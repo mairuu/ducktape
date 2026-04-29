@@ -52,6 +52,8 @@ int disassemble_chunk_instruction(Chunk *chunk, int offset) {
   switch (instruction) {
   case OP_CONSTANT:
     return constant_instruction("OP_CONSTANT", chunk, offset);
+  case OP_BYTE:
+    return byte_instruction("OP_BYTE", chunk, offset);
 
   case OP_POP:
     return simple_instruction("OP_POP", offset);

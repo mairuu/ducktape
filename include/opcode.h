@@ -2,6 +2,7 @@
 
 typedef enum {
   OP_CONSTANT,
+  OP_BYTE, // push a single byte as a number (for small integers)
 
   OP_POP,
 

@@ -131,6 +131,9 @@ static void vm_run(VirtualMachine *vm) {
       Value constant = READ_CONSTANT(READ_BYTE());
       vm_push(vm, constant);
       break;
+    case OP_BYTE:
+      vm_push(vm, NUMBER_VAL(READ_BYTE()));
+      break;
     case OP_POP:
       vm_pop(vm);
       break;

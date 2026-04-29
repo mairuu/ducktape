@@ -330,6 +330,11 @@ static void ctx_emit_constant(Context *ctx, ConstantRef ref) {
 }
 
 static void ctx_emit_number(Context *ctx, double number) {
+  if (number == (int)number && number >= 0 && number <= UINT8_MAX) {
+    ctx_emit_bytes(ctx, OP_BYTE, (uint8_t)number);
+    return;
+  }
+
   ConstantRef ref = ctx_make_constant(ctx, (RawConstant){.type = RAW_NUMBER, .as.number = number});
   ctx_emit_constant(ctx, ref);
 }
