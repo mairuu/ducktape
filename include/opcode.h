@@ -1,0 +1,29 @@
+#pragma once
+
+typedef enum {
+  OP_CONSTANT,
+
+  OP_POP,
+
+  OP_ADD,
+  OP_SUBTRACT,
+  OP_MULTIPLY,
+  OP_DIVIDE,
+  OP_NEGATE,
+
+  OP_NOT,
+  OP_EQUAL,
+  OP_GREATER,
+  OP_LESS,
+
+  OP_NIL,
+  OP_TRUE,
+  OP_FALSE,
+
+  OP_DEFINE_GLOBAL,
+  OP_GET_GLOBAL,
+  OP_SET_GLOBAL,
+
+  OP_TRAP,
+  OP_RETURN,
+} OpCode;
