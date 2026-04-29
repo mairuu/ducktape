@@ -104,6 +104,9 @@ int disassemble_chunk_instruction(Chunk *chunk, int offset) {
   case OP_JUMP_IF_FALSE:
     return jump_instruction("OP_JUMP_IF_FALSE", chunk, true, offset);
 
+  case OP_CALL:
+    return byte_instruction("OP_CALL", chunk, offset);
+
   case OP_TRAP:
     return simple_instruction("OP_TRAP", offset);
   case OP_RETURN:

@@ -58,6 +58,8 @@ DEFINE_ARRAY(uint8_t, ByteArray);
 // caller must ensure arr is not empty and arr->header.count > 0
 #define arr_pop(arr) (arr)->data[--(arr)->header.count]
 
+#define arr_peek(arr) (arr)->data[(arr)->header.count - 1]
+
 void _arr_free(ArrayHeader **arr, size_t element_size, Allocator *al);
 
 bool _arr_resize(ArrayHeader **arr, size_t element_size, int new_capacity, Allocator *al);

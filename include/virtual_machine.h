@@ -1,24 +1,31 @@
 #pragma once
 
 #include "allocator.h"
-#include "chunk.h"
 #include "hash_table.h"
 #include "object.h"
 #include "value.h"
 
 #include <setjmp.h>
 
-#define VM_STACK_MAX 256
+#define VM_FRAMES_MAX 64
+#define VM_STACK_MAX 2048
 
 typedef struct {
-  Value stack[VM_STACK_MAX];
+  ObjFunction *function;
+
+  uint8_t *ip;
+  Value *base;
+} CallFrame;
+
+typedef struct {
   Value *stack_top;
+  Value stack[VM_STACK_MAX];
+  int frame_count;
+  CallFrame frames[VM_FRAMES_MAX];
 
   Object *objects;
   HashTable strings;
   HashTable globals;
-
-  Chunk chunk;
 
   jmp_buf panic_jump;
   char panic_message[256];

@@ -4,6 +4,10 @@
 
 #include "allocator.h"
 
+String str_null(void) {
+  return (String){.chars = NULL, .length = 0, .capacity = 0};
+}
+
 String str_from_cstr(const char *cstr, Allocator *al) {
   int length = strlen(cstr);
   char *chars = al_alloc(al, length + 1);
@@ -41,6 +45,9 @@ String str_concat(const String *a, const String *b, Allocator *al) {
 }
 
 void str_destroy(String *str, Allocator *al) {
+  if (str->chars == NULL) {
+    return;
+  }
   al_free(al, str->chars, str->capacity);
   str->chars = NULL;
   str->length = 0;

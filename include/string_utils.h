@@ -15,6 +15,10 @@ typedef struct {
   int length;
 } StringView;
 
+// -----------------------------------------------------------------------------
+
+String str_null(void);
+
 String str_from_cstr(const char *cstr, Allocator *al);
 
 String str_from_sv(StringView sv, Allocator *al);

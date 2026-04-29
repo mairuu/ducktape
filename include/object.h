@@ -1,9 +1,10 @@
 #pragma once
 
+#include "chunk.h"
 #include "string_utils.h"
 #include "value.h"
 
-typedef enum { OBJ_STRING } ObjectType;
+typedef enum { OBJ_STRING, OBJ_FUNCTION } ObjectType;
 
 #define OBJ_MARK_FLAG (1 << 0)
 
@@ -21,13 +22,30 @@ typedef struct {
   uint32_t hash;
 } ObjString;
 
+typedef struct {
+  Object obj;
+  int arity;
+  Chunk chunk;
+  ObjString *name;
+} ObjFunction;
+
+// -----------------------------------------------------------------------------
+
 static inline bool value_is_obj_type(Value value, ObjectType type) {
   return IS_OBJECT(value) && AS_OBJECT(value)->type == type;
 }
 
 #define IS_STRING(value) value_is_obj_type(value, OBJ_STRING)
+#define IS_FUNCTION(value) value_is_obj_type(value, OBJ_FUNCTION)
+
+// -----------------------------------------------------------------------------
 
 #define AS_STRING(value) ((ObjString *)AS_OBJECT(value))
+#define AS_FUNCTION(value) ((ObjFunction *)AS_OBJECT(value))
+
+// -----------------------------------------------------------------------------
+
+const char *obj_type_name(ObjectType type);
 
 int obj_sprintf(char *buf, int bufsize, Object *obj);
 
@@ -45,3 +63,10 @@ void obj_string_free(ObjString **str, Allocator *al);
 void obj_string_set_interned(ObjString *str, bool interned);
 
 bool obj_string_is_interned(ObjString *str);
+
+// -----------------------------------------------------------------------------
+
+ObjFunction //
+    *obj_function_new(Allocator *al, int arity);
+  
+void obj_function_free(ObjFunction **func, Allocator *al);

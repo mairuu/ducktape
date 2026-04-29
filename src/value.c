@@ -44,6 +44,18 @@ bool val_is_falsey(Value value) {
   return false;
 }
 
+static const char *val_type_names[] = {
+    [VAL_EMPTY] = "empty",   [VAL_NIL] = "nil",       [VAL_BOOL] = "bool",
+    [VAL_NUMBER] = "number", [VAL_OBJECT] = "object",
+};
+
+const char *val_type_name(ValueType type) {
+  if (type < 0 || type >= sizeof(val_type_names) / sizeof(val_type_names[0])) {
+    return "unknown";
+  }
+  return val_type_names[type];
+}
+
 void val_print(Value value) {
   char buf[32];
   val_sprintf(buf, sizeof(buf), value);

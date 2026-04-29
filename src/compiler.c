@@ -118,6 +118,7 @@ typedef struct {
 static void declaration(Context *ctx);
 static void declaration_var(Context *ctx);
 static void statement(Context *ctx);
+static void statement_block(Context *ctx);
 static void expression(Context *ctx);
 static void ctx_advance(Context *ctx);
 
@@ -179,6 +180,10 @@ static void compiler_init(Compiler *compiler, Compiler *enclosing, Allocator *al
 
   compiler->proto = al_alloc_for(al, Proto);
   proto_init(compiler->proto, al);
+
+  Local *local = &compiler->locals[compiler->local_count++];
+  local->name = (Token){.start = "", .length = 0, .line_number = 0};
+  local->depth = 0;
 }
 
 static void ctx_init(Context *ctx, const char *source, Allocator *al) {
@@ -314,7 +319,16 @@ static void _ctx_emit_bytes(Context *ctx, uint8_t *bytes, int length) {
   }
 }
 
-static void ctx_emit_return(Context *ctx) { ctx_emit_byte(ctx, OP_RETURN); }
+static void ctx_emit_return(Context *ctx) {
+  if (arr_count(ctx->current_compiler->proto->code) > 0 &&
+      arr_peek(ctx->current_compiler->proto->code) == OP_RETURN) {
+    return; // already has a return at the end
+  }
+
+  // implicitly return nil
+  ctx_emit_byte(ctx, OP_NIL);
+  ctx_emit_byte(ctx, OP_RETURN);
+}
 
 static ConstantRef ctx_make_constant(Context *ctx, RawConstant val) {
   int index = proto_write_constant(ctx->current_compiler->proto, val, ctx->al);
@@ -527,6 +541,10 @@ Loop *ctx_resolve_loop(Context *ctx, Token *label) {
 static void ctx_begin_compile(Context *ctx, Compiler *compiler) {
   compiler_init(compiler, ctx->current_compiler, ctx->al);
   ctx->current_compiler = compiler;
+
+  if (ctx->parser.previous.type == TOKEN_IDENTIFIER) {
+    ctx->current_compiler->proto->name = str_from_sv(sv_from_token(&ctx->parser.previous), ctx->al);
+  }
 }
 
 static Proto *ctx_end_compile(Context *ctx) {
@@ -566,9 +584,66 @@ static void ctx_end_loop(Context *ctx) {
   ctx->current_compiler->current_loop = ctx->current_compiler->current_loop->enclosing;
 }
 
+// ===== parameter & argument parsing =====
+
+static int ctx_parse_parameter_list(Context *ctx) {
+  ctx_consume(ctx, TOKEN_LEFT_PAREN, "expect '(' before parameter list.");
+
+  int param_count = 0;
+
+  if (!ctx_check(ctx, TOKEN_RIGHT_PAREN)) {
+    do {
+      if (param_count >= UINT8_MAX) {
+        ctx_error_at(ctx, &ctx->parser.current, "can't have more than 255 parameters.");
+      }
+      ConstantRef param_name = ctx_parse_variable(ctx, "expect parameter name.");
+      ctx_mark_initialized(ctx);
+      ctx_define_variable(ctx, param_name);
+      param_count++;
+    } while (ctx_match(ctx, TOKEN_COMMA));
+  }
+
+  ctx_consume(ctx, TOKEN_RIGHT_PAREN, "expect ')' after parameter list.");
+  return param_count;
+}
+
+int ctx_parse_argument_list(Context *ctx) {
+  int arg_count = 0;
+  if (!ctx_check(ctx, TOKEN_RIGHT_PAREN)) {
+    do {
+      expression(ctx);
+      if (arg_count >= UINT8_MAX) {
+        ctx_error_at(ctx, &ctx->parser.current, "can't have more than 255 arguments.");
+      }
+      arg_count++;
+    } while (ctx_match(ctx, TOKEN_COMMA));
+  }
+  ctx_consume(ctx, TOKEN_RIGHT_PAREN, "expect ')' after arguments.");
+  return arg_count;
+}
+
+static void ctx_compile_function(Context *ctx) {
+  Compiler compiler;
+  ctx_begin_compile(ctx, &compiler);
+
+  ctx_begin_scope(ctx);
+
+  compiler.proto->arity = ctx_parse_parameter_list(ctx);
+
+  ctx_consume(ctx, TOKEN_LEFT_BRACE, "expect '{' before function body.");
+  statement_block(ctx);
+
+  Proto *proto = ctx_end_compile(ctx);
+  ConstantRef function_ref =
+      ctx_make_constant(ctx, (RawConstant){.type = RAW_FUNCTION, .as.function = proto});
+
+  ctx_emit_constant(ctx, function_ref);
+}
+
 // ===== parser rules & precedence =====
 
 static void grouping(Context *ctx, bool can_assign);
+static void call(Context *ctx, bool can_assign);
 static void number(Context *ctx, bool can_assign);
 static void literal(Context *ctx, bool can_assign);
 static void string(Context *ctx, bool can_assign);
@@ -579,7 +654,7 @@ static void and_(Context *ctx, bool can_assign);
 static void or_(Context *ctx, bool can_assign);
 
 static ParseRule rules[] = {
-    [TOKEN_LEFT_PAREN] = {grouping, NULL, PREC_NONE}, //
+    [TOKEN_LEFT_PAREN] = {grouping, call, PREC_CALL}, //
     [TOKEN_RIGHT_PAREN] = {NULL, NULL, PREC_NONE},    //
     [TOKEN_LEFT_BRACE] = {NULL, NULL, PREC_NONE},     //
     [TOKEN_RIGHT_BRACE] = {NULL, NULL, PREC_NONE},    //
@@ -867,6 +942,22 @@ static void statement_continue(Context *ctx) {
   ctx_emit_loop(ctx, loop->start_offset);
 }
 
+static void statement_return(Context *ctx) {
+  if (ctx->current_compiler->enclosing == NULL) {
+    ctx_error_at(ctx, &ctx->parser.previous,
+                 "can't return from top-level code.");
+  }
+
+  if (ctx_check(ctx, TOKEN_SEMICOLON)) {
+    ctx_emit_return(ctx);
+  } else {
+    expression(ctx);
+    ctx_emit_byte(ctx, OP_RETURN);
+  }
+
+  ctx_consume(ctx, TOKEN_SEMICOLON, "expect ';' after return value.");
+}
+
 static void statement(Context *ctx) {
   if (ctx_match(ctx, TOKEN_LEFT_BRACE)) {
     ctx_begin_scope(ctx);
@@ -880,7 +971,8 @@ static void statement(Context *ctx) {
     statement_break(ctx);
   } else if (ctx_match(ctx, TOKEN_CONTINUE)) {
     statement_continue(ctx);
-
+  } else if (ctx_match(ctx, TOKEN_RETURN)) {
+    statement_return(ctx);
   } else {
     statement_expression(ctx);
   }
@@ -897,9 +989,18 @@ static void declaration_var(Context *ctx) {
   ctx_define_variable(ctx, name);
 }
 
+static void declaration_fun(Context *ctx) {
+  ConstantRef name = ctx_parse_variable(ctx, "expect function name.");
+  ctx_mark_initialized(ctx); // make function name available in its own body for recursion
+  ctx_compile_function(ctx);
+  ctx_define_variable(ctx, name);
+}
+
 static void declaration(Context *ctx) {
   if (ctx_match(ctx, TOKEN_VAR)) {
     declaration_var(ctx);
+  } else if (ctx_match(ctx, TOKEN_FUN)) {
+    declaration_fun(ctx);
   } else {
     statement(ctx);
   }
@@ -916,6 +1017,12 @@ static void grouping(Context *ctx, bool can_assign) {
 
   expression(ctx);
   ctx_consume(ctx, TOKEN_RIGHT_PAREN, "expect ')' after expression.");
+}
+
+static void call(Context *ctx, bool can_assign) {
+  (void)can_assign;
+  int arg_count = ctx_parse_argument_list(ctx);
+  ctx_emit_bytes(ctx, OP_CALL, (uint8_t)arg_count);
 }
 
 static void number(Context *ctx, bool can_assign) {

@@ -9,13 +9,17 @@
 typedef enum {
   RAW_NUMBER,
   RAW_STRING,
+  RAW_FUNCTION,
 } RawType;
+
+typedef struct Proto Proto;
 
 typedef struct RawConstant {
   RawType type;
   union {
     double number;
     String string;
+    Proto *function;
   } as;
 } RawConstant;
 
@@ -24,6 +28,8 @@ void raw_constant_destroy(RawConstant *constant, Allocator *al);
 DEFINE_ARRAY(RawConstant, RawConstantArray);
 
 typedef struct Proto {
+  String name;
+  int arity;
   IntArray *lines;
   ByteArray *code;
   RawConstantArray *constants;

@@ -5,11 +5,31 @@
 
 #include "string_utils.h"
 
+static const char *obj_type_names[] = {
+    [OBJ_STRING] = "string",
+    [OBJ_FUNCTION] = "function",
+};
+
+const char *obj_type_name(ObjectType type) {
+  if (type < 0 || type >= sizeof(obj_type_names) / sizeof(obj_type_names[0])) {
+    return "unknown";
+  }
+  return obj_type_names[type];
+}
+
 int obj_sprintf(char *buf, int bufsize, Object *obj) {
   switch (obj->type) {
   case OBJ_STRING: {
     ObjString *str = (ObjString *)obj;
     return snprintf(buf, bufsize, "%.*s", str->str.length, str->str.chars);
+  }
+  case OBJ_FUNCTION: {
+    ObjFunction *fn = (ObjFunction *)obj;
+    if (fn->name) {
+      return snprintf(buf, bufsize, "<fn %.*s>", fn->name->str.length, fn->name->str.chars);
+    } else {
+      return snprintf(buf, bufsize, "<fn @%p>", (void *)fn);
+    }
   }
   default:
     assert(false && "unknown object type");
@@ -38,6 +58,8 @@ bool obj_equal(Object *a, Object *b) {
   }
 }
 
+// -----------------------------------------------------------------------------
+
 static void *obj_new(size_t size, ObjectType type, Allocator *al) {
   Object *obj = al_alloc(al, size);
   obj->type = type;
@@ -51,11 +73,16 @@ void obj_free(Object **obj, Allocator *al) {
   case OBJ_STRING:
     obj_string_free((ObjString **)obj, al);
     break;
+  case OBJ_FUNCTION:
+    obj_function_free((ObjFunction **)obj, al);
+    break;
   default:
     assert(false && "unknown object type");
     break;
   }
 }
+
+// -----------------------------------------------------------------------------
 
 ObjString //
     *obj_string_new(String str, uint32_t hash, Allocator *al) {
@@ -66,6 +93,9 @@ ObjString //
 }
 
 void obj_string_free(ObjString **obj, Allocator *al) {
+  if (!*obj) {
+    return;
+  }
   str_destroy(&(*obj)->str, al);
   al_free(al, *obj, sizeof(ObjString));
   *obj = NULL;
@@ -80,3 +110,24 @@ void obj_string_set_interned(ObjString *str, bool interned) {
 }
 
 bool obj_string_is_interned(ObjString *str) { return str->obj.flags & STR_INTERNED_FLAG; }
+
+// -----------------------------------------------------------------------------
+
+ObjFunction //
+    *obj_function_new(Allocator *al, int arity) {
+  ObjFunction *obj = obj_new(sizeof(ObjFunction), OBJ_FUNCTION, al);
+  obj->arity = arity;
+  chunk_init(&obj->chunk);
+  obj->name = NULL;
+  return obj;
+}
+
+void obj_function_free(ObjFunction **obj, Allocator *al) {
+  if (!*obj) {
+    return;
+  }
+
+  chunk_destroy(&(*obj)->chunk, al);
+  al_free(al, *obj, sizeof(ObjFunction));
+  *obj = NULL;
+}

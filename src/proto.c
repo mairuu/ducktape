@@ -1,4 +1,5 @@
 #include "proto.h"
+#include "string_utils.h"
 
 #include <assert.h>
 
@@ -9,6 +10,10 @@ void raw_constant_destroy(RawConstant *constant, Allocator *al) {
   case RAW_STRING:
     str_destroy(&constant->as.string, al);
     break;
+  case RAW_FUNCTION:
+    proto_destroy(constant->as.function, al);
+    al_free_for(al, constant->as.function);
+    break;
   default:
     assert(false && "unknown raw constant type");
   }
@@ -16,6 +21,8 @@ void raw_constant_destroy(RawConstant *constant, Allocator *al) {
 
 void proto_init(Proto *proto, Allocator *al) {
   (void)al;
+  proto->name = str_null();
+  proto->arity = 0;
   proto->lines = arr_new();
   proto->code = arr_new();
   proto->constants = arr_new();
@@ -26,6 +33,8 @@ void proto_destroy(Proto *proto, Allocator *al) {
   for (int i = 0; i < constant_count; i++) {
     raw_constant_destroy(&proto->constants->data[i], al);
   }
+
+  str_destroy(&proto->name, al);
 
   arr_free(&proto->lines, al);
   arr_free(&proto->code, al);

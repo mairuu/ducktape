@@ -10,6 +10,7 @@
 #include "compiler.h"
 #include "object.h"
 #include "opcode.h"
+#include "proto.h"
 #include "string_utils.h"
 #include "value.h"
 
@@ -34,7 +35,10 @@ static inline Value vm_peek(VirtualMachine *vm, int distance) {
   return vm->stack_top[-1 - distance];
 }
 
-static void vm_reset_stack(VirtualMachine *vm) { vm->stack_top = vm->stack; }
+static void vm_reset_stack(VirtualMachine *vm) {
+  vm->stack_top = vm->stack;
+  vm->frame_count = 0;
+}
 
 // ===== error handling =====
 
@@ -44,10 +48,28 @@ void vm_panic(VirtualMachine *vm, const char *format, ...) {
   vsnprintf(vm->panic_message, sizeof(vm->panic_message), format, args);
   va_end(args);
 
+  // print stack trace
+  fprintf(stderr, "stack trace (most recent call last):\n");
+  for (int i = vm->frame_count - 1; i >= 0; i--) {
+    CallFrame *frame = &vm->frames[i];
+    ObjFunction *fn = frame->function;
+    size_t instruction = frame->ip - fn->chunk.code->data - 1;
+    int line = fn->chunk.lines->data[instruction];
+
+    fprintf(stderr, "  [line %d] in ", line);
+    if (fn->name == NULL) {
+      fprintf(stderr, "<main>\n");
+    } else {
+      fprintf(stderr, "%.*s()\n", fn->name->str.length, fn->name->str.chars);
+    }
+  }
+
   longjmp(vm->panic_jump, 1);
 }
 
 // ===== constant loading =====
+
+static ObjFunction *vm_load_proto(VirtualMachine *vm, Proto *proto);
 
 static Value load_constant(ConstantLoader *loader, Allocator *, const RawConstant *raw) {
   VirtualMachine *vm = (VirtualMachine *)loader->ctx;
@@ -59,23 +81,39 @@ static Value load_constant(ConstantLoader *loader, Allocator *, const RawConstan
     assert(str != NULL && "interned string should not be NULL");
     return OBJECT_VAL(str);
   }
+  case RAW_FUNCTION: {
+    ObjFunction *function = vm_load_proto(vm, raw->as.function);
+    assert(function != NULL && "loaded function should not be NULL");
+    return OBJECT_VAL(function);
+  }
   default:
     assert(false && "unknown constant type");
     return NIL_VAL; // unreachable
   }
 }
 
-static void vm_load_proto(VirtualMachine *vm, Proto *proto) {
+static ObjFunction *vm_load_proto(VirtualMachine *vm, Proto *proto) {
   ConstantLoader loader = {
       .load_constant = load_constant,
       .ctx = vm,
   };
 
-  chunk_load_from_proto(&vm->chunk, proto, &loader, &vm->al);
+  ObjFunction *function = obj_function_new(&vm->al, proto->arity);
+  vm_track_object(vm, &function->obj);
+
+  chunk_load_from_proto(&function->chunk, proto, &loader, &vm->al);
+
+  if (proto->name.length > 0) {
+    function->name = vm_intern_string(vm, sv_from_str(proto->name));
+  }
 
 #ifdef DEBUG_PRINT_CODE
-  disassemble_chunk(&vm->chunk, "<main>");
+  char name_buf[256];
+  obj_sprintf(name_buf, sizeof(name_buf), &function->obj);
+  disassemble_chunk(&function->chunk, name_buf);
 #endif
+
+  return function;
 }
 
 // ===== operations =====
@@ -97,12 +135,49 @@ static void vm_concat(VirtualMachine *vm) {
 
 // ===== vm execution =====
 
+static void vm_call_function(VirtualMachine *vm, ObjFunction *callee, int arg_count) {
+  if (vm->frame_count == VM_FRAMES_MAX) {
+    vm_panic(vm, "stack overflow");
+  }
+
+  if (arg_count != callee->arity) {
+    vm_panic(vm, "expected %d arguments but got %d", callee->arity, arg_count);
+  }
+
+  CallFrame *frame = &vm->frames[vm->frame_count++];
+  frame->function = callee;
+  frame->ip = callee->chunk.code->data;
+  frame->base = vm->stack_top - callee->arity - 1;
+}
+
+static void vm_call_object(VirtualMachine *vm, Object *callee, int arg_count) {
+  switch (callee->type) {
+  case OBJ_FUNCTION:
+    vm_call_function(vm, (ObjFunction *)callee, arg_count);
+    return;
+  default:
+    break; // not callable
+  }
+
+  vm_panic(vm, "%s is not callable", obj_type_name(callee->type));
+}
+
+static void vm_call(VirtualMachine *vm, Value callee, int arg_count) {
+  if (IS_OBJECT(callee)) {
+    vm_call_object(vm, AS_OBJECT(callee), arg_count);
+    return;
+  }
+
+  vm_panic(vm, "%s is not callable", val_type_name(callee.type));
+}
+
 static void vm_run(VirtualMachine *vm) {
-  uint8_t *ip = vm->chunk.code->data;
+  CallFrame *frame = &vm->frames[vm->frame_count - 1];
+  uint8_t *ip = frame->ip;
 
 #define READ_BYTE() (*ip++)
 #define READ_SHORT() (ip += 2, (uint16_t)(ip[-2] << 8 | ip[-1]))
-#define READ_CONSTANT(idx) (vm->chunk.constants->data[(idx)])
+#define READ_CONSTANT(idx) (frame->function->chunk.constants->data[(idx)])
 #define BINARY_OP(val, op)                                                                         \
   if (!IS_NUMBER(vm_peek(vm, 0)) || !IS_NUMBER(vm_peek(vm, 1))) {                                  \
     vm_panic(vm, "operands must be numbers");                                                      \
@@ -119,10 +194,11 @@ static void vm_run(VirtualMachine *vm) {
     for (Value *slot = vm->stack; slot < vm->stack_top; slot++) {
       printf("[ ");
       val_print(*slot);
-      printf(" ]");
+      printf(" %c", frame->base == slot ? '|' : ']');
     }
     printf("\n");
-    disassemble_chunk_instruction(&vm->chunk, (int)(ip - vm->chunk.code->data));
+    disassemble_chunk_instruction(&frame->function->chunk,
+                                  (int)(ip - frame->function->chunk.code->data));
 #endif
 
     uint8_t instruction = READ_BYTE();
@@ -191,7 +267,7 @@ static void vm_run(VirtualMachine *vm) {
       break;
     case OP_DEFINE_GLOBAL:
       uint8_t name_idx = READ_BYTE();
-      Value name_val = vm->chunk.constants->data[name_idx];
+      Value name_val = READ_CONSTANT(name_idx);
       if (ht_get(&vm->globals, name_val)) {
         vm_panic(vm, "variable '%s' is already defined", AS_STRING(name_val)->str.chars);
       }
@@ -200,7 +276,7 @@ static void vm_run(VirtualMachine *vm) {
       break;
     case OP_GET_GLOBAL: {
       uint8_t name_idx = READ_BYTE();
-      Value name_val = vm->chunk.constants->data[name_idx];
+      Value name_val = READ_CONSTANT(name_idx);
       Value *value = ht_get(&vm->globals, name_val);
       if (!value) {
         vm_panic(vm, "undefined variable '%s'", AS_STRING(name_val)->str.chars);
@@ -210,7 +286,7 @@ static void vm_run(VirtualMachine *vm) {
     }
     case OP_SET_GLOBAL: {
       uint8_t name_idx = READ_BYTE();
-      Value name_val = vm->chunk.constants->data[name_idx];
+      Value name_val = READ_CONSTANT(name_idx);
       Value *value = ht_get(&vm->globals, name_val);
       if (!value) {
         vm_panic(vm, "undefined variable '%s'", AS_STRING(name_val)->str.chars);
@@ -220,12 +296,12 @@ static void vm_run(VirtualMachine *vm) {
     }
     case OP_GET_LOCAL: {
       uint8_t slot = READ_BYTE();
-      vm_push(vm, vm->stack[slot]);
+      vm_push(vm, frame->base[slot]);
       break;
     }
     case OP_SET_LOCAL: {
       uint8_t slot = READ_BYTE();
-      vm->stack[slot] = vm_peek(vm, 0);
+      frame->base[slot] = vm_peek(vm, 0);
       break;
     }
     case OP_LOOP: {
@@ -245,8 +321,28 @@ static void vm_run(VirtualMachine *vm) {
       }
       break;
     }
+    case OP_CALL: {
+      uint8_t arg_count = READ_BYTE();
+      Value callee = vm_peek(vm, arg_count);
+      frame->ip = ip;
+      vm_call(vm, callee, arg_count);
+      frame = &vm->frames[vm->frame_count - 1];
+      ip = frame->ip;
+      break;
+    }
     case OP_RETURN:
-      return;
+      Value result = vm_pop(vm);
+      frame->ip = ip;
+      vm->frame_count--;
+      if (vm->frame_count == 0) {
+        vm_pop(vm); // pop main script function
+        return;
+      }
+      vm->stack_top = frame->base; // discard local variables 
+      vm_push(vm, result); // push return value
+      frame = &vm->frames[vm->frame_count - 1];
+      ip = frame->ip;
+      break;
     case OP_TRAP:
       raise(SIGTRAP);
       break;
@@ -257,6 +353,12 @@ static void vm_run(VirtualMachine *vm) {
 #undef READ_BYTE
 #undef READ_CONSTANT
 #undef BINARY_OP
+}
+
+static void vm_execute(VirtualMachine *vm, ObjFunction *function) {
+  vm_push(vm, OBJECT_VAL(function));
+  vm_call_function(vm, function, 0);
+  vm_run(vm);
 }
 
 // ===== initialization & cleanup =====
@@ -282,8 +384,6 @@ void vm_destroy(VirtualMachine *vm) {
 
   ht_destroy(&vm->strings, &vm->al);
   ht_destroy(&vm->globals, &vm->al);
-
-  chunk_destroy(&vm->chunk, &vm->al);
 }
 
 // ===== object management =====
@@ -314,8 +414,6 @@ void vm_track_object(VirtualMachine *vm, Object *object) {
   vm->objects = object;
 }
 
-// ===== public api =====
-
 InterpretResult vm_interpret(VirtualMachine *vm, const char *source) {
   Proto *proto = compile(source, &vm->al);
   if (!proto) {
@@ -328,11 +426,11 @@ InterpretResult vm_interpret(VirtualMachine *vm, const char *source) {
     return INTERPRET_RUNTIME_ERROR;
   }
 
-  vm_load_proto(vm, proto);
+  ObjFunction *function = vm_load_proto(vm, proto);
   proto_destroy(proto, &vm->al);
   al_free_for(&vm->al, proto);
 
-  vm_run(vm);
+  vm_execute(vm, function);
 
   return INTERPRET_OK;
 }
