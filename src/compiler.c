@@ -152,6 +152,22 @@ static bool identifier_equals(Token *a, Token *b) {
   return strncmp(a->start, b->start, a->length) == 0;
 }
 
+static uint8_t compound_assignment_opcode(TokenType type) {
+  switch (type) {
+  case TOKEN_PLUS_EQUAL:
+    return OP_ADD;
+  case TOKEN_MINUS_EQUAL:
+    return OP_SUBTRACT;
+  case TOKEN_STAR_EQUAL:
+    return OP_MULTIPLY;
+  case TOKEN_SLASH_EQUAL:
+    return OP_DIVIDE;
+  default:
+    assert(false && "not a compound assignment operator");
+    return 0;
+  }
+}
+
 // ===== core initialization =====
 
 static void compiler_init(Compiler *compiler, Compiler *enclosing, Allocator *al) {
@@ -269,6 +285,11 @@ static bool ctx_match(Context *ctx, TokenType type) {
 
   ctx_advance(ctx);
   return true;
+}
+
+static bool ctx_match_compound_assignment(Context *ctx) {
+  return ctx_match(ctx, TOKEN_PLUS_EQUAL) || ctx_match(ctx, TOKEN_MINUS_EQUAL) ||
+         ctx_match(ctx, TOKEN_STAR_EQUAL) || ctx_match(ctx, TOKEN_SLASH_EQUAL);
 }
 
 static bool ctx_consume(Context *ctx, TokenType type, const char *err_msg) {
@@ -464,6 +485,12 @@ static void ctx_named_variable(Context *ctx, Token name, bool can_assign) {
   if (can_assign && ctx_match(ctx, TOKEN_EQUAL)) {
     expression(ctx);
     ctx_emit_set(ctx, ref);
+  } else if (can_assign && ctx_match_compound_assignment(ctx)) {
+    TokenType operator = ctx->parser.previous.type;
+    ctx_emit_get(ctx, ref);
+    expression(ctx);
+    ctx_emit_byte(ctx, compound_assignment_opcode(operator));
+    ctx_emit_set(ctx, ref);
   } else {
     ctx_emit_get(ctx, ref);
   }
@@ -556,12 +583,16 @@ static ParseRule rules[] = {
     [TOKEN_DOT] = {NULL, NULL, PREC_NONE},            //
     [TOKEN_MINUS] = {unary, binary, PREC_TERM},       //
     [TOKEN_MINUS_MINUS] = {NULL, NULL, PREC_NONE},    //
+    [TOKEN_MINUS_EQUAL] = {NULL, NULL, PREC_NONE},    //
     [TOKEN_PLUS] = {NULL, binary, PREC_TERM},         //
     [TOKEN_PLUS_PLUS] = {NULL, NULL, PREC_NONE},      //
+    [TOKEN_PLUS_EQUAL] = {NULL, NULL, PREC_NONE},     //
     [TOKEN_QUESTION] = {NULL, NULL, PREC_NONE},       //
     [TOKEN_SEMICOLON] = {NULL, NULL, PREC_NONE},      //
     [TOKEN_SLASH] = {NULL, binary, PREC_FACTOR},      //
+    [TOKEN_SLASH_EQUAL] = {NULL, NULL, PREC_NONE},    //
     [TOKEN_STAR] = {NULL, binary, PREC_FACTOR},       //
+    [TOKEN_STAR_EQUAL] = {NULL, NULL, PREC_NONE},     //
 
     [TOKEN_BANG] = {unary, NULL, PREC_NONE},                 //
     [TOKEN_BANG_EQUAL] = {NULL, binary, PREC_COMPARISON},    //

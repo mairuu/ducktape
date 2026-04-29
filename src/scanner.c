@@ -279,15 +279,27 @@ Token scanner_next_token(Scanner *s) {
     if (match(s, '-')) {
       return token_create(s, TOKEN_MINUS_MINUS);
     }
+    if (match(s, '=')) {
+      return token_create(s, TOKEN_MINUS_EQUAL);
+    }
     return token_create(s, TOKEN_MINUS);
   case '+':
     if (match(s, '+')) {
       return token_create(s, TOKEN_PLUS_PLUS);
     }
+    if (match(s, '=')) {
+      return token_create(s, TOKEN_PLUS_EQUAL);
+    }
     return token_create(s, TOKEN_PLUS);
   case '/':
+    if (match(s, '=')) {
+      return token_create(s, TOKEN_SLASH_EQUAL);
+    }
     return token_create(s, TOKEN_SLASH);
   case '*':
+    if (match(s, '=')) {
+      return token_create(s, TOKEN_STAR_EQUAL);
+    }
     return token_create(s, TOKEN_STAR);
   case '!':
     return token_create(s, match(s, '=') ? TOKEN_BANG_EQUAL : TOKEN_BANG);
