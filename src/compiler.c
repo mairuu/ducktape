@@ -1,4 +1,3 @@
-
 #include "compiler.h"
 
 #include <assert.h>
@@ -13,16 +12,7 @@
 #include "scanner.h"
 #include "string_utils.h"
 
-StringView sv_from_token(Token *token) {
-  return (StringView){.chars = token->start, .length = token->length};
-}
-
-static bool identifier_equals(Token *a, Token *b) {
-  if (a->length != b->length) {
-    return false;
-  }
-  return strncmp(a->start, b->start, a->length) == 0;
-}
+// ===== type definitions =====
 
 typedef struct {
   Scanner scanner;
@@ -34,12 +24,12 @@ typedef struct {
   bool in_panic_mode;
 } Parser;
 
-#define COMPILER_MAX_LOCALS 256
-
 typedef struct {
   Token name;
   int depth;
 } Local;
+
+#define COMPILER_MAX_LOCALS 256
 
 typedef struct Compiler {
   struct Compiler *enclosing;
@@ -51,20 +41,6 @@ typedef struct Compiler {
   Proto *proto;
 } Compiler;
 
-static void compiler_init(Compiler *compiler, Compiler *enclosing, Allocator *al) {
-  compiler->enclosing = enclosing;
-
-  compiler->scope_depth = 0;
-  compiler->local_count = 0;
-
-  Local *local = &compiler->locals[compiler->local_count++];
-  local->name = (Token){.start = "", .length = 0, .line_number = 0};
-  local->depth = 0;
-
-  compiler->proto = al_alloc_for(al, Proto);
-  proto_init(compiler->proto, al);
-}
-
 typedef struct {
   const char *source;
   Parser parser;
@@ -73,6 +49,107 @@ typedef struct {
 
   Allocator *al;
 } Context;
+
+typedef struct {
+  Token token;
+  const char *label;
+} ErrorLabel;
+
+typedef struct {
+  const char *message;
+  ErrorLabel labels[4];
+  int label_count;
+} Diagnostic;
+
+typedef struct {
+  int index;
+} ConstantRef;
+
+typedef enum {
+  REF_LOCAL,
+  REF_GLOBAL,
+} RefScope;
+
+typedef struct {
+  RefScope scope;
+  union {
+    int local_index;    // if scope == REF_LOCAL
+    ConstantRef global; // if scope == REF_GLOBAL
+  };
+} VarRef;
+
+typedef void (*ParseFunc)(Context *ctx, bool can_assign);
+
+typedef enum {
+  PREC_NONE,
+  PREC_ASSIGNMENT, // =
+  PREC_OR,         // or
+  PREC_AND,        // and
+  PREC_EQUALITY,   // == !=
+  PREC_COMPARISON, // < > <= >=
+  PREC_TERM,       // + -
+  PREC_FACTOR,     // * /
+  PREC_UNARY,      // ! -
+  PREC_CALL,       // . ()
+  PREC_PRIMARY
+} Precedence;
+
+typedef struct {
+  ParseFunc prefix;
+  ParseFunc infix;
+  Precedence precedence;
+} ParseRule;
+
+// ===== constants & macros =====
+
+// Forward declarations for recursive functions
+static void declaration(Context *ctx);
+static void statement(Context *ctx);
+static void expression(Context *ctx);
+static void ctx_advance(Context *ctx);
+
+#define DIAGNOSTIC(ctx, msg, ...)                                                                  \
+  do {                                                                                             \
+    ErrorLabel _labels[] = {__VA_ARGS__};                                                          \
+    Diagnostic _diag = {                                                                           \
+        .message = (msg),                                                                          \
+        .label_count = sizeof(_labels) / sizeof(_labels[0]),                                       \
+        .labels = {},                                                                              \
+    };                                                                                             \
+    memcpy(_diag.labels, _labels, sizeof(_labels));                                                \
+    ctx_print_diagnostic((ctx), &_diag);                                                           \
+  } while (0)
+
+#define ctx_emit_bytes(ctx, ...)                                                                   \
+  do {                                                                                             \
+    uint8_t codes[] = {__VA_ARGS__};                                                               \
+    _ctx_emit_bytes(ctx, codes, sizeof(codes) / sizeof(codes[0]));                                 \
+  } while (0)
+
+// ===== utility functions =====
+
+StringView sv_from_token(Token *token) {
+  return (StringView){.chars = token->start, .length = token->length};
+}
+
+static bool identifier_equals(Token *a, Token *b) {
+  if (a->length != b->length) {
+    return false;
+  }
+  return strncmp(a->start, b->start, a->length) == 0;
+}
+
+// ===== core initialization =====
+
+static void compiler_init(Compiler *compiler, Compiler *enclosing, Allocator *al) {
+  compiler->enclosing = enclosing;
+
+  compiler->scope_depth = 0;
+  compiler->local_count = 0;
+
+  compiler->proto = al_alloc_for(al, Proto);
+  proto_init(compiler->proto, al);
+}
 
 static void ctx_init(Context *ctx, const char *source, Allocator *al) {
   ctx->al = al;
@@ -87,16 +164,7 @@ static void ctx_init(Context *ctx, const char *source, Allocator *al) {
 
 static void ctx_destroy(Context *ctx) { (void)ctx; }
 
-typedef struct {
-  Token token;
-  const char *label;
-} ErrorLabel;
-
-typedef struct {
-  const char *message;
-  ErrorLabel labels[4];
-  int label_count;
-} Diagnostic;
+// ===== error handling =====
 
 static void ctx_print_diagnostic(Context *ctx, Diagnostic *diag) {
   if (ctx->parser.in_panic_mode) {
@@ -128,21 +196,40 @@ static void ctx_print_diagnostic(Context *ctx, Diagnostic *diag) {
   fprintf(stderr, "\n");
 }
 
-#define DIAGNOSTIC(ctx, msg, ...)                                                                  \
-  do {                                                                                             \
-    ErrorLabel _labels[] = {__VA_ARGS__};                                                          \
-    Diagnostic _diag = {                                                                           \
-        .message = (msg),                                                                          \
-        .label_count = sizeof(_labels) / sizeof(_labels[0]),                                       \
-        .labels = {},                                                                              \
-    };                                                                                             \
-    memcpy(_diag.labels, _labels, sizeof(_labels));                                                \
-    ctx_print_diagnostic((ctx), &_diag);                                                           \
-  } while (0)
-
 static void ctx_error_at(Context *ctx, Token *token, const char *err_msg) {
   DIAGNOSTIC(ctx, err_msg, {*token, ""});
 }
+
+static void ctx_synchronize(Context *ctx) {
+  ctx->parser.in_panic_mode = false;
+
+  while (ctx->parser.current.type != TOKEN_EOF) {
+    if (ctx->parser.current.type == TOKEN_SEMICOLON) {
+      ctx_advance(ctx);
+      return;
+    }
+
+    switch (ctx->parser.current.type) {
+    case TOKEN_RIGHT_BRACE:
+    case TOKEN_FUN:
+    case TOKEN_VAR:
+    case TOKEN_FOR:
+    case TOKEN_IF:
+    case TOKEN_RETURN:
+    case TOKEN_STRUCT:
+    case TOKEN_TRAIT:
+    case TOKEN_IMPL:
+    case TOKEN_VARIANT:
+      return;
+    default:
+      break;
+    }
+
+    ctx_advance(ctx);
+  }
+}
+
+// ===== parser token operations =====
 
 static void ctx_advance(Context *ctx) {
   ctx->parser.previous = ctx->parser.current;
@@ -180,6 +267,8 @@ static bool ctx_consume(Context *ctx, TokenType type, const char *err_msg) {
   return false;
 }
 
+// ===== code emission =====
+
 static void ctx_emit_byte(Context *ctx, uint8_t byte) {
   proto_write_code(ctx->current_compiler->proto, byte, ctx->parser.previous.line_number, ctx->al);
 }
@@ -190,17 +279,7 @@ static void _ctx_emit_bytes(Context *ctx, uint8_t *bytes, int length) {
   }
 }
 
-#define ctx_emit_bytes(ctx, ...)                                                                   \
-  do {                                                                                             \
-    uint8_t codes[] = {__VA_ARGS__};                                                               \
-    _ctx_emit_bytes(ctx, codes, sizeof(codes) / sizeof(codes[0]));                                 \
-  } while (0)
-
 static void ctx_emit_return(Context *ctx) { ctx_emit_byte(ctx, OP_RETURN); }
-
-typedef struct {
-  int index;
-} ConstantRef;
 
 static ConstantRef ctx_make_constant(Context *ctx, RawConstant val) {
   int index = proto_write_constant(ctx->current_compiler->proto, val, ctx->al);
@@ -220,7 +299,7 @@ static void ctx_emit_number(Context *ctx, double number) {
   ctx_emit_constant(ctx, ref);
 }
 
-// -----------------------------------------------------------------------------
+// ===== variable management =====
 
 static void ctx_add_local(Context *ctx, Token *name) {
   if (ctx->current_compiler->local_count >= UINT8_MAX) {
@@ -228,8 +307,7 @@ static void ctx_add_local(Context *ctx, Token *name) {
     return;
   }
 
-  Local *local =
-      &ctx->current_compiler->locals[ctx->current_compiler->local_count++];
+  Local *local = &ctx->current_compiler->locals[ctx->current_compiler->local_count++];
   local->name = *name;
   local->depth = -1;
 }
@@ -248,15 +326,13 @@ static void ctx_declare_variable(Context *ctx, Token *name) {
 
   for (int i = ctx->current_compiler->local_count - 1; i >= 0; i--) {
     Local *local = &ctx->current_compiler->locals[i];
-    if (local->depth != -1 &&
-        local->depth < ctx->current_compiler->scope_depth) {
+    if (local->depth != -1 && local->depth < ctx->current_compiler->scope_depth) {
       break; // out of current depth
     }
 
     if (identifier_equals(name, &local->name)) {
       DIAGNOSTIC(ctx, "already a variable with this name in this scope.",
-                 {local->name, "first declared here"},
-                 {ctx->parser.previous, "re-declared here"});
+                 {local->name, "first declared here"}, {ctx->parser.previous, "re-declared here"});
     }
   }
 
@@ -274,23 +350,90 @@ static ConstantRef ctx_parse_variable(Context *ctx, const char *err_msg) {
   return ctx_identifier_constant(ctx, &ctx->parser.previous);
 }
 
-// define a global variable with the given name,
+// mark all variables in the current scope as initialized
+static void ctx_mark_initialized(Context *ctx) {
+  Compiler *c = ctx->current_compiler;
+  if (c->scope_depth == 0) {
+    return;
+  }
+  for (int i = c->local_count - 1; i >= 0; i--) {
+    Local *local = &c->locals[i];
+    if (local->depth != -1 && local->depth < c->scope_depth) {
+      break; // out of current depth
+    }
+    if (local->depth == -1) {
+      local->depth = c->scope_depth;
+    }
+  }
+}
+
+static int ctx_resolve_local(Context *ctx, Compiler *compiler, Token *name) {
+  for (int i = compiler->local_count - 1; i >= 0; i--) {
+    Local *local = &compiler->locals[i];
+    if (!identifier_equals(name, &local->name)) {
+      continue; // keep looking
+    }
+    if (local->depth == -1) {
+      ctx_error_at(ctx, name, "can't read local variable in its own initializer.");
+    }
+    return i;
+  }
+  return -1;
+}
+
+static VarRef ctx_resolve_variable(Context *ctx, Token name) {
+  VarRef ref;
+  Compiler *target = ctx->current_compiler;
+  if ((ref.local_index = ctx_resolve_local(ctx, target, &name)) > -1) {
+    ref.scope = REF_LOCAL;
+  } else {
+    ref.global = ctx_identifier_constant(ctx, &name);
+    ref.scope = REF_GLOBAL;
+  }
+  return ref;
+}
+
+static void ctx_emit_get(Context *ctx, VarRef ref) {
+  switch (ref.scope) {
+  case REF_LOCAL:
+    ctx_emit_bytes(ctx, OP_GET_LOCAL, (uint8_t)ref.local_index);
+    break;
+  case REF_GLOBAL:
+    ctx_emit_bytes(ctx, OP_GET_GLOBAL, (uint8_t)ref.global.index);
+    break;
+  }
+}
+
+static void ctx_emit_set(Context *ctx, VarRef ref) {
+  switch (ref.scope) {
+  case REF_LOCAL:
+    ctx_emit_bytes(ctx, OP_SET_LOCAL, (uint8_t)ref.local_index);
+    break;
+  case REF_GLOBAL:
+    ctx_emit_bytes(ctx, OP_SET_GLOBAL, (uint8_t)ref.global.index);
+    break;
+  }
+}
+
+static void ctx_named_variable(Context *ctx, Token name, bool can_assign) {
+  VarRef ref = ctx_resolve_variable(ctx, name);
+  if (can_assign && ctx_match(ctx, TOKEN_EQUAL)) {
+    expression(ctx);
+    ctx_emit_set(ctx, ref);
+  } else {
+    ctx_emit_get(ctx, ref);
+  }
+}
+
 static void ctx_define_variable(Context *ctx, ConstantRef name) {
   if (ctx->current_compiler->scope_depth > 0) {
-    return; // local variables are implicitly defined when declared
+    ctx_mark_initialized(ctx);
+    return;
   }
   ctx_emit_bytes(ctx, OP_DEFINE_GLOBAL, (uint8_t)name.index);
 }
 
-static void ctx_emit_get_global(Context *ctx, ConstantRef name) {
-  ctx_emit_bytes(ctx, OP_GET_GLOBAL, (uint8_t)name.index);
-}
-
-static void ctx_emit_set_global(Context *ctx, ConstantRef name) {
-  ctx_emit_bytes(ctx, OP_SET_GLOBAL, (uint8_t)name.index);
-}
-
-// -----------------------------------------------------------------------------
+// ===== scope management =====
 
 static void ctx_begin_compile(Context *ctx, Compiler *compiler) {
   compiler_init(compiler, ctx->current_compiler, ctx->al);
@@ -304,27 +447,21 @@ static Proto *ctx_end_compile(Context *ctx) {
   return compiler->proto;
 }
 
-typedef void (*ParseFunc)(Context *ctx, bool can_assign);
+static void ctx_begin_scope(Context *ctx) { ctx->current_compiler->scope_depth++; }
 
-typedef enum {
-  PREC_NONE,
-  PREC_ASSIGNMENT, // =
-  PREC_OR,         // or
-  PREC_AND,        // and
-  PREC_EQUALITY,   // == !=
-  PREC_COMPARISON, // < > <= >=
-  PREC_TERM,       // + -
-  PREC_FACTOR,     // * /
-  PREC_UNARY,      // ! -
-  PREC_CALL,       // . ()
-  PREC_PRIMARY
-} Precedence;
+static void ctx_end_scope(Context *ctx) {
+  assert(ctx->current_compiler->scope_depth > 0 && "scope underflow");
+  Compiler *c = ctx->current_compiler;
+  c->scope_depth--;
 
-typedef struct {
-  ParseFunc prefix;
-  ParseFunc infix;
-  Precedence precedence;
-} ParseRule;
+  // pop all variables in the current scope
+  while (c->local_count > 0 && c->locals[c->local_count - 1].depth > c->scope_depth) {
+    ctx_emit_byte(ctx, OP_POP);
+    c->local_count--;
+  }
+}
+
+// ===== parser rules & precedence =====
 
 static void grouping(Context *ctx, bool can_assign);
 static void number(Context *ctx, bool can_assign);
@@ -394,6 +531,8 @@ static ParseRule rules[] = {
 
 static inline ParseRule *get_rule(TokenType type) { return &rules[type]; }
 
+// ===== expression parsing =====
+
 static void parse_precedence(Context *ctx, Precedence precedence) {
   ctx_advance(ctx);
   ParseFunc prefix_rule = get_rule(ctx->parser.previous.type)->prefix;
@@ -418,40 +557,29 @@ static void parse_precedence(Context *ctx, Precedence precedence) {
 
 static void expression(Context *ctx) { parse_precedence(ctx, PREC_ASSIGNMENT); }
 
+// ===== statement parsing =====
+
 static void statement_expression(Context *ctx) {
   expression(ctx);
   ctx_consume(ctx, TOKEN_SEMICOLON, "expect ';' after expression.");
   ctx_emit_byte(ctx, OP_POP);
 }
 
-static void statement(Context *ctx) { statement_expression(ctx); }
+static void statement_block(Context *ctx) {
+  while (!ctx_check(ctx, TOKEN_RIGHT_BRACE) && !ctx_check(ctx, TOKEN_EOF)) {
+    declaration(ctx);
+  }
 
-static void ctx_synchronize(Context *ctx) {
-  ctx->parser.in_panic_mode = false;
+  ctx_consume(ctx, TOKEN_RIGHT_BRACE, "expect '}' after block.");
+}
 
-  while (ctx->parser.current.type != TOKEN_EOF) {
-    if (ctx->parser.current.type == TOKEN_SEMICOLON) {
-      ctx_advance(ctx);
-      return;
-    }
-
-    switch (ctx->parser.current.type) {
-    case TOKEN_RIGHT_BRACE:
-    case TOKEN_FUN:
-    case TOKEN_VAR:
-    case TOKEN_FOR:
-    case TOKEN_IF:
-    case TOKEN_RETURN:
-    case TOKEN_STRUCT:
-    case TOKEN_TRAIT:
-    case TOKEN_IMPL:
-    case TOKEN_VARIANT:
-      return;
-    default:
-      break;
-    }
-
-    ctx_advance(ctx);
+static void statement(Context *ctx) {
+  if (ctx_match(ctx, TOKEN_LEFT_BRACE)) {
+    ctx_begin_scope(ctx);
+    statement_block(ctx);
+    ctx_end_scope(ctx);
+  } else {
+    statement_expression(ctx);
   }
 }
 
@@ -477,6 +605,8 @@ static void declaration(Context *ctx) {
     ctx_synchronize(ctx);
   }
 }
+
+// ===== parse functions =====
 
 static void grouping(Context *ctx, bool can_assign) {
   (void)can_assign;
@@ -588,17 +718,10 @@ static void unary(Context *ctx, bool can_assign) {
 }
 
 static void variable(Context *ctx, bool can_assign) {
-  ConstantRef name = ctx_identifier_constant(ctx, &ctx->parser.previous);
-
-  if (can_assign && ctx_match(ctx, TOKEN_EQUAL)) {
-    expression(ctx);
-    ctx_emit_set_global(ctx, name);
-  } else {
-    ctx_emit_get_global(ctx, name);
-  }
+  ctx_named_variable(ctx, ctx->parser.previous, can_assign);
 }
 
-// -----------------------------------------------------------------------------
+// ===== public api =====
 
 Proto *compile(const char *source, Allocator *al) {
   Context ctx;

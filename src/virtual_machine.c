@@ -17,11 +17,40 @@
 #include "chunk_debug.h"
 #endif
 
-static Value load_constant(ConstantLoader *loader, Allocator *al, const RawConstant *raw) {
-  VirtualMachine *vm = (VirtualMachine *)loader->ctx;
-  (void)al;
-  (void)vm;
+// ===== stack operations =====
 
+static void vm_push(VirtualMachine *vm, Value value) {
+  assert(vm->stack_top < vm->stack + VM_STACK_MAX && "stack overflow");
+  *vm->stack_top++ = value;
+}
+
+static inline Value vm_pop(VirtualMachine *vm) {
+  assert(vm->stack_top > vm->stack && "stack underflow");
+  return *--vm->stack_top;
+}
+
+static inline Value vm_peek(VirtualMachine *vm, int distance) {
+  assert(vm->stack_top - distance - 1 >= vm->stack && "stack underflow");
+  return vm->stack_top[-1 - distance];
+}
+
+static void vm_reset_stack(VirtualMachine *vm) { vm->stack_top = vm->stack; }
+
+// ===== error handling =====
+
+void vm_panic(VirtualMachine *vm, const char *format, ...) {
+  va_list args;
+  va_start(args, format);
+  vsnprintf(vm->panic_message, sizeof(vm->panic_message), format, args);
+  va_end(args);
+
+  longjmp(vm->panic_jump, 1);
+}
+
+// ===== constant loading =====
+
+static Value load_constant(ConstantLoader *loader, Allocator *, const RawConstant *raw) {
+  VirtualMachine *vm = (VirtualMachine *)loader->ctx;
   switch (raw->type) {
   case RAW_NUMBER:
     return NUMBER_VAL(raw->as.number);
@@ -49,29 +78,7 @@ static void vm_load_proto(VirtualMachine *vm, Proto *proto) {
 #endif
 }
 
-static void vm_push(VirtualMachine *vm, Value value) {
-  assert(vm->stack_top < vm->stack + VM_STACK_MAX && "stack overflow");
-  *vm->stack_top++ = value;
-}
-
-static inline Value vm_pop(VirtualMachine *vm) {
-  assert(vm->stack_top > vm->stack && "stack underflow");
-  return *--vm->stack_top;
-}
-
-static inline Value vm_peek(VirtualMachine *vm, int distance) {
-  assert(vm->stack_top - distance - 1 >= vm->stack && "stack underflow");
-  return vm->stack_top[-1 - distance];
-}
-
-void vm_panic(VirtualMachine *vm, const char *format, ...) {
-  va_list args;
-  va_start(args, format);
-  vsnprintf(vm->panic_message, sizeof(vm->panic_message), format, args);
-  va_end(args);
-
-  longjmp(vm->panic_jump, 1);
-}
+// ===== operations =====
 
 static void vm_concat(VirtualMachine *vm) {
   ObjString *b = AS_STRING(vm_peek(vm, 0));
@@ -87,6 +94,8 @@ static void vm_concat(VirtualMachine *vm) {
   vm_pop(vm);
   vm_push(vm, OBJECT_VAL(str));
 }
+
+// ===== vm execution =====
 
 static void vm_run(VirtualMachine *vm) {
   uint8_t *ip = vm->chunk.code->data;
@@ -205,6 +214,16 @@ static void vm_run(VirtualMachine *vm) {
       *value = vm_peek(vm, 0);
       break;
     }
+    case OP_GET_LOCAL: {
+      uint8_t slot = READ_BYTE();
+      vm_push(vm, vm->stack[slot]);
+      break;
+    }
+    case OP_SET_LOCAL: {
+      uint8_t slot = READ_BYTE();
+      vm->stack[slot] = vm_peek(vm, 0);
+      break;
+    }
     case OP_RETURN:
       return;
     case OP_TRAP:
@@ -219,9 +238,7 @@ static void vm_run(VirtualMachine *vm) {
 #undef BINARY_OP
 }
 
-static void vm_reset_stack(VirtualMachine *vm) { vm->stack_top = vm->stack; }
-
-// -----------------------------------------------------------------------------
+// ===== initialization & cleanup =====
 
 void vm_init(VirtualMachine *vm, Allocator al) {
   vm_reset_stack(vm);
@@ -248,6 +265,8 @@ void vm_destroy(VirtualMachine *vm) {
   chunk_destroy(&vm->chunk, &vm->al);
 }
 
+// ===== object management =====
+
 ObjString *vm_intern_string(VirtualMachine *vm, StringView str) {
   uint32_t hash = sv_hash(str);
   ObjString tmp = {
@@ -273,6 +292,8 @@ void vm_track_object(VirtualMachine *vm, Object *object) {
   object->next = vm->objects;
   vm->objects = object;
 }
+
+// ===== public api =====
 
 InterpretResult vm_interpret(VirtualMachine *vm, const char *source) {
   Proto *proto = compile(source, &vm->al);
