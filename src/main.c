@@ -1,4 +1,5 @@
 #include "allocator.h"
+#include "builtins.h"
 #include "virtual_machine.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,6 +17,8 @@ int main(int argc, char *argv[]) {
   Allocator al = track_allocator_create(&ta);
 
   vm_init(&vm, al);
+
+  builtin_register(&vm);
 
   if (argc == 1) {
     repl(&vm);

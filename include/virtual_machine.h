@@ -17,7 +17,7 @@ typedef struct {
   Value *base;
 } CallFrame;
 
-typedef struct {
+typedef struct VirtualMachine {
   Value *stack_top;
   Value stack[VM_STACK_MAX];
   int frame_count;
@@ -40,6 +40,8 @@ void vm_destroy(VirtualMachine *vm);
 ObjString *vm_intern_string(VirtualMachine *vm, StringView str);
 
 void vm_track_object(VirtualMachine *vm, Object *object);
+
+void vm_define_native(VirtualMachine *vm, StringView name, NativeFunc function);
 
 void vm_panic(VirtualMachine *vm, const char *format, ...) __attribute__((noreturn));
 

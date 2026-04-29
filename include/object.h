@@ -4,7 +4,7 @@
 #include "string_utils.h"
 #include "value.h"
 
-typedef enum { OBJ_STRING, OBJ_FUNCTION } ObjectType;
+typedef enum { OBJ_STRING, OBJ_FUNCTION, OBJ_NATIVE } ObjectType;
 
 #define OBJ_MARK_FLAG (1 << 0)
 
@@ -29,6 +29,15 @@ typedef struct {
   ObjString *name;
 } ObjFunction;
 
+typedef struct VirtualMachine VirtualMachine;
+
+typedef Value (*NativeFunc)(VirtualMachine *vm, int arg_count, Value *args);
+
+typedef struct {
+  Object obj;
+  NativeFunc function;
+} ObjNative;
+
 // -----------------------------------------------------------------------------
 
 static inline bool value_is_obj_type(Value value, ObjectType type) {
@@ -37,11 +46,13 @@ static inline bool value_is_obj_type(Value value, ObjectType type) {
 
 #define IS_STRING(value) value_is_obj_type(value, OBJ_STRING)
 #define IS_FUNCTION(value) value_is_obj_type(value, OBJ_FUNCTION)
+#define IS_NATIVE(value) value_is_obj_type(value, OBJ_NATIVE)
 
 // -----------------------------------------------------------------------------
 
 #define AS_STRING(value) ((ObjString *)AS_OBJECT(value))
 #define AS_FUNCTION(value) ((ObjFunction *)AS_OBJECT(value))
+#define AS_NATIVE(value) ((ObjNative *)AS_OBJECT(value))
 
 // -----------------------------------------------------------------------------
 
@@ -68,5 +79,12 @@ bool obj_string_is_interned(ObjString *str);
 
 ObjFunction //
     *obj_function_new(Allocator *al, int arity);
-  
+
 void obj_function_free(ObjFunction **func, Allocator *al);
+
+// -----------------------------------------------------------------------------
+
+ObjNative //
+    *obj_native_new(NativeFunc function, Allocator *al);
+
+void obj_native_free(ObjNative **native, Allocator *al);

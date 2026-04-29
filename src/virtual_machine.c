@@ -150,10 +150,19 @@ static void vm_call_function(VirtualMachine *vm, ObjFunction *callee, int arg_co
   frame->base = vm->stack_top - callee->arity - 1;
 }
 
+static void vm_call_native(VirtualMachine *vm, ObjNative *native, int arg_count) {
+  Value result = native->function(vm, arg_count, vm->stack_top - arg_count);
+  vm->stack_top -= arg_count + 1;
+  vm_push(vm, result);
+}
+
 static void vm_call_object(VirtualMachine *vm, Object *callee, int arg_count) {
   switch (callee->type) {
   case OBJ_FUNCTION:
     vm_call_function(vm, (ObjFunction *)callee, arg_count);
+    return;
+  case OBJ_NATIVE:
+    vm_call_native(vm, (ObjNative *)callee, arg_count);
     return;
   default:
     break; // not callable
@@ -386,7 +395,7 @@ void vm_destroy(VirtualMachine *vm) {
   ht_destroy(&vm->globals, &vm->al);
 }
 
-// ===== object management =====
+// ===== public =====
 
 ObjString *vm_intern_string(VirtualMachine *vm, StringView str) {
   uint32_t hash = sv_hash(str);
@@ -409,9 +418,16 @@ ObjString *vm_intern_string(VirtualMachine *vm, StringView str) {
 
 void vm_track_object(VirtualMachine *vm, Object *object) {
   assert(object != NULL && "cannot track NULL object");
-  assert(object->next == NULL && "object is already tracked");
+  assert((object->next == NULL && vm->objects != object) && "object is already tracked");
   object->next = vm->objects;
   vm->objects = object;
+}
+
+void vm_define_native(VirtualMachine *vm, StringView name, NativeFunc function) {
+  ObjString *str = vm_intern_string(vm, name);
+  ObjNative *native = obj_native_new(function, &vm->al);
+  vm_track_object(vm, &native->obj);
+  ht_put(&vm->globals, OBJECT_VAL(str), OBJECT_VAL(native), &vm->al);
 }
 
 InterpretResult vm_interpret(VirtualMachine *vm, const char *source) {

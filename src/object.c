@@ -8,6 +8,7 @@
 static const char *obj_type_names[] = {
     [OBJ_STRING] = "string",
     [OBJ_FUNCTION] = "function",
+    [OBJ_NATIVE] = "native",
 };
 
 const char *obj_type_name(ObjectType type) {
@@ -30,6 +31,9 @@ int obj_sprintf(char *buf, int bufsize, Object *obj) {
     } else {
       return snprintf(buf, bufsize, "<fn @%p>", (void *)fn);
     }
+  }
+  case OBJ_NATIVE: {
+    return snprintf(buf, bufsize, "<native fn>");
   }
   default:
     assert(false && "unknown object type");
@@ -75,6 +79,9 @@ void obj_free(Object **obj, Allocator *al) {
     break;
   case OBJ_FUNCTION:
     obj_function_free((ObjFunction **)obj, al);
+    break;
+  case OBJ_NATIVE:
+    obj_native_free((ObjNative **)obj, al);
     break;
   default:
     assert(false && "unknown object type");
@@ -130,4 +137,21 @@ void obj_function_free(ObjFunction **obj, Allocator *al) {
   chunk_destroy(&(*obj)->chunk, al);
   al_free(al, *obj, sizeof(ObjFunction));
   *obj = NULL;
+}
+
+// -----------------------------------------------------------------------------
+
+ObjNative //
+    *obj_native_new(NativeFunc function, Allocator *al) {
+  ObjNative *obj = obj_new(sizeof(ObjNative), OBJ_NATIVE, al);
+  obj->function = function;
+  return obj;
+}
+
+void obj_native_free(ObjNative **native, Allocator *al) {
+  if (!*native) {
+    return;
+  }
+  al_free(al, *native, sizeof(ObjNative));
+  *native = NULL;
 }
