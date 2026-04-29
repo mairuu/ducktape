@@ -29,6 +29,17 @@ typedef struct {
   int depth;
 } Local;
 
+#define MAX_BREAK_JUMPS 16
+
+typedef struct Loop {
+  struct Loop *enclosing;
+  int start_offset;
+  int break_count;
+  int break_jumps[MAX_BREAK_JUMPS];
+  int scope_depth;
+  Token label;
+} Loop;
+
 #define COMPILER_MAX_LOCALS 256
 
 typedef struct Compiler {
@@ -37,6 +48,8 @@ typedef struct Compiler {
   int scope_depth;
   int local_count;
   Local locals[COMPILER_MAX_LOCALS];
+
+  Loop *current_loop; // fixme; labels should be per-compile-unit, not per-context
 
   Proto *proto;
 } Compiler;
@@ -102,8 +115,8 @@ typedef struct {
 
 // ===== constants & macros =====
 
-// Forward declarations for recursive functions
 static void declaration(Context *ctx);
+static void declaration_var(Context *ctx);
 static void statement(Context *ctx);
 static void expression(Context *ctx);
 static void ctx_advance(Context *ctx);
@@ -146,6 +159,7 @@ static void compiler_init(Compiler *compiler, Compiler *enclosing, Allocator *al
 
   compiler->scope_depth = 0;
   compiler->local_count = 0;
+  compiler->current_loop = NULL;
 
   compiler->proto = al_alloc_for(al, Proto);
   proto_init(compiler->proto, al);
@@ -299,6 +313,36 @@ static void ctx_emit_number(Context *ctx, double number) {
   ctx_emit_constant(ctx, ref);
 }
 
+static size_t ctx_code_offset(Context *ctx) {
+  return arr_count(ctx->current_compiler->proto->code);
+}
+
+static int ctx_emit_jump(Context *ctx, uint8_t instruction) {
+  ctx_emit_bytes(ctx, instruction, 0, 0);
+  return ctx_code_offset(ctx) - 2;
+}
+
+static void ctx_patch_jump(Context *ctx, int offset) {
+  int jump = ctx_code_offset(ctx) - offset - 2;
+
+  if (jump > UINT16_MAX) {
+    ctx_error_at(ctx, &ctx->parser.previous, "too much code to jump over.");
+  }
+
+  proto_patch_short(ctx->current_compiler->proto, offset, (uint16_t)jump);
+}
+
+static void ctx_emit_loop(Context *ctx, int loop_start) {
+  ctx_emit_byte(ctx, OP_LOOP);
+
+  int offset = ctx_code_offset(ctx) - loop_start + 2;
+  if (offset > UINT16_MAX) {
+    ctx_error_at(ctx, &ctx->parser.previous, "loop body too large.");
+  }
+
+  ctx_emit_bytes(ctx, (offset >> 8) & 0xff, offset & 0xff);
+}
+
 // ===== variable management =====
 
 static void ctx_add_local(Context *ctx, Token *name) {
@@ -433,6 +477,19 @@ static void ctx_define_variable(Context *ctx, ConstantRef name) {
   ctx_emit_bytes(ctx, OP_DEFINE_GLOBAL, (uint8_t)name.index);
 }
 
+// ===== loop management =====
+
+Loop *ctx_resolve_loop(Context *ctx, Token *label) {
+  Loop *loop = ctx->current_compiler->current_loop;
+  while (loop != NULL) {
+    if (identifier_equals(label, &loop->label)) {
+      return loop;
+    }
+    loop = loop->enclosing;
+  }
+  return NULL;
+}
+
 // ===== scope management =====
 
 static void ctx_begin_compile(Context *ctx, Compiler *compiler) {
@@ -461,6 +518,22 @@ static void ctx_end_scope(Context *ctx) {
   }
 }
 
+static void ctx_begin_loop(Context *ctx, Loop *loop, int start, Token *label) {
+  *loop = (Loop){
+      .enclosing = ctx->current_compiler->current_loop,
+      .start_offset = start,
+      .break_count = 0,
+      .scope_depth = ctx->current_compiler->scope_depth,
+      .label = label ? *label : (Token){0},
+  };
+  ctx->current_compiler->current_loop = loop;
+}
+
+static void ctx_end_loop(Context *ctx) {
+  assert(ctx->current_compiler->current_loop != NULL && "no loop to end");
+  ctx->current_compiler->current_loop = ctx->current_compiler->current_loop->enclosing;
+}
+
 // ===== parser rules & precedence =====
 
 static void grouping(Context *ctx, bool can_assign);
@@ -470,6 +543,8 @@ static void string(Context *ctx, bool can_assign);
 static void binary(Context *ctx, bool can_assign);
 static void unary(Context *ctx, bool can_assign);
 static void variable(Context *ctx, bool can_assign);
+static void and_(Context *ctx, bool can_assign);
+static void or_(Context *ctx, bool can_assign);
 
 static ParseRule rules[] = {
     [TOKEN_LEFT_PAREN] = {grouping, NULL, PREC_NONE}, //
@@ -502,7 +577,7 @@ static ParseRule rules[] = {
     [TOKEN_STRING] = {string, NULL, PREC_NONE},       //
     [TOKEN_NUMBER] = {number, NULL, PREC_NONE},       //
 
-    [TOKEN_AND] = {NULL, NULL, PREC_NONE},      //
+    [TOKEN_AND] = {NULL, and_, PREC_AND},       //
     [TOKEN_AS] = {NULL, NULL, PREC_NONE},       //
     [TOKEN_BREAK] = {NULL, NULL, PREC_NONE},    //
     [TOKEN_CONTINUE] = {NULL, NULL, PREC_NONE}, //
@@ -516,7 +591,7 @@ static ParseRule rules[] = {
     [TOKEN_IMPL] = {NULL, NULL, PREC_NONE},     //
     [TOKEN_MATCH] = {NULL, NULL, PREC_NONE},    //
     [TOKEN_NIL] = {literal, NULL, PREC_NONE},   //
-    [TOKEN_OR] = {NULL, NULL, PREC_NONE},       //
+    [TOKEN_OR] = {NULL, or_, PREC_OR},          //
     [TOKEN_RETURN] = {NULL, NULL, PREC_NONE},   //
     [TOKEN_STRUCT] = {NULL, NULL, PREC_NONE},   //
     [TOKEN_THIS] = {NULL, NULL, PREC_NONE},     //
@@ -573,11 +648,203 @@ static void statement_block(Context *ctx) {
   ctx_consume(ctx, TOKEN_RIGHT_BRACE, "expect '}' after block.");
 }
 
+static void statement_if(Context *ctx) {
+  expression(ctx);
+
+  int else_jump = ctx_emit_jump(ctx, OP_JUMP_IF_FALSE);
+  ctx_emit_byte(ctx, OP_POP); // pop condition result
+
+  ctx_begin_scope(ctx);
+  ctx_consume(ctx, TOKEN_LEFT_BRACE, "expect '{' after 'if' condition.");
+  statement_block(ctx);
+  ctx_end_scope(ctx);
+
+  int exit_jump = ctx_emit_jump(ctx, OP_JUMP);
+
+  ctx_patch_jump(ctx, else_jump);
+  ctx_emit_byte(ctx, OP_POP);
+
+  if (ctx_match(ctx, TOKEN_ELSE)) {
+    if (ctx_match(ctx, TOKEN_IF)) {
+      statement_if(ctx); // else if
+    } else {
+      ctx_begin_scope(ctx);
+      ctx_consume(ctx, TOKEN_LEFT_BRACE, "expect '{' after 'else'.");
+      statement_block(ctx);
+      ctx_end_scope(ctx);
+    }
+  }
+
+  ctx_patch_jump(ctx, exit_jump);
+}
+
+static void statement_for(Context *ctx) {
+  ctx_begin_scope(ctx);
+
+  Token loop_label = {0};
+
+  if (ctx_match(ctx, TOKEN_APOSTROPHE)) {
+    ctx_consume(ctx, TOKEN_IDENTIFIER, "expect identifier after loop label.");
+    loop_label = ctx->parser.previous;
+  }
+
+  int loop_start = ctx_code_offset(ctx);
+  int exit_jump = -1;
+  bool has_condition = false;
+
+  if (ctx_match(ctx, TOKEN_SEMICOLON)) {
+    // no initializer
+  } else if (ctx_check(ctx, TOKEN_LEFT_BRACE)) {
+    // infinite loop
+  } else if (ctx_match(ctx, TOKEN_VAR)) {
+    declaration_var(ctx);
+    ctx_match(ctx, TOKEN_SEMICOLON); // consume optional semicolon after var declaration
+    loop_start = ctx_code_offset(ctx);
+  } else {
+    // ambiguous expression
+    int expr_start = ctx_code_offset(ctx);
+    expression(ctx);
+
+    if (ctx_match(ctx, TOKEN_SEMICOLON)) {
+      // it was initializer
+      ctx_emit_byte(ctx, OP_POP); // pop initializer result
+      loop_start = ctx_code_offset(ctx);
+    } else {
+      // it was condition
+      loop_start = expr_start;
+      has_condition = true;
+    }
+  }
+
+  if (!has_condition && !ctx_check(ctx, TOKEN_LEFT_BRACE)) {
+    if (ctx_match(ctx, TOKEN_SEMICOLON)) {
+      // explicitly omit condition for ; ; {}
+    } else {
+      expression(ctx);
+      has_condition = true;
+      ctx_match(ctx, TOKEN_SEMICOLON); // consume optional trailing semicolon
+    }
+  }
+
+  if (has_condition) {
+    exit_jump = ctx_emit_jump(ctx, OP_JUMP_IF_FALSE);
+    ctx_emit_byte(ctx, OP_POP); // pop condition result
+  }
+
+  // if we did not hit body's left brace, it means we have an increment clause
+  if (!ctx_check(ctx, TOKEN_LEFT_BRACE)) {
+    int body_jump = ctx_emit_jump(ctx, OP_JUMP);
+    int increment_start = ctx_code_offset(ctx);
+
+    expression(ctx);
+    ctx_match(ctx, TOKEN_SEMICOLON); // optional
+    ctx_emit_byte(ctx, OP_POP);
+
+    ctx_emit_loop(ctx, loop_start);
+    loop_start = increment_start;
+    ctx_patch_jump(ctx, body_jump);
+  }
+
+  Loop loop;
+  ctx_begin_loop(ctx, &loop, loop_start, &loop_label);
+
+  ctx_match(ctx, TOKEN_SEMICOLON); // optional semicolon before body
+  ctx_consume(ctx, TOKEN_LEFT_BRACE, "expect '{' before for body.");
+
+  ctx_begin_scope(ctx);
+  statement_block(ctx);
+  ctx_end_scope(ctx);
+
+  ctx_emit_loop(ctx, loop_start);
+  if (exit_jump != -1) {
+    ctx_patch_jump(ctx, exit_jump);
+    ctx_emit_byte(ctx, OP_POP);
+  }
+
+  for (int i = 0; i < loop.break_count; i++) {
+    ctx_patch_jump(ctx, loop.break_jumps[i]);
+  }
+
+  ctx_end_loop(ctx);
+
+  ctx_end_scope(ctx);
+}
+
+static void statement_break(Context *ctx) {
+  if (ctx->current_compiler->current_loop == NULL) {
+    ctx_error_at(ctx, &ctx->parser.previous, "can't use 'break' outside of a loop.");
+    return;
+  }
+  Loop *loop = ctx->current_compiler->current_loop;
+  if (loop->break_count >= MAX_BREAK_JUMPS) {
+    ctx_error_at(ctx, &ctx->parser.previous, "too many 'break' statements in one loop.");
+    return;
+  }
+
+  if (ctx_match(ctx, TOKEN_IDENTIFIER)) {
+    loop = ctx_resolve_loop(ctx, &ctx->parser.previous);
+    if (loop == NULL) {
+      char err_msg[100];
+      snprintf(err_msg, sizeof(err_msg), "no enclosing loop with label '%.*s'.",
+               ctx->parser.previous.length, ctx->parser.previous.start);
+      ctx_error_at(ctx, &ctx->parser.previous, err_msg);
+      return;
+    }
+  }
+
+  ctx_consume(ctx, TOKEN_SEMICOLON, "expect ';' after 'break'.");
+
+  // pop local variables until end of loop's scope
+  const Compiler *c = ctx->current_compiler;
+  for (int i = c->local_count - 1; i >= 0 && c->locals[i].depth > loop->scope_depth; i--) {
+    ctx_emit_byte(ctx, OP_POP);
+  }
+
+  loop->break_jumps[loop->break_count++] = ctx_emit_jump(ctx, OP_JUMP);
+}
+
+static void statement_continue(Context *ctx) {
+  if (ctx->current_compiler->current_loop == NULL) {
+    ctx_error_at(ctx, &ctx->parser.current, "can't use 'continue' outside of a loop.");
+    return;
+  }
+  Loop *loop = ctx->current_compiler->current_loop;
+  if (ctx_match(ctx, TOKEN_IDENTIFIER)) {
+    loop = ctx_resolve_loop(ctx, &ctx->parser.previous);
+    if (loop == NULL) {
+      char err_msg[100];
+      snprintf(err_msg, sizeof(err_msg), "no enclosing loop with label '%.*s'.",
+               ctx->parser.previous.length, ctx->parser.previous.start);
+      ctx_error_at(ctx, &ctx->parser.previous, err_msg);
+      return;
+    }
+  }
+
+  ctx_consume(ctx, TOKEN_SEMICOLON, "expect ';' after 'continue'.");
+
+  // pop local variables until end of loop's scope
+  const Compiler *c = ctx->current_compiler;
+  for (int i = c->local_count - 1; i >= 0 && c->locals[i].depth > loop->scope_depth; i--) {
+    ctx_emit_byte(ctx, OP_POP);
+  }
+
+  ctx_emit_loop(ctx, loop->start_offset);
+}
+
 static void statement(Context *ctx) {
   if (ctx_match(ctx, TOKEN_LEFT_BRACE)) {
     ctx_begin_scope(ctx);
     statement_block(ctx);
     ctx_end_scope(ctx);
+  } else if (ctx_match(ctx, TOKEN_IF)) {
+    statement_if(ctx);
+  } else if (ctx_match(ctx, TOKEN_FOR)) {
+    statement_for(ctx);
+  } else if (ctx_match(ctx, TOKEN_BREAK)) {
+    statement_break(ctx);
+  } else if (ctx_match(ctx, TOKEN_CONTINUE)) {
+    statement_continue(ctx);
+
   } else {
     statement_expression(ctx);
   }
@@ -721,6 +988,28 @@ static void variable(Context *ctx, bool can_assign) {
   ctx_named_variable(ctx, ctx->parser.previous, can_assign);
 }
 
+static void and_(Context *ctx, bool can_assign) {
+  (void)can_assign;
+
+  int end_jump = ctx_emit_jump(ctx, OP_JUMP_IF_FALSE);
+  ctx_emit_byte(ctx, OP_POP);
+  parse_precedence(ctx, PREC_AND);
+  ctx_patch_jump(ctx, end_jump);
+}
+
+static void or_(Context *ctx, bool can_assign) {
+  (void)can_assign;
+
+  int else_jump = ctx_emit_jump(ctx, OP_JUMP_IF_FALSE);
+  int end_jump = ctx_emit_jump(ctx, OP_JUMP);
+
+  ctx_patch_jump(ctx, else_jump);
+  ctx_emit_byte(ctx, OP_POP);
+
+  parse_precedence(ctx, PREC_OR);
+  ctx_patch_jump(ctx, end_jump);
+}
+
 // ===== public api =====
 
 Proto *compile(const char *source, Allocator *al) {
@@ -737,6 +1026,12 @@ Proto *compile(const char *source, Allocator *al) {
   }
 
   Proto *proto = ctx_end_compile(&ctx);
+  if (ctx.parser.had_error) {
+    proto_destroy(proto, al);
+    al_free_for(al, proto);
+    ctx_destroy(&ctx);
+    return NULL;
+  }
 
   ctx_destroy(&ctx);
 

@@ -117,10 +117,9 @@ static bool is_alphabet(char c) {
   return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
 }
 
-static TokenType check_keyword(Scanner *s, int start, int length,
-                               const char *rest, TokenType type) {
-  if (s->current - s->start == start + length &&
-      memcmp(s->start + start, rest, length) == 0) {
+static TokenType check_keyword(Scanner *s, int start, int length, const char *rest,
+                               TokenType type) {
+  if (s->current - s->start == start + length && memcmp(s->start + start, rest, length) == 0) {
     return type;
   }
   return TOKEN_IDENTIFIER;
@@ -258,6 +257,8 @@ Token scanner_next_token(Scanner *s) {
   }
 
   switch (c) {
+  case '\'':
+    return token_create(s, TOKEN_APOSTROPHE);
   case '(':
     return token_create(s, TOKEN_LEFT_PAREN);
   case ')':

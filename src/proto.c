@@ -41,3 +41,8 @@ int proto_write_constant(Proto *proto, RawConstant constant, Allocator *al) {
   arr_push(proto->constants, constant, al);
   return arr_count(proto->constants) - 1;
 }
+
+void proto_patch_short(Proto *proto, int offset, uint16_t value) {
+  proto->code->data[offset] = (value >> 8) & 0xff; // high byte.
+  proto->code->data[offset + 1] = value & 0xff;    // low byte.
+}

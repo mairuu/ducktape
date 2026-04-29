@@ -27,7 +27,7 @@ bool val_equal(Value a, Value b) {
   return false;
 }
 
-bool val_falsey(Value value) {
+bool val_is_falsey(Value value) {
   switch (value.type) {
   case VAL_EMPTY:
     return true;

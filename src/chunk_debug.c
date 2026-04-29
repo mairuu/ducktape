@@ -32,6 +32,13 @@ static int byte_instruction(const char *name, Chunk *chunk, int offset) {
   return offset + 2;
 }
 
+static int jump_instruction(const char *name, Chunk *chunk, bool is_forward, int offset) {
+  uint16_t jump = (uint16_t)(chunk->code->data[offset + 1] << 8);
+  jump |= chunk->code->data[offset + 2];
+  printf("%-16s %04d -> %04d\n", name, offset, offset + 3 + (is_forward ? jump : -jump));
+  return offset + 3;
+}
+
 int disassemble_chunk_instruction(Chunk *chunk, int offset) {
   printf("%04d ", offset);
   if (offset > 0 && chunk->lines->data[offset] == chunk->lines->data[offset - 1]) {
@@ -82,11 +89,18 @@ int disassemble_chunk_instruction(Chunk *chunk, int offset) {
     return constant_instruction("OP_GET_GLOBAL", chunk, offset);
   case OP_SET_GLOBAL:
     return constant_instruction("OP_SET_GLOBAL", chunk, offset);
-  
+
   case OP_GET_LOCAL:
     return byte_instruction("OP_GET_LOCAL", chunk, offset);
   case OP_SET_LOCAL:
     return byte_instruction("OP_SET_LOCAL", chunk, offset);
+
+  case OP_LOOP:
+    return jump_instruction("OP_LOOP", chunk, false, offset);
+  case OP_JUMP:
+    return jump_instruction("OP_JUMP", chunk, true, offset);
+  case OP_JUMP_IF_FALSE:
+    return jump_instruction("OP_JUMP_IF_FALSE", chunk, true, offset);
 
   case OP_TRAP:
     return simple_instruction("OP_TRAP", offset);

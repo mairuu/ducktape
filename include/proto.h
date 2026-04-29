@@ -36,3 +36,5 @@ void proto_destroy(Proto *proto, Allocator *al);
 void proto_write_code(Proto *proto, uint8_t byte, int line, Allocator *al);
 
 int proto_write_constant(Proto *proto, RawConstant constant, Allocator *al);
+
+void proto_patch_short(Proto *proto, int offset, uint16_t value);

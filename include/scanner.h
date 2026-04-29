@@ -7,6 +7,7 @@ typedef struct {
 } Scanner;
 
 typedef enum {
+  TOKEN_APOSTROPHE,
   TOKEN_LEFT_PAREN,
   TOKEN_RIGHT_PAREN,
   TOKEN_LEFT_BRACE,

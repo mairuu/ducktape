@@ -101,6 +101,7 @@ static void vm_run(VirtualMachine *vm) {
   uint8_t *ip = vm->chunk.code->data;
 
 #define READ_BYTE() (*ip++)
+#define READ_SHORT() (ip += 2, (uint16_t)(ip[-2] << 8 | ip[-1]))
 #define READ_CONSTANT(idx) (vm->chunk.constants->data[(idx)])
 #define BINARY_OP(val, op)                                                                         \
   if (!IS_NUMBER(vm_peek(vm, 0)) || !IS_NUMBER(vm_peek(vm, 1))) {                                  \
@@ -163,7 +164,7 @@ static void vm_run(VirtualMachine *vm) {
       vm->stack_top[-1] = NUMBER_VAL(-AS_NUMBER(vm_peek(vm, 0)));
       break;
     case OP_NOT:
-      vm->stack_top[-1] = BOOL_VAL(val_falsey(vm_peek(vm, 0)));
+      vm->stack_top[-1] = BOOL_VAL(val_is_falsey(vm_peek(vm, 0)));
       break;
     case OP_EQUAL:
       Value b = vm_pop(vm);
@@ -222,6 +223,23 @@ static void vm_run(VirtualMachine *vm) {
     case OP_SET_LOCAL: {
       uint8_t slot = READ_BYTE();
       vm->stack[slot] = vm_peek(vm, 0);
+      break;
+    }
+    case OP_LOOP: {
+      uint16_t offset = READ_SHORT();
+      ip -= offset;
+      break;
+    }
+    case OP_JUMP: {
+      uint16_t offset = READ_SHORT();
+      ip += offset;
+      break;
+    }
+    case OP_JUMP_IF_FALSE: {
+      uint16_t offset = READ_SHORT();
+      if (val_is_falsey(vm_peek(vm, 0))) {
+        ip += offset;
+      }
       break;
     }
     case OP_RETURN:
