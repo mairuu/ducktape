@@ -27,7 +27,13 @@ typedef struct {
 typedef struct {
   Token name;
   int depth;
+  bool is_captured;
 } Local;
+
+typedef struct {
+  uint8_t index;
+  bool is_local;
+} Upvalue;
 
 #define MAX_BREAK_JUMPS 16
 
@@ -48,8 +54,9 @@ typedef struct Compiler {
   int scope_depth;
   int local_count;
   Local locals[COMPILER_MAX_LOCALS];
+  Upvalue upvalues[COMPILER_MAX_LOCALS];
 
-  Loop *current_loop; // fixme; labels should be per-compile-unit, not per-context
+  Loop *current_loop;
 
   Proto *proto;
 } Compiler;
@@ -80,6 +87,7 @@ typedef struct {
 
 typedef enum {
   REF_LOCAL,
+  REF_UPVALUE,
   REF_GLOBAL,
 } RefScope;
 
@@ -87,6 +95,7 @@ typedef struct {
   RefScope scope;
   union {
     int local_index;    // if scope == REF_LOCAL
+    int upvalue_index;  // if scope == REF_UPVALUE
     ConstantRef global; // if scope == REF_GLOBAL
   };
 } VarRef;
@@ -184,6 +193,7 @@ static void compiler_init(Compiler *compiler, Compiler *enclosing, Allocator *al
   Local *local = &compiler->locals[compiler->local_count++];
   local->name = (Token){.start = "", .length = 0, .line_number = 0};
   local->depth = 0;
+  local->is_captured = false;
 }
 
 static void ctx_init(Context *ctx, const char *source, Allocator *al) {
@@ -343,6 +353,20 @@ static void ctx_emit_constant(Context *ctx, ConstantRef ref) {
   ctx_emit_bytes(ctx, OP_CONSTANT, (uint8_t)ref.index);
 }
 
+static void ctx_emit_closure(Context *ctx, Compiler *compiler, ConstantRef ref) {
+  Proto *proto = compiler->proto;
+
+  if (ref.index > UINT8_MAX) {
+    ctx_error_at(ctx, &ctx->parser.previous, "too many constants in one chunk");
+    return;
+  }
+  ctx_emit_bytes(ctx, OP_CLOSURE, (uint8_t)ref.index);
+  for (int i = 0; i < proto->upvalue_count; i++) {
+    Upvalue *upvalue = &compiler->upvalues[i];
+    ctx_emit_bytes(ctx, upvalue->is_local ? 1 : 0, upvalue->index);
+  }
+}
+
 static void ctx_emit_number(Context *ctx, double number) {
   if (number == (int)number && number >= 0 && number <= UINT8_MAX) {
     ctx_emit_bytes(ctx, OP_BYTE, (uint8_t)number);
@@ -394,6 +418,25 @@ static void ctx_add_local(Context *ctx, Token *name) {
   Local *local = &ctx->current_compiler->locals[ctx->current_compiler->local_count++];
   local->name = *name;
   local->depth = -1;
+}
+
+static int ctx_add_upvalue(Context *ctx, Compiler *compiler, uint8_t index, bool is_local) {
+  int i = compiler->proto->upvalue_count;
+  for (int j = 0; j < i; j++) {
+    Upvalue *upvalue = &compiler->upvalues[j];
+    if (upvalue->index == index && upvalue->is_local == is_local) {
+      return j; // already have this upvalue
+    }
+  }
+
+  if (i == UINT8_MAX) {
+    ctx_error_at(ctx, &ctx->parser.previous, "too many closure variables in function.");
+    return -1;
+  }
+
+  compiler->upvalues[i].index = index;
+  compiler->upvalues[i].is_local = is_local;
+  return compiler->proto->upvalue_count++;
 }
 
 static ConstantRef ctx_identifier_constant(Context *ctx, Token *name) {
@@ -465,11 +508,32 @@ static int ctx_resolve_local(Context *ctx, Compiler *compiler, Token *name) {
   return -1;
 }
 
+static int ctx_resolve_upvalue(Context *ctx, Compiler *compiler, Token *name) {
+  if (compiler->enclosing == NULL) {
+    return -1; // not found
+  }
+
+  int local_index = ctx_resolve_local(ctx, compiler->enclosing, name);
+  if (local_index != -1) {
+    compiler->enclosing->locals[local_index].is_captured = true;
+    return ctx_add_upvalue(ctx, compiler, (uint8_t)local_index, true);
+  }
+
+  int upvalue_index = ctx_resolve_upvalue(ctx, compiler->enclosing, name);
+  if (upvalue_index != -1) {
+    return ctx_add_upvalue(ctx, compiler, (uint8_t)upvalue_index, false);
+  }
+
+  return -1; // not found
+}
+
 static VarRef ctx_resolve_variable(Context *ctx, Token name) {
   VarRef ref;
   Compiler *target = ctx->current_compiler;
   if ((ref.local_index = ctx_resolve_local(ctx, target, &name)) > -1) {
     ref.scope = REF_LOCAL;
+  } else if ((ref.upvalue_index = ctx_resolve_upvalue(ctx, target, &name)) > -1) {
+    ref.scope = REF_UPVALUE;
   } else {
     ref.global = ctx_identifier_constant(ctx, &name);
     ref.scope = REF_GLOBAL;
@@ -482,6 +546,9 @@ static void ctx_emit_get(Context *ctx, VarRef ref) {
   case REF_LOCAL:
     ctx_emit_bytes(ctx, OP_GET_LOCAL, (uint8_t)ref.local_index);
     break;
+  case REF_UPVALUE:
+    ctx_emit_bytes(ctx, OP_GET_UPVALUE, (uint8_t)ref.upvalue_index);
+    break;
   case REF_GLOBAL:
     ctx_emit_bytes(ctx, OP_GET_GLOBAL, (uint8_t)ref.global.index);
     break;
@@ -492,6 +559,9 @@ static void ctx_emit_set(Context *ctx, VarRef ref) {
   switch (ref.scope) {
   case REF_LOCAL:
     ctx_emit_bytes(ctx, OP_SET_LOCAL, (uint8_t)ref.local_index);
+    break;
+  case REF_UPVALUE:
+    ctx_emit_bytes(ctx, OP_SET_UPVALUE, (uint8_t)ref.upvalue_index);
     break;
   case REF_GLOBAL:
     ctx_emit_bytes(ctx, OP_SET_GLOBAL, (uint8_t)ref.global.index);
@@ -563,7 +633,7 @@ static void ctx_end_scope(Context *ctx) {
 
   // pop all variables in the current scope
   while (c->local_count > 0 && c->locals[c->local_count - 1].depth > c->scope_depth) {
-    ctx_emit_byte(ctx, OP_POP);
+    ctx_emit_byte(ctx, c->locals[c->local_count - 1].is_captured ? OP_CLOSE_UPVALUE : OP_POP);
     c->local_count--;
   }
 }
@@ -637,7 +707,11 @@ static void ctx_compile_function(Context *ctx) {
   ConstantRef function_ref =
       ctx_make_constant(ctx, (RawConstant){.type = RAW_FUNCTION, .as.function = proto});
 
-  ctx_emit_constant(ctx, function_ref);
+  if (proto->upvalue_count == 0) {
+    ctx_emit_constant(ctx, function_ref);
+  } else {
+    ctx_emit_closure(ctx, &compiler, function_ref);
+  }
 }
 
 // ===== parser rules & precedence =====
@@ -908,7 +982,7 @@ static void statement_break(Context *ctx) {
   // pop local variables until end of loop's scope
   const Compiler *c = ctx->current_compiler;
   for (int i = c->local_count - 1; i >= 0 && c->locals[i].depth > loop->scope_depth; i--) {
-    ctx_emit_byte(ctx, OP_POP);
+    ctx_emit_byte(ctx, c->locals[i].is_captured ? OP_CLOSE_UPVALUE : OP_POP);
   }
 
   loop->break_jumps[loop->break_count++] = ctx_emit_jump(ctx, OP_JUMP);
@@ -936,7 +1010,7 @@ static void statement_continue(Context *ctx) {
   // pop local variables until end of loop's scope
   const Compiler *c = ctx->current_compiler;
   for (int i = c->local_count - 1; i >= 0 && c->locals[i].depth > loop->scope_depth; i--) {
-    ctx_emit_byte(ctx, OP_POP);
+    ctx_emit_byte(ctx, c->locals[i].is_captured ? OP_CLOSE_UPVALUE : OP_POP);
   }
 
   ctx_emit_loop(ctx, loop->start_offset);
@@ -944,8 +1018,7 @@ static void statement_continue(Context *ctx) {
 
 static void statement_return(Context *ctx) {
   if (ctx->current_compiler->enclosing == NULL) {
-    ctx_error_at(ctx, &ctx->parser.previous,
-                 "can't return from top-level code.");
+    ctx_error_at(ctx, &ctx->parser.previous, "can't return from top-level code.");
   }
 
   if (ctx_check(ctx, TOKEN_SEMICOLON)) {

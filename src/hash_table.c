@@ -25,7 +25,7 @@ static inline bool is_tombstone(Entry *entry) {
 }
 
 static inline void mark_tombstone(Entry *entry) {
-  entry->key = EMPTY_VALUE;
+  entry->key = EMPTY_VAL;
   entry->value = OBJECT_VAL(TOMBSTONE_VALUE);
 }
 
@@ -34,7 +34,7 @@ static inline bool is_empty(Entry *entry) {
 }
 
 static inline void mark_empty(Entry *entry) {
-  entry->key = EMPTY_VALUE;
+  entry->key = EMPTY_VAL;
   entry->value = NIL_VAL;
 }
 

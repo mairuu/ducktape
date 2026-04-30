@@ -20,6 +20,7 @@ typedef enum {
 
 typedef struct {
   ObjFunction *function;
+  ObjUpvalue **upvalues;
 
   uint8_t *ip;
   Value *base;
@@ -31,9 +32,11 @@ typedef struct VirtualMachine {
   int frame_count;
   CallFrame frames[VM_FRAMES_MAX];
 
-  Object *objects;
+  Object *objects; // linked list
   HashTable strings;
   HashTable globals;
+
+  ObjUpvalue *open_upvalues; // linked list
 
   jmp_buf panic_jump;
   char panic_message[256];

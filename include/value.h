@@ -32,7 +32,7 @@ typedef struct {
 #define AS_NUMBER(value) ((value).as.number)
 #define AS_OBJECT(value) ((value).as.object)
 
-#define EMPTY_VALUE ((Value){.type = VAL_EMPTY})
+#define EMPTY_VAL ((Value){.type = VAL_EMPTY})
 #define NIL_VAL ((Value){.type = VAL_NIL})
 #define BOOL_VAL(value) ((Value){.type = VAL_BOOL, .as.boolean = (value)})
 #define NUMBER_VAL(value) ((Value){.type = VAL_NUMBER, .as.number = (value)})

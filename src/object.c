@@ -3,12 +3,16 @@
 #include <assert.h>
 #include <stdio.h>
 
+#include "allocator.h"
 #include "string_utils.h"
+#include "value.h"
 
 static const char *obj_type_names[] = {
     [OBJ_STRING] = "string",
     [OBJ_FUNCTION] = "function",
     [OBJ_NATIVE] = "native",
+    [OBJ_UPVALUE] = "upvalue",
+    [OBJ_CLOSURE] = "closure",
 };
 
 const char *obj_type_name(ObjectType type) {
@@ -40,6 +44,17 @@ int obj_sprintf(char *buf, int bufsize, Object *obj) {
   }
   case OBJ_NATIVE: {
     return snprintf(buf, bufsize, "<native fn>");
+  }
+  case OBJ_UPVALUE: {
+    return snprintf(buf, bufsize, "<upvalue @%p>", (void *)obj);
+  }
+  case OBJ_CLOSURE: {
+    ObjFunction *fn = ((ObjClosure *)obj)->func;
+    if (fn->name) {
+      return snprintf(buf, bufsize, "<fn %.*s>", fn->name->str.length, fn->name->str.chars);
+    } else {
+      return snprintf(buf, bufsize, "<fn @%p>", (void *)fn);
+    }
   }
   default:
     assert(false && "unknown object type");
@@ -89,6 +104,12 @@ void obj_free(Object **obj, Allocator *al) {
   case OBJ_NATIVE:
     obj_native_free((ObjNative **)obj, al);
     break;
+  case OBJ_UPVALUE:
+    obj_upvalue_free((ObjUpvalue **)obj, al);
+    break;
+  case OBJ_CLOSURE:
+    obj_closure_free((ObjClosure **)obj, al);
+    break;
   default:
     assert(false && "unknown object type");
     break;
@@ -103,9 +124,7 @@ void obj_set_marked(Object *obj, bool marked) {
   }
 }
 
-bool obj_is_marked(Object *obj) {
-  return obj->flags & OBJ_MARKED_FLAG;
-}
+bool obj_is_marked(Object *obj) { return obj->flags & OBJ_MARKED_FLAG; }
 
 // -----------------------------------------------------------------------------
 
@@ -142,6 +161,7 @@ ObjFunction //
     *obj_function_new(Allocator *al, int arity) {
   ObjFunction *obj = obj_new(sizeof(ObjFunction), OBJ_FUNCTION, al);
   obj->arity = arity;
+  obj->upvalue_count = 0;
   chunk_init(&obj->chunk);
   obj->name = NULL;
   return obj;
@@ -162,7 +182,7 @@ void obj_function_free(ObjFunction **obj, Allocator *al) {
 ObjNative //
     *obj_native_new(NativeFunc function, Allocator *al) {
   ObjNative *obj = obj_new(sizeof(ObjNative), OBJ_NATIVE, al);
-  obj->function = function;
+  obj->func = function;
   return obj;
 }
 
@@ -172,4 +192,46 @@ void obj_native_free(ObjNative **native, Allocator *al) {
   }
   al_free(al, *native, sizeof(ObjNative));
   *native = NULL;
+}
+
+// -----------------------------------------------------------------------------
+
+ObjUpvalue //
+    *obj_upvalue_new(Allocator *al, Value *location) {
+  ObjUpvalue *obj = obj_new(sizeof(ObjUpvalue), OBJ_UPVALUE, al);
+  obj->closed = EMPTY_VAL;
+  obj->location = location;
+  return obj;
+}
+
+void obj_upvalue_free(ObjUpvalue **upvalue, Allocator *al) {
+  if (!upvalue) {
+    return;
+  }
+  al_free(al, *upvalue, sizeof(ObjUpvalue));
+  *upvalue = NULL;
+}
+
+// -----------------------------------------------------------------------------
+
+static inline size_t closure_size(int upvalue_count) {
+  return sizeof(ObjClosure) + sizeof(ObjUpvalue *) * upvalue_count;
+}
+
+ObjClosure //
+    *obj_closure_new(ObjFunction *func, Allocator *al) {
+  ObjClosure *obj = obj_new(closure_size(func->upvalue_count), OBJ_CLOSURE, al);
+  obj->func = func;
+  for (int i = 0; i < func->upvalue_count; i++) {
+    obj->upvalues[i] = NULL;
+  }
+  return obj;
+}
+
+void obj_closure_free(ObjClosure **closure, Allocator *al) {
+  if (!closure) {
+    return;
+  }
+  al_free(al, *closure, closure_size((*closure)->func->upvalue_count));
+  *closure = NULL;
 }

@@ -1,5 +1,6 @@
 #include "chunk_debug.h"
 #include "array.h"
+#include "object.h"
 #include "opcode.h"
 #include <stdio.h>
 
@@ -12,7 +13,7 @@ void disassemble_chunk(Chunk *chunk, const char *name) {
   }
 }
 
-int simple_instruction(const char *name, int offset) {
+static int simple_instruction(const char *name, int offset) {
   printf("%s\n", name);
   return offset + 1;
 }
@@ -24,6 +25,24 @@ static int constant_instruction(const char *name, Chunk *chunk, int offset) {
   val_print(constant);
   printf("'\n");
   return offset + 2;
+}
+
+static int closure_instruction(const char *name, Chunk *chunk, int offset) {
+  offset++;
+  uint8_t constant_index = chunk->code->data[offset++];
+  printf("%-16s %d '", name, constant_index);
+  val_print(chunk->constants->data[constant_index]);
+  printf("'\n");
+
+  ObjFunction *function = AS_FUNCTION(chunk->constants->data[constant_index]);
+  for (int j = 0; j < function->upvalue_count; j++) {
+    int is_local = chunk->code->data[offset++];
+    int index = chunk->code->data[offset++];
+    printf("%04d      |                   %s %d\n", offset - 2, is_local ? "local" : "upvalue",
+           index);
+  }
+
+  return offset;
 }
 
 static int byte_instruction(const char *name, Chunk *chunk, int offset) {
@@ -52,6 +71,8 @@ int disassemble_chunk_instruction(Chunk *chunk, int offset) {
   switch (instruction) {
   case OP_CONSTANT:
     return constant_instruction("OP_CONSTANT", chunk, offset);
+  case OP_CLOSURE:
+    return closure_instruction("OP_CLOSURE", chunk, offset);
   case OP_BYTE:
     return byte_instruction("OP_BYTE", chunk, offset);
 
@@ -96,6 +117,13 @@ int disassemble_chunk_instruction(Chunk *chunk, int offset) {
     return byte_instruction("OP_GET_LOCAL", chunk, offset);
   case OP_SET_LOCAL:
     return byte_instruction("OP_SET_LOCAL", chunk, offset);
+
+  case OP_GET_UPVALUE:
+    return byte_instruction("OP_GET_UPVALUE", chunk, offset);
+  case OP_SET_UPVALUE:
+    return byte_instruction("OP_SET_UPVALUE", chunk, offset);
+  case OP_CLOSE_UPVALUE:
+    return simple_instruction("OP_CLOSE_UPVALUE", offset);
 
   case OP_LOOP:
     return jump_instruction("OP_LOOP", chunk, false, offset);

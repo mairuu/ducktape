@@ -30,6 +30,7 @@ DEFINE_ARRAY(RawConstant, RawConstantArray);
 typedef struct Proto {
   String name;
   int arity;
+  int upvalue_count;
   IntArray *lines;
   ByteArray *code;
   RawConstantArray *constants;

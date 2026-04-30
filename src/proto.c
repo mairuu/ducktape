@@ -23,6 +23,7 @@ void proto_init(Proto *proto, Allocator *al) {
   (void)al;
   proto->name = str_null();
   proto->arity = 0;
+  proto->upvalue_count = 0;
   proto->lines = arr_new();
   proto->code = arr_new();
   proto->constants = arr_new();

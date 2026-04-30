@@ -65,6 +65,12 @@ static void gc_mark_roots(GarbageCollector *gc) {
     gc_mark_value(gc, *slot);
   }
 
+  for (Object *obj = gc->vm->objects; obj != NULL; obj = obj->next) {
+    if (obj_is_marked(obj)) {
+      gc_mark_object(gc, obj);
+    }
+  }
+
   gc_mark_hash_table(gc, &gc->vm->globals);
 }
 
@@ -85,6 +91,19 @@ static void gc_blacken_object(GarbageCollector *gc, Object *obj) {
   }
   case OBJ_NATIVE:
     break;
+  case OBJ_UPVALUE: {
+    ObjUpvalue *upvalue = (ObjUpvalue *)obj;
+    gc_mark_value(gc, *upvalue->location);
+    break;
+  }
+  case OBJ_CLOSURE: {
+    ObjClosure *closure = (ObjClosure *)obj;
+    gc_mark_object(gc, &closure->func->obj);
+    for (int i = 0; i < closure->func->upvalue_count; i++) {
+      gc_mark_object(gc, &closure->upvalues[i]->obj);
+    }
+    break;
+  }
   default:
     assert(false && "unknown object type");
     break;

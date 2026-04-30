@@ -1,10 +1,11 @@
 #pragma once
 
+#include "allocator.h"
 #include "chunk.h"
 #include "string_utils.h"
 #include "value.h"
 
-typedef enum { OBJ_STRING, OBJ_FUNCTION, OBJ_NATIVE } ObjectType;
+typedef enum { OBJ_STRING, OBJ_FUNCTION, OBJ_NATIVE, OBJ_UPVALUE, OBJ_CLOSURE } ObjectType;
 
 #define OBJ_MARKED_FLAG (1 << 0)
 
@@ -25,9 +26,23 @@ typedef struct {
 typedef struct {
   Object obj;
   int arity;
+  int upvalue_count;
   Chunk chunk;
   ObjString *name;
 } ObjFunction;
+
+typedef struct ObjUpvalue {
+  Object obj;
+  struct ObjUpvalue *next;
+  Value *location;
+  Value closed;
+} ObjUpvalue;
+
+typedef struct {
+  Object obj;
+  ObjFunction *func;
+  ObjUpvalue *upvalues[];
+} ObjClosure;
 
 typedef struct VirtualMachine VirtualMachine;
 
@@ -35,7 +50,7 @@ typedef Value (*NativeFunc)(VirtualMachine *vm, int arg_count, Value *args);
 
 typedef struct {
   Object obj;
-  NativeFunc function;
+  NativeFunc func;
 } ObjNative;
 
 // -----------------------------------------------------------------------------
@@ -94,3 +109,17 @@ ObjNative //
     *obj_native_new(NativeFunc function, Allocator *al);
 
 void obj_native_free(ObjNative **native, Allocator *al);
+
+// -----------------------------------------------------------------------------
+
+ObjUpvalue //
+    *obj_upvalue_new(Allocator *al, Value *location);
+
+void obj_upvalue_free(ObjUpvalue **upvalue, Allocator *al);
+
+// -----------------------------------------------------------------------------
+
+ObjClosure //
+    *obj_closure_new(ObjFunction *func, Allocator *al);
+
+void obj_closure_free(ObjClosure **closure, Allocator *al);
