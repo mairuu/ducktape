@@ -65,7 +65,9 @@ void vm_panic(VirtualMachine *vm, const char *format, ...) {
     }
   }
 
-  vm->gc_disabled = 0;
+  // force enable gc
+  vm->gc.disabled = 0;
+
   longjmp(vm->panic_jump, 1);
 }
 
@@ -95,7 +97,6 @@ static Value load_constant(ConstantLoader *loader, Allocator *, const RawConstan
 }
 
 static ObjFunction *vm_load_proto(VirtualMachine *vm, Proto *proto) {
-  vm_begin_staging(vm);
   ConstantLoader loader = {
       .load_constant = load_constant,
       .ctx = vm,
@@ -117,14 +118,27 @@ static ObjFunction *vm_load_proto(VirtualMachine *vm, Proto *proto) {
   disassemble_chunk(&function->chunk, name_buf);
 #endif
 
-  vm_end_staging(vm);
+  return function;
+}
+
+// load a Proto into an ObjFunction, then destroy the Proto and free its memory.
+static ObjFunction *vm_proto_to_func(VirtualMachine *vm, Proto *proto) {
+  gc_begin_staging(&vm->gc);
+  ObjFunction *function = vm_load_proto(vm, proto);
+  vm_push(vm, OBJECT_VAL(function));
+  gc_end_staging(&vm->gc);
+  vm_pop(vm);
+
+  proto_destroy(proto, &vm->inner_al);
+  al_free_for(&vm->inner_al, proto);
+
   return function;
 }
 
 // ===== operations =====
 
 static void vm_concat(VirtualMachine *vm) {
-  vm_begin_staging(vm);
+  gc_begin_staging(&vm->gc);
   ObjString *b = AS_STRING(vm_pop(vm));
   ObjString *a = AS_STRING(vm_pop(vm));
 
@@ -133,8 +147,8 @@ static void vm_concat(VirtualMachine *vm) {
   ObjString *str = obj_string_new(r, hash, &vm->al);
   vm_track_object(vm, &str->obj);
 
-  vm_end_staging(vm);
   vm_push(vm, OBJECT_VAL(str));
+  gc_end_staging(&vm->gc);
 }
 
 static ObjUpvalue *vm_capture_upvalue(VirtualMachine *vm, Value *local) {
@@ -269,7 +283,7 @@ static void vm_run(VirtualMachine *vm) {
       assert(IS_FUNCTION(func_constant) && "expect function constant");
       ObjFunction *function = AS_FUNCTION(func_constant);
 
-      vm_begin_staging(vm);
+      gc_begin_staging(&vm->gc);
       ObjClosure *closure = obj_closure_new(function, &vm->al);
       vm_track_object(vm, &closure->obj);
 
@@ -284,7 +298,7 @@ static void vm_run(VirtualMachine *vm) {
         }
       }
       vm_push(vm, OBJECT_VAL(closure));
-      vm_end_staging(vm);
+      gc_end_staging(&vm->gc);
       break;
     }
     case OP_BYTE:
@@ -455,7 +469,7 @@ static void vm_execute(VirtualMachine *vm, ObjFunction *function) {
   vm_push(vm, OBJECT_VAL(function));
   vm_call_function(vm, function, 0);
 
-  assert(vm->gc_disabled == 0 && "gc should not be disabled when starting execution");
+  assert(vm->gc.disabled == 0 && "gc should not be disabled when starting execution");
   vm_run(vm);
 }
 
@@ -473,8 +487,6 @@ void vm_init(VirtualMachine *vm, Allocator al) {
 
   ht_init(&vm->strings);
   ht_init(&vm->globals);
-
-  vm->gc_disabled = 0;
 }
 
 void vm_destroy(VirtualMachine *vm) {
@@ -490,8 +502,8 @@ void vm_destroy(VirtualMachine *vm) {
   ht_destroy(&vm->strings, &vm->al);
   ht_destroy(&vm->globals, &vm->al);
 
-  // assert(vm->gc.bytes_allocated == 0 && "memory leak detected: garbage collector "
-  //                                       "has allocated memory that was not freed");
+  assert(vm->gc.bytes_allocated == 0 && "memory leak detected: garbage collector "
+                                        "has allocated memory that was not freed");
 
   gc_destroy(&vm->gc);
 }
@@ -509,13 +521,13 @@ ObjString *vm_intern_string(VirtualMachine *vm, StringView str) {
   if (existing) {
     return AS_STRING(*existing);
   }
-  vm_begin_staging(vm);
+  gc_begin_staging(&vm->gc);
   String copy = str_copy_sv(str, &vm->al);
   ObjString *interned = obj_string_new(copy, hash, &vm->al);
   obj_string_set_interned(interned, true);
   vm_track_object(vm, &interned->obj);
   ht_put(&vm->strings, OBJECT_VAL(interned), OBJECT_VAL(interned), &vm->al);
-  vm_end_staging(vm);
+  gc_end_staging(&vm->gc);
   return interned;
 }
 
@@ -527,19 +539,12 @@ void vm_track_object(VirtualMachine *vm, Object *object) {
 }
 
 void vm_define_native(VirtualMachine *vm, StringView name, NativeFunc function) {
-  vm_begin_staging(vm);
+  gc_begin_staging(&vm->gc);
   ObjString *str = vm_intern_string(vm, name);
   ObjNative *native = obj_native_new(function, &vm->al);
   vm_track_object(vm, &native->obj);
   ht_put(&vm->globals, OBJECT_VAL(str), OBJECT_VAL(native), &vm->al);
-  vm_end_staging(vm);
-}
-
-void vm_begin_staging(VirtualMachine *vm) { vm->gc_disabled++; }
-
-void vm_end_staging(VirtualMachine *vm) {
-  assert(vm->gc_disabled > 0 && "unbalanced vm_end_staging call");
-  vm->gc_disabled--;
+  gc_end_staging(&vm->gc);
 }
 
 InterpretResult vm_interpret(VirtualMachine *vm, const char *source) {
@@ -554,10 +559,7 @@ InterpretResult vm_interpret(VirtualMachine *vm, const char *source) {
     return INTERPRET_RUNTIME_ERROR;
   }
 
-  ObjFunction *function = vm_load_proto(vm, proto);
-  proto_destroy(proto, &vm->inner_al);
-  al_free_for(&vm->inner_al, proto);
-
+  ObjFunction *function = vm_proto_to_func(vm, proto);
   vm_execute(vm, function);
 
   return INTERPRET_OK;

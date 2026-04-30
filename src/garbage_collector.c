@@ -140,7 +140,7 @@ static void gc_sweep(GarbageCollector *gc) {
 }
 
 static void gc_collect(GarbageCollector *gc) {
-  if (gc->vm->gc_disabled) {
+  if (gc->disabled) {
     return;
   }
 
@@ -163,15 +163,23 @@ static void gc_collect(GarbageCollector *gc) {
 #endif
 }
 
+void gc_collect_if_needed(GarbageCollector *gc) {
+#ifdef DEBUG_STRESS_GC
+  gc_collect(gc);
+#else
+  if (gc->bytes_allocated >= gc->next_gc) {
+    gc_collect(gc);
+  }
+#endif
+}
+
 static void *_gc_alloc(void *ctx, size_t size) {
   GarbageCollector *gc = (GarbageCollector *)ctx;
 #ifdef DEBUG_STRESS_GC
   gc_collect(gc);
 #endif
   gc->bytes_allocated += size;
-  if (gc->bytes_allocated >= gc->next_gc) {
-    gc_collect(gc);
-  }
+  gc_collect_if_needed(gc);
   return al_alloc(gc->inner, size);
 }
 
@@ -191,6 +199,7 @@ static void _gc_free(void *ctx, void *ptr, size_t size) {
 }
 
 void gc_init(GarbageCollector *gc, VirtualMachine *vm, Allocator *inner) {
+  gc->disabled = 0;
   gc->bytes_allocated = 0;
   gc->next_gc = GC_INITIAL_THRESHOLD;
   gc->inner = inner;
@@ -205,5 +214,13 @@ void gc_init(GarbageCollector *gc, VirtualMachine *vm, Allocator *inner) {
 }
 
 void gc_destroy(GarbageCollector *gc) { arr_free(&gc->gray_stack, gc->inner); }
+
+void gc_begin_staging(GarbageCollector *gc) { gc->disabled++; }
+
+void gc_end_staging(GarbageCollector *gc) {
+  assert(gc->disabled > 0 && "unbalanced gc staging");
+  gc->disabled--;
+  gc_collect_if_needed(gc);
+}
 
 Allocator gc_allocator_create(GarbageCollector *gc) { return gc->as_allocator; }

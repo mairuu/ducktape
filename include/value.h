@@ -38,7 +38,6 @@ typedef struct {
 #define NUMBER_VAL(value) ((Value){.type = VAL_NUMBER, .as.number = (value)})
 #define OBJECT_VAL(obj) ((Value){.type = VAL_OBJECT, .as.object = (Object *)(obj)})
 
-
 bool val_equal(Value a, Value b);
 
 bool val_is_falsey(Value value);

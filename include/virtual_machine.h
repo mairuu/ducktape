@@ -41,7 +41,6 @@ typedef struct VirtualMachine {
   jmp_buf panic_jump;
   char panic_message[256];
 
-  int gc_disabled;
   GarbageCollector gc;
   Allocator al; // gc allocator
 
@@ -60,8 +59,5 @@ void vm_define_native(VirtualMachine *vm, StringView name, NativeFunc function);
 
 void vm_panic(VirtualMachine *vm, const char *format, ...) __attribute__((noreturn));
 
-void vm_begin_staging(VirtualMachine *vm);
-
-void vm_end_staging(VirtualMachine *vm);
 
 InterpretResult vm_interpret(VirtualMachine *vm, const char *source);
