@@ -8,6 +8,7 @@
 #include "allocator.h"
 #include "chunk.h"
 #include "compiler.h"
+#include "garbage_collector.h"
 #include "object.h"
 #include "opcode.h"
 #include "proto.h"
@@ -93,6 +94,7 @@ static Value load_constant(ConstantLoader *loader, Allocator *, const RawConstan
 }
 
 static ObjFunction *vm_load_proto(VirtualMachine *vm, Proto *proto) {
+  vm_begin_staging(vm);
   ConstantLoader loader = {
       .load_constant = load_constant,
       .ctx = vm,
@@ -113,23 +115,23 @@ static ObjFunction *vm_load_proto(VirtualMachine *vm, Proto *proto) {
   disassemble_chunk(&function->chunk, name_buf);
 #endif
 
+  vm_end_staging(vm);
   return function;
 }
 
 // ===== operations =====
 
 static void vm_concat(VirtualMachine *vm) {
-  ObjString *b = AS_STRING(vm_peek(vm, 0));
-  ObjString *a = AS_STRING(vm_peek(vm, 1));
+  vm_begin_staging(vm);
+  ObjString *b = AS_STRING(vm_pop(vm));
+  ObjString *a = AS_STRING(vm_pop(vm));
 
   String r = str_concat(&a->str, &b->str, &vm->al);
   uint32_t hash = sv_hash(sv_from_str(r));
   ObjString *str = obj_string_new(r, hash, &vm->al);
-
   vm_track_object(vm, &str->obj);
 
-  vm_pop(vm);
-  vm_pop(vm);
+  vm_end_staging(vm);
   vm_push(vm, OBJECT_VAL(str));
 }
 
@@ -347,8 +349,8 @@ static void vm_run(VirtualMachine *vm) {
         vm_pop(vm); // pop main script function
         return;
       }
-      vm->stack_top = frame->base; // discard local variables 
-      vm_push(vm, result); // push return value
+      vm->stack_top = frame->base; // discard local variables
+      vm_push(vm, result);         // push return value
       frame = &vm->frames[vm->frame_count - 1];
       ip = frame->ip;
       break;
@@ -367,6 +369,8 @@ static void vm_run(VirtualMachine *vm) {
 static void vm_execute(VirtualMachine *vm, ObjFunction *function) {
   vm_push(vm, OBJECT_VAL(function));
   vm_call_function(vm, function, 0);
+
+  assert(vm->gc_disabled == 0 && "gc should not be disabled when starting execution");
   vm_run(vm);
 }
 
@@ -374,11 +378,18 @@ static void vm_execute(VirtualMachine *vm, ObjFunction *function) {
 
 void vm_init(VirtualMachine *vm, Allocator al) {
   vm_reset_stack(vm);
-  vm->al = al;
+
+  vm->inner_al = al;
+
+  gc_init(&vm->gc, vm, &vm->inner_al);
+  vm->al = gc_allocator_create(&vm->gc);
+
   vm->objects = NULL;
 
   ht_init(&vm->strings);
   ht_init(&vm->globals);
+
+  vm->gc_disabled = 0;
 }
 
 void vm_destroy(VirtualMachine *vm) {
@@ -393,6 +404,11 @@ void vm_destroy(VirtualMachine *vm) {
 
   ht_destroy(&vm->strings, &vm->al);
   ht_destroy(&vm->globals, &vm->al);
+
+  assert(vm->gc.bytes_allocated == 0 && "memory leak detected: garbage collector "
+                                        "has allocated memory that was not freed");
+
+  gc_destroy(&vm->gc);
 }
 
 // ===== public =====
@@ -408,11 +424,13 @@ ObjString *vm_intern_string(VirtualMachine *vm, StringView str) {
   if (existing) {
     return AS_STRING(*existing);
   }
+  vm_begin_staging(vm);
   String copy = str_copy_sv(str, &vm->al);
   ObjString *interned = obj_string_new(copy, hash, &vm->al);
   obj_string_set_interned(interned, true);
   vm_track_object(vm, &interned->obj);
   ht_put(&vm->strings, OBJECT_VAL(interned), OBJECT_VAL(interned), &vm->al);
+  vm_end_staging(vm);
   return interned;
 }
 
@@ -424,14 +442,23 @@ void vm_track_object(VirtualMachine *vm, Object *object) {
 }
 
 void vm_define_native(VirtualMachine *vm, StringView name, NativeFunc function) {
+  vm_begin_staging(vm);
   ObjString *str = vm_intern_string(vm, name);
   ObjNative *native = obj_native_new(function, &vm->al);
   vm_track_object(vm, &native->obj);
   ht_put(&vm->globals, OBJECT_VAL(str), OBJECT_VAL(native), &vm->al);
+  vm_end_staging(vm);
+}
+
+void vm_begin_staging(VirtualMachine *vm) { vm->gc_disabled++; }
+
+void vm_end_staging(VirtualMachine *vm) {
+  assert(vm->gc_disabled > 0 && "unbalanced vm_end_staging call");
+  vm->gc_disabled--;
 }
 
 InterpretResult vm_interpret(VirtualMachine *vm, const char *source) {
-  Proto *proto = compile(source, &vm->al);
+  Proto *proto = compile(source, &vm->inner_al);
   if (!proto) {
     return INTERPRET_COMPILE_ERROR;
   }
@@ -443,8 +470,8 @@ InterpretResult vm_interpret(VirtualMachine *vm, const char *source) {
   }
 
   ObjFunction *function = vm_load_proto(vm, proto);
-  proto_destroy(proto, &vm->al);
-  al_free_for(&vm->al, proto);
+  proto_destroy(proto, &vm->inner_al);
+  al_free_for(&vm->inner_al, proto);
 
   vm_execute(vm, function);
 

@@ -18,6 +18,12 @@ const char *obj_type_name(ObjectType type) {
   return obj_type_names[type];
 }
 
+void obj_print(Object *obj) {
+  char buf[64];
+  obj_sprintf(buf, sizeof(buf), obj);
+  printf("%s", buf);
+}
+
 int obj_sprintf(char *buf, int bufsize, Object *obj) {
   switch (obj->type) {
   case OBJ_STRING: {
@@ -87,6 +93,18 @@ void obj_free(Object **obj, Allocator *al) {
     assert(false && "unknown object type");
     break;
   }
+}
+
+void obj_set_marked(Object *obj, bool marked) {
+  if (marked) {
+    obj->flags |= OBJ_MARKED_FLAG;
+  } else {
+    obj->flags &= ~OBJ_MARKED_FLAG;
+  }
+}
+
+bool obj_is_marked(Object *obj) {
+  return obj->flags & OBJ_MARKED_FLAG;
 }
 
 // -----------------------------------------------------------------------------

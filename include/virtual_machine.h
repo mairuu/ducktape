@@ -1,6 +1,7 @@
 #pragma once
 
 #include "allocator.h"
+#include "garbage_collector.h"
 #include "hash_table.h"
 #include "object.h"
 #include "value.h"
@@ -8,7 +9,14 @@
 #include <setjmp.h>
 
 #define VM_FRAMES_MAX 64
+
 #define VM_STACK_MAX 2048
+
+typedef enum {
+  INTERPRET_OK,
+  INTERPRET_COMPILE_ERROR,
+  INTERPRET_RUNTIME_ERROR,
+} InterpretResult;
 
 typedef struct {
   ObjFunction *function;
@@ -30,7 +38,11 @@ typedef struct VirtualMachine {
   jmp_buf panic_jump;
   char panic_message[256];
 
-  Allocator al;
+  int gc_disabled;
+  GarbageCollector gc;
+  Allocator al; // gc allocator
+
+  Allocator inner_al;
 } VirtualMachine;
 
 void vm_init(VirtualMachine *vm, Allocator al);
@@ -45,10 +57,8 @@ void vm_define_native(VirtualMachine *vm, StringView name, NativeFunc function);
 
 void vm_panic(VirtualMachine *vm, const char *format, ...) __attribute__((noreturn));
 
-typedef enum {
-  INTERPRET_OK,
-  INTERPRET_COMPILE_ERROR,
-  INTERPRET_RUNTIME_ERROR,
-} InterpretResult;
+void vm_begin_staging(VirtualMachine *vm);
+
+void vm_end_staging(VirtualMachine *vm);
 
 InterpretResult vm_interpret(VirtualMachine *vm, const char *source);

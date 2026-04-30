@@ -6,7 +6,7 @@
 
 typedef enum { OBJ_STRING, OBJ_FUNCTION, OBJ_NATIVE } ObjectType;
 
-#define OBJ_MARK_FLAG (1 << 0)
+#define OBJ_MARKED_FLAG (1 << 0)
 
 #define STR_INTERNED_FLAG (1 << 1)
 
@@ -58,11 +58,17 @@ static inline bool value_is_obj_type(Value value, ObjectType type) {
 
 const char *obj_type_name(ObjectType type);
 
+void obj_print(Object *obj);
+
 int obj_sprintf(char *buf, int bufsize, Object *obj);
 
 bool obj_equal(Object *a, Object *b);
 
 void obj_free(Object **obj, Allocator *al);
+
+void obj_set_marked(Object *obj, bool marked);
+
+bool obj_is_marked(Object *obj);
 
 // -----------------------------------------------------------------------------
 
