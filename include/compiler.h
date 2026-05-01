@@ -1,5 +1,7 @@
 #pragma once
 
-#include "proto.h"
+#include "allocator.h"
+#include "definition.h"
+#include "module.h"
 
-Proto *compile(const char *source, Allocator *al);
+bool compile(const char *source, const DefinitionArray *prior_defs, Allocator *al, Module *out_module);

@@ -1,12 +1,14 @@
 #include "compiler.h"
 
 #include <assert.h>
+#include <complex.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "allocator.h"
+#include "definition.h"
 #include "opcode.h"
 #include "proto.h"
 #include "scanner.h"
@@ -65,6 +67,7 @@ typedef struct {
   const char *source;
   Parser parser;
 
+  DefinitionRegistry def_reg;
   Compiler *current_compiler;
 
   Allocator *al;
@@ -88,15 +91,17 @@ typedef struct {
 typedef enum {
   REF_LOCAL,
   REF_UPVALUE,
+  REF_DEFINITION,
   REF_GLOBAL,
 } RefScope;
 
 typedef struct {
   RefScope scope;
   union {
-    int local_index;    // if scope == REF_LOCAL
-    int upvalue_index;  // if scope == REF_UPVALUE
-    ConstantRef global; // if scope == REF_GLOBAL
+    int local_index;      // if scope == REF_LOCAL
+    int upvalue_index;    // if scope == REF_UPVALUE
+    int definition_index; // if scope == REF_DEFINITION
+    ConstantRef global;   // if scope == REF_GLOBAL
   };
 } VarRef;
 
@@ -196,7 +201,8 @@ static void compiler_init(Compiler *compiler, Compiler *enclosing, Allocator *al
   local->is_captured = false;
 }
 
-static void ctx_init(Context *ctx, const char *source, Allocator *al) {
+static void ctx_init(Context *ctx, const char *source, const DefinitionArray *prior_defs,
+                     Allocator *al) {
   ctx->al = al;
   ctx->source = source;
 
@@ -205,9 +211,18 @@ static void ctx_init(Context *ctx, const char *source, Allocator *al) {
   ctx->parser.in_panic_mode = false;
 
   ctx->current_compiler = NULL;
+
+  defreg_init(&ctx->def_reg, al);
+
+  // seed definition registry with prior definitions from other modules
+  int def_count = arr_count(prior_defs);
+  for (int i = 0; i < def_count; i++) {
+    Definition def = def_copy(&prior_defs->data[i], al);
+    defreg_add(&ctx->def_reg, def, al);
+  }
 }
 
-static void ctx_destroy(Context *ctx) { (void)ctx; }
+static void ctx_destroy(Context *ctx) { defreg_destroy(&ctx->def_reg, ctx->al); }
 
 // ===== error handling =====
 
@@ -407,6 +422,11 @@ static void ctx_emit_loop(Context *ctx, int loop_start) {
   ctx_emit_bytes(ctx, (offset >> 8) & 0xff, offset & 0xff);
 }
 
+static void ctx_mark_patch_site(Context *ctx) {
+  int offset = ctx_code_offset(ctx);
+  proto_add_patch(ctx->current_compiler->proto, offset, ctx->al);
+}
+
 // ===== variable management =====
 
 static void ctx_add_local(Context *ctx, Token *name) {
@@ -527,6 +547,14 @@ static int ctx_resolve_upvalue(Context *ctx, Compiler *compiler, Token *name) {
   return -1; // not found
 }
 
+static int ctx_resolve_definition(Context *ctx, Token *name) {
+  DefinitionEntry *def = defreg_find(&ctx->def_reg, sv_from_token(name));
+  if (def == NULL) {
+    return -1;
+  }
+  return def->index;
+}
+
 static VarRef ctx_resolve_variable(Context *ctx, Token name) {
   VarRef ref;
   Compiler *target = ctx->current_compiler;
@@ -534,6 +562,8 @@ static VarRef ctx_resolve_variable(Context *ctx, Token name) {
     ref.scope = REF_LOCAL;
   } else if ((ref.upvalue_index = ctx_resolve_upvalue(ctx, target, &name)) > -1) {
     ref.scope = REF_UPVALUE;
+  } else if ((ref.definition_index = ctx_resolve_definition(ctx, &name)) > -1) {
+    ref.scope = REF_DEFINITION;
   } else {
     ref.global = ctx_identifier_constant(ctx, &name);
     ref.scope = REF_GLOBAL;
@@ -549,6 +579,10 @@ static void ctx_emit_get(Context *ctx, VarRef ref) {
   case REF_UPVALUE:
     ctx_emit_bytes(ctx, OP_GET_UPVALUE, (uint8_t)ref.upvalue_index);
     break;
+  case REF_DEFINITION:
+    ctx_mark_patch_site(ctx);
+    ctx_emit_bytes(ctx, OP_GET_DEFINITION, (uint8_t)ref.definition_index);
+    break;
   case REF_GLOBAL:
     ctx_emit_bytes(ctx, OP_GET_GLOBAL, (uint8_t)ref.global.index);
     break;
@@ -562,6 +596,9 @@ static void ctx_emit_set(Context *ctx, VarRef ref) {
     break;
   case REF_UPVALUE:
     ctx_emit_bytes(ctx, OP_SET_UPVALUE, (uint8_t)ref.upvalue_index);
+    break;
+  case REF_DEFINITION:
+    ctx_error_at(ctx, &ctx->parser.previous, "can't assign to a definition.");
     break;
   case REF_GLOBAL:
     ctx_emit_bytes(ctx, OP_SET_GLOBAL, (uint8_t)ref.global.index);
@@ -1069,11 +1106,45 @@ static void declaration_fun(Context *ctx) {
   ctx_define_variable(ctx, name);
 }
 
+static void ctx_register_definition(Context *ctx, Token *name, Definition def) {
+  if (!defreg_add(&ctx->def_reg, def, ctx->al)) {
+    ctx_error_at(ctx, name, "definition with this name already exists.");
+  }
+}
+
+static void declaration_struct(Context *ctx) {
+  ctx_consume(ctx, TOKEN_IDENTIFIER, "expect struct name.");
+  Token name = ctx->parser.previous;
+
+  Definition def = {0};
+  def.type = DEFTYPE_STRUCT;
+  def.name = str_from_sv(sv_from_token(&name), ctx->al);
+  StructDef *struct_def = &def.as.struct_def;
+  struct_def->field_names = arr_new();
+
+  ctx_consume(ctx, TOKEN_LEFT_BRACE, "expect '{' before struct body.");
+
+  if (!ctx_check(ctx, TOKEN_RIGHT_BRACE)) {
+    do {
+      ctx_consume(ctx, TOKEN_IDENTIFIER, "expect field name in struct body.");
+      Token field_name = ctx->parser.previous;
+      ctx_consume(ctx, TOKEN_SEMICOLON, "expect ';' after struct field declaration.");
+      String field_str = str_from_sv(sv_from_token(&field_name), ctx->al);
+      arr_push(struct_def->field_names, field_str, ctx->al);
+    } while (!ctx_check(ctx, TOKEN_RIGHT_BRACE) && !ctx_check(ctx, TOKEN_EOF));
+  }
+
+  ctx_consume(ctx, TOKEN_RIGHT_BRACE, "expect '}' after struct body.");
+ ctx_register_definition(ctx, &name, def);
+}
+
 static void declaration(Context *ctx) {
   if (ctx_match(ctx, TOKEN_VAR)) {
     declaration_var(ctx);
   } else if (ctx_match(ctx, TOKEN_FUN)) {
     declaration_fun(ctx);
+  } else if (ctx_match(ctx, TOKEN_STRUCT)) {
+    declaration_struct(ctx);
   } else {
     statement(ctx);
   }
@@ -1228,9 +1299,10 @@ static void or_(Context *ctx, bool can_assign) {
 
 // ===== public api =====
 
-Proto *compile(const char *source, Allocator *al) {
+bool compile(const char *source, const DefinitionArray *prior_defs, Allocator *al,
+             Module *out_module) {
   Context ctx;
-  ctx_init(&ctx, source, al);
+  ctx_init(&ctx, source, prior_defs, al);
 
   Compiler root_compiler;
   ctx_begin_compile(&ctx, &root_compiler);
@@ -1246,10 +1318,19 @@ Proto *compile(const char *source, Allocator *al) {
     proto_destroy(proto, al);
     al_free_for(al, proto);
     ctx_destroy(&ctx);
-    return NULL;
+    return false;
+  }
+
+  if (out_module != NULL) {
+    out_module->proto = proto;
+    out_module->def_reg = ctx.def_reg; // moved
+    ctx.def_reg = (DefinitionRegistry){0};
+  } else {
+    proto_destroy(proto, al);
+    al_free_for(al, proto);
   }
 
   ctx_destroy(&ctx);
 
-  return proto;
+  return true;
 }

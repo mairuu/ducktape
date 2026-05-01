@@ -125,6 +125,9 @@ int disassemble_chunk_instruction(Chunk *chunk, int offset) {
   case OP_CLOSE_UPVALUE:
     return simple_instruction("OP_CLOSE_UPVALUE", offset);
 
+  case OP_GET_DEFINITION:
+    return byte_instruction("OP_GET_DEFINITION", chunk, offset);
+
   case OP_LOOP:
     return jump_instruction("OP_LOOP", chunk, false, offset);
   case OP_JUMP:

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "allocator.h"
+#include "definition.h"
 #include "garbage_collector.h"
 #include "hash_table.h"
 #include "object.h"
@@ -36,6 +37,9 @@ typedef struct VirtualMachine {
   HashTable strings;
   HashTable globals;
 
+  DefinitionArray *definitions;       // all definitions in the program
+  ObjectPtrArray *definition_objects; // parallel array to definitions
+
   ObjUpvalue *open_upvalues; // linked list
 
   jmp_buf panic_jump;
@@ -58,6 +62,5 @@ void vm_track_object(VirtualMachine *vm, Object *object);
 void vm_define_native(VirtualMachine *vm, StringView name, NativeFunc function);
 
 void vm_panic(VirtualMachine *vm, const char *format, ...) __attribute__((noreturn));
-
 
 InterpretResult vm_interpret(VirtualMachine *vm, const char *source);

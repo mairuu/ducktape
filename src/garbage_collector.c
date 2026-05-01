@@ -71,6 +71,11 @@ static void gc_mark_roots(GarbageCollector *gc) {
     }
   }
 
+  int def_count = arr_count(gc->vm->definition_objects);
+  for (int i = 0; i < def_count; i++) {
+    gc_mark_object(gc, gc->vm->definition_objects->data[i]);
+  }
+    
   gc_mark_hash_table(gc, &gc->vm->globals);
 }
 
@@ -102,6 +107,12 @@ static void gc_blacken_object(GarbageCollector *gc, Object *obj) {
     for (int i = 0; i < closure->func->upvalue_count; i++) {
       gc_mark_object(gc, &closure->upvalues[i]->obj);
     }
+    break;
+  }
+  case OBJ_STRUCT_DEF: {
+    ObjStructDef *def = (ObjStructDef *)obj;
+    gc_mark_object(gc, &def->name->obj);
+    gc_mark_hash_table(gc, &def->fields);
     break;
   }
   default:
@@ -194,6 +205,7 @@ static void *_gc_realloc(void *ctx, void *ptr, size_t old_size, size_t new_size)
 
 static void _gc_free(void *ctx, void *ptr, size_t size) {
   GarbageCollector *gc = (GarbageCollector *)ctx;
+  assert(gc->bytes_allocated >= size && "freeing more bytes than allocated");
   gc->bytes_allocated -= size;
   al_free(gc->inner, ptr, size);
 }

@@ -33,6 +33,8 @@ void str_destroy(String *str, Allocator *al);
 
 // -----------------------------------------------------------------------------
 
+StringView sv_null(void);
+
 StringView sv_from_cstr(const char *cstr);
 
 StringView sv_from_str(String str);

@@ -8,7 +8,9 @@
 #include "allocator.h"
 #include "chunk.h"
 #include "compiler.h"
+#include "definition.h"
 #include "garbage_collector.h"
+#include "linker.h"
 #include "object.h"
 #include "opcode.h"
 #include "proto.h"
@@ -73,10 +75,18 @@ void vm_panic(VirtualMachine *vm, const char *format, ...) {
 
 // ===== constant loading =====
 
-static ObjFunction *vm_load_proto(VirtualMachine *vm, Proto *proto);
+typedef struct {
+  ConstantLoader loader;
+  VirtualMachine *vm;
+  PatchSiteArray **patch_sites; // for collecting patch sites during proto walk
+} LoadContext;
+
+static ObjFunction *vm_load_proto(ConstantLoader *loader, Proto *proto);
 
 static Value load_constant(ConstantLoader *loader, Allocator *, const RawConstant *raw) {
-  VirtualMachine *vm = (VirtualMachine *)loader->ctx;
+  LoadContext *ctx = (LoadContext *)loader->ctx;
+  VirtualMachine *vm = ctx->vm;
+
   switch (raw->type) {
   case RAW_NUMBER:
     return NUMBER_VAL(raw->as.number);
@@ -86,7 +96,7 @@ static Value load_constant(ConstantLoader *loader, Allocator *, const RawConstan
     return OBJECT_VAL(str);
   }
   case RAW_FUNCTION: {
-    ObjFunction *function = vm_load_proto(vm, raw->as.function);
+    ObjFunction *function = vm_load_proto(loader, raw->as.function);
     assert(function != NULL && "loaded function should not be NULL");
     return OBJECT_VAL(function);
   }
@@ -96,43 +106,103 @@ static Value load_constant(ConstantLoader *loader, Allocator *, const RawConstan
   }
 }
 
-static ObjFunction *vm_load_proto(VirtualMachine *vm, Proto *proto) {
-  ConstantLoader loader = {
-      .load_constant = load_constant,
-      .ctx = vm,
-  };
+static ObjFunction *vm_load_proto(ConstantLoader *loader, Proto *proto) {
+  LoadContext *ctx = (LoadContext *)loader;
+  VirtualMachine *vm = ctx->vm;
 
-  ObjFunction *function = obj_function_new(&vm->al, proto->arity);
-  vm_track_object(vm, &function->obj);
+  ObjFunction *func = obj_function_new(&vm->al, proto->arity);
+  vm_track_object(vm, &func->obj);
 
-  chunk_load_from_proto(&function->chunk, proto, &loader, &vm->al);
-  function->upvalue_count = proto->upvalue_count;
+  chunk_load_from_proto(&func->chunk, proto, loader, &vm->al);
+  func->upvalue_count = proto->upvalue_count;
 
   if (proto->name.length > 0) {
-    function->name = vm_intern_string(vm, sv_from_str(proto->name));
+    func->name = vm_intern_string(vm, sv_from_str(proto->name));
+  }
+
+  int patch_count = arr_count(proto->patches);
+  for (int i = 0; i < patch_count; i++) {
+    PatchSite site = {
+        .code_offset = proto->patches->data[i],
+        .function = func,
+    };
+    arr_push((*ctx->patch_sites), site, &vm->inner_al);
   }
 
 #ifdef DEBUG_PRINT_CODE
   char name_buf[256];
-  obj_sprintf(name_buf, sizeof(name_buf), &function->obj);
-  disassemble_chunk(&function->chunk, name_buf);
+  obj_sprintf(name_buf, sizeof(name_buf), &func->obj);
+  disassemble_chunk(&func->chunk, name_buf);
 #endif
 
-  return function;
+  return func;
 }
 
-// load a Proto into an ObjFunction, then destroy the Proto and free its memory.
-static ObjFunction *vm_proto_to_func(VirtualMachine *vm, Proto *proto) {
+static Object *vm_load_definition(VirtualMachine *vm, const Definition *def) {
+  switch (def->type) {
+  case DEFTYPE_STRUCT: {
+    const StructDef *struct_def = &def->as.struct_def;
+    ObjString *name = vm_intern_string(vm, sv_from_str(def->name));
+    ObjStructDef *obj_def = obj_struct_def_new(name, &vm->al);
+    vm_track_object(vm, &obj_def->obj);
+
+    int field_count = arr_count(struct_def->field_names);
+    for (int i = 0; i < field_count; i++) {
+      ObjString *field_name = vm_intern_string(vm, sv_from_str(struct_def->field_names->data[i]));
+      ht_put(&obj_def->fields, OBJECT_VAL(field_name), NUMBER_VAL(i), &vm->al);
+    }
+
+    return &obj_def->obj;
+  }
+  default:
+    assert(false && "unknown definition type");
+    break;
+  }
+  return NULL; // unreachable
+}
+
+ObjFunction *vm_load(VirtualMachine *vm, LinkedModule *lm) {
   gc_begin_staging(&vm->gc);
-  ObjFunction *function = vm_load_proto(vm, proto);
-  vm_push(vm, OBJECT_VAL(function));
+
+  int new_def_cursor = 0;
+
+  int mapping_count = arr_count(lm->local_to_vm);
+  for (int i = 0; i < mapping_count; i++) {
+    LocalToVM *m = &lm->local_to_vm->data[i];
+    if (m->vm_index == -1) {
+      const Definition *def = &lm->defs->data[new_def_cursor++];
+      Object *obj = vm_load_definition(vm, def);
+      arr_push(vm->definitions, def_copy(def, &vm->al), &vm->al);
+      arr_push(vm->definition_objects, obj, &vm->al);
+      m->vm_index = arr_count(vm->definitions) - 1;
+    }
+  }
+
+  LoadContext ctx = {
+      .loader = {.load_constant = load_constant, .ctx = &ctx}, .vm = vm, .patch_sites = &lm->sites};
+  ObjFunction *main = vm_load_proto(&ctx.loader, lm->proto);
+
+  int site_count = arr_count(lm->sites);
+  for (int i = 0; i < site_count; i++) {
+    PatchSite site = lm->sites->data[i];
+
+    uint8_t local_idx = site.function->chunk.code->data[site.code_offset + 1];
+    int vm_idx = -1;
+    for (int j = 0; j < mapping_count; j++) {
+      if (lm->local_to_vm->data[j].local_index == local_idx) {
+        vm_idx = lm->local_to_vm->data[j].vm_index;
+        break;
+      }
+    }
+    assert(vm_idx != -1 && "patch site has no mapping");
+    chunk_patch_byte(&site.function->chunk, site.code_offset + 1, (uint8_t)vm_idx);
+  }
+
+  vm_push(vm, OBJECT_VAL(main));
   gc_end_staging(&vm->gc);
   vm_pop(vm);
 
-  proto_destroy(proto, &vm->inner_al);
-  al_free_for(&vm->inner_al, proto);
-
-  return function;
+  return main;
 }
 
 // ===== operations =====
@@ -413,6 +483,15 @@ static void vm_run(VirtualMachine *vm) {
       vm_pop(vm);
       break;
     }
+    case OP_GET_DEFINITION: {
+      uint8_t def_idx = READ_BYTE();
+      Object *def_obj = vm->definition_objects->data[def_idx];
+      if (!def_obj) {
+        vm_panic(vm, "undefined definition at index %d", def_idx);
+      }
+      vm_push(vm, OBJECT_VAL(def_obj));
+      break;
+    }
     case OP_LOOP: {
       uint16_t offset = READ_SHORT();
       ip -= offset;
@@ -458,9 +537,11 @@ static void vm_run(VirtualMachine *vm) {
       break;
     default:
       assert(false && "unknown opcode");
+      vm_panic(vm, "unknown opcode %d", instruction);
     }
   }
 #undef READ_BYTE
+#undef READ_SHORT
 #undef READ_CONSTANT
 #undef BINARY_OP
 }
@@ -487,6 +568,11 @@ void vm_init(VirtualMachine *vm, Allocator al) {
 
   ht_init(&vm->strings);
   ht_init(&vm->globals);
+
+  vm->open_upvalues = NULL;
+
+  vm->definition_objects = arr_new();
+  vm->definitions = arr_new();
 }
 
 void vm_destroy(VirtualMachine *vm) {
@@ -501,6 +587,14 @@ void vm_destroy(VirtualMachine *vm) {
 
   ht_destroy(&vm->strings, &vm->al);
   ht_destroy(&vm->globals, &vm->al);
+
+  int def_count = arr_count(vm->definitions);
+  for (int i = 0; i < def_count; i++) {
+    def_destroy(&vm->definitions->data[i], &vm->al);
+  }
+
+  arr_free(&vm->definitions, &vm->al);
+  arr_free(&vm->definition_objects, &vm->al);
 
   assert(vm->gc.bytes_allocated == 0 && "memory leak detected: garbage collector "
                                         "has allocated memory that was not freed");
@@ -548,18 +642,27 @@ void vm_define_native(VirtualMachine *vm, StringView name, NativeFunc function) 
 }
 
 InterpretResult vm_interpret(VirtualMachine *vm, const char *source) {
-  Proto *proto = compile(source, &vm->inner_al);
-  if (!proto) {
+  Module m = {0};
+  LinkedModule ml = {0};
+  if (!compile(source, vm->definitions, &vm->inner_al, &m)) {
     return INTERPRET_COMPILE_ERROR;
   }
 
   if (setjmp(vm->panic_jump) != 0) {
     vm_reset_stack(vm);
     fprintf(stderr, "panic: %s\n", vm->panic_message);
+    module_destroy(&m, &vm->inner_al);
+    linked_module_destroy(&ml, &vm->inner_al);
     return INTERPRET_RUNTIME_ERROR;
   }
 
-  ObjFunction *function = vm_proto_to_func(vm, proto);
+  Linker linker;
+  linker_init(&linker, &vm->inner_al);
+  ml = linker_link(&linker, &m, vm->definitions);
+
+  ObjFunction *function = vm_load(vm, &ml);
+  linked_module_destroy(&ml, &vm->inner_al);
+
   vm_execute(vm, function);
 
   return INTERPRET_OK;

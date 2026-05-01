@@ -2,10 +2,18 @@
 
 #include "allocator.h"
 #include "chunk.h"
+#include "hash_table.h"
 #include "string_utils.h"
 #include "value.h"
 
-typedef enum { OBJ_STRING, OBJ_FUNCTION, OBJ_NATIVE, OBJ_UPVALUE, OBJ_CLOSURE } ObjectType;
+typedef enum {
+  OBJ_STRING,
+  OBJ_FUNCTION,
+  OBJ_NATIVE,
+  OBJ_UPVALUE,
+  OBJ_CLOSURE,
+  OBJ_STRUCT_DEF
+} ObjectType;
 
 #define OBJ_MARKED_FLAG (1 << 0)
 
@@ -43,6 +51,12 @@ typedef struct {
   ObjFunction *func;
   ObjUpvalue *upvalues[];
 } ObjClosure;
+
+typedef struct {
+  Object obj;
+  ObjString *name;
+  HashTable fields;
+} ObjStructDef;
 
 typedef struct VirtualMachine VirtualMachine;
 
@@ -123,3 +137,10 @@ ObjClosure //
     *obj_closure_new(ObjFunction *func, Allocator *al);
 
 void obj_closure_free(ObjClosure **closure, Allocator *al);
+
+// -----------------------------------------------------------------------------
+
+ObjStructDef //
+    *obj_struct_def_new(ObjString *name, Allocator *al);
+
+void obj_struct_def_free(ObjStructDef **def, Allocator *al);

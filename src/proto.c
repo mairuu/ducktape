@@ -1,7 +1,9 @@
 #include "proto.h"
-#include "string_utils.h"
 
 #include <assert.h>
+
+#include "array.h"
+#include "string_utils.h"
 
 void raw_constant_destroy(RawConstant *constant, Allocator *al) {
   switch (constant->type) {
@@ -27,6 +29,7 @@ void proto_init(Proto *proto, Allocator *al) {
   proto->lines = arr_new();
   proto->code = arr_new();
   proto->constants = arr_new();
+  proto->patches = arr_new();
 }
 
 void proto_destroy(Proto *proto, Allocator *al) {
@@ -40,6 +43,7 @@ void proto_destroy(Proto *proto, Allocator *al) {
   arr_free(&proto->lines, al);
   arr_free(&proto->code, al);
   arr_free(&proto->constants, al);
+  arr_free(&proto->patches, al);
 }
 
 void proto_write_code(Proto *proto, uint8_t byte, int line, Allocator *al) {
@@ -50,6 +54,10 @@ void proto_write_code(Proto *proto, uint8_t byte, int line, Allocator *al) {
 int proto_write_constant(Proto *proto, RawConstant constant, Allocator *al) {
   arr_push(proto->constants, constant, al);
   return arr_count(proto->constants) - 1;
+}
+
+void proto_add_patch(Proto *proto, int offset, Allocator *al) {
+  arr_push(proto->patches, offset, al);
 }
 
 void proto_patch_short(Proto *proto, int offset, uint16_t value) {

@@ -1,4 +1,7 @@
 #include "chunk.h"
+
+#include <assert.h>
+
 #include "array.h"
 
 void chunk_init(Chunk *chunk) {
@@ -28,4 +31,9 @@ void chunk_load_from_proto(Chunk *chunk, const Proto *proto, ConstantLoader *loa
     Value constant = loader->load_constant(loader, al, raw_constant);
     arr_push(chunk->constants, constant, al);
   }
+}
+
+void chunk_patch_byte(Chunk *chunk, int offset, uint8_t byte) {
+  assert(offset >= 0 && offset < arr_count(chunk->code) && "offset out of bounds");
+  chunk->code->data[offset] = byte;
 }

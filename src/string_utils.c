@@ -56,6 +56,10 @@ void str_destroy(String *str, Allocator *al) {
 
 // -----------------------------------------------------------------------------
 
+StringView sv_null(void) {
+  return (StringView){.chars = NULL, .length = 0};
+}
+
 StringView sv_from_cstr(const char *cstr) {
   int length = strlen(cstr);
   return (StringView){.chars = cstr, .length = length};

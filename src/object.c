@@ -4,15 +4,13 @@
 #include <stdio.h>
 
 #include "allocator.h"
+#include "hash_table.h"
 #include "string_utils.h"
 #include "value.h"
 
 static const char *obj_type_names[] = {
-    [OBJ_STRING] = "string",
-    [OBJ_FUNCTION] = "function",
-    [OBJ_NATIVE] = "native",
-    [OBJ_UPVALUE] = "upvalue",
-    [OBJ_CLOSURE] = "closure",
+    [OBJ_STRING] = "string",   [OBJ_FUNCTION] = "function", [OBJ_NATIVE] = "native",
+    [OBJ_UPVALUE] = "upvalue", [OBJ_CLOSURE] = "closure",
 };
 
 const char *obj_type_name(ObjectType type) {
@@ -55,6 +53,10 @@ int obj_sprintf(char *buf, int bufsize, Object *obj) {
     } else {
       return snprintf(buf, bufsize, "<fn @%p>", (void *)fn);
     }
+  }
+  case OBJ_STRUCT_DEF: {
+    ObjStructDef *def = (ObjStructDef *)obj;
+    return snprintf(buf, bufsize, "<struct %.*s>", def->name->str.length, def->name->str.chars);
   }
   default:
     assert(false && "unknown object type");
@@ -109,6 +111,9 @@ void obj_free(Object **obj, Allocator *al) {
     break;
   case OBJ_CLOSURE:
     obj_closure_free((ObjClosure **)obj, al);
+    break;
+  case OBJ_STRUCT_DEF:
+    obj_struct_def_free((ObjStructDef **)obj, al);
     break;
   default:
     assert(false && "unknown object type");
@@ -234,4 +239,23 @@ void obj_closure_free(ObjClosure **closure, Allocator *al) {
   }
   al_free(al, *closure, closure_size((*closure)->func->upvalue_count));
   *closure = NULL;
+}
+
+// -----------------------------------------------------------------------------
+
+ObjStructDef //
+    *obj_struct_def_new(ObjString *name, Allocator *al) {
+  ObjStructDef *obj = obj_new(sizeof(ObjStructDef), OBJ_STRUCT_DEF, al);
+  obj->name = name;
+  ht_init(&obj->fields);
+  return obj;
+}
+
+void obj_struct_def_free(ObjStructDef **def, Allocator *al) {
+  if (!def) {
+    return;
+  }
+  ht_destroy(&(*def)->fields, al);
+  al_free(al, *def, sizeof(ObjStructDef));
+  *def = NULL;
 }
