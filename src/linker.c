@@ -50,8 +50,11 @@ LinkedModule linker_link(Linker *l, Module *m, const DefinitionArray *prior_defs
 }
 
 void linked_module_destroy(LinkedModule *lm, Allocator *al) {
-  proto_destroy(lm->proto, al);
-  al_free_for(al, lm->proto);
+  if (lm->proto) {
+    proto_destroy(lm->proto, al);
+    al_free_for(al, lm->proto);
+    lm->proto = NULL;
+  }
   arr_free(&lm->local_to_vm, al);
   int def_count = arr_count(lm->defs);
   for (int i = 0; i < def_count; i++) {

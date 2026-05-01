@@ -12,7 +12,8 @@ typedef enum {
   OBJ_NATIVE,
   OBJ_UPVALUE,
   OBJ_CLOSURE,
-  OBJ_STRUCT_DEF
+  OBJ_STRUCT_DEF,
+  OBJ_STRUCT_INST
 } ObjectType;
 
 #define OBJ_MARKED_FLAG (1 << 0)
@@ -52,12 +53,6 @@ typedef struct {
   ObjUpvalue *upvalues[];
 } ObjClosure;
 
-typedef struct {
-  Object obj;
-  ObjString *name;
-  HashTable fields;
-} ObjStructDef;
-
 typedef struct VirtualMachine VirtualMachine;
 
 typedef Value (*NativeFunc)(VirtualMachine *vm, int arg_count, Value *args);
@@ -66,6 +61,19 @@ typedef struct {
   Object obj;
   NativeFunc func;
 } ObjNative;
+
+typedef struct {
+  Object obj;
+  ObjString *name;
+  HashTable fields;
+} ObjStructDef;
+
+typedef struct {
+  Object obj;
+  ObjStructDef *def;
+  Value payload[]; // length is def->fields.count
+} ObjStructInst;
+
 
 // -----------------------------------------------------------------------------
 
@@ -76,12 +84,14 @@ static inline bool value_is_obj_type(Value value, ObjectType type) {
 #define IS_STRING(value) value_is_obj_type(value, OBJ_STRING)
 #define IS_FUNCTION(value) value_is_obj_type(value, OBJ_FUNCTION)
 #define IS_NATIVE(value) value_is_obj_type(value, OBJ_NATIVE)
+#define IS_STRUCT_INST(value) value_is_obj_type(value, OBJ_STRUCT_INST)
 
 // -----------------------------------------------------------------------------
 
 #define AS_STRING(value) ((ObjString *)AS_OBJECT(value))
 #define AS_FUNCTION(value) ((ObjFunction *)AS_OBJECT(value))
 #define AS_NATIVE(value) ((ObjNative *)AS_OBJECT(value))
+#define AS_STRUCT_INST(value) ((ObjStructInst *)AS_OBJECT(value))
 
 // -----------------------------------------------------------------------------
 
@@ -144,3 +154,10 @@ ObjStructDef //
     *obj_struct_def_new(ObjString *name, Allocator *al);
 
 void obj_struct_def_free(ObjStructDef **def, Allocator *al);
+
+// -----------------------------------------------------------------------------
+
+ObjStructInst //
+    *obj_struct_inst_new(ObjStructDef *def, Allocator *al);
+
+void obj_struct_inst_free(ObjStructInst **inst, Allocator *al);

@@ -57,7 +57,7 @@ const char *val_type_name(ValueType type) {
 }
 
 void val_print(Value value) {
-  char buf[32];
+  char buf[64];
   val_sprintf(buf, sizeof(buf), value);
   printf("%s", buf);
 }

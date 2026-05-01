@@ -285,6 +285,24 @@ static void vm_call_closure(VirtualMachine *vm, ObjClosure *closure, int arg_cou
   vm->frames[vm->frame_count - 1].upvalues = closure->upvalues;
 }
 
+static void vm_call_struct_constructor(VirtualMachine *vm, ObjStructDef *def, int arg_count) {
+  if (arg_count != def->fields.count) {
+    vm_panic(vm, "expected %d arguments but got %d", def->fields.count, arg_count);
+  }
+
+  gc_begin_staging(&vm->gc);
+  ObjStructInst *inst = obj_struct_inst_new(def, &vm->al);
+  vm_track_object(vm, &inst->obj);
+  for (int i = def->fields.count - 1; i >= 0; i--) {
+    inst->payload[i] = vm_pop(vm);
+  }
+
+  vm_pop(vm); // pop the struct def
+  vm_push(vm, OBJECT_VAL(inst));
+
+  gc_end_staging(&vm->gc);
+}
+
 static void vm_call_object(VirtualMachine *vm, Object *callee, int arg_count) {
   switch (callee->type) {
   case OBJ_FUNCTION:
@@ -295,6 +313,9 @@ static void vm_call_object(VirtualMachine *vm, Object *callee, int arg_count) {
     return;
   case OBJ_CLOSURE:
     vm_call_closure(vm, (ObjClosure *)callee, arg_count);
+    return;
+  case OBJ_STRUCT_DEF:
+    vm_call_struct_constructor(vm, (ObjStructDef *)callee, arg_count);
     return;
   default:
     break; // not callable

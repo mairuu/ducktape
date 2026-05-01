@@ -75,7 +75,7 @@ static void gc_mark_roots(GarbageCollector *gc) {
   for (int i = 0; i < def_count; i++) {
     gc_mark_object(gc, gc->vm->definition_objects->data[i]);
   }
-    
+
   gc_mark_hash_table(gc, &gc->vm->globals);
 }
 
@@ -113,6 +113,14 @@ static void gc_blacken_object(GarbageCollector *gc, Object *obj) {
     ObjStructDef *def = (ObjStructDef *)obj;
     gc_mark_object(gc, &def->name->obj);
     gc_mark_hash_table(gc, &def->fields);
+    break;
+  }
+  case OBJ_STRUCT_INST: {
+    ObjStructInst *inst = (ObjStructInst *)obj;
+    gc_mark_object(gc, &inst->def->obj);
+    for (int i = 0; i < inst->def->fields.count; i++) {
+      gc_mark_value(gc, inst->payload[i]);
+    }
     break;
   }
   default:

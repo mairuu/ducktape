@@ -9,8 +9,9 @@
 #include "value.h"
 
 static const char *obj_type_names[] = {
-    [OBJ_STRING] = "string",   [OBJ_FUNCTION] = "function", [OBJ_NATIVE] = "native",
-    [OBJ_UPVALUE] = "upvalue", [OBJ_CLOSURE] = "closure",
+    [OBJ_STRING] = "string",           [OBJ_FUNCTION] = "function", [OBJ_NATIVE] = "native",
+    [OBJ_UPVALUE] = "upvalue",         [OBJ_CLOSURE] = "closure",   [OBJ_STRUCT_DEF] = "struct-def",
+    [OBJ_STRUCT_INST] = "struct-inst",
 };
 
 const char *obj_type_name(ObjectType type) {
@@ -57,6 +58,11 @@ int obj_sprintf(char *buf, int bufsize, Object *obj) {
   case OBJ_STRUCT_DEF: {
     ObjStructDef *def = (ObjStructDef *)obj;
     return snprintf(buf, bufsize, "<struct %.*s>", def->name->str.length, def->name->str.chars);
+  }
+  case OBJ_STRUCT_INST: {
+    ObjStructInst *inst = (ObjStructInst *)obj;
+    return snprintf(buf, bufsize, "<instance of %.*s at @%p>", inst->def->name->str.length,
+                    inst->def->name->str.chars, (void *)inst);
   }
   default:
     assert(false && "unknown object type");
@@ -114,6 +120,9 @@ void obj_free(Object **obj, Allocator *al) {
     break;
   case OBJ_STRUCT_DEF:
     obj_struct_def_free((ObjStructDef **)obj, al);
+    break;
+  case OBJ_STRUCT_INST:
+    obj_struct_inst_free((ObjStructInst **)obj, al);
     break;
   default:
     assert(false && "unknown object type");
@@ -258,4 +267,28 @@ void obj_struct_def_free(ObjStructDef **def, Allocator *al) {
   ht_destroy(&(*def)->fields, al);
   al_free(al, *def, sizeof(ObjStructDef));
   *def = NULL;
+}
+
+// -----------------------------------------------------------------------------
+
+static inline size_t struct_inst_size(int field_count) {
+  return sizeof(ObjStructInst) + sizeof(Value) * field_count;
+}
+
+ObjStructInst //
+    *obj_struct_inst_new(ObjStructDef *def, Allocator *al) {
+  ObjStructInst *obj = obj_new(struct_inst_size(def->fields.count), OBJ_STRUCT_INST, al);
+  obj->def = def;
+  for (int i = 0; i < def->fields.count; i++) {
+    obj->payload[i] = EMPTY_VAL;
+  }
+  return obj;
+}
+
+void obj_struct_inst_free(ObjStructInst **inst, Allocator *al) {
+  if (!inst) {
+    return;
+  }
+  al_free(al, *inst, struct_inst_size((*inst)->def->fields.count));
+  *inst = NULL;
 }
