@@ -4,6 +4,8 @@
 #include <stdio.h>
 
 #include "allocator.h"
+#include "array.h"
+#include "chunk.h"
 #include "hash_table.h"
 #include "string_utils.h"
 #include "value.h"
@@ -140,6 +142,15 @@ void obj_set_marked(Object *obj, bool marked) {
 
 bool obj_is_marked(Object *obj) { return obj->flags & OBJ_MARKED_FLAG; }
 
+int obj_def_get_id(Object *obj) {
+  return (int)((obj->flags & OBJ_DEF_ID_MASK) >> OBJ_DEF_ID_SHIFT);
+}
+
+void obj_def_set_id(Object *obj, int id) {
+  obj->flags =
+      (obj->flags & ~OBJ_DEF_ID_MASK) | (((uint32_t)id << OBJ_DEF_ID_SHIFT) & OBJ_DEF_ID_MASK);
+}
+
 // -----------------------------------------------------------------------------
 
 ObjString //
@@ -171,13 +182,29 @@ bool obj_string_is_interned(ObjString *str) { return str->obj.flags & STR_INTERN
 
 // -----------------------------------------------------------------------------
 
+static inline size_t function_size(int pic_count) {
+  return sizeof(ObjFunction) + sizeof(Pic) * pic_count;
+}
+
 ObjFunction //
-    *obj_function_new(Allocator *al, int arity) {
-  ObjFunction *obj = obj_new(sizeof(ObjFunction), OBJ_FUNCTION, al);
-  obj->arity = arity;
-  obj->upvalue_count = 0;
-  chunk_init(&obj->chunk);
-  obj->name = NULL;
+    *obj_function_new(Allocator *al, ObjString *name, ConstantLoader *loader, const Proto *proto) {
+  int pic_count = arr_count(proto->pic);
+  ObjFunction *obj = obj_new(function_size(pic_count), OBJ_FUNCTION, al);
+
+  obj->arity = proto->arity;
+  obj->upvalue_count = proto->upvalue_count;
+  chunk_load_from_proto(&obj->chunk, proto, loader, al);
+  obj->name = name;
+
+  for (int i = 0; i < pic_count; i++) {
+    obj->pic[i].name = obj->chunk.pic->data[i];
+    obj->pic[i].count = 0;
+    for (int j = 0; j < PIC_CACHE_SIZE; j++) {
+      obj->pic[i].entries[j].shape_id = 0;
+      obj->pic[i].entries[j].offset = 0;
+    }
+  }
+
   return obj;
 }
 
@@ -186,8 +213,9 @@ void obj_function_free(ObjFunction **obj, Allocator *al) {
     return;
   }
 
+  int pic_count = arr_count((*obj)->chunk.pic);
   chunk_destroy(&(*obj)->chunk, al);
-  al_free(al, *obj, sizeof(ObjFunction));
+  al_free(al, *obj, function_size(pic_count));
   *obj = NULL;
 }
 

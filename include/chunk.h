@@ -20,6 +20,7 @@ typedef struct {
   ByteArray *code;
   IntArray *lines;
   ValueArray *constants;
+  IntArray *pic; // for debugging only, not used in execution
 } Chunk;
 
 void chunk_init(Chunk *chunk);

@@ -2,6 +2,7 @@
 #include "array.h"
 #include "object.h"
 #include "opcode.h"
+#include <stdint.h>
 #include <stdio.h>
 
 void disassemble_chunk(Chunk *chunk, const char *name) {
@@ -20,6 +21,16 @@ static int simple_instruction(const char *name, int offset) {
 
 static int constant_instruction(const char *name, Chunk *chunk, int offset) {
   uint8_t constant_index = chunk->code->data[offset + 1];
+  printf("%-16s %d '", name, constant_index);
+  Value constant = chunk->constants->data[constant_index];
+  val_print(constant);
+  printf("'\n");
+  return offset + 2;
+}
+
+static int pic_instruction(const char *name, Chunk *chunk, int offset) {
+  uint8_t pic_index = chunk->code->data[offset + 1];
+  uint8_t constant_index = chunk->pic->data[pic_index];
   printf("%-16s %d '", name, constant_index);
   Value constant = chunk->constants->data[constant_index];
   val_print(constant);
@@ -78,6 +89,8 @@ int disassemble_chunk_instruction(Chunk *chunk, int offset) {
 
   case OP_POP:
     return simple_instruction("OP_POP", offset);
+  case OP_DUP:
+    return simple_instruction("OP_DUP", offset);
 
   case OP_ADD:
     return simple_instruction("OP_ADD", offset);
@@ -127,6 +140,11 @@ int disassemble_chunk_instruction(Chunk *chunk, int offset) {
 
   case OP_GET_DEFINITION:
     return byte_instruction("OP_GET_DEFINITION", chunk, offset);
+
+  case OP_GET_PROPERTY:
+    return pic_instruction("OP_GET_PROPERTY", chunk, offset);
+  case OP_SET_PROPERTY:
+    return pic_instruction("OP_SET_PROPERTY", chunk, offset);
 
   case OP_LOOP:
     return jump_instruction("OP_LOOP", chunk, false, offset);

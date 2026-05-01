@@ -34,7 +34,8 @@ typedef struct Proto {
   IntArray *lines;
   ByteArray *code;
   RawConstantArray *constants;
-  IntArray *patches;
+  IntArray *pic;     // polymorphic inline cache
+  IntArray *patches; // patch sites for definitions
 } Proto;
 
 void proto_init(Proto *proto, Allocator *al);
@@ -45,6 +46,10 @@ void proto_write_code(Proto *proto, uint8_t byte, int line, Allocator *al);
 
 int proto_write_constant(Proto *proto, RawConstant constant, Allocator *al);
 
-void proto_add_patch(Proto *proto, int offset, Allocator *al); // mark a patch site that needs to be patched later.
+int proto_register_pic(Proto *proto, int constant_index, Allocator *al);
 
-void proto_patch_short(Proto *proto, int offset, uint16_t value); // patch a short (2 bytes) value at the given offset.
+void proto_add_patch(Proto *proto, int offset,
+                     Allocator *al); // mark a patch site that needs to be patched later.
+
+void proto_patch_short(Proto *proto, int offset,
+                       uint16_t value); // patch a short (2 bytes) value at the given offset.

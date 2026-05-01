@@ -5,6 +5,7 @@
 #include "hash_table.h"
 #include "string_utils.h"
 #include "value.h"
+#include <stdint.h>
 
 typedef enum {
   OBJ_STRING,
@@ -16,9 +17,11 @@ typedef enum {
   OBJ_STRUCT_INST
 } ObjectType;
 
-#define OBJ_MARKED_FLAG (1 << 0)
+#define OBJ_MARKED_FLAG (1u << 0)   // bit 0
+#define STR_INTERNED_FLAG (1u << 1) // bit 1
 
-#define STR_INTERNED_FLAG (1 << 1)
+#define OBJ_DEF_ID_SHIFT 2
+#define OBJ_DEF_ID_MASK (0xFFFFFFFCu) // bits 2–31
 
 typedef struct Object {
   ObjectType type;
@@ -32,12 +35,26 @@ typedef struct {
   uint32_t hash;
 } ObjString;
 
+#define PIC_CACHE_SIZE 4
+
+typedef struct {
+  uint16_t shape_id;
+  uint16_t offset;
+} PicEntry;
+
+typedef struct {
+  int name;
+  uint8_t count;
+  PicEntry entries[PIC_CACHE_SIZE];
+} Pic;
+
 typedef struct {
   Object obj;
   int arity;
   int upvalue_count;
   Chunk chunk;
   ObjString *name;
+  Pic pic[]; // length is arr_count(chunk->pic)
 } ObjFunction;
 
 typedef struct ObjUpvalue {
@@ -74,7 +91,6 @@ typedef struct {
   Value payload[]; // length is def->fields.count
 } ObjStructInst;
 
-
 // -----------------------------------------------------------------------------
 
 static inline bool value_is_obj_type(Value value, ObjectType type) {
@@ -109,6 +125,12 @@ void obj_set_marked(Object *obj, bool marked);
 
 bool obj_is_marked(Object *obj);
 
+// for only definitions
+int obj_def_get_id(Object *obj);
+
+// for only definitions
+void obj_def_set_id(Object *obj, int id);
+
 // -----------------------------------------------------------------------------
 
 ObjString // move ownership of str to the object
@@ -123,7 +145,7 @@ bool obj_string_is_interned(ObjString *str);
 // -----------------------------------------------------------------------------
 
 ObjFunction //
-    *obj_function_new(Allocator *al, int arity);
+    *obj_function_new(Allocator *al, ObjString *name, ConstantLoader *loader, const Proto *proto);
 
 void obj_function_free(ObjFunction **func, Allocator *al);
 
@@ -161,3 +183,5 @@ ObjStructInst //
     *obj_struct_inst_new(ObjStructDef *def, Allocator *al);
 
 void obj_struct_inst_free(ObjStructInst **inst, Allocator *al);
+
+// -----------------------------------------------------------------------------

@@ -6,6 +6,7 @@ typedef enum {
   OP_BYTE, // push a single byte as a number (for small integers)
 
   OP_POP,
+  OP_DUP,
 
   OP_ADD,
   OP_SUBTRACT,
@@ -34,6 +35,9 @@ typedef enum {
   OP_CLOSE_UPVALUE,
 
   OP_GET_DEFINITION,
+
+  OP_GET_PROPERTY,
+  OP_SET_PROPERTY,
 
   OP_LOOP,
   OP_JUMP,

@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 
 #include "allocator.h"
@@ -73,7 +74,7 @@ void vm_panic(VirtualMachine *vm, const char *format, ...) {
   longjmp(vm->panic_jump, 1);
 }
 
-// ===== constant loading =====
+// ===== loading =====
 
 typedef struct {
   ConstantLoader loader;
@@ -110,15 +111,10 @@ static ObjFunction *vm_load_proto(ConstantLoader *loader, Proto *proto) {
   LoadContext *ctx = (LoadContext *)loader;
   VirtualMachine *vm = ctx->vm;
 
-  ObjFunction *func = obj_function_new(&vm->al, proto->arity);
+  ObjString *func_name =
+      proto->name.length > 0 ? vm_intern_string(vm, sv_from_str(proto->name)) : NULL;
+  ObjFunction *func = obj_function_new(&vm->al, func_name, loader, proto);
   vm_track_object(vm, &func->obj);
-
-  chunk_load_from_proto(&func->chunk, proto, loader, &vm->al);
-  func->upvalue_count = proto->upvalue_count;
-
-  if (proto->name.length > 0) {
-    func->name = vm_intern_string(vm, sv_from_str(proto->name));
-  }
 
   int patch_count = arr_count(proto->patches);
   for (int i = 0; i < patch_count; i++) {
@@ -172,6 +168,7 @@ ObjFunction *vm_load(VirtualMachine *vm, LinkedModule *lm) {
     if (m->vm_index == -1) {
       const Definition *def = &lm->defs->data[new_def_cursor++];
       Object *obj = vm_load_definition(vm, def);
+      obj_def_set_id(obj, arr_count(vm->definitions) + 1); // 0 is reserved
       arr_push(vm->definitions, def_copy(def, &vm->al), &vm->al);
       arr_push(vm->definition_objects, obj, &vm->al);
       m->vm_index = arr_count(vm->definitions) - 1;
@@ -255,6 +252,38 @@ static void vm_close_upvalues(VirtualMachine *vm, Value *last) {
     upvalue->location = &upvalue->closed;
     vm->open_upvalues = upvalue->next;
   }
+}
+
+static Value *vm_property_ref(VirtualMachine *vm, uint8_t pic_index, Value receiver,
+                              ObjFunction *function) {
+  ObjStructInst *inst = AS_STRUCT_INST(receiver);
+  Pic *pic = &function->pic[pic_index];
+
+  if (pic->count < PIC_CACHE_SIZE) { // not megamorphic, try to find cached entry
+    for (int i = 0; i < pic->count; i++) {
+      if (pic->entries[i].shape_id == obj_def_get_id(&inst->def->obj)) {
+        return &inst->payload[pic->entries[i].offset];
+      }
+    }
+  }
+
+  ObjString *field_name = AS_STRING(function->chunk.constants->data[pic->name]);
+
+  Value *offset_val = ht_get(&inst->def->fields, OBJECT_VAL(field_name));
+  if (!offset_val) {
+    vm_panic(vm, "undefined property '%.*s'", field_name->str.length, field_name->str.chars);
+  }
+
+  uint8_t offset = (uint8_t)AS_NUMBER(*offset_val);
+
+  if (pic->count < PIC_CACHE_SIZE) {
+    pic->entries[pic->count++] =
+        (PicEntry){.shape_id = obj_def_get_id(&inst->def->obj), .offset = offset};
+  } else {
+    pic->count = UINT8_MAX; // megamorphic, stop caching
+  }
+
+  return &inst->payload[offset];
 }
 
 // ===== vm execution =====
@@ -398,6 +427,10 @@ static void vm_run(VirtualMachine *vm) {
     case OP_POP:
       vm_pop(vm);
       break;
+    case OP_DUP: {
+      vm_push(vm, vm_peek(vm, 0));
+      break;
+    }
     case OP_ADD: {
       if (IS_NUMBER(vm_peek(vm, 0)) && IS_NUMBER(vm_peek(vm, 1))) {
         double b = AS_NUMBER(vm_pop(vm));
@@ -511,6 +544,24 @@ static void vm_run(VirtualMachine *vm) {
         vm_panic(vm, "undefined definition at index %d", def_idx);
       }
       vm_push(vm, OBJECT_VAL(def_obj));
+      break;
+    }
+    case OP_GET_PROPERTY: {
+      uint8_t pic_index = READ_BYTE();
+      Value receiver = vm_peek(vm, 0);
+      Value *property = vm_property_ref(vm, pic_index, receiver, frame->function);
+      assert(property != NULL && "property reference should not be NULL");
+      vm->stack_top[-1] = *property;
+      break;
+    }
+    case OP_SET_PROPERTY: {
+      uint8_t pic_index = READ_BYTE();
+      Value receiver = vm_peek(vm, 1);
+      Value *property = vm_property_ref(vm, pic_index, receiver, frame->function);
+      assert(property != NULL && "property reference should not be NULL");
+      *property = vm_peek(vm, 0);
+      vm->stack_top[-2] = *property;
+      vm->stack_top--;
       break;
     }
     case OP_LOOP: {

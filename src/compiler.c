@@ -612,6 +612,25 @@ static void ctx_emit_set(Context *ctx, VarRef ref) {
   }
 }
 
+static int ctx_register_pic(Context *ctx, ConstantRef name) {
+  Proto *proto = ctx->current_compiler->proto;
+  int pic_index = proto_register_pic(proto, name.index, ctx->al);
+  if (pic_index == -1) {
+    ctx_error_at(ctx, &ctx->parser.previous, "too many property accesses in one chunk.");
+  }
+  return pic_index;
+}
+
+static void ctx_emit_get_property(Context *ctx, ConstantRef name) {
+  int pic_index = ctx_register_pic(ctx, name);
+  ctx_emit_bytes(ctx, OP_GET_PROPERTY, (uint8_t)pic_index);
+}
+
+static void ctx_emit_set_property(Context *ctx, ConstantRef name) {
+  int pic_index = ctx_register_pic(ctx, name);
+  ctx_emit_bytes(ctx, OP_SET_PROPERTY, (uint8_t)pic_index);
+}
+
 static void ctx_named_variable(Context *ctx, Token name, bool can_assign) {
   VarRef ref = ctx_resolve_variable(ctx, name);
   if (can_assign && ctx_match(ctx, TOKEN_EQUAL)) {
@@ -769,6 +788,7 @@ static void unary(Context *ctx, bool can_assign);
 static void variable(Context *ctx, bool can_assign);
 static void and_(Context *ctx, bool can_assign);
 static void or_(Context *ctx, bool can_assign);
+static void dot(Context *ctx, bool can_assign);
 
 static ParseRule rules[] = {
     [TOKEN_LEFT_PAREN] = {grouping, call, PREC_CALL}, //
@@ -777,7 +797,7 @@ static ParseRule rules[] = {
     [TOKEN_RIGHT_BRACE] = {NULL, NULL, PREC_NONE},    //
     [TOKEN_COLON] = {NULL, NULL, PREC_NONE},          //
     [TOKEN_COMMA] = {NULL, NULL, PREC_NONE},          //
-    [TOKEN_DOT] = {NULL, NULL, PREC_NONE},            //
+    [TOKEN_DOT] = {NULL, dot, PREC_CALL},             //
     [TOKEN_MINUS] = {unary, binary, PREC_TERM},       //
     [TOKEN_MINUS_MINUS] = {NULL, NULL, PREC_NONE},    //
     [TOKEN_MINUS_EQUAL] = {NULL, NULL, PREC_NONE},    //
@@ -1323,6 +1343,27 @@ static void or_(Context *ctx, bool can_assign) {
 
   parse_precedence(ctx, PREC_OR);
   ctx_patch_jump(ctx, end_jump);
+}
+
+static void dot(Context *ctx, bool can_assign) {
+  (void)can_assign;
+
+  ctx_consume(ctx, TOKEN_IDENTIFIER, "expect property name after '.'.");
+  ConstantRef name = ctx_identifier_constant(ctx, &ctx->parser.previous);
+
+  if (can_assign && ctx_match(ctx, TOKEN_EQUAL)) {
+    expression(ctx);
+    ctx_emit_set_property(ctx, name);
+  } else if (can_assign && ctx_match_compound_assignment(ctx)) {
+    TokenType operator = ctx->parser.previous.type;
+    ctx_emit_byte(ctx, OP_DUP);
+    ctx_emit_get_property(ctx, name);
+    expression(ctx);
+    ctx_emit_byte(ctx, compound_assignment_opcode(operator));
+    ctx_emit_set_property(ctx, name);
+  } else {
+    ctx_emit_get_property(ctx, name);
+  }
 }
 
 // ===== public api =====
