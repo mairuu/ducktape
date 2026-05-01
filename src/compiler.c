@@ -2,6 +2,7 @@
 
 #include <assert.h>
 #include <complex.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -256,8 +257,13 @@ static void ctx_print_diagnostic(Context *ctx, Diagnostic *diag) {
   fprintf(stderr, "\n");
 }
 
-static void ctx_error_at(Context *ctx, Token *token, const char *err_msg) {
-  DIAGNOSTIC(ctx, err_msg, {*token, ""});
+static void ctx_error_at(Context *ctx, Token *token, const char *fmt, ...) {
+  char buf[256];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, args);
+  va_end(args);
+  DIAGNOSTIC(ctx, buf, {*token, ""});
 }
 
 static void ctx_synchronize(Context *ctx) {
@@ -1006,10 +1012,8 @@ static void statement_break(Context *ctx) {
   if (ctx_match(ctx, TOKEN_IDENTIFIER)) {
     loop = ctx_resolve_loop(ctx, &ctx->parser.previous);
     if (loop == NULL) {
-      char err_msg[100];
-      snprintf(err_msg, sizeof(err_msg), "no enclosing loop with label '%.*s'.",
-               ctx->parser.previous.length, ctx->parser.previous.start);
-      ctx_error_at(ctx, &ctx->parser.previous, err_msg);
+      ctx_error_at(ctx, &ctx->parser.previous, "no enclosing loop with label '%.*s'.",
+                   ctx->parser.previous.length, ctx->parser.previous.start);
       return;
     }
   }
@@ -1034,10 +1038,8 @@ static void statement_continue(Context *ctx) {
   if (ctx_match(ctx, TOKEN_IDENTIFIER)) {
     loop = ctx_resolve_loop(ctx, &ctx->parser.previous);
     if (loop == NULL) {
-      char err_msg[100];
-      snprintf(err_msg, sizeof(err_msg), "no enclosing loop with label '%.*s'.",
-               ctx->parser.previous.length, ctx->parser.previous.start);
-      ctx_error_at(ctx, &ctx->parser.previous, err_msg);
+      ctx_error_at(ctx, &ctx->parser.previous, "no enclosing loop with label '%.*s'.",
+                   ctx->parser.previous.length, ctx->parser.previous.start);
       return;
     }
   }
@@ -1089,21 +1091,43 @@ static void statement(Context *ctx) {
 }
 
 static void declaration_var(Context *ctx) {
-  ConstantRef name = ctx_parse_variable(ctx, "expect variable name.");
+  ConstantRef name_const = ctx_parse_variable(ctx, "expect variable name.");
+  Token name = ctx->parser.previous;
+
+  if (ctx->current_compiler->scope_depth == 0) {
+    DefinitionEntry *entry = defreg_find(&ctx->def_reg, sv_from_token(&name));
+    if (entry != NULL) {
+      Definition *def = &ctx->def_reg.defs->data[entry->index];
+      ctx_error_at(ctx, &name, "'%.*s' is a %s definition and cannot be shadowed by a variable.",
+                   name.length, name.start, def_type_name(def->type));
+    }
+  }
+
   if (ctx_match(ctx, TOKEN_EQUAL)) {
     expression(ctx);
   } else {
     ctx_emit_byte(ctx, OP_NIL);
   }
   ctx_consume(ctx, TOKEN_SEMICOLON, "expect ';' after variable declaration.");
-  ctx_define_variable(ctx, name);
+  ctx_define_variable(ctx, name_const);
 }
 
 static void declaration_fun(Context *ctx) {
-  ConstantRef name = ctx_parse_variable(ctx, "expect function name.");
+  ConstantRef name_const = ctx_parse_variable(ctx, "expect function name.");
+  Token name = ctx->parser.previous;
+
+  if (ctx->current_compiler->scope_depth == 0) {
+    DefinitionEntry *entry = defreg_find(&ctx->def_reg, sv_from_token(&name));
+    if (entry != NULL) {
+      Definition *def = &ctx->def_reg.defs->data[entry->index];
+      ctx_error_at(ctx, &name, "'%.*s' is a %s definition and cannot be shadowed by a function.",
+                   name.length, name.start, def_type_name(def->type));
+    }
+  }
+
   ctx_mark_initialized(ctx); // make function name available in its own body for recursion
   ctx_compile_function(ctx);
-  ctx_define_variable(ctx, name);
+  ctx_define_variable(ctx, name_const);
 }
 
 static void ctx_register_definition(Context *ctx, Token *name, Definition def) {
@@ -1115,6 +1139,10 @@ static void ctx_register_definition(Context *ctx, Token *name, Definition def) {
 static void declaration_struct(Context *ctx) {
   ctx_consume(ctx, TOKEN_IDENTIFIER, "expect struct name.");
   Token name = ctx->parser.previous;
+
+  if (ctx->current_compiler->scope_depth > 0) {
+    ctx_error_at(ctx, &name, "struct definitions are only allowed at the top level.");
+  }
 
   Definition def = {0};
   def.type = DEFTYPE_STRUCT;
@@ -1135,7 +1163,7 @@ static void declaration_struct(Context *ctx) {
   }
 
   ctx_consume(ctx, TOKEN_RIGHT_BRACE, "expect '}' after struct body.");
- ctx_register_definition(ctx, &name, def);
+  ctx_register_definition(ctx, &name, def);
 }
 
 static void declaration(Context *ctx) {

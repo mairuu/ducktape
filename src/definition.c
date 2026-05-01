@@ -4,6 +4,17 @@
 
 #include "string_utils.h"
 
+static const char *def_type_names[] = {
+    [DEFTYPE_STRUCT] = "struct",
+};
+
+const char *def_type_name(DefinitionType type) {
+  if (type < 0 || type >= sizeof(def_type_names) / sizeof(def_type_names[0])) {
+    return "unknown";
+  }
+  return def_type_names[type];
+}
+
 Definition def_copy(const Definition *def, Allocator *al) {
   Definition copy = {
       .type = def->type,
@@ -16,8 +27,7 @@ Definition def_copy(const Definition *def, Allocator *al) {
     copy_struct_def->field_names = arr_new();
     int field_count = arr_count(struct_def->field_names);
     for (int i = 0; i < field_count; i++) {
-      arr_push(copy_struct_def->field_names,
-               str_copy(&struct_def->field_names->data[i], al), al);
+      arr_push(copy_struct_def->field_names, str_copy(&struct_def->field_names->data[i], al), al);
     }
     break;
   }
@@ -114,7 +124,8 @@ static void _defreg_grow(DefinitionRegistry *reg, Allocator *al) {
   *reg = new_reg;
 }
 
-DefinitionEntry *get_or_insert(DefinitionRegistry *reg, StringView name, Allocator *al, bool *out_exists) {
+DefinitionEntry *get_or_insert(DefinitionRegistry *reg, StringView name, Allocator *al,
+                               bool *out_exists) {
   if (!reg->entries) {
     _defreg_alloc(reg, INITIAL_CAPACITY, al);
   } else if (reg->count >= reg->capacity * HIGH_WATER_MARK) {

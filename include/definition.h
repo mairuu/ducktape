@@ -21,6 +21,8 @@ typedef struct {
   } as;
 } Definition;
 
+const char *def_type_name(DefinitionType type);
+
 // deep copy definition
 Definition def_copy(const Definition *def, Allocator *al);
 
