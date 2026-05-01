@@ -73,7 +73,7 @@ int obj_sprintf(char *buf, int bufsize, Object *obj) {
 }
 
 static bool obj_string_equal(ObjString *a, ObjString *b) {
-  if (obj_string_is_interned(a) && obj_string_is_interned(b)) {
+  if (a->obj.flags.interned && b->obj.flags.interned) {
     return a == b;
   }
   return sv_equal(sv_from_str(a->str), sv_from_str(b->str));
@@ -98,7 +98,7 @@ bool obj_equal(Object *a, Object *b) {
 static void *obj_new(size_t size, ObjectType type, Allocator *al) {
   Object *obj = al_alloc(al, size);
   obj->type = type;
-  obj->flags = 0;
+  obj->flags = (ObjectFlags){0};
   obj->next = NULL;
   return obj;
 }
@@ -132,25 +132,6 @@ void obj_free(Object **obj, Allocator *al) {
   }
 }
 
-void obj_set_marked(Object *obj, bool marked) {
-  if (marked) {
-    obj->flags |= OBJ_MARKED_FLAG;
-  } else {
-    obj->flags &= ~OBJ_MARKED_FLAG;
-  }
-}
-
-bool obj_is_marked(Object *obj) { return obj->flags & OBJ_MARKED_FLAG; }
-
-int obj_def_get_id(Object *obj) {
-  return (int)((obj->flags & OBJ_DEF_ID_MASK) >> OBJ_DEF_ID_SHIFT);
-}
-
-void obj_def_set_id(Object *obj, int id) {
-  obj->flags =
-      (obj->flags & ~OBJ_DEF_ID_MASK) | (((uint32_t)id << OBJ_DEF_ID_SHIFT) & OBJ_DEF_ID_MASK);
-}
-
 // -----------------------------------------------------------------------------
 
 ObjString //
@@ -169,16 +150,6 @@ void obj_string_free(ObjString **obj, Allocator *al) {
   al_free(al, *obj, sizeof(ObjString));
   *obj = NULL;
 }
-
-void obj_string_set_interned(ObjString *str, bool interned) {
-  if (interned) {
-    str->obj.flags |= STR_INTERNED_FLAG;
-  } else {
-    str->obj.flags &= ~STR_INTERNED_FLAG;
-  }
-}
-
-bool obj_string_is_interned(ObjString *str) { return str->obj.flags & STR_INTERNED_FLAG; }
 
 // -----------------------------------------------------------------------------
 

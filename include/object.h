@@ -17,15 +17,19 @@ typedef enum {
   OBJ_STRUCT_INST
 } ObjectType;
 
-#define OBJ_MARKED_FLAG (1u << 0)   // bit 0
-#define STR_INTERNED_FLAG (1u << 1) // bit 1
-
-#define OBJ_DEF_ID_SHIFT 2
-#define OBJ_DEF_ID_MASK (0xFFFFFFFCu) // bits 2–31
+typedef union {
+  uint32_t raw;
+  struct {
+    uint8_t marked : 1;
+    uint8_t interned : 1;
+    uint8_t _pad : 6;
+    uint32_t def_id : 24;
+  };
+} ObjectFlags;
 
 typedef struct Object {
   ObjectType type;
-  int flags;
+  ObjectFlags flags;
   struct Object *next;
 } Object;
 
@@ -121,26 +125,12 @@ bool obj_equal(Object *a, Object *b);
 
 void obj_free(Object **obj, Allocator *al);
 
-void obj_set_marked(Object *obj, bool marked);
-
-bool obj_is_marked(Object *obj);
-
-// for only definitions
-int obj_def_get_id(Object *obj);
-
-// for only definitions
-void obj_def_set_id(Object *obj, int id);
-
 // -----------------------------------------------------------------------------
 
 ObjString // move ownership of str to the object
     *obj_string_new(String str, uint32_t hash, Allocator *al);
 
 void obj_string_free(ObjString **str, Allocator *al);
-
-void obj_string_set_interned(ObjString *str, bool interned);
-
-bool obj_string_is_interned(ObjString *str);
 
 // -----------------------------------------------------------------------------
 

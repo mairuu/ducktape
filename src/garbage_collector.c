@@ -27,14 +27,14 @@ static void ht_remove_unmarked(HashTable *table) {
   HashTableIterator it;
   hti_init(&it, table);
   while (hti_next(&it)) {
-    if (IS_OBJECT(*it.key) && !obj_is_marked(AS_OBJECT(*it.key))) {
+    if (IS_OBJECT(*it.key) && !AS_OBJECT(*it.key)->flags.marked) {
       ht_delete(table, *it.key);
     }
   }
 }
 
 static void gc_mark_object(GarbageCollector *gc, Object *obj) {
-  if (obj == NULL || obj_is_marked(obj)) {
+  if (obj == NULL || obj->flags.marked) {
     return;
   }
 
@@ -44,7 +44,7 @@ static void gc_mark_object(GarbageCollector *gc, Object *obj) {
   printf("\n");
 #endif
 
-  obj_set_marked(obj, true);
+  obj->flags.marked = true;
   arr_push(gc->gray_stack, obj, gc->inner);
 }
 
@@ -66,7 +66,7 @@ static void gc_mark_roots(GarbageCollector *gc) {
   }
 
   for (Object *obj = gc->vm->objects; obj != NULL; obj = obj->next) {
-    if (obj_is_marked(obj)) {
+    if (obj->flags.marked) {
       gc_mark_object(gc, obj);
     }
   }
@@ -139,8 +139,8 @@ static void gc_sweep(GarbageCollector *gc) {
   Object *prev = NULL;
   Object *obj = gc->vm->objects;
   while (obj != NULL) {
-    if (obj_is_marked(obj)) {
-      obj_set_marked(obj, false);
+    if (obj->flags.marked) {
+      obj->flags.marked = false;
       prev = obj;
       obj = obj->next;
       continue;

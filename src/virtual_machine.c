@@ -168,7 +168,7 @@ ObjFunction *vm_load(VirtualMachine *vm, LinkedModule *lm) {
     if (m->vm_index == -1) {
       const Definition *def = &lm->defs->data[new_def_cursor++];
       Object *obj = vm_load_definition(vm, def);
-      obj_def_set_id(obj, arr_count(vm->definitions) + 1); // 0 is reserved
+      obj->flags.def_id = arr_count(vm->definitions) + 1;
       arr_push(vm->definitions, def_copy(def, &vm->al), &vm->al);
       arr_push(vm->definition_objects, obj, &vm->al);
       m->vm_index = arr_count(vm->definitions) - 1;
@@ -261,7 +261,7 @@ static Value *vm_property_ref(VirtualMachine *vm, uint8_t pic_index, Value recei
 
   if (pic->count < PIC_CACHE_SIZE) { // not megamorphic, try to find cached entry
     for (int i = 0; i < pic->count; i++) {
-      if (pic->entries[i].shape_id == obj_def_get_id(&inst->def->obj)) {
+      if (pic->entries[i].shape_id == inst->def->obj.flags.def_id) {
         return &inst->payload[pic->entries[i].offset];
       }
     }
@@ -278,7 +278,7 @@ static Value *vm_property_ref(VirtualMachine *vm, uint8_t pic_index, Value recei
 
   if (pic->count < PIC_CACHE_SIZE) {
     pic->entries[pic->count++] =
-        (PicEntry){.shape_id = obj_def_get_id(&inst->def->obj), .offset = offset};
+        (PicEntry){.shape_id = inst->def->obj.flags.def_id, .offset = offset};
   } else {
     pic->count = UINT8_MAX; // megamorphic, stop caching
   }
@@ -679,7 +679,7 @@ void vm_destroy(VirtualMachine *vm) {
 ObjString *vm_intern_string(VirtualMachine *vm, StringView str) {
   uint32_t hash = sv_hash(str);
   ObjString tmp = {
-      .obj = {.type = OBJ_STRING, .flags = 0, .next = NULL},
+      .obj = {.type = OBJ_STRING, .flags = {0}, .next = NULL},
       .str = {.chars = (char *)str.chars, .length = str.length, .capacity = str.length},
       .hash = hash,
   };
@@ -690,8 +690,8 @@ ObjString *vm_intern_string(VirtualMachine *vm, StringView str) {
   gc_begin_staging(&vm->gc);
   String copy = str_copy_sv(str, &vm->al);
   ObjString *interned = obj_string_new(copy, hash, &vm->al);
-  obj_string_set_interned(interned, true);
   vm_track_object(vm, &interned->obj);
+  interned->obj.flags.interned = true;
   ht_put(&vm->strings, OBJECT_VAL(interned), OBJECT_VAL(interned), &vm->al);
   gc_end_staging(&vm->gc);
   return interned;
