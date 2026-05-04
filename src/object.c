@@ -74,6 +74,10 @@ int obj_sprintf(char *buf, int bufsize, Object *obj) {
     ObjImpl *impl = (ObjImpl *)obj;
     return snprintf(buf, bufsize, "<impl at @%p>", (void *)impl);
   }
+  case OBJ_TRAIT_OBJECT: {
+    ObjTraitObject *trait_obj = (ObjTraitObject *)obj;
+    return snprintf(buf, bufsize, "<trait object at @%p>", (void *)trait_obj);
+  }
   default:
     assert(false && "unknown object type");
     return 0;
@@ -139,6 +143,9 @@ void obj_free(Object **obj, Allocator *al) {
     break;
   case OBJ_IMPL:
     obj_impl_free((ObjImpl **)obj, al);
+    break;
+  case OBJ_TRAIT_OBJECT:
+    obj_trait_object_free((ObjTraitObject **)obj, al);
     break;
   default:
     assert(false && "unknown object type");
@@ -350,4 +357,22 @@ void obj_impl_free(ObjImpl **impl, Allocator *al) {
   int method_count = (*impl)->trait->method_count;
   al_free(al, *impl, impl_size(method_count));
   *impl = NULL;
+}
+
+// -----------------------------------------------------------------------------
+
+ObjTraitObject //
+    *obj_trait_object_new(Object *receiver, ObjImpl *impl, Allocator *al) {
+  ObjTraitObject *obj = obj_new(sizeof(ObjTraitObject), OBJ_TRAIT_OBJECT, al);
+  obj->receiver = receiver;
+  obj->impl = impl;
+  return obj;
+}
+
+void obj_trait_object_free(ObjTraitObject **trait_obj, Allocator *al) {
+  if (!trait_obj) {
+    return;
+  }
+  al_free(al, *trait_obj, sizeof(ObjTraitObject));
+  *trait_obj = NULL;
 }

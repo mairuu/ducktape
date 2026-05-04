@@ -17,6 +17,7 @@ typedef enum {
   OBJ_STRUCT_INST,
   OBJ_TRAIT_DEF,
   OBJ_IMPL,
+  OBJ_TRAIT_OBJECT,
 } ObjectType;
 
 typedef union {
@@ -112,6 +113,12 @@ typedef struct ObjImpl {
   Object *subject;
   Object *impls[]; // length is trait->method_count
 } ObjImpl;
+
+typedef struct {
+  Object obj;
+  Object *receiver;
+  ObjImpl *impl;
+} ObjTraitObject;
 
 // -----------------------------------------------------------------------------
 
@@ -217,3 +224,8 @@ ObjImpl //
 void obj_impl_free(ObjImpl **impl, Allocator *al);
 
 // -----------------------------------------------------------------------------
+
+ObjTraitObject //
+    *obj_trait_object_new(Object *receiver, ObjImpl *impl, Allocator *al);
+
+void obj_trait_object_free(ObjTraitObject **trait_obj, Allocator *al);

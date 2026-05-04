@@ -4,6 +4,7 @@
 #include "definition.h"
 #include "garbage_collector.h"
 #include "hash_table.h"
+#include "impl_registry.h"
 #include "object.h"
 #include "value.h"
 
@@ -39,6 +40,7 @@ typedef struct VirtualMachine {
 
   DefinitionArray *definitions;       // all definitions in the program
   ObjectPtrArray *definition_objects; // parallel array to definitions
+  ImplRegistry impl_registry;
 
   ObjUpvalue *open_upvalues; // linked list
 

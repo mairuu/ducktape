@@ -965,6 +965,7 @@ static void variable(Context *ctx, bool can_assign);
 static void and_(Context *ctx, bool can_assign);
 static void or_(Context *ctx, bool can_assign);
 static void dot(Context *ctx, bool can_assign);
+static void as(Context *ctx, bool can_assign);
 
 static ParseRule rules[] = {
     [TOKEN_LEFT_PAREN] = {grouping, call, PREC_CALL}, //
@@ -1002,7 +1003,7 @@ static ParseRule rules[] = {
     [TOKEN_NUMBER] = {number, NULL, PREC_NONE},       //
 
     [TOKEN_AND] = {NULL, and_, PREC_AND},       //
-    [TOKEN_AS] = {NULL, NULL, PREC_NONE},       //
+    [TOKEN_AS] = {NULL, as, PREC_CALL},         //
     [TOKEN_BREAK] = {NULL, NULL, PREC_NONE},    //
     [TOKEN_CONTINUE] = {NULL, NULL, PREC_NONE}, //
     [TOKEN_ELSE] = {NULL, NULL, PREC_NONE},     //
@@ -1727,6 +1728,18 @@ static void dot(Context *ctx, bool can_assign) {
   } else {
     ctx_emit_get_property(ctx, name);
   }
+}
+
+static void as(Context *ctx, bool can_assign) {
+  (void)can_assign;
+  DefinitionEntry *entry = NULL;
+  Definition *trait_def = ctx_consume_as_definition(ctx, DEFTYPE_TRAIT, &entry);
+  if (trait_def == NULL) {
+    return;
+  }
+  VarRef trait_ref = {.definition_index = entry->index, .scope = REF_DEFINITION};
+  ctx_emit_get(ctx, trait_ref);
+  ctx_emit_byte(ctx, OP_CAST);
 }
 
 // ===== public api =====

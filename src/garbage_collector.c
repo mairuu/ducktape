@@ -1,6 +1,7 @@
 #include "garbage_collector.h"
 
 #include "array.h"
+#include "impl_registry.h"
 #include "object.h"
 #include "virtual_machine.h"
 
@@ -77,6 +78,12 @@ static void gc_mark_roots(GarbageCollector *gc) {
   }
 
   gc_mark_hash_table(gc, &gc->vm->globals);
+
+  ImplRegistryIterator it;
+  impl_registry_iter_init(&it, &gc->vm->impl_registry);
+  while (impl_registry_iter_next(&it)) {
+    gc_mark_object(gc, &it.impl->obj);
+  }
 }
 
 static void gc_blacken_object(GarbageCollector *gc, Object *obj) {
@@ -135,6 +142,12 @@ static void gc_blacken_object(GarbageCollector *gc, Object *obj) {
     for (int i = 0; i < impl->trait->method_count; i++) {
       gc_mark_object(gc, impl->impls[i]);
     }
+    break;
+  }
+  case OBJ_TRAIT_OBJECT: {
+    ObjTraitObject *trait_obj = (ObjTraitObject *)obj;
+    gc_mark_object(gc, trait_obj->receiver);
+    gc_mark_object(gc, &trait_obj->impl->obj);
     break;
   }
   default:

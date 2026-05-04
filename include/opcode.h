@@ -50,6 +50,8 @@ typedef enum {
   // wire a method implementation to the impl object
   OP_IMPL_METHOD,
 
+  OP_CAST,
+
   OP_TRAP,
   OP_RETURN,
 } OpCode;

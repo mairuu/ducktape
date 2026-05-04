@@ -163,6 +163,9 @@ int disassemble_chunk_instruction(Chunk *chunk, int offset) {
     return simple_instruction("OP_IMPL", offset);
   case OP_IMPL_METHOD:
     return byte_instruction("OP_IMPL_METHOD", chunk, offset);
+  
+  case OP_CAST:
+    return simple_instruction("OP_CAST", offset);
 
   case OP_TRAP:
     return simple_instruction("OP_TRAP", offset);

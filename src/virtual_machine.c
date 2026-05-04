@@ -11,6 +11,7 @@
 #include "compiler.h"
 #include "definition.h"
 #include "garbage_collector.h"
+#include "impl_registry.h"
 #include "linker.h"
 #include "object.h"
 #include "opcode.h"
@@ -611,13 +612,25 @@ static void vm_run(VirtualMachine *vm) {
       assert((IS_STRUCT_DEF(subject) || IS_TRAIT_DEF(subject)) &&
              "expect struct or trait definition as impl subject");
 
+      gc_begin_staging(&vm->gc);
       ObjImpl *impl = obj_impl_new(AS_TRAIT_DEF(trait), AS_OBJECT(subject), &vm->al);
       vm_track_object(vm, &impl->obj);
+
+      if (!impl_registry_put(&vm->impl_registry, impl, &vm->al)) {
+        vm_panic(
+            vm, "duplicate impl for trait '%.*s' and subject '%.*s'",
+            AS_TRAIT_DEF(trait)->name->str.length, AS_TRAIT_DEF(trait)->name->str.chars,
+            AS_OBJECT(subject)->type == OBJ_STRUCT_DEF ? AS_STRUCT_DEF(subject)->name->str.length
+                                                       : AS_TRAIT_DEF(subject)->name->str.length,
+            AS_OBJECT(subject)->type == OBJ_STRUCT_DEF ? AS_STRUCT_DEF(subject)->name->str.chars
+                                                       : AS_TRAIT_DEF(subject)->name->str.chars);
+      }
 
       vm_pop(vm); // pop subject
       vm_pop(vm); // pop trait
       vm_push(vm, OBJECT_VAL(impl));
 
+      gc_end_staging(&vm->gc);
       break;
     }
     case OP_IMPL_METHOD: {
@@ -635,10 +648,30 @@ static void vm_run(VirtualMachine *vm) {
         // this should not happen if the compiler is correct
         vm_panic(vm, "internal error: cannot find method to implement");
       }
-    
-      vm_pop(vm); // pop method
 
+      vm_pop(vm); // pop method
       impl->impls[method_idx] = AS_OBJECT(method_val);
+
+      break;
+    }
+    case OP_CAST: {
+      ObjTraitDef *trait = AS_TRAIT_DEF(vm_peek(vm, 0));
+      Value receiver_val = vm_peek(vm, 1);
+
+      Object *inst = AS_OBJECT(receiver_val);
+      ObjImpl *impl = impl_registry_get(&vm->impl_registry, inst, trait);
+
+      if (impl == NULL) {
+        char inst_print[32];
+        val_sprintf(inst_print, sizeof(inst_print), receiver_val);
+        vm_panic(vm, "'%s' does not implement trait '%.*s'", inst_print, trait->name->str.length,
+                 trait->name->str.chars);
+      }
+
+      ObjTraitObject *trait_object = obj_trait_object_new(inst, impl, &vm->al);
+      vm_track_object(vm, &trait_object->obj);
+      vm_pop(vm);                                   // pop trait
+      vm->stack_top[-1] = OBJECT_VAL(trait_object); // replace receiver with trait object
       break;
     }
     case OP_RETURN:
@@ -696,6 +729,8 @@ void vm_init(VirtualMachine *vm, Allocator al) {
 
   vm->definition_objects = arr_new();
   vm->definitions = arr_new();
+
+  impl_registry_init(&vm->impl_registry);
 }
 
 void vm_destroy(VirtualMachine *vm) {
@@ -718,6 +753,8 @@ void vm_destroy(VirtualMachine *vm) {
 
   arr_free(&vm->definitions, &vm->al);
   arr_free(&vm->definition_objects, &vm->al);
+
+  impl_registry_destroy(&vm->impl_registry, &vm->al);
 
   assert(vm->gc.bytes_allocated == 0 && "memory leak detected: garbage collector "
                                         "has allocated memory that was not freed");
