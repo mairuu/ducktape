@@ -31,6 +31,21 @@ Definition def_copy(const Definition *def, Allocator *al) {
     }
     break;
   }
+  case DEFTYPE_TRAIT: {
+    const TraitDef *trait_def = &def->as.trait_def;
+    TraitDef *copy_trait_def = &copy.as.trait_def;
+    copy_trait_def->methods = arr_new();
+    int method_count = arr_count(trait_def->methods);
+    for (int i = 0; i < method_count; i++) {
+      TraitMethodDef *method_def = &trait_def->methods->data[i];
+      TraitMethodDef copy_method_def = {
+          .name = str_copy(&method_def->name, al),
+          .arity = method_def->arity,
+      };
+      arr_push(copy_trait_def->methods, copy_method_def, al);
+    }
+    break;
+  }
   default:
     assert(false && "unknown definition type");
   }
@@ -47,6 +62,16 @@ void def_destroy(Definition *def, Allocator *al) {
       str_destroy(&struct_def->field_names->data[i], al);
     }
     arr_free(&struct_def->field_names, al);
+    break;
+  }
+  case DEFTYPE_TRAIT: {
+    TraitDef *trait_def = &def->as.trait_def;
+    int method_count = arr_count(trait_def->methods);
+    for (int i = 0; i < method_count; i++) {
+      TraitMethodDef *method_def = &trait_def->methods->data[i];
+      str_destroy(&method_def->name, al);
+    }
+    arr_free(&trait_def->methods, al);
     break;
   }
   default:

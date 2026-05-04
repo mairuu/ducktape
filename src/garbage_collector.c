@@ -123,6 +123,16 @@ static void gc_blacken_object(GarbageCollector *gc, Object *obj) {
     }
     break;
   }
+  case OBJ_TRAIT_DEF: {
+    ObjTraitDef *def = (ObjTraitDef *)obj;
+    gc_mark_object(gc, &def->name->obj);
+    for (int i = 0; i < def->method_count; i++) {
+      TraitMethod *method = &def->methods[i];
+      gc_mark_object(gc, &method->name->obj);
+      gc_mark_object(gc, method->default_impl);
+    }
+    break;
+  }
   default:
     assert(false && "unknown object type");
     break;

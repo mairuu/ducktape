@@ -45,6 +45,10 @@ typedef enum {
 
   OP_CALL,
 
+  // stack: [trait, function] -> [trait]
+  // operand: index of the default method in the trait's definition
+  OP_IMPL_DEFAULT,
+
   OP_TRAP,
   OP_RETURN,
 } OpCode;

@@ -14,7 +14,8 @@ typedef enum {
   OBJ_UPVALUE,
   OBJ_CLOSURE,
   OBJ_STRUCT_DEF,
-  OBJ_STRUCT_INST
+  OBJ_STRUCT_INST,
+  OBJ_TRAIT_DEF,
 } ObjectType;
 
 typedef union {
@@ -95,6 +96,19 @@ typedef struct {
   Value payload[]; // length is def->fields.count
 } ObjStructInst;
 
+typedef struct {
+  ObjString *name;
+  int arity; // included self parameter
+  Object *default_impl;
+} TraitMethod;
+
+typedef struct {
+  Object obj;
+  ObjString *name;
+  int method_count;
+  TraitMethod methods[]; // length is method_count
+} ObjTraitDef;
+
 // -----------------------------------------------------------------------------
 
 static inline bool value_is_obj_type(Value value, ObjectType type) {
@@ -103,15 +117,23 @@ static inline bool value_is_obj_type(Value value, ObjectType type) {
 
 #define IS_STRING(value) value_is_obj_type(value, OBJ_STRING)
 #define IS_FUNCTION(value) value_is_obj_type(value, OBJ_FUNCTION)
+#define IS_UPVALUE(value) value_is_obj_type(value, OBJ_UPVALUE)
+#define IS_CLOSURE(value) value_is_obj_type(value, OBJ_CLOSURE)
 #define IS_NATIVE(value) value_is_obj_type(value, OBJ_NATIVE)
+#define IS_STRUCT_DEF(value) value_is_obj_type(value, OBJ_STRUCT_DEF)
 #define IS_STRUCT_INST(value) value_is_obj_type(value, OBJ_STRUCT_INST)
+#define IS_TRAIT_DEF(value) value_is_obj_type(value, OBJ_TRAIT_DEF)
 
 // -----------------------------------------------------------------------------
 
 #define AS_STRING(value) ((ObjString *)AS_OBJECT(value))
 #define AS_FUNCTION(value) ((ObjFunction *)AS_OBJECT(value))
+#define AS_UPVALUE(value) ((ObjUpvalue *)AS_OBJECT(value))
+#define AS_CLOSURE(value) ((ObjClosure *)AS_OBJECT(value))
 #define AS_NATIVE(value) ((ObjNative *)AS_OBJECT(value))
+#define AS_STRUCT_DEF(value) ((ObjStructDef *)AS_OBJECT(value))
 #define AS_STRUCT_INST(value) ((ObjStructInst *)AS_OBJECT(value))
+#define AS_TRAIT_DEF(value) ((ObjTraitDef *)AS_OBJECT(value))
 
 // -----------------------------------------------------------------------------
 
@@ -173,5 +195,12 @@ ObjStructInst //
     *obj_struct_inst_new(ObjStructDef *def, Allocator *al);
 
 void obj_struct_inst_free(ObjStructInst **inst, Allocator *al);
+
+// -----------------------------------------------------------------------------
+
+ObjTraitDef //
+    *obj_trait_def_new(ObjString *name, int method_count, Allocator *al);
+
+void obj_trait_def_free(ObjTraitDef **def, Allocator *al);
 
 // -----------------------------------------------------------------------------

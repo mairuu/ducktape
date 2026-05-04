@@ -5,6 +5,7 @@
 
 typedef enum {
   DEFTYPE_STRUCT,
+  DEFTYPE_TRAIT,
 } DefinitionType;
 
 DEFINE_ARRAY(String, StringArray);
@@ -13,11 +14,25 @@ typedef struct {
   StringArray *field_names;
 } StructDef;
 
+typedef struct Proto Proto;
+
+typedef struct {
+  String name;
+  int arity; // included self parameter
+} TraitMethodDef;
+
+DEFINE_ARRAY(TraitMethodDef, TraitMethodDefArray);
+
+typedef struct {
+  TraitMethodDefArray *methods;
+} TraitDef;
+
 typedef struct {
   DefinitionType type;
   String name;
   union {
     StructDef struct_def;
+    TraitDef trait_def;
   } as;
 } Definition;
 

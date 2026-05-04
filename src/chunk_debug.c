@@ -1,9 +1,12 @@
 #include "chunk_debug.h"
+
+#include <assert.h>
+#include <stdint.h>
+#include <stdio.h>
+
 #include "array.h"
 #include "object.h"
 #include "opcode.h"
-#include <stdint.h>
-#include <stdio.h>
 
 void disassemble_chunk(Chunk *chunk, const char *name) {
   printf("== %s ==\n", name);
@@ -139,7 +142,7 @@ int disassemble_chunk_instruction(Chunk *chunk, int offset) {
     return simple_instruction("OP_CLOSE_UPVALUE", offset);
 
   case OP_GET_DEFINITION:
-    return byte_instruction("OP_GET_DEFINITION", chunk, offset);
+    return byte_instruction("OP_DEFINITION", chunk, offset);
 
   case OP_GET_PROPERTY:
     return pic_instruction("OP_GET_PROPERTY", chunk, offset);
@@ -155,12 +158,16 @@ int disassemble_chunk_instruction(Chunk *chunk, int offset) {
 
   case OP_CALL:
     return byte_instruction("OP_CALL", chunk, offset);
+  
+  case OP_IMPL_DEFAULT:
+    return byte_instruction("OP_IMPL_DEFAULT", chunk, offset);
 
   case OP_TRAP:
     return simple_instruction("OP_TRAP", offset);
   case OP_RETURN:
     return simple_instruction("OP_RETURN", offset);
   default:
+    assert(false && "unknown opcode");
     printf("unknown opcode %d\n", instruction);
     return offset + 1;
   }

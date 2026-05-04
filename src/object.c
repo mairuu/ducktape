@@ -66,6 +66,10 @@ int obj_sprintf(char *buf, int bufsize, Object *obj) {
     return snprintf(buf, bufsize, "<instance of %.*s at @%p>", inst->def->name->str.length,
                     inst->def->name->str.chars, (void *)inst);
   }
+  case OBJ_TRAIT_DEF: {
+    ObjTraitDef *def = (ObjTraitDef *)obj;
+    return snprintf(buf, bufsize, "<trait %.*s>", def->name->str.length, def->name->str.chars);
+  }
   default:
     assert(false && "unknown object type");
     return 0;
@@ -126,6 +130,9 @@ void obj_free(Object **obj, Allocator *al) {
   case OBJ_STRUCT_INST:
     obj_struct_inst_free((ObjStructInst **)obj, al);
     break;
+  case OBJ_TRAIT_DEF:
+    obj_trait_def_free((ObjTraitDef **)obj, al);
+    break;
   default:
     assert(false && "unknown object type");
     break;
@@ -160,10 +167,11 @@ static inline size_t function_size(int pic_count) {
 ObjFunction //
     *obj_function_new(Allocator *al, ObjString *name, ConstantLoader *loader, const Proto *proto) {
   int pic_count = arr_count(proto->pic);
-  ObjFunction *obj = obj_new(function_size(pic_count), OBJ_FUNCTION, al);
+  ObjFunction *obj = obj_new(function_size(pic_count), OBJ_FUNCTION, al);   
 
   obj->arity = proto->arity;
   obj->upvalue_count = proto->upvalue_count;
+  chunk_init(&obj->chunk);
   chunk_load_from_proto(&obj->chunk, proto, loader, al);
   obj->name = name;
 
@@ -290,4 +298,30 @@ void obj_struct_inst_free(ObjStructInst **inst, Allocator *al) {
   }
   al_free(al, *inst, struct_inst_size((*inst)->def->fields.count));
   *inst = NULL;
+}
+
+// -----------------------------------------------------------------------------
+
+static inline size_t trait_def_size(int method_count) {
+  return sizeof(ObjTraitDef) + sizeof(TraitMethod) * method_count;
+}
+
+ObjTraitDef //
+    *obj_trait_def_new(ObjString *name, int method_count, Allocator *al) {
+  ObjTraitDef *obj = obj_new(trait_def_size(method_count), OBJ_TRAIT_DEF, al);
+  obj->name = name;
+  obj->method_count = method_count;
+  for (int i = 0; i < method_count; i++) {
+    obj->methods[i] = (TraitMethod){0};
+  }
+  return obj;
+}
+
+void obj_trait_def_free(ObjTraitDef **def, Allocator *al) {
+  if (!def) {
+    return;
+  }
+  int method_count = (*def)->method_count;
+  al_free(al, *def, trait_def_size(method_count));
+  *def = NULL;
 }

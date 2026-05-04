@@ -106,6 +106,25 @@ typedef struct {
   };
 } VarRef;
 
+#define MAX_DEFAULT_METHODS 8
+
+typedef struct {
+  Token trait_name; // for error reporting
+  Proto *protos[MAX_DEFAULT_METHODS];
+  Token method_tokens[MAX_DEFAULT_METHODS]; // for error reporting
+  int method_indices[MAX_DEFAULT_METHODS];
+  int count;
+} DefaultMethodList;
+
+// todo: increase this limit if needed, or remove it by using dynamic arrays
+#define MAX_STRUCT_FIELDS 8
+
+typedef struct {
+  Token struct_name;
+  Token field_tokens[MAX_STRUCT_FIELDS];
+  int field_count;
+} StructFieldList;
+
 typedef void (*ParseFunc)(Context *ctx, bool can_assign);
 
 typedef enum {
@@ -631,6 +650,29 @@ static void ctx_emit_set_property(Context *ctx, ConstantRef name) {
   ctx_emit_bytes(ctx, OP_SET_PROPERTY, (uint8_t)pic_index);
 }
 
+static void ctx_emit_default_methods(Context *ctx, Token *trait_name, DefaultMethodList *defaults) {
+  if (defaults->count == 0)
+    return;
+
+  DefinitionEntry *entry = defreg_find(&ctx->def_reg, sv_from_token(trait_name));
+  if (entry == NULL) {
+    ctx_error_at(ctx, trait_name, "internal error: just registered trait definition not found.");
+    return;
+  }
+
+  VarRef trait_ref = {.definition_index = entry->index, .scope = REF_DEFINITION};
+  ctx_emit_get(ctx, trait_ref);
+
+  for (int i = 0; i < defaults->count; i++) {
+    ConstantRef fn_ref = ctx_make_constant(
+        ctx, (RawConstant){.type = RAW_FUNCTION, .as.function = defaults->protos[i]});
+    ctx_emit_constant(ctx, fn_ref);
+    ctx_emit_bytes(ctx, OP_IMPL_DEFAULT, (uint8_t)defaults->method_indices[i]);
+  }
+
+  ctx_emit_byte(ctx, OP_POP); // pop the trait reference
+}
+
 static void ctx_named_variable(Context *ctx, Token name, bool can_assign) {
   VarRef ref = ctx_resolve_variable(ctx, name);
   if (can_assign && ctx_match(ctx, TOKEN_EQUAL)) {
@@ -716,9 +758,60 @@ static void ctx_end_loop(Context *ctx) {
   ctx->current_compiler->current_loop = ctx->current_compiler->current_loop->enclosing;
 }
 
+// ===== definition management =====
+
+static bool struct_fields_add(StructFieldList *field_list, Context *ctx, Token *field_token) {
+  if (field_list->field_count >= MAX_STRUCT_FIELDS) {
+    ctx_error_at(ctx, field_token, "too many fields in one struct.");
+    return false;
+  }
+
+  for (int i = 0; i < field_list->field_count; i++) {
+    if (identifier_equals(field_token, &field_list->field_tokens[i])) {
+      DIAGNOSTIC(ctx, "already a field with this name in this struct.", //
+                 {field_list->struct_name, "in struct"},                //
+                 {field_list->field_tokens[i], "first declared here"},
+                 {*field_token, "re-declared here"});
+      return false;
+    }
+  }
+
+  field_list->field_tokens[field_list->field_count++] = *field_token;
+  return true;
+}
+
+static bool default_methods_add(DefaultMethodList *list, Context *ctx, Token *method_token,
+                                int method_index, Proto *proto) {
+  if (list->count >= MAX_DEFAULT_METHODS) {
+    ctx_error_at(ctx, method_token, "too many default methods in one trait.");
+    return false;
+  }
+
+  for (int i = 0; i < list->count; i++) {
+    if (identifier_equals(method_token, &list->method_tokens[i])) {
+      DIAGNOSTIC(ctx, "already a method with this name in this trait.", //
+                 {list->trait_name, "in trait"},                        //
+                 {list->method_tokens[i], "first declared here"},
+                 {*method_token, "re-declared here"});
+      return false;
+    }
+  }
+
+  list->protos[list->count] = proto;
+  list->method_indices[list->count] = method_index;
+  list->method_tokens[list->count] = *method_token;
+  list->count++;
+  return true;
+}
+
 // ===== parameter & argument parsing =====
 
-static int ctx_parse_parameter_list(Context *ctx) {
+typedef enum {
+  PARAM_LIST_FUNCTION,
+  PARAM_LIST_METHOD,
+} ParamListKind;
+
+static int ctx_parse_parameter_list(Context *ctx, ParamListKind kind) {
   ctx_consume(ctx, TOKEN_LEFT_PAREN, "expect '(' before parameter list.");
 
   int param_count = 0;
@@ -728,11 +821,22 @@ static int ctx_parse_parameter_list(Context *ctx) {
       if (param_count >= UINT8_MAX) {
         ctx_error_at(ctx, &ctx->parser.current, "can't have more than 255 parameters.");
       }
+
       ConstantRef param_name = ctx_parse_variable(ctx, "expect parameter name.");
+
+      if (param_count == 0 && kind == PARAM_LIST_METHOD) {
+        StringView name_sv = sv_from_token(&ctx->parser.previous);
+        if (!sv_equal(name_sv, sv_from_cstr("self"))) {
+          ctx_error_at(ctx, &ctx->parser.previous, "first parameter of a method must be 'self'.");
+        }
+      }
+
       ctx_mark_initialized(ctx);
       ctx_define_variable(ctx, param_name);
       param_count++;
     } while (ctx_match(ctx, TOKEN_COMMA));
+  } else if (kind == PARAM_LIST_METHOD) {
+    ctx_error_at(ctx, &ctx->parser.current, "method must have 'self' as its first parameter.");
   }
 
   ctx_consume(ctx, TOKEN_RIGHT_PAREN, "expect ')' after parameter list.");
@@ -754,13 +858,15 @@ int ctx_parse_argument_list(Context *ctx) {
   return arg_count;
 }
 
+// ===== function & method compilation =====
+
 static void ctx_compile_function(Context *ctx) {
   Compiler compiler;
   ctx_begin_compile(ctx, &compiler);
 
   ctx_begin_scope(ctx);
 
-  compiler.proto->arity = ctx_parse_parameter_list(ctx);
+  compiler.proto->arity = ctx_parse_parameter_list(ctx, PARAM_LIST_FUNCTION);
 
   ctx_consume(ctx, TOKEN_LEFT_BRACE, "expect '{' before function body.");
   statement_block(ctx);
@@ -773,6 +879,38 @@ static void ctx_compile_function(Context *ctx) {
     ctx_emit_constant(ctx, function_ref);
   } else {
     ctx_emit_closure(ctx, &compiler, function_ref);
+  }
+}
+
+static void ctx_compile_method(Context *ctx, Token *method_token, TraitMethodDef *method,
+                               DefaultMethodList *defaults, int method_index) {
+  Compiler compiler;
+  ctx_begin_compile(ctx, &compiler);
+
+  ctx_begin_scope(ctx);
+
+  compiler.proto->arity = ctx_parse_parameter_list(ctx, PARAM_LIST_METHOD);
+  method->arity = compiler.proto->arity;
+
+  if (ctx_match(ctx, TOKEN_SEMICOLON)) {
+    Proto *proto = ctx_end_compile(ctx);
+    proto_destroy(proto, ctx->al);
+    al_free_for(ctx->al, proto);
+    return;
+  }
+
+  // default implementation provided
+  ctx_consume(ctx, TOKEN_LEFT_BRACE, "expect '{' before function body.");
+  statement_block(ctx);
+
+  Proto *proto = ctx_end_compile(ctx);
+  if (proto->upvalue_count > 0) {
+    ctx_error_at(ctx, &ctx->parser.previous, "methods can't have closure variables.");
+  }
+
+  if (!default_methods_add(defaults, ctx, method_token, method_index, proto)) {
+    proto_destroy(proto, ctx->al);
+    al_free_for(ctx->al, proto);
   }
 }
 
@@ -1156,6 +1294,28 @@ static void ctx_register_definition(Context *ctx, Token *name, Definition def) {
   }
 }
 
+static String parse_struct_field(StructFieldList *field_list, Context *ctx) {
+  ctx_consume(ctx, TOKEN_IDENTIFIER, "expect field name in struct body.");
+  Token field_name = ctx->parser.previous;
+  ctx_consume(ctx, TOKEN_SEMICOLON, "expect ';' after struct field declaration.");
+
+  struct_fields_add(field_list, ctx, &field_name);
+  return str_from_sv(sv_from_token(&field_name), ctx->al);
+}
+
+static void parse_struct_body(Context *ctx, StructDef *struct_def, StructFieldList *field_list) {
+  ctx_consume(ctx, TOKEN_LEFT_BRACE, "expect '{' before struct body.");
+
+  if (!ctx_check(ctx, TOKEN_RIGHT_BRACE)) {
+    do {
+      String field_str = parse_struct_field(field_list, ctx);
+      arr_push(struct_def->field_names, field_str, ctx->al);
+    } while (!ctx_check(ctx, TOKEN_RIGHT_BRACE) && !ctx_check(ctx, TOKEN_EOF));
+  }
+
+  ctx_consume(ctx, TOKEN_RIGHT_BRACE, "expect '}' after struct body.");
+}
+
 static void declaration_struct(Context *ctx) {
   ctx_consume(ctx, TOKEN_IDENTIFIER, "expect struct name.");
   Token name = ctx->parser.previous;
@@ -1167,23 +1327,70 @@ static void declaration_struct(Context *ctx) {
   Definition def = {0};
   def.type = DEFTYPE_STRUCT;
   def.name = str_from_sv(sv_from_token(&name), ctx->al);
+
   StructDef *struct_def = &def.as.struct_def;
   struct_def->field_names = arr_new();
 
-  ctx_consume(ctx, TOKEN_LEFT_BRACE, "expect '{' before struct body.");
+  StructFieldList field_list = {0};
+  field_list.struct_name = name;
+
+  parse_struct_body(ctx, struct_def, &field_list);
+
+  ctx_register_definition(ctx, &name, def);
+}
+
+static TraitMethodDef parse_trait_method(Context *ctx, DefaultMethodList *defaults,
+                                         int method_index) {
+  ctx_consume(ctx, TOKEN_FUN, "expect 'fun' before method declaration in trait body.");
+  ctx_consume(ctx, TOKEN_IDENTIFIER, "expect method name in trait body.");
+
+  Token method_token = ctx->parser.previous;
+  String method_name = str_from_sv(sv_from_token(&method_token), ctx->al);
+
+  TraitMethodDef method = {0};
+  method.name = method_name;
+
+  ctx_compile_method(ctx, &method_token, &method, defaults, method_index);
+
+  return method;
+}
+
+static void parse_trait_body(Context *ctx, TraitDef *trait_def, DefaultMethodList *defaults) {
+  ctx_consume(ctx, TOKEN_LEFT_BRACE, "expect '{' before trait body.");
 
   if (!ctx_check(ctx, TOKEN_RIGHT_BRACE)) {
+    int method_index = 0;
     do {
-      ctx_consume(ctx, TOKEN_IDENTIFIER, "expect field name in struct body.");
-      Token field_name = ctx->parser.previous;
-      ctx_consume(ctx, TOKEN_SEMICOLON, "expect ';' after struct field declaration.");
-      String field_str = str_from_sv(sv_from_token(&field_name), ctx->al);
-      arr_push(struct_def->field_names, field_str, ctx->al);
+      TraitMethodDef method = parse_trait_method(ctx, defaults, method_index++);
+      arr_push(trait_def->methods, method, ctx->al);
     } while (!ctx_check(ctx, TOKEN_RIGHT_BRACE) && !ctx_check(ctx, TOKEN_EOF));
   }
 
-  ctx_consume(ctx, TOKEN_RIGHT_BRACE, "expect '}' after struct body.");
+  ctx_consume(ctx, TOKEN_RIGHT_BRACE, "expect '}' after trait body.");
+}
+
+static void declaration_trait(Context *ctx) {
+  ctx_consume(ctx, TOKEN_IDENTIFIER, "expect trait name.");
+  Token name = ctx->parser.previous;
+
+  if (ctx->current_compiler->scope_depth > 0) {
+    ctx_error_at(ctx, &name, "trait definitions are only allowed at the top level.");
+  }
+
+  Definition def = {0};
+  def.type = DEFTYPE_TRAIT;
+  def.name = str_from_sv(sv_from_token(&name), ctx->al);
+
+  TraitDef *trait_def = &def.as.trait_def;
+  trait_def->methods = arr_new();
+
+  DefaultMethodList defaults = {0};
+  defaults.trait_name = name;
+
+  parse_trait_body(ctx, trait_def, &defaults);
+
   ctx_register_definition(ctx, &name, def);
+  ctx_emit_default_methods(ctx, &name, &defaults);
 }
 
 static void declaration(Context *ctx) {
@@ -1193,6 +1400,8 @@ static void declaration(Context *ctx) {
     declaration_fun(ctx);
   } else if (ctx_match(ctx, TOKEN_STRUCT)) {
     declaration_struct(ctx);
+  } else if (ctx_match(ctx, TOKEN_TRAIT)) {
+    declaration_trait(ctx);
   } else {
     statement(ctx);
   }

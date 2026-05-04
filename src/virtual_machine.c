@@ -134,6 +134,7 @@ static ObjFunction *vm_load_proto(ConstantLoader *loader, Proto *proto) {
   return func;
 }
 
+// loader is for loading default impls of trait methods
 static Object *vm_load_definition(VirtualMachine *vm, const Definition *def) {
   switch (def->type) {
   case DEFTYPE_STRUCT: {
@@ -150,6 +151,23 @@ static Object *vm_load_definition(VirtualMachine *vm, const Definition *def) {
 
     return &obj_def->obj;
   }
+  case DEFTYPE_TRAIT: {
+    const TraitDef *trait_def = &def->as.trait_def;
+    int method_count = arr_count(trait_def->methods);
+
+    ObjString *name = vm_intern_string(vm, sv_from_str(def->name));
+    ObjTraitDef *obj_def = obj_trait_def_new(name, method_count, &vm->al);
+    vm_track_object(vm, &obj_def->obj);
+
+    for (int i = 0; i < method_count; i++) {
+      TraitMethodDef *method_def = &trait_def->methods->data[i];
+      TraitMethod *method = &obj_def->methods[i];
+
+      method->name = vm_intern_string(vm, sv_from_str(method_def->name));
+      method->arity = method_def->arity;
+    }
+    return &obj_def->obj;
+  }
   default:
     assert(false && "unknown definition type");
     break;
@@ -161,14 +179,16 @@ ObjFunction *vm_load(VirtualMachine *vm, LinkedModule *lm) {
   gc_begin_staging(&vm->gc);
 
   int new_def_cursor = 0;
-
   int mapping_count = arr_count(lm->local_to_vm);
+
   for (int i = 0; i < mapping_count; i++) {
     LocalToVM *m = &lm->local_to_vm->data[i];
     if (m->vm_index == -1) {
       const Definition *def = &lm->defs->data[new_def_cursor++];
+
       Object *obj = vm_load_definition(vm, def);
       obj->flags.def_id = arr_count(vm->definitions) + 1;
+
       arr_push(vm->definitions, def_copy(def, &vm->al), &vm->al);
       arr_push(vm->definition_objects, obj, &vm->al);
       m->vm_index = arr_count(vm->definitions) - 1;
@@ -590,6 +610,36 @@ static void vm_run(VirtualMachine *vm) {
       ip = frame->ip;
       break;
     }
+    case OP_IMPL_DEFAULT: {
+      uint8_t method_idx = READ_BYTE();
+
+      Value subject = vm_peek(vm, 1);
+      if (!IS_TRAIT_DEF(subject)) {
+        vm_panic(vm, "expected a trait definition");
+      }
+
+      Object *method_obj = AS_OBJECT(vm_peek(vm, 0));
+      if (method_obj->type != OBJ_FUNCTION) {
+        vm_panic(vm, "expected a function");
+      }
+
+      ObjTraitDef *trait_def = AS_TRAIT_DEF(subject);
+
+      if (method_idx >= trait_def->method_count) {
+        vm_panic(vm, "invalid method index %d for trait '%.*s'", method_idx, trait_def->name->str.length,
+                 trait_def->name->str.chars);
+      }
+
+      if (trait_def->methods[method_idx].default_impl) {
+        vm_panic(vm, "default implementation for method '%.*s' is already defined",
+                 trait_def->methods[method_idx].name->str.length,
+                 trait_def->methods[method_idx].name->str.chars);
+      }
+
+      trait_def->methods[method_idx].default_impl = method_obj;
+      vm_pop(vm); // pop the method
+      break;
+    }
     case OP_RETURN:
       Value result = vm_pop(vm);
       vm_close_upvalues(vm, frame->base);
@@ -732,10 +782,10 @@ InterpretResult vm_interpret(VirtualMachine *vm, const char *source) {
   linker_init(&linker, &vm->inner_al);
   ml = linker_link(&linker, &m, vm->definitions);
 
-  ObjFunction *function = vm_load(vm, &ml);
+  ObjFunction *main = vm_load(vm, &ml);
   linked_module_destroy(&ml, &vm->inner_al);
 
-  vm_execute(vm, function);
+  vm_execute(vm, main);
 
   return INTERPRET_OK;
 }
