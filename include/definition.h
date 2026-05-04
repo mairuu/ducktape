@@ -19,6 +19,7 @@ typedef struct Proto Proto;
 typedef struct {
   String name;
   int arity; // included self parameter
+  bool has_default_impl;
 } TraitMethodDef;
 
 DEFINE_ARRAY(TraitMethodDef, TraitMethodDefArray);

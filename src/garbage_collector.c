@@ -126,10 +126,14 @@ static void gc_blacken_object(GarbageCollector *gc, Object *obj) {
   case OBJ_TRAIT_DEF: {
     ObjTraitDef *def = (ObjTraitDef *)obj;
     gc_mark_object(gc, &def->name->obj);
-    for (int i = 0; i < def->method_count; i++) {
-      TraitMethod *method = &def->methods[i];
-      gc_mark_object(gc, &method->name->obj);
-      gc_mark_object(gc, method->default_impl);
+    gc_mark_object(gc, &def->default_impl->obj);
+    break;
+  }
+  case OBJ_IMPL: {
+    ObjImpl *impl = (ObjImpl *)obj;
+    gc_mark_object(gc, &impl->trait->obj);
+    for (int i = 0; i < impl->trait->method_count; i++) {
+      gc_mark_object(gc, impl->impls[i]);
     }
     break;
   }

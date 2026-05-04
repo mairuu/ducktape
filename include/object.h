@@ -16,6 +16,7 @@ typedef enum {
   OBJ_STRUCT_DEF,
   OBJ_STRUCT_INST,
   OBJ_TRAIT_DEF,
+  OBJ_IMPL,
 } ObjectType;
 
 typedef union {
@@ -96,18 +97,21 @@ typedef struct {
   Value payload[]; // length is def->fields.count
 } ObjStructInst;
 
-typedef struct {
-  ObjString *name;
-  int arity; // included self parameter
-  Object *default_impl;
-} TraitMethod;
+typedef struct ObjImpl ObjImpl;
 
 typedef struct {
   Object obj;
   ObjString *name;
+  ObjImpl *default_impl; // null if no default impl provided
   int method_count;
-  TraitMethod methods[]; // length is method_count
 } ObjTraitDef;
+
+typedef struct ObjImpl {
+  Object obj;
+  ObjTraitDef *trait;
+  Object *subject;
+  Object *impls[]; // length is trait->method_count
+} ObjImpl;
 
 // -----------------------------------------------------------------------------
 
@@ -123,6 +127,7 @@ static inline bool value_is_obj_type(Value value, ObjectType type) {
 #define IS_STRUCT_DEF(value) value_is_obj_type(value, OBJ_STRUCT_DEF)
 #define IS_STRUCT_INST(value) value_is_obj_type(value, OBJ_STRUCT_INST)
 #define IS_TRAIT_DEF(value) value_is_obj_type(value, OBJ_TRAIT_DEF)
+#define IS_IMPL(value) value_is_obj_type(value, OBJ_IMPL)
 
 // -----------------------------------------------------------------------------
 
@@ -134,6 +139,7 @@ static inline bool value_is_obj_type(Value value, ObjectType type) {
 #define AS_STRUCT_DEF(value) ((ObjStructDef *)AS_OBJECT(value))
 #define AS_STRUCT_INST(value) ((ObjStructInst *)AS_OBJECT(value))
 #define AS_TRAIT_DEF(value) ((ObjTraitDef *)AS_OBJECT(value))
+#define AS_IMPL(value) ((ObjImpl *)AS_OBJECT(value))
 
 // -----------------------------------------------------------------------------
 
@@ -202,5 +208,12 @@ ObjTraitDef //
     *obj_trait_def_new(ObjString *name, int method_count, Allocator *al);
 
 void obj_trait_def_free(ObjTraitDef **def, Allocator *al);
+
+// -----------------------------------------------------------------------------
+
+ObjImpl //
+    *obj_impl_new(ObjTraitDef *trait, Object *subject, Allocator *al);
+
+void obj_impl_free(ObjImpl **impl, Allocator *al);
 
 // -----------------------------------------------------------------------------

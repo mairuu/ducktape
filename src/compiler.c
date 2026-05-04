@@ -49,6 +49,8 @@ typedef struct Loop {
   Token label;
 } Loop;
 
+typedef enum { PROTO_SCRIPT, PROTO_FUNCTION, PROTO_METHOD } ProtoType;
+
 #define COMPILER_MAX_LOCALS 256
 
 typedef struct Compiler {
@@ -205,7 +207,7 @@ static uint8_t compound_assignment_opcode(TokenType type) {
 
 // ===== core initialization =====
 
-static void compiler_init(Compiler *compiler, Compiler *enclosing, Allocator *al) {
+static void compiler_init(Compiler *compiler, Compiler *enclosing, ProtoType type, Allocator *al) {
   compiler->enclosing = enclosing;
 
   compiler->scope_depth = 0;
@@ -216,7 +218,8 @@ static void compiler_init(Compiler *compiler, Compiler *enclosing, Allocator *al
   proto_init(compiler->proto, al);
 
   Local *local = &compiler->locals[compiler->local_count++];
-  local->name = (Token){.start = "", .length = 0, .line_number = 0};
+  local->name = type == PROTO_METHOD ? (Token){.start = "self", .length = 4, .line_number = 0}
+                                     : (Token){.start = "", .length = 0, .line_number = 0};
   local->depth = 0;
   local->is_captured = false;
 }
@@ -355,6 +358,34 @@ static bool ctx_consume(Context *ctx, TokenType type, const char *err_msg) {
   ctx_error_at(ctx, &ctx->parser.current, err_msg);
 
   return false;
+}
+
+Definition *ctx_consume_as_definition(Context *ctx, DefinitionType expected_type,
+                                      DefinitionEntry **out_entry) {
+  // todo: if we had module system, we would also look for imported definitions here
+  ctx_consume(ctx, TOKEN_IDENTIFIER, "expect definition name.");
+
+  DefinitionEntry *entry = defreg_find(&ctx->def_reg, sv_from_token(&ctx->parser.previous));
+  if (entry == NULL) {
+    ctx_error_at(ctx, &ctx->parser.previous, "no definition found with this name.");
+    return NULL;
+  }
+
+  // last consumed token should be the definition name
+  Token name = ctx->parser.previous;
+
+  Definition *def = &ctx->def_reg.defs->data[entry->index];
+  if (def->type != expected_type) {
+    ctx_error_at(ctx, &name, "'%.*s' is a %s definition, not a %s.", name.length, name.start,
+                 def_type_name(def->type), def_type_name(expected_type));
+    return NULL;
+  }
+
+  if (out_entry) {
+    *out_entry = entry;
+  }
+
+  return def;
 }
 
 // ===== code emission =====
@@ -662,12 +693,13 @@ static void ctx_emit_default_methods(Context *ctx, Token *trait_name, DefaultMet
 
   VarRef trait_ref = {.definition_index = entry->index, .scope = REF_DEFINITION};
   ctx_emit_get(ctx, trait_ref);
+  ctx_emit_bytes(ctx, OP_DUP, OP_IMPL);
 
   for (int i = 0; i < defaults->count; i++) {
     ConstantRef fn_ref = ctx_make_constant(
         ctx, (RawConstant){.type = RAW_FUNCTION, .as.function = defaults->protos[i]});
     ctx_emit_constant(ctx, fn_ref);
-    ctx_emit_bytes(ctx, OP_IMPL_DEFAULT, (uint8_t)defaults->method_indices[i]);
+    ctx_emit_bytes(ctx, OP_IMPL_METHOD, (uint8_t)defaults->method_indices[i]);
   }
 
   ctx_emit_byte(ctx, OP_POP); // pop the trait reference
@@ -712,11 +744,13 @@ Loop *ctx_resolve_loop(Context *ctx, Token *label) {
 
 // ===== scope management =====
 
-static void ctx_begin_compile(Context *ctx, Compiler *compiler) {
-  compiler_init(compiler, ctx->current_compiler, ctx->al);
+static void ctx_begin_compile(Context *ctx, Compiler *compiler, ProtoType type) {
+  compiler_init(compiler, ctx->current_compiler, type, ctx->al);
   ctx->current_compiler = compiler;
 
-  if (ctx->parser.previous.type == TOKEN_IDENTIFIER) {
+  if (type == PROTO_SCRIPT) {
+    ctx->current_compiler->proto->name = str_from_cstr("__script", ctx->al);
+  } else if (ctx->parser.previous.type == TOKEN_IDENTIFIER) {
     ctx->current_compiler->proto->name = str_from_sv(sv_from_token(&ctx->parser.previous), ctx->al);
   }
 }
@@ -822,18 +856,20 @@ static int ctx_parse_parameter_list(Context *ctx, ParamListKind kind) {
         ctx_error_at(ctx, &ctx->parser.current, "can't have more than 255 parameters.");
       }
 
-      ConstantRef param_name = ctx_parse_variable(ctx, "expect parameter name.");
-
       if (param_count == 0 && kind == PARAM_LIST_METHOD) {
+        // first parameter of a method must be 'self'
+        ctx_consume(ctx, TOKEN_IDENTIFIER, "expect parameter name.");
         StringView name_sv = sv_from_token(&ctx->parser.previous);
         if (!sv_equal(name_sv, sv_from_cstr("self"))) {
           ctx_error_at(ctx, &ctx->parser.previous, "first parameter of a method must be 'self'.");
         }
+      } else {
+        ConstantRef param_name = ctx_parse_variable(ctx, "expect parameter name.");
+        ctx_mark_initialized(ctx);
+        ctx_define_variable(ctx, param_name);
+        param_count++;
       }
 
-      ctx_mark_initialized(ctx);
-      ctx_define_variable(ctx, param_name);
-      param_count++;
     } while (ctx_match(ctx, TOKEN_COMMA));
   } else if (kind == PARAM_LIST_METHOD) {
     ctx_error_at(ctx, &ctx->parser.current, "method must have 'self' as its first parameter.");
@@ -862,7 +898,7 @@ int ctx_parse_argument_list(Context *ctx) {
 
 static void ctx_compile_function(Context *ctx) {
   Compiler compiler;
-  ctx_begin_compile(ctx, &compiler);
+  ctx_begin_compile(ctx, &compiler, PROTO_FUNCTION);
 
   ctx_begin_scope(ctx);
 
@@ -885,7 +921,7 @@ static void ctx_compile_function(Context *ctx) {
 static void ctx_compile_method(Context *ctx, Token *method_token, TraitMethodDef *method,
                                DefaultMethodList *defaults, int method_index) {
   Compiler compiler;
-  ctx_begin_compile(ctx, &compiler);
+  ctx_begin_compile(ctx, &compiler, PROTO_METHOD);
 
   ctx_begin_scope(ctx);
 
@@ -896,6 +932,7 @@ static void ctx_compile_method(Context *ctx, Token *method_token, TraitMethodDef
     Proto *proto = ctx_end_compile(ctx);
     proto_destroy(proto, ctx->al);
     al_free_for(ctx->al, proto);
+    method->has_default_impl = false;
     return;
   }
 
@@ -912,6 +949,7 @@ static void ctx_compile_method(Context *ctx, Token *method_token, TraitMethodDef
     proto_destroy(proto, ctx->al);
     al_free_for(ctx->al, proto);
   }
+  method->has_default_impl = true;
 }
 
 // ===== parser rules & precedence =====
@@ -1393,6 +1431,120 @@ static void declaration_trait(Context *ctx) {
   ctx_emit_default_methods(ctx, &name, &defaults);
 }
 
+static int find_trait_method_index(TraitDef *trait, StringView name) {
+  int method_count = arr_count(trait->methods);
+  for (int i = 0; i < method_count; i++) {
+    if (sv_equal(sv_from_str(trait->methods->data[i].name), name)) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+static void parse_impl_body(Context *ctx, Definition *trait_def, Definition *struct_def) {
+  (void)struct_def;
+
+  TraitDef *trait = &trait_def->as.trait_def;
+  int method_count = arr_count(trait->methods);
+
+  bool *implemented = al_alloc_zero(ctx->al, sizeof(bool) * method_count);
+
+  // pre-mark methods that have defaults
+  for (int i = 0; i < method_count; i++) {
+    implemented[i] = trait->methods->data[i].has_default_impl;
+  }
+
+  ctx_consume(ctx, TOKEN_LEFT_BRACE, "expect '{' before impl body.");
+
+  while (!ctx_check(ctx, TOKEN_RIGHT_BRACE) && !ctx_check(ctx, TOKEN_EOF)) {
+    ctx_consume(ctx, TOKEN_FUN, "expect 'fun' in impl body.");
+    ctx_consume(ctx, TOKEN_IDENTIFIER, "expect method name in impl body.");
+    Token method_token = ctx->parser.previous;
+    StringView name_sv = sv_from_token(&method_token);
+
+    int method_index = find_trait_method_index(trait, name_sv);
+    if (method_index < 0) {
+      ctx_error_at(ctx, &method_token, "method not found in trait.");
+      ctx_consume(ctx, TOKEN_LEFT_PAREN, "");
+      ctx_parse_parameter_list(ctx, PARAM_LIST_FUNCTION); // ignore parameters for error recovery
+      ctx_consume(ctx, TOKEN_LEFT_BRACE, "");
+      statement_block(ctx); // ignore method body for error recovery
+      continue;
+    }
+
+    // is_duplicate_impl; allow if the method has a default implementation, in which case we will
+    // override it
+    if (implemented[method_index] && !trait->methods->data[method_index].has_default_impl) {
+      ctx_error_at(ctx, &method_token, "method already implemented in this impl block.");
+    }
+
+    TraitMethodDef *method_def = &trait->methods->data[method_index];
+
+    Compiler compiler;
+    ctx_begin_compile(ctx, &compiler, PROTO_METHOD);
+    ctx_begin_scope(ctx);
+    compiler.proto->arity = ctx_parse_parameter_list(ctx, PARAM_LIST_METHOD);
+
+    if (compiler.proto->arity != method_def->arity) {
+      ctx_error_at(ctx, &method_token, "method arity does not match trait definition.");
+    }
+
+    ctx_consume(ctx, TOKEN_LEFT_BRACE, "expect '{' before method body.");
+    statement_block(ctx);
+
+    Proto *proto = ctx_end_compile(ctx);
+
+    ConstantRef fn_ref =
+        ctx_make_constant(ctx, (RawConstant){.type = RAW_FUNCTION, .as.function = proto});
+    ctx_emit_constant(ctx, fn_ref);
+    ctx_emit_bytes(ctx, OP_IMPL_METHOD, (uint8_t)method_index);
+
+    implemented[method_index] = true;
+  }
+
+  ctx_consume(ctx, TOKEN_RIGHT_BRACE, "expect '}' after impl body.");
+
+  // check that all methods are implemented
+  for (int i = 0; i < method_count; i++) {
+    if (!implemented[i]) {
+      char buf[256];
+      snprintf(buf, sizeof(buf), "missing implementation for method '%s' with no default.",
+               trait->methods->data[i].name.chars);
+      ctx_error_at(ctx, &ctx->parser.previous, buf);
+    }
+  }
+
+  al_free(ctx->al, implemented, sizeof(bool) * method_count);
+}
+
+static void declaration_impl(Context *ctx) {
+  if (ctx->current_compiler->scope_depth > 0) {
+    ctx_error_at(ctx, &ctx->parser.current, "impl definitions are only allowed at the top level.");
+  }
+
+  DefinitionEntry *trait_entry = NULL;
+  Definition *trait_def = ctx_consume_as_definition(ctx, DEFTYPE_TRAIT, &trait_entry);
+
+  ctx_consume(ctx, TOKEN_FOR, "expect 'for' after trait name in impl.");
+  DefinitionEntry *struct_entry = NULL;
+  Definition *struct_def = ctx_consume_as_definition(ctx, DEFTYPE_STRUCT, &struct_entry);
+
+  if (trait_def == NULL || struct_def == NULL) {
+    assert(false && "todo: implement proper error recovery for impl declaration parsing");
+    return;
+  }
+
+  VarRef trait_ref = {.definition_index = trait_entry->index, .scope = REF_DEFINITION};
+  ctx_emit_get(ctx, trait_ref);
+  VarRef struct_ref = {.definition_index = struct_entry->index, .scope = REF_DEFINITION};
+  ctx_emit_get(ctx, struct_ref);
+  ctx_emit_byte(ctx, OP_IMPL);
+
+  parse_impl_body(ctx, trait_def, struct_def);
+
+  ctx_emit_byte(ctx, OP_POP);
+}
+
 static void declaration(Context *ctx) {
   if (ctx_match(ctx, TOKEN_VAR)) {
     declaration_var(ctx);
@@ -1402,6 +1554,8 @@ static void declaration(Context *ctx) {
     declaration_struct(ctx);
   } else if (ctx_match(ctx, TOKEN_TRAIT)) {
     declaration_trait(ctx);
+  } else if (ctx_match(ctx, TOKEN_IMPL)) {
+    declaration_impl(ctx);
   } else {
     statement(ctx);
   }
@@ -1583,7 +1737,7 @@ bool compile(const char *source, const DefinitionArray *prior_defs, Allocator *a
   ctx_init(&ctx, source, prior_defs, al);
 
   Compiler root_compiler;
-  ctx_begin_compile(&ctx, &root_compiler);
+  ctx_begin_compile(&ctx, &root_compiler, PROTO_SCRIPT);
 
   ctx_advance(&ctx);
 

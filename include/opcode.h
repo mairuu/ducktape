@@ -45,9 +45,10 @@ typedef enum {
 
   OP_CALL,
 
-  // stack: [trait, function] -> [trait]
-  // operand: index of the default method in the trait's definition
-  OP_IMPL_DEFAULT,
+  // beginning of impl block create a empty impl object
+  OP_IMPL,
+  // wire a method implementation to the impl object
+  OP_IMPL_METHOD,
 
   OP_TRAP,
   OP_RETURN,

@@ -159,13 +159,6 @@ static Object *vm_load_definition(VirtualMachine *vm, const Definition *def) {
     ObjTraitDef *obj_def = obj_trait_def_new(name, method_count, &vm->al);
     vm_track_object(vm, &obj_def->obj);
 
-    for (int i = 0; i < method_count; i++) {
-      TraitMethodDef *method_def = &trait_def->methods->data[i];
-      TraitMethod *method = &obj_def->methods[i];
-
-      method->name = vm_intern_string(vm, sv_from_str(method_def->name));
-      method->arity = method_def->arity;
-    }
     return &obj_def->obj;
   }
   default:
@@ -610,34 +603,42 @@ static void vm_run(VirtualMachine *vm) {
       ip = frame->ip;
       break;
     }
-    case OP_IMPL_DEFAULT: {
+    case OP_IMPL: {
+      Value trait = vm_peek(vm, 1);
+      Value subject = vm_peek(vm, 0);
+
+      assert(IS_TRAIT_DEF(trait) && "expected trait definition");
+      assert((IS_STRUCT_DEF(subject) || IS_TRAIT_DEF(subject)) &&
+             "expect struct or trait definition as impl subject");
+
+      ObjImpl *impl = obj_impl_new(AS_TRAIT_DEF(trait), AS_OBJECT(subject), &vm->al);
+      vm_track_object(vm, &impl->obj);
+
+      vm_pop(vm); // pop subject
+      vm_pop(vm); // pop trait
+      vm_push(vm, OBJECT_VAL(impl));
+
+      break;
+    }
+    case OP_IMPL_METHOD: {
       uint8_t method_idx = READ_BYTE();
 
-      Value subject = vm_peek(vm, 1);
-      if (!IS_TRAIT_DEF(subject)) {
-        vm_panic(vm, "expected a trait definition");
+      Value impl_val = vm_peek(vm, 1);
+      Value method_val = vm_peek(vm, 0);
+
+      assert(IS_IMPL(impl_val) && "expected impl");
+      assert((IS_FUNCTION(method_val)) && "expected function as impl method");
+
+      ObjImpl *impl = AS_IMPL(impl_val);
+
+      if (method_idx >= impl->trait->method_count) {
+        // this should not happen if the compiler is correct
+        vm_panic(vm, "internal error: cannot find method to implement");
       }
+    
+      vm_pop(vm); // pop method
 
-      Object *method_obj = AS_OBJECT(vm_peek(vm, 0));
-      if (method_obj->type != OBJ_FUNCTION) {
-        vm_panic(vm, "expected a function");
-      }
-
-      ObjTraitDef *trait_def = AS_TRAIT_DEF(subject);
-
-      if (method_idx >= trait_def->method_count) {
-        vm_panic(vm, "invalid method index %d for trait '%.*s'", method_idx, trait_def->name->str.length,
-                 trait_def->name->str.chars);
-      }
-
-      if (trait_def->methods[method_idx].default_impl) {
-        vm_panic(vm, "default implementation for method '%.*s' is already defined",
-                 trait_def->methods[method_idx].name->str.length,
-                 trait_def->methods[method_idx].name->str.chars);
-      }
-
-      trait_def->methods[method_idx].default_impl = method_obj;
-      vm_pop(vm); // pop the method
+      impl->impls[method_idx] = AS_OBJECT(method_val);
       break;
     }
     case OP_RETURN:
