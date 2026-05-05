@@ -178,6 +178,10 @@ static void ctx_advance(Context *ctx);
 
 // ===== utility functions =====
 
+static Token make_token(const char *cstr) {
+  return (Token){.type = TOKEN_ERROR, .start = cstr, .length = strlen(cstr), .line_number = 0};
+}
+
 StringView sv_from_token(Token *token) {
   return (StringView){.chars = token->start, .length = token->length};
 }
@@ -207,7 +211,8 @@ static uint8_t compound_assignment_opcode(TokenType type) {
 
 // ===== core initialization =====
 
-static void compiler_init(Compiler *compiler, Compiler *enclosing, ProtoType type, Allocator *al) {
+static void compiler_init(Compiler *compiler, Compiler *enclosing, Token name, ProtoType type,
+                          Allocator *al) {
   compiler->enclosing = enclosing;
 
   compiler->scope_depth = 0;
@@ -218,10 +223,15 @@ static void compiler_init(Compiler *compiler, Compiler *enclosing, ProtoType typ
   proto_init(compiler->proto, al);
 
   Local *local = &compiler->locals[compiler->local_count++];
-  local->name = type == PROTO_METHOD ? (Token){.start = "self", .length = 4, .line_number = 0}
-                                     : (Token){.start = "", .length = 0, .line_number = 0};
+  local->name = type == PROTO_METHOD ? make_token("self") : name;
   local->depth = 0;
   local->is_captured = false;
+
+  if (type == PROTO_SCRIPT) {
+    compiler->proto->name = str_from_cstr("@", al);
+  } else if (name.type == TOKEN_IDENTIFIER) {
+    compiler->proto->name = str_from_sv(sv_from_token(&name), al);
+  }
 }
 
 static void ctx_init(Context *ctx, const char *source, const DefinitionArray *prior_defs,
@@ -758,14 +768,10 @@ Loop *ctx_resolve_loop(Context *ctx, Token *label) {
 // ===== scope management =====
 
 static void ctx_begin_compile(Context *ctx, Compiler *compiler, ProtoType type) {
-  compiler_init(compiler, ctx->current_compiler, type, ctx->al);
+  Token name =
+      ctx->parser.previous.type == TOKEN_IDENTIFIER ? ctx->parser.previous : make_token("");
+  compiler_init(compiler, ctx->current_compiler, name, type, ctx->al);
   ctx->current_compiler = compiler;
-
-  if (type == PROTO_SCRIPT) {
-    ctx->current_compiler->proto->name = str_from_cstr("__script", ctx->al);
-  } else if (ctx->parser.previous.type == TOKEN_IDENTIFIER) {
-    ctx->current_compiler->proto->name = str_from_sv(sv_from_token(&ctx->parser.previous), ctx->al);
-  }
 }
 
 static Proto *ctx_end_compile(Context *ctx) {
@@ -931,8 +937,13 @@ static void ctx_compile_function(Context *ctx) {
 
   ctx_parse_parameter_list(ctx, compiler.proto, PARAM_LIST_FUNCTION);
 
-  ctx_consume(ctx, TOKEN_LEFT_BRACE, "expect '{' before function body.");
-  statement_block(ctx);
+  if (ctx_match(ctx, TOKEN_FAT_ARROW)) {
+    expression(ctx);
+    ctx_emit_byte(ctx, OP_RETURN);
+  } else {
+    ctx_consume(ctx, TOKEN_LEFT_BRACE, "expect '{' before function body.");
+    statement_block(ctx);
+  }
 
   Proto *proto = ctx_end_compile(ctx);
   ConstantRef function_ref =
@@ -993,6 +1004,7 @@ static void and_(Context *ctx, bool can_assign);
 static void or_(Context *ctx, bool can_assign);
 static void dot(Context *ctx, bool can_assign);
 static void as(Context *ctx, bool can_assign);
+static void fun(Context *ctx, bool can_assign);
 
 static ParseRule rules[] = {
     [TOKEN_LEFT_PAREN] = {grouping, call, PREC_CALL}, //
@@ -1036,7 +1048,7 @@ static ParseRule rules[] = {
     [TOKEN_ELSE] = {NULL, NULL, PREC_NONE},     //
     [TOKEN_FALSE] = {literal, NULL, PREC_NONE}, //
     [TOKEN_FOR] = {NULL, NULL, PREC_NONE},      //
-    [TOKEN_FUN] = {NULL, NULL, PREC_NONE},      //
+    [TOKEN_FUN] = {fun, NULL, PREC_NONE},       //
     [TOKEN_IF] = {NULL, NULL, PREC_NONE},       //
     [TOKEN_IN] = {NULL, NULL, PREC_NONE},       //
     [TOKEN_IS] = {NULL, NULL, PREC_NONE},       //
@@ -1773,6 +1785,14 @@ static void as(Context *ctx, bool can_assign) {
   VarRef trait_ref = {.definition_index = entry->index, .scope = REF_DEFINITION};
   ctx_emit_get(ctx, trait_ref);
   ctx_emit_byte(ctx, OP_CAST);
+}
+
+static void fun(Context *ctx, bool can_assign) {
+  (void)can_assign;
+
+  // optional name
+  ctx_match(ctx, TOKEN_IDENTIFIER);
+  ctx_compile_function(ctx);
 }
 
 // ===== public api =====
