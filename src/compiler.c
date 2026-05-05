@@ -1005,6 +1005,7 @@ static void or_(Context *ctx, bool can_assign);
 static void dot(Context *ctx, bool can_assign);
 static void as(Context *ctx, bool can_assign);
 static void fun(Context *ctx, bool can_assign);
+static void if_(Context *ctx, bool can_assign);
 
 static ParseRule rules[] = {
     [TOKEN_LEFT_PAREN] = {grouping, call, PREC_CALL}, //
@@ -1049,7 +1050,7 @@ static ParseRule rules[] = {
     [TOKEN_FALSE] = {literal, NULL, PREC_NONE}, //
     [TOKEN_FOR] = {NULL, NULL, PREC_NONE},      //
     [TOKEN_FUN] = {fun, NULL, PREC_NONE},       //
-    [TOKEN_IF] = {NULL, NULL, PREC_NONE},       //
+    [TOKEN_IF] = {NULL, if_, PREC_CALL},        //
     [TOKEN_IN] = {NULL, NULL, PREC_NONE},       //
     [TOKEN_IS] = {NULL, NULL, PREC_NONE},       //
     [TOKEN_IMPL] = {NULL, NULL, PREC_NONE},     //
@@ -1793,6 +1794,23 @@ static void fun(Context *ctx, bool can_assign) {
   // optional name
   ctx_match(ctx, TOKEN_IDENTIFIER);
   ctx_compile_function(ctx);
+}
+
+static void if_(Context *ctx, bool can_assign) {
+  (void)can_assign;
+  expression(ctx);
+
+  int else_jump = ctx_emit_jump(ctx, OP_JUMP_IF_FALSE);
+  ctx_emit_byte(ctx, OP_POP);
+  int exit_jump = ctx_emit_jump(ctx, OP_JUMP);
+
+  ctx_consume(ctx, TOKEN_ELSE, "expect 'else' after 'if' expression.");
+
+  ctx_patch_jump(ctx, else_jump);
+  ctx_emit_bytes(ctx, OP_POP, OP_POP);
+  expression(ctx);
+
+  ctx_patch_jump(ctx, exit_jump);
 }
 
 // ===== public api =====
