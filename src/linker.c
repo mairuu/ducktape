@@ -25,6 +25,7 @@ LinkedModule linker_link(Linker *l, Module *m, const DefinitionArray *prior_defs
       .defs = arr_new(),
       .local_to_vm = arr_new(),
       .sites = arr_new(),
+      .param_constraints = arr_new(),
   };
   m->proto = NULL;
 
@@ -62,4 +63,5 @@ void linked_module_destroy(LinkedModule *lm, Allocator *al) {
   }
   arr_free(&lm->defs, al);
   arr_free(&lm->sites, al);
+  arr_free(&lm->param_constraints, al);
 }

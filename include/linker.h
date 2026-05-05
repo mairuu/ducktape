@@ -19,6 +19,8 @@ DEFINE_ARRAY(LocalToVM, LocalToVMArray);
 
 DEFINE_ARRAY(PatchSite, PatchSiteArray);
 
+DEFINE_ARRAY(IntArray *, ParamConstraintPatchArray);
+
 typedef struct {
   PatchSiteArray *sites;
   Allocator *al;
@@ -30,6 +32,7 @@ typedef struct {
   DefinitionArray
       *defs; // new definitions introduced by this module (delta only, excluding prior_defs)
   PatchSiteArray *sites; // patch sites collected during proto walk
+  ParamConstraintPatchArray *param_constraints;
 } LinkedModule;
 
 void linker_init(Linker *l, Allocator *al);

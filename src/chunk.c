@@ -25,7 +25,7 @@ void chunk_load_from_proto(Chunk *chunk, const Proto *proto, ConstantLoader *loa
 
   chunk->code = arr_copy(proto->code, al);
   chunk->lines = arr_copy(proto->lines, al);
-  chunk->pic = arr_copy(proto->pic, al);
+  chunk->pic = arr_copy(proto->pics, al);
 
   int constant_count = arr_count(proto->constants);
   arr_reserve(&chunk->constants, constant_count, al);

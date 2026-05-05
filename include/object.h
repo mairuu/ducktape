@@ -1,6 +1,7 @@
 #pragma once
 
 #include "allocator.h"
+#include "array.h"
 #include "chunk.h"
 #include "hash_table.h"
 #include "string_utils.h"
@@ -30,10 +31,7 @@ typedef union {
   };
 } ObjectFlags;
 
-typedef enum {
-  DEFID_NONE = 0,
-  DEFID_START
-} ReservedDefID;
+typedef enum { DEFID_NONE = 0, DEFID_START } ReservedDefID;
 
 typedef struct Object {
   ObjectType type;
@@ -66,6 +64,7 @@ typedef struct {
   int upvalue_count;
   Chunk chunk;
   ObjString *name;
+  IntArray *param_constraints;
   Pic pic[]; // length is arr_count(chunk->pic)
 } ObjFunction;
 

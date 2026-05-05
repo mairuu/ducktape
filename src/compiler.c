@@ -360,8 +360,7 @@ static bool ctx_consume(Context *ctx, TokenType type, const char *err_msg) {
   return false;
 }
 
-Definition *ctx_consume_as_definition(Context *ctx, DefinitionType expected_type,
-                                      DefinitionEntry **out_entry) {
+Definition *ctx_consume_definition(Context *ctx, DefinitionEntry **out_entry) {
   // todo: if we had module system, we would also look for imported definitions here
   ctx_consume(ctx, TOKEN_IDENTIFIER, "expect definition name.");
 
@@ -371,20 +370,29 @@ Definition *ctx_consume_as_definition(Context *ctx, DefinitionType expected_type
     return NULL;
   }
 
-  // last consumed token should be the definition name
-  Token name = ctx->parser.previous;
-
   Definition *def = &ctx->def_reg.defs->data[entry->index];
-  if (def->type != expected_type) {
-    ctx_error_at(ctx, &name, "'%.*s' is a %s definition, not a %s.", name.length, name.start,
-                 def_type_name(def->type), def_type_name(expected_type));
-    return NULL;
-  }
 
   if (out_entry) {
     *out_entry = entry;
   }
 
+  return def;
+}
+
+Definition *ctx_consume_expected_definition(Context *ctx, DefinitionType expected_type,
+                                            DefinitionEntry **out_entry) {
+  Definition *def = ctx_consume_definition(ctx, out_entry);
+  if (!def) {
+    return NULL;
+  }
+
+  // last consumed token should be the definition name
+  Token name = ctx->parser.previous;
+  if (def->type != expected_type) {
+    ctx_error_at(ctx, &name, "'%.*s' is a %s definition, not a %s.", name.length, name.start,
+                 def_type_name(def->type), def_type_name(expected_type));
+    return NULL;
+  }
   return def;
 }
 
@@ -850,7 +858,7 @@ typedef enum {
   PARAM_LIST_METHOD,
 } ParamListKind;
 
-static int ctx_parse_parameter_list(Context *ctx, ParamListKind kind) {
+static void ctx_parse_parameter_list(Context *ctx, Proto *proto, ParamListKind kind) {
   ctx_consume(ctx, TOKEN_LEFT_PAREN, "expect '(' before parameter list.");
 
   int param_count = 0;
@@ -873,6 +881,14 @@ static int ctx_parse_parameter_list(Context *ctx, ParamListKind kind) {
         ctx_mark_initialized(ctx);
         ctx_define_variable(ctx, param_name);
         param_count++;
+
+        // type constraints
+        if (ctx_match(ctx, TOKEN_COLON)) {
+          DefinitionEntry *def_entry = NULL;
+          if (ctx_consume_definition(ctx, &def_entry) && proto) {
+            proto_set_param_constraint(proto, param_count - 1, def_entry->index, ctx->al);
+          }
+        }
       }
 
     } while (ctx_match(ctx, TOKEN_COMMA));
@@ -881,7 +897,13 @@ static int ctx_parse_parameter_list(Context *ctx, ParamListKind kind) {
   }
 
   ctx_consume(ctx, TOKEN_RIGHT_PAREN, "expect ')' after parameter list.");
-  return param_count;
+
+  if (proto && arr_count(proto->param_constraints) != param_count) {
+    proto_set_param_constraint(proto, param_count - 1, -1, ctx->al);
+  }
+
+  assert(!proto || (proto && param_count == arr_count(proto->param_constraints)));
+  proto->arity = param_count;
 }
 
 int ctx_parse_argument_list(Context *ctx) {
@@ -907,7 +929,7 @@ static void ctx_compile_function(Context *ctx) {
 
   ctx_begin_scope(ctx);
 
-  compiler.proto->arity = ctx_parse_parameter_list(ctx, PARAM_LIST_FUNCTION);
+  ctx_parse_parameter_list(ctx, compiler.proto, PARAM_LIST_FUNCTION);
 
   ctx_consume(ctx, TOKEN_LEFT_BRACE, "expect '{' before function body.");
   statement_block(ctx);
@@ -930,7 +952,7 @@ static void ctx_compile_method(Context *ctx, Token *method_token, TraitMethodDef
 
   ctx_begin_scope(ctx);
 
-  compiler.proto->arity = ctx_parse_parameter_list(ctx, PARAM_LIST_METHOD);
+  ctx_parse_parameter_list(ctx, compiler.proto, PARAM_LIST_METHOD);
   method->arity = compiler.proto->arity;
 
   if (ctx_match(ctx, TOKEN_SEMICOLON)) {
@@ -1472,7 +1494,7 @@ static void parse_impl_body(Context *ctx, Definition *trait_def, Definition *str
     if (method_index < 0) {
       ctx_error_at(ctx, &method_token, "method not found in trait.");
       ctx_consume(ctx, TOKEN_LEFT_PAREN, "");
-      ctx_parse_parameter_list(ctx, PARAM_LIST_FUNCTION); // ignore parameters for error recovery
+      ctx_parse_parameter_list(ctx, NULL, PARAM_LIST_FUNCTION); // ignore
       ctx_consume(ctx, TOKEN_LEFT_BRACE, "");
       statement_block(ctx); // ignore method body for error recovery
       continue;
@@ -1489,7 +1511,7 @@ static void parse_impl_body(Context *ctx, Definition *trait_def, Definition *str
     Compiler compiler;
     ctx_begin_compile(ctx, &compiler, PROTO_METHOD);
     ctx_begin_scope(ctx);
-    compiler.proto->arity = ctx_parse_parameter_list(ctx, PARAM_LIST_METHOD);
+    ctx_parse_parameter_list(ctx, compiler.proto, PARAM_LIST_METHOD);
 
     if (compiler.proto->arity != method_def->arity) {
       ctx_error_at(ctx, &method_token, "method arity does not match trait definition.");
@@ -1529,11 +1551,12 @@ static void declaration_impl(Context *ctx) {
   }
 
   DefinitionEntry *trait_entry = NULL;
-  Definition *trait_def = ctx_consume_as_definition(ctx, DEFTYPE_TRAIT, &trait_entry);
+  Definition *trait_def = ctx_consume_expected_definition(ctx, DEFTYPE_TRAIT, &trait_entry);
 
   ctx_consume(ctx, TOKEN_FOR, "expect 'for' after trait name in impl.");
+
   DefinitionEntry *struct_entry = NULL;
-  Definition *struct_def = ctx_consume_as_definition(ctx, DEFTYPE_STRUCT, &struct_entry);
+  Definition *struct_def = ctx_consume_expected_definition(ctx, DEFTYPE_STRUCT, &struct_entry);
 
   if (trait_def == NULL || struct_def == NULL) {
     assert(false && "todo: implement proper error recovery for impl declaration parsing");
@@ -1743,7 +1766,7 @@ static void dot(Context *ctx, bool can_assign) {
 static void as(Context *ctx, bool can_assign) {
   (void)can_assign;
   DefinitionEntry *entry = NULL;
-  Definition *trait_def = ctx_consume_as_definition(ctx, DEFTYPE_TRAIT, &entry);
+  Definition *trait_def = ctx_consume_definition(ctx, &entry);
   if (trait_def == NULL) {
     return;
   }

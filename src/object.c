@@ -180,7 +180,7 @@ static inline size_t function_size(int pic_count) {
 
 ObjFunction //
     *obj_function_new(Allocator *al, ObjString *name, ConstantLoader *loader, const Proto *proto) {
-  int pic_count = arr_count(proto->pic);
+  int pic_count = arr_count(proto->pics);
   ObjFunction *obj = obj_new(function_size(pic_count), OBJ_FUNCTION, al);
 
   obj->arity = proto->arity;
@@ -188,6 +188,7 @@ ObjFunction //
   chunk_init(&obj->chunk);
   chunk_load_from_proto(&obj->chunk, proto, loader, al);
   obj->name = name;
+  obj->param_constraints = arr_copy(proto->param_constraints, al);
 
   for (int i = 0; i < pic_count; i++) {
     obj->pic[i].name = obj->chunk.pic->data[i];
@@ -208,6 +209,7 @@ void obj_function_free(ObjFunction **obj, Allocator *al) {
 
   int pic_count = arr_count((*obj)->chunk.pic);
   chunk_destroy(&(*obj)->chunk, al);
+  arr_free(&(*obj)->param_constraints, al);
   al_free(al, *obj, function_size(pic_count));
   *obj = NULL;
 }

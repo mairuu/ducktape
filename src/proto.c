@@ -29,8 +29,9 @@ void proto_init(Proto *proto, Allocator *al) {
   proto->lines = arr_new();
   proto->code = arr_new();
   proto->constants = arr_new();
-  proto->pic = arr_new();
+  proto->pics = arr_new();
   proto->patches = arr_new();
+  proto->param_constraints = arr_new();
 }
 
 void proto_destroy(Proto *proto, Allocator *al) {
@@ -44,8 +45,9 @@ void proto_destroy(Proto *proto, Allocator *al) {
   arr_free(&proto->lines, al);
   arr_free(&proto->code, al);
   arr_free(&proto->constants, al);
-  arr_free(&proto->pic, al);
+  arr_free(&proto->pics, al);
   arr_free(&proto->patches, al);
+  arr_free(&proto->param_constraints, al);
 }
 
 void proto_write_code(Proto *proto, uint8_t byte, int line, Allocator *al) {
@@ -59,8 +61,8 @@ int proto_write_constant(Proto *proto, RawConstant constant, Allocator *al) {
 }
 
 int proto_register_pic(Proto *proto, int constant_index, Allocator *al) {
-  arr_push(proto->pic, constant_index, al);
-  return arr_count(proto->pic) - 1;
+  arr_push(proto->pics, constant_index, al);
+  return arr_count(proto->pics) - 1;
 }
 
 void proto_add_patch(Proto *proto, int offset, Allocator *al) {
@@ -70,4 +72,16 @@ void proto_add_patch(Proto *proto, int offset, Allocator *al) {
 void proto_patch_short(Proto *proto, int offset, uint16_t value) {
   proto->code->data[offset] = (value >> 8) & 0xff; // high byte.
   proto->code->data[offset + 1] = value & 0xff;    // low byte.
+}
+
+void proto_set_param_constraint(Proto *proto, int param_index, int def_index, Allocator *al) {
+  if (param_index >= arr_count(proto->param_constraints)) {
+    // pad with -1 for parameters without constraints
+    while (arr_count(proto->param_constraints) < param_index) {
+      arr_push(proto->param_constraints, -1, al);
+    }
+    arr_push(proto->param_constraints, def_index, al);
+  } else {
+    proto->param_constraints->data[param_index] = def_index;
+  }
 }

@@ -81,6 +81,8 @@ typedef struct {
   ConstantLoader loader;
   VirtualMachine *vm;
   PatchSiteArray **patch_sites; // for collecting patch sites during proto walk
+  ParamConstraintPatchArray *
+      *param_constraints; // for collecting param constraint patch sites during proto walk
 } LoadContext;
 
 static ObjFunction *vm_load_proto(ConstantLoader *loader, Proto *proto);
@@ -125,6 +127,7 @@ static ObjFunction *vm_load_proto(ConstantLoader *loader, Proto *proto) {
     };
     arr_push((*ctx->patch_sites), site, &vm->inner_al);
   }
+  arr_push((*ctx->param_constraints), func->param_constraints, &vm->inner_al);
 
 #ifdef DEBUG_PRINT_CODE
   char name_buf[256];
@@ -190,7 +193,11 @@ ObjFunction *vm_load(VirtualMachine *vm, LinkedModule *lm) {
   }
 
   LoadContext ctx = {
-      .loader = {.load_constant = load_constant, .ctx = &ctx}, .vm = vm, .patch_sites = &lm->sites};
+      .loader = {.load_constant = load_constant, .ctx = &ctx},
+      .vm = vm,
+      .patch_sites = &lm->sites,
+      .param_constraints = &lm->param_constraints,
+  };
   ObjFunction *main = vm_load_proto(&ctx.loader, lm->proto);
 
   int site_count = arr_count(lm->sites);
@@ -207,6 +214,27 @@ ObjFunction *vm_load(VirtualMachine *vm, LinkedModule *lm) {
     }
     assert(vm_idx != -1 && "patch site has no mapping");
     chunk_patch_byte(&site.function->chunk, site.code_offset + 1, (uint8_t)vm_idx);
+  }
+
+  int constraint_patch_count = arr_count(lm->param_constraints);
+  for (int i = 0; i < constraint_patch_count; i++) {
+    IntArray *constraints = lm->param_constraints->data[i];
+    int constraint_count = arr_count(constraints);
+    for (int j = 0; j < constraint_count; j++) {
+      int local_idx = constraints->data[j];
+      if (local_idx == -1) {
+        continue; // no constraint for this parameter
+      }
+      int vm_idx = -1;
+      for (int k = 0; k < mapping_count; k++) {
+        if (lm->local_to_vm->data[k].local_index == local_idx) {
+          vm_idx = lm->local_to_vm->data[k].vm_index;
+          break;
+        }
+      }
+      assert(vm_idx != -1 && "constraint patch site has no mapping");
+      constraints->data[j] = vm_idx;
+    }
   }
 
   vm_push(vm, OBJECT_VAL(main));
@@ -279,7 +307,6 @@ static Value *vm_property_ref(VirtualMachine *vm, uint8_t pic_index, Value recei
     assert(inner->type == OBJ_STRUCT_INST && "trait object receiver must be a struct instance");
     inst = (ObjStructInst *)inner;
   } else {
-    assert(false && "invalid receiver type for property access");
     vm_panic(vm, "invalid receiver type for property access");
   }
 
@@ -356,6 +383,61 @@ static Object *vm_method_ref(VirtualMachine *vm, uint8_t pic_index, Value receiv
   return NULL;
 }
 
+Object *vm_cast_struct(VirtualMachine *vm, Value receiver_val, ObjStructDef *def) {
+  Object *receiver = AS_OBJECT(receiver_val);
+  if (receiver->type == OBJ_TRAIT_OBJECT) {
+    ObjTraitObject *trait_object = (ObjTraitObject *)receiver;
+    receiver = trait_object->receiver; // unwrap
+  }
+  if (receiver->type == OBJ_STRUCT_INST) {
+    ObjStructInst *inst = (ObjStructInst *)receiver;
+    if (inst->def == def) {
+      return receiver; // already the correct struct instance
+    }
+  }
+
+  vm_panic(vm, "expected instance of struct '%.*s' but got %s", def->name->str.length,
+           def->name->str.chars, val_type_name(receiver_val.type));
+  return NULL; // unreachable
+}
+
+Object *vm_cast_trait(VirtualMachine *vm, Value receiver_val, ObjTraitDef *trait) {
+  Object *receiver = AS_OBJECT(receiver_val);
+  if (receiver->type == OBJ_TRAIT_OBJECT) {
+    ObjTraitObject *trait_object = (ObjTraitObject *)receiver;
+    if (trait_object->impl->trait == trait) {
+      return receiver; // already a trait object of the correct trait
+    }
+    // unwrap
+    receiver = trait_object->receiver;
+  }
+
+  ObjImpl *impl = impl_registry_get(&vm->impl_registry, receiver, trait);
+
+  if (impl == NULL) {
+    char inst_print[32];
+    val_sprintf(inst_print, sizeof(inst_print), receiver_val);
+    vm_panic(vm, "'%s' does not implement trait '%.*s'", inst_print, trait->name->str.length,
+             trait->name->str.chars);
+  }
+
+  ObjTraitObject *trait_object = obj_trait_object_new(receiver, impl, &vm->al);
+  vm_track_object(vm, &trait_object->obj);
+  return &trait_object->obj;
+}
+
+// panic if cast fails
+// returns null if target type is not supported (caller should handle this)
+Object *vm_cast(VirtualMachine *vm, Value receiver_val, Object *target) {
+  if (target->type == OBJ_STRUCT_DEF) {
+    return vm_cast_struct(vm, receiver_val, (ObjStructDef *)target);
+  } else if (target->type == OBJ_TRAIT_DEF) {
+    return vm_cast_trait(vm, receiver_val, (ObjTraitDef *)target);
+  } else {
+    return NULL; // caller handle error
+  }
+}
+
 // ===== vm execution =====
 
 static void vm_call_function(VirtualMachine *vm, ObjFunction *callee, int arg_count) {
@@ -365,6 +447,24 @@ static void vm_call_function(VirtualMachine *vm, ObjFunction *callee, int arg_co
 
   if (arg_count != callee->arity) {
     vm_panic(vm, "expected %d arguments but got %d", callee->arity, arg_count);
+  }
+
+  int constraint_count = arr_count(callee->param_constraints);
+  for (int i = 0; i < constraint_count; i++) {
+    int def_idx = callee->param_constraints->data[i];
+    if (def_idx == -1) {
+      continue; // no constraint for this parameter
+    }
+
+    Value arg = vm_peek(vm, arg_count - 1 - i);
+    Object *def_obj = vm->definition_objects->data[def_idx];
+
+    Object *casted = vm_cast(vm, arg, def_obj);
+    if (casted) {
+      vm->stack_top[i - arg_count] = OBJECT_VAL(casted);
+    } else {
+      vm_panic(vm, "invalid constraint on parameter %d", i);
+    }
   }
 
   CallFrame *frame = &vm->frames[vm->frame_count++];
@@ -741,34 +841,14 @@ static void vm_run(VirtualMachine *vm) {
       break;
     }
     case OP_CAST: {
-      ObjTraitDef *trait = AS_TRAIT_DEF(vm_peek(vm, 0));
       Value receiver_val = vm_peek(vm, 1);
-
-      Object *receiver = AS_OBJECT(receiver_val);
-      if (receiver->type == OBJ_TRAIT_OBJECT) {
-        ObjTraitObject *trait_object = (ObjTraitObject *)receiver;
-        if (trait_object->impl->trait == trait) {
-          // already a trait object of the correct trait, no need to cast
-          vm_pop(vm); // pop trait
-          break;
-        }
-        // unwrap
-        receiver = trait_object->receiver;
+      Object *target = AS_OBJECT(vm_peek(vm, 0));
+      Object *casted = vm_cast(vm, receiver_val, target);
+      if (!casted) {
+        vm_panic(vm, "cannot cast to type '%s'", obj_type_name(target->type));
       }
-
-      ObjImpl *impl = impl_registry_get(&vm->impl_registry, receiver, trait);
-
-      if (impl == NULL) {
-        char inst_print[32];
-        val_sprintf(inst_print, sizeof(inst_print), receiver_val);
-        vm_panic(vm, "'%s' does not implement trait '%.*s'", inst_print, trait->name->str.length,
-                 trait->name->str.chars);
-      }
-
-      ObjTraitObject *trait_object = obj_trait_object_new(receiver, impl, &vm->al);
-      vm_track_object(vm, &trait_object->obj);
-      vm_pop(vm);                                   // pop trait
-      vm->stack_top[-1] = OBJECT_VAL(trait_object); // replace receiver with trait object
+      vm_pop(vm); // pop target
+      vm->stack_top[-1] = OBJECT_VAL(casted); // replace receiver with casted value
       break;
     }
     case OP_RETURN:

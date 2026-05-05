@@ -6,6 +6,7 @@
 
 static const char *def_type_names[] = {
     [DEFTYPE_STRUCT] = "struct",
+    [DEFTYPE_TRAIT] = "trait",
 };
 
 const char *def_type_name(DefinitionType type) {

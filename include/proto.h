@@ -34,8 +34,9 @@ typedef struct Proto {
   IntArray *lines;
   ByteArray *code;
   RawConstantArray *constants;
-  IntArray *pic;     // polymorphic inline cache
-  IntArray *patches; // patch sites for definitions
+  IntArray *pics;         // polymorphic inline cache
+  IntArray *patches;     // patch sites for definitions
+  IntArray *param_constraints; // length == arity, for storing type constraints of function parameters
 } Proto;
 
 void proto_init(Proto *proto, Allocator *al);
@@ -53,3 +54,5 @@ void proto_add_patch(Proto *proto, int offset,
 
 void proto_patch_short(Proto *proto, int offset,
                        uint16_t value); // patch a short (2 bytes) value at the given offset.
+
+void proto_set_param_constraint(Proto *proto, int param_index, int def_index, Allocator *al); // set the definition index of the constraint for the parameter at the given index.
