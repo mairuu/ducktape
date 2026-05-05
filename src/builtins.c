@@ -36,6 +36,19 @@ static Value native_println(VirtualMachine *vm, int arg_count, Value *args) {
   return NIL_VAL;
 }
 
+static Value native_panic(VirtualMachine *vm, int arg_count, Value *args) {
+  (void)vm;
+  char buf[1024];
+  int offset = 0;
+  for (int i = 0; i < arg_count && offset < (int)sizeof(buf) - 1; i++) {
+    if (i > 0) {
+      offset += snprintf(buf + offset, sizeof(buf) - offset, " ");
+    }
+    offset += val_sprintf(buf + offset, sizeof(buf) - offset, args[i]);
+  }
+  vm_panic(vm, "%s", buf);
+}
+
 void builtin_register(VirtualMachine *vm) {
   struct {
     const char *name;
@@ -44,6 +57,7 @@ void builtin_register(VirtualMachine *vm) {
       {.name = "clock", .function = native_clock},
       {.name = "print", .function = native_print},
       {.name = "println", .function = native_println},
+      {.name = "panic", .function = native_panic},
   };
 
   for (size_t i = 0; i < ARRAY_COUNT(builtin_functions); i++) {

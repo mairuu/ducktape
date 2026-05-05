@@ -63,7 +63,7 @@ void vm_panic(VirtualMachine *vm, const char *format, ...) {
 
     fprintf(stderr, "  [line %d] in ", line);
     if (fn->name == NULL) {
-      fprintf(stderr, "<main>\n");
+      fprintf(stderr, "anonymous\n");
     } else {
       fprintf(stderr, "%.*s()\n", fn->name->str.length, fn->name->str.chars);
     }
