@@ -30,6 +30,11 @@ typedef union {
   };
 } ObjectFlags;
 
+typedef enum {
+  DEFID_NONE = 0,
+  DEFID_START
+} ReservedDefID;
+
 typedef struct Object {
   ObjectType type;
   ObjectFlags flags;
@@ -135,6 +140,7 @@ static inline bool value_is_obj_type(Value value, ObjectType type) {
 #define IS_STRUCT_INST(value) value_is_obj_type(value, OBJ_STRUCT_INST)
 #define IS_TRAIT_DEF(value) value_is_obj_type(value, OBJ_TRAIT_DEF)
 #define IS_IMPL(value) value_is_obj_type(value, OBJ_IMPL)
+#define IS_TRAIT_OBJECT(value) value_is_obj_type(value, OBJ_TRAIT_OBJECT)
 
 // -----------------------------------------------------------------------------
 
@@ -147,6 +153,7 @@ static inline bool value_is_obj_type(Value value, ObjectType type) {
 #define AS_STRUCT_INST(value) ((ObjStructInst *)AS_OBJECT(value))
 #define AS_TRAIT_DEF(value) ((ObjTraitDef *)AS_OBJECT(value))
 #define AS_IMPL(value) ((ObjImpl *)AS_OBJECT(value))
+#define AS_TRAIT_OBJECT(value) ((ObjTraitObject *)AS_OBJECT(value))
 
 // -----------------------------------------------------------------------------
 

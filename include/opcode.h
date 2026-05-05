@@ -44,6 +44,7 @@ typedef enum {
   OP_JUMP_IF_FALSE,
 
   OP_CALL,
+  OP_INVOKE,
 
   // beginning of impl block create a empty impl object
   OP_IMPL,

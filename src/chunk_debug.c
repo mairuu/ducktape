@@ -158,12 +158,22 @@ int disassemble_chunk_instruction(Chunk *chunk, int offset) {
 
   case OP_CALL:
     return byte_instruction("OP_CALL", chunk, offset);
-  
+  case OP_INVOKE: {
+    uint8_t pic_index = chunk->code->data[offset + 1];
+    uint8_t arg_count = chunk->code->data[offset + 2];
+    uint8_t constant_index = chunk->pic->data[pic_index];
+    printf("%-16s %d '", "OP_INVOKE", arg_count);
+    Value constant = chunk->constants->data[constant_index];
+    val_print(constant);
+    printf("'\n");
+    return offset + 3;
+  }
+
   case OP_IMPL:
     return simple_instruction("OP_IMPL", offset);
   case OP_IMPL_METHOD:
     return byte_instruction("OP_IMPL_METHOD", chunk, offset);
-  
+
   case OP_CAST:
     return simple_instruction("OP_CAST", offset);
 

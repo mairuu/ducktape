@@ -181,7 +181,7 @@ ObjFunction *vm_load(VirtualMachine *vm, LinkedModule *lm) {
       const Definition *def = &lm->defs->data[new_def_cursor++];
 
       Object *obj = vm_load_definition(vm, def);
-      obj->flags.def_id = arr_count(vm->definitions) + 1;
+      obj->flags.def_id = DEFID_START + arr_count(vm->definitions);
 
       arr_push(vm->definitions, def_copy(def, &vm->al), &vm->al);
       arr_push(vm->definition_objects, obj, &vm->al);
@@ -270,34 +270,90 @@ static void vm_close_upvalues(VirtualMachine *vm, Value *last) {
 
 static Value *vm_property_ref(VirtualMachine *vm, uint8_t pic_index, Value receiver,
                               ObjFunction *function) {
-  ObjStructInst *inst = AS_STRUCT_INST(receiver);
-  Pic *pic = &function->pic[pic_index];
+  (void)vm;
+  ObjStructInst *inst;
+  if (IS_STRUCT_INST(receiver)) {
+    inst = AS_STRUCT_INST(receiver);
+  } else if (IS_TRAIT_OBJECT(receiver)) {
+    Object *inner = AS_TRAIT_OBJECT(receiver)->receiver;
+    assert(inner->type == OBJ_STRUCT_INST && "trait object receiver must be a struct instance");
+    inst = (ObjStructInst *)inner;
+  } else {
+    assert(false && "invalid receiver type for property access");
+    vm_panic(vm, "invalid receiver type for property access");
+  }
 
-  if (pic->count < PIC_CACHE_SIZE) { // not megamorphic, try to find cached entry
+  Pic *pic = &function->pic[pic_index];
+  uint16_t shape_id = inst->def->obj.flags.def_id;
+
+  if (pic->count < PIC_CACHE_SIZE) {
     for (int i = 0; i < pic->count; i++) {
-      if (pic->entries[i].shape_id == inst->def->obj.flags.def_id) {
+      if (pic->entries[i].shape_id == shape_id)
         return &inst->payload[pic->entries[i].offset];
-      }
     }
+
+    ObjString *field_name = AS_STRING(function->chunk.constants->data[pic->name]);
+    Value *offset_val = ht_get(&inst->def->fields, OBJECT_VAL(field_name));
+    if (!offset_val) {
+      return NULL;
+    }
+
+    uint8_t offset = (uint8_t)AS_NUMBER(*offset_val);
+    pic->entries[pic->count++] = (PicEntry){.shape_id = shape_id, .offset = offset};
+    return &inst->payload[offset];
   }
 
   ObjString *field_name = AS_STRING(function->chunk.constants->data[pic->name]);
-
   Value *offset_val = ht_get(&inst->def->fields, OBJECT_VAL(field_name));
   if (!offset_val) {
-    vm_panic(vm, "undefined property '%.*s'", field_name->str.length, field_name->str.chars);
+    return NULL;
   }
 
-  uint8_t offset = (uint8_t)AS_NUMBER(*offset_val);
+  return &inst->payload[(uint8_t)AS_NUMBER(*offset_val)];
+}
 
-  if (pic->count < PIC_CACHE_SIZE) {
-    pic->entries[pic->count++] =
-        (PicEntry){.shape_id = inst->def->obj.flags.def_id, .offset = offset};
-  } else {
-    pic->count = UINT8_MAX; // megamorphic, stop caching
+static Object *vm_method_ref(VirtualMachine *vm, uint8_t pic_index, Value receiver,
+                             ObjFunction *function) {
+  (void)vm;
+  ObjTraitObject *fat = AS_TRAIT_OBJECT(receiver);
+  Pic *pic = &function->pic[pic_index];
+  ObjImpl *impl = fat->impl;
+
+  ObjString *method_name = AS_STRING(function->chunk.constants->data[pic->name]);
+
+  // resolve the canonical impl up front by scanning for the method name.
+  // this also gives us the slot index and the single shape_id to key on.
+  for (int i = 0; i < impl->trait->method_count; i++) {
+    // this might be very slow
+    ObjImpl *target_impl = (impl->impls[i] != NULL) ? impl : impl->trait->default_impl;
+
+    assert(target_impl != NULL && target_impl->impls[i] != NULL &&
+           "impl slot must be filled after default resolution");
+
+    Object *slot = target_impl->impls[i];
+    assert(slot->type == OBJ_FUNCTION && "invalid method type in impl");
+
+    ObjFunction *method = (ObjFunction *)slot;
+    if (!obj_equal(&method->name->obj, &method_name->obj)) {
+      continue;
+    }
+
+    uint16_t shape_id = (uint16_t)target_impl->subject->flags.def_id;
+
+    if (pic->count < PIC_CACHE_SIZE) {
+      for (int j = 0; j < pic->count; j++) {
+        if (pic->entries[j].shape_id == shape_id)
+          return target_impl->impls[pic->entries[j].offset];
+      }
+      pic->entries[pic->count++] = (PicEntry){.shape_id = shape_id, .offset = (uint8_t)i};
+    } else {
+      pic->count = UINT8_MAX; // megamorphic
+    }
+
+    return &method->obj;
   }
 
-  return &inst->payload[offset];
+  return NULL;
 }
 
 // ===== vm execution =====
@@ -564,7 +620,11 @@ static void vm_run(VirtualMachine *vm) {
       uint8_t pic_index = READ_BYTE();
       Value receiver = vm_peek(vm, 0);
       Value *property = vm_property_ref(vm, pic_index, receiver, frame->function);
-      assert(property != NULL && "property reference should not be NULL");
+      if (!property) {
+        ObjString *field_name =
+            AS_STRING(frame->function->chunk.constants->data[frame->function->pic[pic_index].name]);
+        vm_panic(vm, "undefined property '%.*s'", field_name->str.length, field_name->str.chars);
+      }
       vm->stack_top[-1] = *property;
       break;
     }
@@ -572,7 +632,11 @@ static void vm_run(VirtualMachine *vm) {
       uint8_t pic_index = READ_BYTE();
       Value receiver = vm_peek(vm, 1);
       Value *property = vm_property_ref(vm, pic_index, receiver, frame->function);
-      assert(property != NULL && "property reference should not be NULL");
+      if (!property) {
+        ObjString *field_name =
+            AS_STRING(frame->function->chunk.constants->data[frame->function->pic[pic_index].name]);
+        vm_panic(vm, "undefined property '%.*s'", field_name->str.length, field_name->str.chars);
+      }
       *property = vm_peek(vm, 0);
       vm->stack_top[-2] = *property;
       vm->stack_top--;
@@ -604,6 +668,22 @@ static void vm_run(VirtualMachine *vm) {
       ip = frame->ip;
       break;
     }
+    case OP_INVOKE: {
+      uint8_t pic_index = READ_BYTE();
+      uint8_t arg_count = READ_BYTE();
+      Value receiver = vm_peek(vm, arg_count);
+      Object *method = vm_method_ref(vm, pic_index, receiver, frame->function);
+      if (method == NULL) {
+        ObjString *method_name =
+            AS_STRING(frame->function->chunk.constants->data[frame->function->pic[pic_index].name]);
+        vm_panic(vm, "undefined method '%.*s' ", method_name->str.length, method_name->str.chars);
+      }
+      frame->ip = ip;
+      vm_call_object(vm, method, arg_count);
+      frame = &vm->frames[vm->frame_count - 1];
+      ip = frame->ip;
+      break;
+    }
     case OP_IMPL: {
       Value trait = vm_peek(vm, 1);
       Value subject = vm_peek(vm, 0);
@@ -612,18 +692,24 @@ static void vm_run(VirtualMachine *vm) {
       assert((IS_STRUCT_DEF(subject) || IS_TRAIT_DEF(subject)) &&
              "expect struct or trait definition as impl subject");
 
+      ObjTraitDef *trait_def = AS_TRAIT_DEF(trait);
+
       gc_begin_staging(&vm->gc);
       ObjImpl *impl = obj_impl_new(AS_TRAIT_DEF(trait), AS_OBJECT(subject), &vm->al);
       vm_track_object(vm, &impl->obj);
 
       if (!impl_registry_put(&vm->impl_registry, impl, &vm->al)) {
         vm_panic(
-            vm, "duplicate impl for trait '%.*s' and subject '%.*s'",
-            AS_TRAIT_DEF(trait)->name->str.length, AS_TRAIT_DEF(trait)->name->str.chars,
+            vm, "duplicate impl for trait '%.*s' and subject '%.*s'", trait_def->name->str.length,
+            trait_def->name->str.chars,
             AS_OBJECT(subject)->type == OBJ_STRUCT_DEF ? AS_STRUCT_DEF(subject)->name->str.length
                                                        : AS_TRAIT_DEF(subject)->name->str.length,
             AS_OBJECT(subject)->type == OBJ_STRUCT_DEF ? AS_STRUCT_DEF(subject)->name->str.chars
                                                        : AS_TRAIT_DEF(subject)->name->str.chars);
+      }
+
+      if (IS_TRAIT_DEF(subject)) {
+        AS_TRAIT_DEF(subject)->default_impl = impl;
       }
 
       vm_pop(vm); // pop subject
@@ -658,8 +744,19 @@ static void vm_run(VirtualMachine *vm) {
       ObjTraitDef *trait = AS_TRAIT_DEF(vm_peek(vm, 0));
       Value receiver_val = vm_peek(vm, 1);
 
-      Object *inst = AS_OBJECT(receiver_val);
-      ObjImpl *impl = impl_registry_get(&vm->impl_registry, inst, trait);
+      Object *receiver = AS_OBJECT(receiver_val);
+      if (receiver->type == OBJ_TRAIT_OBJECT) {
+        ObjTraitObject *trait_object = (ObjTraitObject *)receiver;
+        if (trait_object->impl->trait == trait) {
+          // already a trait object of the correct trait, no need to cast
+          vm_pop(vm); // pop trait
+          break;
+        }
+        // unwrap
+        receiver = trait_object->receiver;
+      }
+
+      ObjImpl *impl = impl_registry_get(&vm->impl_registry, receiver, trait);
 
       if (impl == NULL) {
         char inst_print[32];
@@ -668,7 +765,7 @@ static void vm_run(VirtualMachine *vm) {
                  trait->name->str.chars);
       }
 
-      ObjTraitObject *trait_object = obj_trait_object_new(inst, impl, &vm->al);
+      ObjTraitObject *trait_object = obj_trait_object_new(receiver, impl, &vm->al);
       vm_track_object(vm, &trait_object->obj);
       vm_pop(vm);                                   // pop trait
       vm->stack_top[-1] = OBJECT_VAL(trait_object); // replace receiver with trait object

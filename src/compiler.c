@@ -681,6 +681,11 @@ static void ctx_emit_set_property(Context *ctx, ConstantRef name) {
   ctx_emit_bytes(ctx, OP_SET_PROPERTY, (uint8_t)pic_index);
 }
 
+static void ctx_emit_invoke(Context *ctx, ConstantRef name, int arg_count) {
+  int pic_index = ctx_register_pic(ctx, name);
+  ctx_emit_bytes(ctx, OP_INVOKE, (uint8_t)pic_index, (uint8_t)arg_count);
+}
+
 static void ctx_emit_default_methods(Context *ctx, Token *trait_name, DefaultMethodList *defaults) {
   if (defaults->count == 0)
     return;
@@ -1718,6 +1723,11 @@ static void dot(Context *ctx, bool can_assign) {
   if (can_assign && ctx_match(ctx, TOKEN_EQUAL)) {
     expression(ctx);
     ctx_emit_set_property(ctx, name);
+  } else if (ctx_match(ctx, TOKEN_LEFT_PAREN)) {
+    // ctx_emit_constant(ctx, name);
+    int arg_count = ctx_parse_argument_list(ctx);
+    // ctx_emit_bytes(ctx, OP_INVOKE, (uint8_t)arg_count);
+    ctx_emit_invoke(ctx, name, arg_count);
   } else if (can_assign && ctx_match_compound_assignment(ctx)) {
     TokenType operator = ctx->parser.previous.type;
     ctx_emit_byte(ctx, OP_DUP);
