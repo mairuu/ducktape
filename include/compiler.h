@@ -4,4 +4,9 @@
 #include "definition.h"
 #include "module.h"
 
-bool compile(const char *source, const DefinitionArray *prior_defs, Allocator *al, Module *out_module);
+typedef struct {
+  int next_slot;
+} SlotAllocator;
+
+bool compile(const char *source, const DefinitionArray *prior_defs, SlotAllocator *slot_al,
+             Allocator *al, Module *out_module);

@@ -70,6 +70,7 @@ typedef struct {
   const char *source;
   Parser parser;
 
+  SlotAllocator *slot_al;
   DefinitionRegistry def_reg;
   Compiler *current_compiler;
 
@@ -235,7 +236,7 @@ static void compiler_init(Compiler *compiler, Compiler *enclosing, Token name, P
 }
 
 static void ctx_init(Context *ctx, const char *source, const DefinitionArray *prior_defs,
-                     Allocator *al) {
+                     SlotAllocator *slot_al, Allocator *al) {
   ctx->al = al;
   ctx->source = source;
 
@@ -245,6 +246,7 @@ static void ctx_init(Context *ctx, const char *source, const DefinitionArray *pr
 
   ctx->current_compiler = NULL;
 
+  ctx->slot_al = slot_al;
   defreg_init(&ctx->def_reg, al);
 
   // seed definition registry with prior definitions from other modules
@@ -370,28 +372,21 @@ static bool ctx_consume(Context *ctx, TokenType type, const char *err_msg) {
   return false;
 }
 
-Definition *ctx_consume_definition(Context *ctx, DefinitionEntry **out_entry) {
+Definition *ctx_consume_definition(Context *ctx) {
   // todo: if we had module system, we would also look for imported definitions here
   ctx_consume(ctx, TOKEN_IDENTIFIER, "expect definition name.");
 
-  DefinitionEntry *entry = defreg_find(&ctx->def_reg, sv_from_token(&ctx->parser.previous));
-  if (entry == NULL) {
+  Definition *def = defreg_find(&ctx->def_reg, sv_from_token(&ctx->parser.previous));
+  if (def == NULL) {
     ctx_error_at(ctx, &ctx->parser.previous, "no definition found with this name.");
     return NULL;
-  }
-
-  Definition *def = &ctx->def_reg.defs->data[entry->index];
-
-  if (out_entry) {
-    *out_entry = entry;
   }
 
   return def;
 }
 
-Definition *ctx_consume_expected_definition(Context *ctx, DefinitionType expected_type,
-                                            DefinitionEntry **out_entry) {
-  Definition *def = ctx_consume_definition(ctx, out_entry);
+Definition *ctx_consume_expected_definition(Context *ctx, DefinitionType expected_type) {
+  Definition *def = ctx_consume_definition(ctx);
   if (!def) {
     return NULL;
   }
@@ -622,11 +617,11 @@ static int ctx_resolve_upvalue(Context *ctx, Compiler *compiler, Token *name) {
 }
 
 static int ctx_resolve_definition(Context *ctx, Token *name) {
-  DefinitionEntry *def = defreg_find(&ctx->def_reg, sv_from_token(name));
+  Definition *def = defreg_find(&ctx->def_reg, sv_from_token(name));
   if (def == NULL) {
     return -1;
   }
-  return def->index;
+  return def->slot;
 }
 
 static VarRef ctx_resolve_variable(Context *ctx, Token name) {
@@ -648,16 +643,20 @@ static VarRef ctx_resolve_variable(Context *ctx, Token name) {
 static void ctx_emit_get(Context *ctx, VarRef ref) {
   switch (ref.scope) {
   case REF_LOCAL:
+    assert(ref.local_index <= UINT8_MAX);
     ctx_emit_bytes(ctx, OP_GET_LOCAL, (uint8_t)ref.local_index);
     break;
   case REF_UPVALUE:
+    assert(ref.upvalue_index <= UINT8_MAX);
     ctx_emit_bytes(ctx, OP_GET_UPVALUE, (uint8_t)ref.upvalue_index);
     break;
   case REF_DEFINITION:
+    assert(ref.definition_index <= UINT8_MAX);
     ctx_mark_patch_site(ctx);
     ctx_emit_bytes(ctx, OP_GET_DEFINITION, (uint8_t)ref.definition_index);
     break;
   case REF_GLOBAL:
+    assert(ref.global.index <= UINT8_MAX);
     ctx_emit_bytes(ctx, OP_GET_GLOBAL, (uint8_t)ref.global.index);
     break;
   }
@@ -666,15 +665,18 @@ static void ctx_emit_get(Context *ctx, VarRef ref) {
 static void ctx_emit_set(Context *ctx, VarRef ref) {
   switch (ref.scope) {
   case REF_LOCAL:
+    assert(ref.local_index <= UINT8_MAX);
     ctx_emit_bytes(ctx, OP_SET_LOCAL, (uint8_t)ref.local_index);
     break;
   case REF_UPVALUE:
+    assert(ref.upvalue_index <= UINT8_MAX);
     ctx_emit_bytes(ctx, OP_SET_UPVALUE, (uint8_t)ref.upvalue_index);
     break;
   case REF_DEFINITION:
     ctx_error_at(ctx, &ctx->parser.previous, "can't assign to a definition.");
     break;
   case REF_GLOBAL:
+    assert(ref.global.index <= UINT8_MAX);
     ctx_emit_bytes(ctx, OP_SET_GLOBAL, (uint8_t)ref.global.index);
     break;
   }
@@ -708,13 +710,13 @@ static void ctx_emit_default_methods(Context *ctx, Token *trait_name, DefaultMet
   if (defaults->count == 0)
     return;
 
-  DefinitionEntry *entry = defreg_find(&ctx->def_reg, sv_from_token(trait_name));
-  if (entry == NULL) {
+  Definition *trait_def = defreg_find(&ctx->def_reg, sv_from_token(trait_name));
+  if (trait_def == NULL) {
     ctx_error_at(ctx, trait_name, "internal error: just registered trait definition not found.");
     return;
   }
 
-  VarRef trait_ref = {.definition_index = entry->index, .scope = REF_DEFINITION};
+  VarRef trait_ref = {.definition_index = trait_def->slot, .scope = REF_DEFINITION};
   ctx_emit_get(ctx, trait_ref);
   ctx_emit_bytes(ctx, OP_DUP, OP_IMPL);
 
@@ -890,9 +892,9 @@ static void ctx_parse_parameter_list(Context *ctx, Proto *proto, ParamListKind k
 
         // type constraints
         if (ctx_match(ctx, TOKEN_COLON)) {
-          DefinitionEntry *def_entry = NULL;
-          if (ctx_consume_definition(ctx, &def_entry) && proto) {
-            proto_set_param_constraint(proto, param_count - 1, def_entry->index, ctx->al);
+          Definition *def = ctx_consume_definition(ctx);
+          if (def && proto) {
+            proto_set_param_constraint(proto, param_count - 1, def->slot, ctx->al);
           }
         }
       }
@@ -1332,9 +1334,8 @@ static void declaration_var(Context *ctx) {
   Token name = ctx->parser.previous;
 
   if (ctx->current_compiler->scope_depth == 0) {
-    DefinitionEntry *entry = defreg_find(&ctx->def_reg, sv_from_token(&name));
-    if (entry != NULL) {
-      Definition *def = &ctx->def_reg.defs->data[entry->index];
+    Definition *def = defreg_find(&ctx->def_reg, sv_from_token(&name));
+    if (def != NULL) {
       ctx_error_at(ctx, &name, "'%.*s' is a %s definition and cannot be shadowed by a variable.",
                    name.length, name.start, def_type_name(def->type));
     }
@@ -1354,9 +1355,8 @@ static void declaration_fun(Context *ctx) {
   Token name = ctx->parser.previous;
 
   if (ctx->current_compiler->scope_depth == 0) {
-    DefinitionEntry *entry = defreg_find(&ctx->def_reg, sv_from_token(&name));
-    if (entry != NULL) {
-      Definition *def = &ctx->def_reg.defs->data[entry->index];
+    Definition *def = defreg_find(&ctx->def_reg, sv_from_token(&name));
+    if (def != NULL) {
       ctx_error_at(ctx, &name, "'%.*s' is a %s definition and cannot be shadowed by a function.",
                    name.length, name.start, def_type_name(def->type));
     }
@@ -1368,6 +1368,10 @@ static void declaration_fun(Context *ctx) {
 }
 
 static void ctx_register_definition(Context *ctx, Token *name, Definition def) {
+  assert(def.slot == -1 && "definition slot should be assigned by registration function");
+
+  def.slot = ctx->slot_al->next_slot++;
+
   if (!defreg_add(&ctx->def_reg, def, ctx->al)) {
     ctx_error_at(ctx, name, "definition with this name already exists.");
   }
@@ -1406,6 +1410,7 @@ static void declaration_struct(Context *ctx) {
   Definition def = {0};
   def.type = DEFTYPE_STRUCT;
   def.name = str_from_sv(sv_from_token(&name), ctx->al);
+  def.slot = -1;
 
   StructDef *struct_def = &def.as.struct_def;
   struct_def->field_names = arr_new();
@@ -1459,6 +1464,7 @@ static void declaration_trait(Context *ctx) {
   Definition def = {0};
   def.type = DEFTYPE_TRAIT;
   def.name = str_from_sv(sv_from_token(&name), ctx->al);
+  def.slot = -1;
 
   TraitDef *trait_def = &def.as.trait_def;
   trait_def->methods = arr_new();
@@ -1563,22 +1569,20 @@ static void declaration_impl(Context *ctx) {
     ctx_error_at(ctx, &ctx->parser.current, "impl definitions are only allowed at the top level.");
   }
 
-  DefinitionEntry *trait_entry = NULL;
-  Definition *trait_def = ctx_consume_expected_definition(ctx, DEFTYPE_TRAIT, &trait_entry);
+  Definition *trait_def = ctx_consume_expected_definition(ctx, DEFTYPE_TRAIT);
 
   ctx_consume(ctx, TOKEN_FOR, "expect 'for' after trait name in impl.");
 
-  DefinitionEntry *struct_entry = NULL;
-  Definition *struct_def = ctx_consume_expected_definition(ctx, DEFTYPE_STRUCT, &struct_entry);
+  Definition *struct_def = ctx_consume_expected_definition(ctx, DEFTYPE_STRUCT);
 
   if (trait_def == NULL || struct_def == NULL) {
     assert(false && "todo: implement proper error recovery for impl declaration parsing");
     return;
   }
 
-  VarRef trait_ref = {.definition_index = trait_entry->index, .scope = REF_DEFINITION};
+  VarRef trait_ref = {.definition_index = trait_def->slot, .scope = REF_DEFINITION};
   ctx_emit_get(ctx, trait_ref);
-  VarRef struct_ref = {.definition_index = struct_entry->index, .scope = REF_DEFINITION};
+  VarRef struct_ref = {.definition_index = struct_def->slot, .scope = REF_DEFINITION};
   ctx_emit_get(ctx, struct_ref);
   ctx_emit_byte(ctx, OP_IMPL);
 
@@ -1778,12 +1782,11 @@ static void dot(Context *ctx, bool can_assign) {
 
 static void as(Context *ctx, bool can_assign) {
   (void)can_assign;
-  DefinitionEntry *entry = NULL;
-  Definition *trait_def = ctx_consume_definition(ctx, &entry);
+  Definition *trait_def = ctx_consume_definition(ctx);
   if (trait_def == NULL) {
     return;
   }
-  VarRef trait_ref = {.definition_index = entry->index, .scope = REF_DEFINITION};
+  VarRef trait_ref = {.definition_index = trait_def->slot, .scope = REF_DEFINITION};
   ctx_emit_get(ctx, trait_ref);
   ctx_emit_byte(ctx, OP_CAST);
 }
@@ -1815,10 +1818,10 @@ static void if_(Context *ctx, bool can_assign) {
 
 // ===== public api =====
 
-bool compile(const char *source, const DefinitionArray *prior_defs, Allocator *al,
-             Module *out_module) {
+bool compile(const char *source, const DefinitionArray *prior_defs, SlotAllocator *slot_al,
+             Allocator *al, Module *out_module) {
   Context ctx;
-  ctx_init(&ctx, source, prior_defs, al);
+  ctx_init(&ctx, source, prior_defs, slot_al, al);
 
   Compiler root_compiler;
   ctx_begin_compile(&ctx, &root_compiler, PROTO_SCRIPT);

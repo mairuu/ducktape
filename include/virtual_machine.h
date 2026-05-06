@@ -1,6 +1,7 @@
 #pragma once
 
 #include "allocator.h"
+#include "compiler.h"
 #include "definition.h"
 #include "garbage_collector.h"
 #include "hash_table.h"
@@ -38,6 +39,7 @@ typedef struct VirtualMachine {
   HashTable strings;
   HashTable globals;
 
+  SlotAllocator slot_al;              // for assigning definition slots
   DefinitionArray *definitions;       // all definitions in the program
   ObjectPtrArray *definition_objects; // parallel array to definitions
   ImplRegistry impl_registry;

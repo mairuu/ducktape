@@ -192,7 +192,7 @@ bool defreg_add(DefinitionRegistry *reg, Definition def, Allocator *al) {
   return true;
 }
 
-DefinitionEntry *defreg_find(DefinitionRegistry *reg, StringView name) {
+Definition *defreg_find(DefinitionRegistry *reg, StringView name) {
   if (!reg->entries) {
     return NULL;
   }
@@ -208,7 +208,7 @@ DefinitionEntry *defreg_find(DefinitionRegistry *reg, StringView name) {
     }
 
     if (sv_equal(entry->name, name)) {
-      return entry;
+      return &reg->defs->data[entry->index];
     }
   }
 

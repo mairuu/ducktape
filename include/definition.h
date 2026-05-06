@@ -31,6 +31,7 @@ typedef struct {
 typedef struct {
   DefinitionType type;
   String name;
+  int slot; // stable slot
   union {
     StructDef struct_def;
     TraitDef trait_def;
@@ -66,4 +67,4 @@ void defreg_destroy(DefinitionRegistry *reg, Allocator *al);
 // registry takes ownership of the definition
 bool defreg_add(DefinitionRegistry *reg, Definition def, Allocator *al);
 
-DefinitionEntry *defreg_find(DefinitionRegistry *reg, StringView name);
+Definition *defreg_find(DefinitionRegistry *reg, StringView name);

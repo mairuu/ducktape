@@ -12,7 +12,6 @@
 #include "definition.h"
 #include "garbage_collector.h"
 #include "impl_registry.h"
-#include "linker.h"
 #include "object.h"
 #include "opcode.h"
 #include "proto.h"
@@ -80,9 +79,6 @@ void vm_panic(VirtualMachine *vm, const char *format, ...) {
 typedef struct {
   ConstantLoader loader;
   VirtualMachine *vm;
-  PatchSiteArray **patch_sites; // for collecting patch sites during proto walk
-  ParamConstraintPatchArray *
-      *param_constraints; // for collecting param constraint patch sites during proto walk
 } LoadContext;
 
 static ObjFunction *vm_load_proto(ConstantLoader *loader, Proto *proto);
@@ -118,16 +114,6 @@ static ObjFunction *vm_load_proto(ConstantLoader *loader, Proto *proto) {
       proto->name.length > 0 ? vm_intern_string(vm, sv_from_str(proto->name)) : NULL;
   ObjFunction *func = obj_function_new(&vm->al, func_name, loader, proto);
   vm_track_object(vm, &func->obj);
-
-  int patch_count = arr_count(proto->patches);
-  for (int i = 0; i < patch_count; i++) {
-    PatchSite site = {
-        .code_offset = proto->patches->data[i],
-        .function = func,
-    };
-    arr_push((*ctx->patch_sites), site, &vm->inner_al);
-  }
-  arr_push((*ctx->param_constraints), func->param_constraints, &vm->inner_al);
 
 #ifdef DEBUG_PRINT_CODE
   char name_buf[256];
@@ -172,70 +158,31 @@ static Object *vm_load_definition(VirtualMachine *vm, const Definition *def) {
   return NULL; // unreachable
 }
 
-ObjFunction *vm_load(VirtualMachine *vm, LinkedModule *lm) {
+ObjFunction *vm_load(VirtualMachine *vm, Module *m) {
   gc_begin_staging(&vm->gc);
 
-  int new_def_cursor = 0;
-  int mapping_count = arr_count(lm->local_to_vm);
-
-  for (int i = 0; i < mapping_count; i++) {
-    LocalToVM *m = &lm->local_to_vm->data[i];
-    if (m->vm_index == -1) {
-      const Definition *def = &lm->defs->data[new_def_cursor++];
-
-      Object *obj = vm_load_definition(vm, def);
-      obj->flags.def_id = DEFID_START + arr_count(vm->definitions);
-
-      arr_push(vm->definitions, def_copy(def, &vm->al), &vm->al);
-      arr_push(vm->definition_objects, obj, &vm->al);
-      m->vm_index = arr_count(vm->definitions) - 1;
+  int def_count = arr_count(m->def_reg.defs);
+  for (int i = 0; i < def_count; i++) {
+    Definition *def = &m->def_reg.defs->data[i];
+    if (def->slot < arr_count(vm->definition_objects)) {
+      continue; // already loaded
     }
+
+    while (arr_count(vm->definition_objects) <= def->slot) {
+      arr_push(vm->definition_objects, NULL, &vm->al);
+      arr_push(vm->definitions, (Definition){0}, &vm->al);
+    }
+
+    Object *def_obj = vm_load_definition(vm, def);
+    vm->definition_objects->data[def->slot] = def_obj;
+    vm->definitions->data[def->slot] = def_copy(def, &vm->al);
   }
 
   LoadContext ctx = {
       .loader = {.load_constant = load_constant, .ctx = &ctx},
       .vm = vm,
-      .patch_sites = &lm->sites,
-      .param_constraints = &lm->param_constraints,
   };
-  ObjFunction *main = vm_load_proto(&ctx.loader, lm->proto);
-
-  int site_count = arr_count(lm->sites);
-  for (int i = 0; i < site_count; i++) {
-    PatchSite site = lm->sites->data[i];
-
-    uint8_t local_idx = site.function->chunk.code->data[site.code_offset + 1];
-    int vm_idx = -1;
-    for (int j = 0; j < mapping_count; j++) {
-      if (lm->local_to_vm->data[j].local_index == local_idx) {
-        vm_idx = lm->local_to_vm->data[j].vm_index;
-        break;
-      }
-    }
-    assert(vm_idx != -1 && "patch site has no mapping");
-    chunk_patch_byte(&site.function->chunk, site.code_offset + 1, (uint8_t)vm_idx);
-  }
-
-  int constraint_patch_count = arr_count(lm->param_constraints);
-  for (int i = 0; i < constraint_patch_count; i++) {
-    IntArray *constraints = lm->param_constraints->data[i];
-    int constraint_count = arr_count(constraints);
-    for (int j = 0; j < constraint_count; j++) {
-      int local_idx = constraints->data[j];
-      if (local_idx == -1) {
-        continue; // no constraint for this parameter
-      }
-      int vm_idx = -1;
-      for (int k = 0; k < mapping_count; k++) {
-        if (lm->local_to_vm->data[k].local_index == local_idx) {
-          vm_idx = lm->local_to_vm->data[k].vm_index;
-          break;
-        }
-      }
-      assert(vm_idx != -1 && "constraint patch site has no mapping");
-      constraints->data[j] = vm_idx;
-    }
-  }
+  ObjFunction *main = vm_load_proto(&ctx.loader, m->proto);
 
   vm_push(vm, OBJECT_VAL(main));
   gc_end_staging(&vm->gc);
@@ -847,7 +794,7 @@ static void vm_run(VirtualMachine *vm) {
       if (!casted) {
         vm_panic(vm, "cannot cast to type '%s'", obj_type_name(target->type));
       }
-      vm_pop(vm); // pop target
+      vm_pop(vm);                             // pop target
       vm->stack_top[-1] = OBJECT_VAL(casted); // replace receiver with casted value
       break;
     }
@@ -904,6 +851,7 @@ void vm_init(VirtualMachine *vm, Allocator al) {
 
   vm->open_upvalues = NULL;
 
+  vm->slot_al.next_slot = 0;
   vm->definition_objects = arr_new();
   vm->definitions = arr_new();
 
@@ -980,8 +928,7 @@ void vm_define_native(VirtualMachine *vm, StringView name, NativeFunc function) 
 
 InterpretResult vm_interpret(VirtualMachine *vm, const char *source) {
   Module m = {0};
-  LinkedModule ml = {0};
-  if (!compile(source, vm->definitions, &vm->inner_al, &m)) {
+  if (!compile(source, vm->definitions, &vm->slot_al, &vm->inner_al, &m)) {
     return INTERPRET_COMPILE_ERROR;
   }
 
@@ -989,16 +936,11 @@ InterpretResult vm_interpret(VirtualMachine *vm, const char *source) {
     vm_reset_stack(vm);
     fprintf(stderr, "panic: %s\n", vm->panic_message);
     module_destroy(&m, &vm->inner_al);
-    linked_module_destroy(&ml, &vm->inner_al);
     return INTERPRET_RUNTIME_ERROR;
   }
 
-  Linker linker;
-  linker_init(&linker, &vm->inner_al);
-  ml = linker_link(&linker, &m, vm->definitions);
-
-  ObjFunction *main = vm_load(vm, &ml);
-  linked_module_destroy(&ml, &vm->inner_al);
+  ObjFunction *main = vm_load(vm, &m);
+  module_destroy(&m, &vm->inner_al);
 
   vm_execute(vm, main);
 
