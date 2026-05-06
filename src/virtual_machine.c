@@ -174,6 +174,7 @@ ObjFunction *vm_load(VirtualMachine *vm, Module *m) {
     }
 
     Object *def_obj = vm_load_definition(vm, def);
+    def_obj->flags.def_id = DEFID_START + def->slot;
     vm->definition_objects->data[def->slot] = def_obj;
     vm->definitions->data[def->slot] = def_copy(def, &vm->al);
   }
