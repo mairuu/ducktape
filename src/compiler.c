@@ -911,7 +911,9 @@ static void ctx_parse_parameter_list(Context *ctx, Proto *proto, ParamListKind k
   }
 
   assert(!proto || (proto && param_count == arr_count(proto->param_constraints)));
-  proto->arity = param_count;
+  if (proto) {
+    proto->arity = param_count;
+  }
 }
 
 int ctx_parse_argument_list(Context *ctx) {
@@ -1488,9 +1490,7 @@ static int find_trait_method_index(TraitDef *trait, StringView name) {
   return -1;
 }
 
-static void parse_impl_body(Context *ctx, Definition *trait_def, Definition *struct_def) {
-  (void)struct_def;
-
+static void parse_impl_body(Context *ctx, Definition *trait_def) {
   TraitDef *trait = &trait_def->as.trait_def;
   int method_count = arr_count(trait->methods);
 
@@ -1516,6 +1516,7 @@ static void parse_impl_body(Context *ctx, Definition *trait_def, Definition *str
       ctx_parse_parameter_list(ctx, NULL, PARAM_LIST_FUNCTION); // ignore
       ctx_consume(ctx, TOKEN_LEFT_BRACE, "");
       statement_block(ctx); // ignore method body for error recovery
+      ctx->parser.in_panic_mode = true;
       continue;
     }
 
@@ -1562,6 +1563,7 @@ static void parse_impl_body(Context *ctx, Definition *trait_def, Definition *str
   }
 
   al_free(ctx->al, implemented, sizeof(bool) * method_count);
+  ctx->parser.in_panic_mode = false; // note: if errors are not definition-related, this will explode with multiple error messages
 }
 
 static void declaration_impl(Context *ctx) {
@@ -1569,15 +1571,18 @@ static void declaration_impl(Context *ctx) {
     ctx_error_at(ctx, &ctx->parser.current, "impl definitions are only allowed at the top level.");
   }
 
+  Definition _null_definition = {0};
+
   Definition *trait_def = ctx_consume_expected_definition(ctx, DEFTYPE_TRAIT);
+  if (!trait_def) {
+    trait_def = &_null_definition;
+  }
 
   ctx_consume(ctx, TOKEN_FOR, "expect 'for' after trait name in impl.");
 
   Definition *struct_def = ctx_consume_expected_definition(ctx, DEFTYPE_STRUCT);
-
-  if (trait_def == NULL || struct_def == NULL) {
-    assert(false && "todo: implement proper error recovery for impl declaration parsing");
-    return;
+  if (!struct_def) {
+    struct_def = &_null_definition;
   }
 
   VarRef trait_ref = {.definition_index = trait_def->slot, .scope = REF_DEFINITION};
@@ -1586,7 +1591,7 @@ static void declaration_impl(Context *ctx) {
   ctx_emit_get(ctx, struct_ref);
   ctx_emit_byte(ctx, OP_IMPL);
 
-  parse_impl_body(ctx, trait_def, struct_def);
+  parse_impl_body(ctx, trait_def);
 
   ctx_emit_byte(ctx, OP_POP);
 }
