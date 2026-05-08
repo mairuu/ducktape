@@ -866,42 +866,62 @@ typedef enum {
   PARAM_LIST_METHOD,
 } ParamListKind;
 
+static bool ctx_parse_self_param(Context *ctx, ParamListKind kind) {
+  if (kind != PARAM_LIST_METHOD) {
+    return false;
+  }
+
+  StringView name_sv = sv_from_token(&ctx->parser.current);
+  if (!sv_equal(name_sv, sv_from_cstr("self"))) {
+    if (kind == PARAM_LIST_METHOD) {
+      ctx_error_at(ctx, &ctx->parser.current, "first parameter of a method must be 'self'.");
+    }
+    return false;
+  }
+
+  ctx_advance(ctx); // consume 'self'
+  return true;
+}
+
+static void ctx_parse_param(Context *ctx, Proto *proto, int param_count) {
+  ConstantRef param_name = ctx_parse_variable(ctx, "expect parameter name.");
+  ctx_mark_initialized(ctx);
+  ctx_define_variable(ctx, param_name);
+
+  if (ctx_match(ctx, TOKEN_COLON)) {
+    Definition *def = ctx_consume_definition(ctx);
+    if (def && proto) {
+      proto_set_param_constraint(proto, param_count, def->slot, ctx->al);
+    }
+  }
+}
+
 static void ctx_parse_parameter_list(Context *ctx, Proto *proto, ParamListKind kind) {
   ctx_consume(ctx, TOKEN_LEFT_PAREN, "expect '(' before parameter list.");
 
   int param_count = 0;
+  bool has_self_param = false;
 
-  if (!ctx_check(ctx, TOKEN_RIGHT_PAREN)) {
+  if (ctx_check(ctx, TOKEN_RIGHT_PAREN)) {
+    if (kind == PARAM_LIST_METHOD) {
+      ctx_error_at(ctx, &ctx->parser.current, "method must have a 'self' parameter.");
+    }
+  } else {
     do {
       if (param_count >= UINT8_MAX) {
         ctx_error_at(ctx, &ctx->parser.current, "can't have more than 255 parameters.");
       }
 
-      if (param_count == 0 && kind == PARAM_LIST_METHOD) {
-        // first parameter of a method must be 'self'
-        ctx_consume(ctx, TOKEN_IDENTIFIER, "expect parameter name.");
-        StringView name_sv = sv_from_token(&ctx->parser.previous);
-        if (!sv_equal(name_sv, sv_from_cstr("self"))) {
-          ctx_error_at(ctx, &ctx->parser.previous, "first parameter of a method must be 'self'.");
-        }
-      } else {
-        ConstantRef param_name = ctx_parse_variable(ctx, "expect parameter name.");
-        ctx_mark_initialized(ctx);
-        ctx_define_variable(ctx, param_name);
-        param_count++;
-
-        // type constraints
-        if (ctx_match(ctx, TOKEN_COLON)) {
-          Definition *def = ctx_consume_definition(ctx);
-          if (def && proto) {
-            proto_set_param_constraint(proto, param_count - 1, def->slot, ctx->al);
-          }
-        }
+      if (param_count == 0) {
+        has_self_param = ctx_parse_self_param(ctx, kind);
       }
 
+      if (!has_self_param || param_count > 0) {
+        ctx_parse_param(ctx, proto, param_count);
+      }
+
+      param_count++;
     } while (ctx_match(ctx, TOKEN_COMMA));
-  } else if (kind == PARAM_LIST_METHOD) {
-    ctx_error_at(ctx, &ctx->parser.current, "method must have 'self' as its first parameter.");
   }
 
   ctx_consume(ctx, TOKEN_RIGHT_PAREN, "expect ')' after parameter list.");
@@ -912,7 +932,7 @@ static void ctx_parse_parameter_list(Context *ctx, Proto *proto, ParamListKind k
 
   assert(!proto || (proto && param_count == arr_count(proto->param_constraints)));
   if (proto) {
-    proto->arity = param_count;
+    proto->arity = param_count - (has_self_param ? 1 : 0);
   }
 }
 
@@ -1563,7 +1583,8 @@ static void parse_impl_body(Context *ctx, Definition *trait_def) {
   }
 
   al_free(ctx->al, implemented, sizeof(bool) * method_count);
-  ctx->parser.in_panic_mode = false; // note: if errors are not definition-related, this will explode with multiple error messages
+  ctx->parser.in_panic_mode = false; // note: if errors are not definition-related, this will
+                                     // explode with multiple error messages
 }
 
 static void declaration_impl(Context *ctx) {
