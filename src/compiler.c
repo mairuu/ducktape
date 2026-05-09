@@ -896,7 +896,9 @@ static void ctx_parse_param(Context *ctx, Proto *proto, int param_count) {
   }
 }
 
-static void ctx_parse_parameter_list(Context *ctx, Proto *proto, ParamListKind kind) {
+// parse a parameter list register constraints in the proto if provided
+// returns the number of parameters (excluding 'self' if it's a method)
+static int ctx_parse_parameter_list(Context *ctx, Proto *proto, ParamListKind kind) {
   ctx_consume(ctx, TOKEN_LEFT_PAREN, "expect '(' before parameter list.");
 
   int param_count = 0;
@@ -930,10 +932,15 @@ static void ctx_parse_parameter_list(Context *ctx, Proto *proto, ParamListKind k
     proto_set_param_constraint(proto, param_count - 1, -1, ctx->al);
   }
 
-  assert(!proto || (proto && param_count == arr_count(proto->param_constraints)));
+  int arity = param_count - (has_self_param ? 1 : 0);
+
+  assert((!proto || (proto && param_count == arr_count(proto->param_constraints))) &&
+         "proto param constraints should be set up correctly");
   if (proto) {
-    proto->arity = param_count - (has_self_param ? 1 : 0);
+    proto->arity = arity;
   }
+
+  return arity;
 }
 
 int ctx_parse_argument_list(Context *ctx) {
@@ -953,16 +960,72 @@ int ctx_parse_argument_list(Context *ctx) {
 
 // ===== function & method compilation =====
 
-static void ctx_compile_function(Context *ctx) {
+typedef enum {
+  FUN_TYPE_FUNCTION, // regular function declaration
+  FUN_TYPE_EXPR,     // function expression (lambda)
+  FUN_TYPE_IMPL,     // method declaration in a trait impl block
+  FUN_TYPE_TRAIT,    // method declaration in a trait definition (default implementation)
+} FUN_TYPE;
+
+typedef struct {
+  Proto *proto;
+  int arity;
+} FunCompileResult;
+
+static ProtoType proto_type_from_fun_type(FUN_TYPE fun_type) {
+  switch (fun_type) {
+  case FUN_TYPE_FUNCTION:
+  case FUN_TYPE_EXPR:
+    return PROTO_FUNCTION;
+  case FUN_TYPE_IMPL:
+  case FUN_TYPE_TRAIT:
+    return PROTO_METHOD;
+  default:
+    assert(false && "invalid function type");
+    return PROTO_FUNCTION;
+  }
+}
+
+static ParamListKind param_list_kind_from_fun_type(FUN_TYPE fun_type) {
+  switch (fun_type) {
+  case FUN_TYPE_FUNCTION:
+  case FUN_TYPE_EXPR:
+    return PARAM_LIST_FUNCTION;
+  case FUN_TYPE_IMPL:
+  case FUN_TYPE_TRAIT:
+    return PARAM_LIST_METHOD;
+  default:
+    assert(false && "invalid function type");
+    return PARAM_LIST_FUNCTION;
+  }
+}
+
+// compile a function or method, depending on the type.
+// proto ownership:
+// - for regular functions and impl methods, the proto is owned by enclosing compiler
+// - for trait methods with default implementation, the proto is owned by the caller and should be
+// freed after use
+static FunCompileResult ctx_compile_function(Context *ctx, FUN_TYPE fun_type) {
   Compiler compiler;
-  ctx_begin_compile(ctx, &compiler, PROTO_FUNCTION);
+  ctx_begin_compile(ctx, &compiler, proto_type_from_fun_type(fun_type));
 
   ctx_begin_scope(ctx);
+  int arity =
+      ctx_parse_parameter_list(ctx, compiler.proto, param_list_kind_from_fun_type(fun_type));
 
-  ctx_parse_parameter_list(ctx, compiler.proto, PARAM_LIST_FUNCTION);
+  if (ctx_match(ctx, TOKEN_SEMICOLON) && fun_type == FUN_TYPE_TRAIT) {
+    Proto *proto = ctx_end_compile(ctx);
+    proto_destroy(proto, ctx->al);
+    al_free_for(ctx->al, proto);
+    // this is trait method declaration without default implementation
+    return (FunCompileResult){.proto = NULL, .arity = arity};
+  }
 
   if (ctx_match(ctx, TOKEN_FAT_ARROW)) {
     expression(ctx);
+    if (fun_type != FUN_TYPE_EXPR) {
+      ctx_consume(ctx, TOKEN_SEMICOLON, "expect ';' after expression.");
+    }
     ctx_emit_byte(ctx, OP_RETURN);
   } else {
     ctx_consume(ctx, TOKEN_LEFT_BRACE, "expect '{' before function body.");
@@ -970,48 +1033,19 @@ static void ctx_compile_function(Context *ctx) {
   }
 
   Proto *proto = ctx_end_compile(ctx);
-  ConstantRef function_ref =
-      ctx_make_constant(ctx, (RawConstant){.type = RAW_FUNCTION, .as.function = proto});
 
-  if (proto->upvalue_count == 0) {
-    ctx_emit_constant(ctx, function_ref);
-  } else {
-    ctx_emit_closure(ctx, &compiler, function_ref);
-  }
-}
-
-static void ctx_compile_method(Context *ctx, Token *method_token, TraitMethodDef *method,
-                               DefaultMethodList *defaults, int method_index) {
-  Compiler compiler;
-  ctx_begin_compile(ctx, &compiler, PROTO_METHOD);
-
-  ctx_begin_scope(ctx);
-
-  ctx_parse_parameter_list(ctx, compiler.proto, PARAM_LIST_METHOD);
-  method->arity = compiler.proto->arity;
-
-  if (ctx_match(ctx, TOKEN_SEMICOLON)) {
-    Proto *proto = ctx_end_compile(ctx);
-    proto_destroy(proto, ctx->al);
-    al_free_for(ctx->al, proto);
-    method->has_default_impl = false;
-    return;
+  // emit if not a trait method
+  if (fun_type != FUN_TYPE_TRAIT) {
+    ConstantRef function_ref =
+        ctx_make_constant(ctx, (RawConstant){.type = RAW_FUNCTION, .as.function = proto});
+    if (proto->upvalue_count == 0) {
+      ctx_emit_constant(ctx, function_ref);
+    } else {
+      ctx_emit_closure(ctx, &compiler, function_ref);
+    }
   }
 
-  // default implementation provided
-  ctx_consume(ctx, TOKEN_LEFT_BRACE, "expect '{' before function body.");
-  statement_block(ctx);
-
-  Proto *proto = ctx_end_compile(ctx);
-  if (proto->upvalue_count > 0) {
-    ctx_error_at(ctx, &ctx->parser.previous, "methods can't have closure variables.");
-  }
-
-  if (!default_methods_add(defaults, ctx, method_token, method_index, proto)) {
-    proto_destroy(proto, ctx->al);
-    al_free_for(ctx->al, proto);
-  }
-  method->has_default_impl = true;
+  return (FunCompileResult){.proto = proto, .arity = arity};
 }
 
 // ===== parser rules & precedence =====
@@ -1385,7 +1419,7 @@ static void declaration_fun(Context *ctx) {
   }
 
   ctx_mark_initialized(ctx); // make function name available in its own body for recursion
-  ctx_compile_function(ctx);
+  ctx_compile_function(ctx, FUN_TYPE_FUNCTION);
   ctx_define_variable(ctx, name_const);
 }
 
@@ -1456,7 +1490,23 @@ static TraitMethodDef parse_trait_method(Context *ctx, DefaultMethodList *defaul
   TraitMethodDef method = {0};
   method.name = method_name;
 
-  ctx_compile_method(ctx, &method_token, &method, defaults, method_index);
+  FunCompileResult result = ctx_compile_function(ctx, FUN_TYPE_TRAIT);
+  method.arity = result.arity;
+
+  if (result.proto) {
+    if (result.proto->upvalue_count > 0) {
+      ctx_error_at(ctx, &ctx->parser.previous,
+                   "trait default implementations cannot have closures.");
+    }
+
+    if (!default_methods_add(defaults, ctx, &method_token, method_index, result.proto)) {
+      proto_destroy(result.proto, ctx->al);
+      al_free_for(ctx->al, result.proto);
+    }
+    method.has_default_impl = true;
+  } else {
+    method.has_default_impl = false;
+  }
 
   return method;
 }
@@ -1540,32 +1590,21 @@ static void parse_impl_body(Context *ctx, Definition *trait_def) {
       continue;
     }
 
+    TraitMethodDef *method_def = &trait->methods->data[method_index];
+
     // is_duplicate_impl; allow if the method has a default implementation, in which case we will
     // override it
-    if (implemented[method_index] && !trait->methods->data[method_index].has_default_impl) {
+    if (implemented[method_index] && !method_def->has_default_impl) {
       ctx_error_at(ctx, &method_token, "method already implemented in this impl block.");
     }
 
-    TraitMethodDef *method_def = &trait->methods->data[method_index];
+    Proto *proto = ctx_compile_function(ctx, FUN_TYPE_IMPL).proto;
+    assert(proto != NULL && "impl method should have a body");
+    ctx_emit_bytes(ctx, OP_IMPL_METHOD, (uint8_t)method_index);
 
-    Compiler compiler;
-    ctx_begin_compile(ctx, &compiler, PROTO_METHOD);
-    ctx_begin_scope(ctx);
-    ctx_parse_parameter_list(ctx, compiler.proto, PARAM_LIST_METHOD);
-
-    if (compiler.proto->arity != method_def->arity) {
+    if (proto->arity != method_def->arity) {
       ctx_error_at(ctx, &method_token, "method arity does not match trait definition.");
     }
-
-    ctx_consume(ctx, TOKEN_LEFT_BRACE, "expect '{' before method body.");
-    statement_block(ctx);
-
-    Proto *proto = ctx_end_compile(ctx);
-
-    ConstantRef fn_ref =
-        ctx_make_constant(ctx, (RawConstant){.type = RAW_FUNCTION, .as.function = proto});
-    ctx_emit_constant(ctx, fn_ref);
-    ctx_emit_bytes(ctx, OP_IMPL_METHOD, (uint8_t)method_index);
 
     implemented[method_index] = true;
   }
@@ -1822,7 +1861,7 @@ static void fun(Context *ctx, bool can_assign) {
 
   // optional name
   ctx_match(ctx, TOKEN_IDENTIFIER);
-  ctx_compile_function(ctx);
+  ctx_compile_function(ctx, FUN_TYPE_EXPR);
 }
 
 static void if_(Context *ctx, bool can_assign) {
