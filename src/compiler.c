@@ -1453,14 +1453,15 @@ static void declaration_fun(Context *ctx) {
   ctx_define_variable(ctx, name_const);
 }
 
-static Definition *ctx_register_definition(Context *ctx, Token *name, Definition def) {
+static Definition *ctx_register_definition(Context *ctx, Token *name, Definition def,
+                                           const char *err_msg) {
   assert(def.slot == -1 && "definition slot should be assigned by registration function");
 
   def.slot = ctx->slot_al->next_slot++;
 
   Definition *added = defreg_add(&ctx->def_reg, def, ctx->al);
   if (!added) {
-    ctx_error_at(ctx, name, "definition with this name already exists.");
+    ctx_error_at(ctx, name, "%s", err_msg);
   }
 
   return added;
@@ -1509,7 +1510,7 @@ static void declaration_struct(Context *ctx) {
 
   parse_struct_body(ctx, struct_def, &field_list);
 
-  ctx_register_definition(ctx, &name, def);
+  ctx_register_definition(ctx, &name, def, "a definition with this name already exists.");
 }
 
 static TraitMethodDef parse_trait_method(Context *ctx, DefaultMethodList *defaults,
@@ -1572,7 +1573,8 @@ static void declaration_trait(Context *ctx) {
   def.name = str_from_sv(sv_from_token(&name), ctx->al);
   def.slot = -1;
 
-  Definition *reg_def = ctx_register_definition(ctx, &name, def);
+  Definition *reg_def =
+      ctx_register_definition(ctx, &name, def, "a definition with this name already exists.");
   if (!reg_def) {
     return;
   }
@@ -1598,7 +1600,12 @@ static int find_trait_method_index(TraitDef *trait, StringView name) {
   return -1;
 }
 
-static void parse_impl_body(Context *ctx, Token *impl_token, Definition *trait_def) {
+typedef enum {
+  IMPL_TYPE_TRAIT,
+  IMPL_TYPE_INHERENT,
+} ImplType;
+
+static void parse_impl_body_trait(Context *ctx, Token *impl_token, Definition *trait_def) {
   TraitDef *trait = &trait_def->as.trait_def;
   int method_count = arr_count(trait->methods);
 
@@ -1665,6 +1672,75 @@ static void parse_impl_body(Context *ctx, Token *impl_token, Definition *trait_d
   al_free(ctx->al, implemented, sizeof(bool) * method_count);
 }
 
+static void parse_impl_body_inherent(Context *ctx, Token *impl_token, Definition *trait_def) {
+  TraitDef *trait = &trait_def->as.trait_def;
+
+  ctx_consume(ctx, TOKEN_LEFT_BRACE, "expect '{' before impl body.");
+
+  while (!ctx_check(ctx, TOKEN_RIGHT_BRACE) && !ctx_check(ctx, TOKEN_EOF)) {
+    ctx_consume(ctx, TOKEN_FUN, "expect 'fun' in impl body.");
+    ctx_consume(ctx, TOKEN_IDENTIFIER, "expect method name in impl body.");
+    Token method_token = ctx->parser.previous;
+    StringView name_sv = sv_from_token(&method_token);
+
+    int method_index = find_trait_method_index(trait, name_sv);
+    if (method_index >= 0) {
+      DIAGNOSTIC(ctx, "method name conflicts with method in inherent impl",   
+                 {*impl_token, "in this impl block"}, {method_token, "method declared here"}, );
+      ctx_compile_function(ctx, FUN_TYPE_IMPL);
+      ctx_synchronize(ctx);
+      continue;
+    }
+
+    TraitMethodDef method_def = {0};
+    method_def.name = str_from_sv(name_sv, ctx->al);
+    method_def.arity = -1;
+    method_def.has_default_impl = false; // not relevant for inherent impl methods
+    arr_push(trait->methods, method_def, ctx->al);
+
+    Proto *proto = ctx_compile_function(ctx, FUN_TYPE_IMPL).proto;
+    ctx_emit_bytes(ctx, OP_IMPL_METHOD, (uint8_t)(arr_count(trait->methods) - 1));
+    assert(proto != NULL && "impl method should have a body");
+    method_def.arity = proto->arity;
+  }
+
+  ctx_consume(ctx, TOKEN_RIGHT_BRACE, "expect '}' after impl body.");
+
+}
+
+static void parse_impl_body(Context *ctx, Token *impl_token, Definition *trait_def,
+                            ImplType impl_type) {
+  switch (impl_type) {
+  case IMPL_TYPE_TRAIT:
+    parse_impl_body_trait(ctx, impl_token, trait_def);
+    break;
+  case IMPL_TYPE_INHERENT:
+    parse_impl_body_inherent(ctx, impl_token, trait_def);
+    break;
+  default:
+    assert(false && "invalid impl type");
+    break;
+  }
+}
+
+static Definition *ctx_make_inherent_trait_def(Context *ctx, Definition *struct_def) {
+  Definition def = {0};
+  def.type = DEFTYPE_TRAIT;
+  def.name = str_concat_sv(&struct_def->name, sv_from_cstr("@"), ctx->al);
+  def.slot = -1;
+
+  Definition *reg_def =
+      ctx_register_definition(ctx, NULL, def, "already have an inherent impl for this struct.");
+  if (!reg_def) {
+    return NULL;
+  }
+
+  TraitDef *trait_def = &(*reg_def).as.trait_def;
+  trait_def->methods = arr_new();
+
+  return reg_def;
+}
+
 static void declaration_impl(Context *ctx) {
   Token impl_token = ctx->parser.previous;
   if (ctx->current_compiler->scope_depth > 0) {
@@ -1673,16 +1749,36 @@ static void declaration_impl(Context *ctx) {
 
   int brace_depth = ctx->parser.brace_depth;
 
-  Definition *trait_def = ctx_consume_expected_definition(ctx, DEFTYPE_TRAIT);
+  Definition *trait_def = NULL;
+  Definition *struct_def = NULL;
+
+  trait_def = ctx_consume_definition(ctx);
   if (!trait_def) {
     ctx_brace_synchronize(ctx, brace_depth);
     return;
   }
 
-  ctx_consume(ctx, TOKEN_FOR, "expect 'for' after trait name in impl.");
+  ImplType impl_type = IMPL_TYPE_TRAIT;
 
-  Definition *struct_def = ctx_consume_expected_definition(ctx, DEFTYPE_STRUCT);
-  if (!struct_def) {
+  if (trait_def->type == DEFTYPE_TRAIT) {
+    ctx_consume(ctx, TOKEN_FOR, "expect 'for' after trait name in impl.");
+
+    struct_def = ctx_consume_expected_definition(ctx, DEFTYPE_STRUCT);
+    if (!struct_def) {
+      ctx_brace_synchronize(ctx, brace_depth);
+      return;
+    }
+  } else if (trait_def->type == DEFTYPE_STRUCT) {
+    // inherent impl
+    struct_def = trait_def;
+    trait_def = ctx_make_inherent_trait_def(ctx, struct_def);
+    impl_type = IMPL_TYPE_INHERENT;
+    if (!trait_def) {
+      ctx_brace_synchronize(ctx, brace_depth);
+      return;
+    }
+  } else {
+    ctx_error_at(ctx, &impl_token, "expect trait or struct name after 'impl'.");
     ctx_brace_synchronize(ctx, brace_depth);
     return;
   }
@@ -1693,7 +1789,7 @@ static void declaration_impl(Context *ctx) {
   ctx_emit_get(ctx, struct_ref);
   ctx_emit_byte(ctx, OP_IMPL);
 
-  parse_impl_body(ctx, &impl_token, trait_def);
+  parse_impl_body(ctx, &impl_token, trait_def, impl_type);
 
   ctx_emit_byte(ctx, OP_POP);
 }

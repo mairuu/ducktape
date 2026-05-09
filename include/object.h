@@ -90,9 +90,12 @@ typedef struct {
   NativeFunc func;
 } ObjNative;
 
+typedef struct ObjImpl ObjImpl;
+
 typedef struct {
   Object obj;
   ObjString *name;
+  ObjImpl *inherent_impl;
   HashTable fields;
 } ObjStructDef;
 
@@ -101,8 +104,6 @@ typedef struct {
   ObjStructDef *def;
   Value payload[]; // length is def->fields.count
 } ObjStructInst;
-
-typedef struct ObjImpl ObjImpl;
 
 typedef struct {
   Object obj;

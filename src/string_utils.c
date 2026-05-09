@@ -44,6 +44,15 @@ String str_concat(const String *a, const String *b, Allocator *al) {
   return (String){.chars = chars, .length = length, .capacity = length + 1};
 }
 
+String str_concat_sv(const String *a, StringView b, Allocator *al) {
+  int length = a->length + b.length;
+  char *chars = al_alloc(al, length + 1);
+  memcpy(chars, a->chars, a->length);
+  memcpy(chars + a->length, b.chars, b.length);
+  chars[length] = '\0';
+  return (String){.chars = chars, .length = length, .capacity = length + 1};
+}
+
 void str_destroy(String *str, Allocator *al) {
   if (str->chars == NULL) {
     return;

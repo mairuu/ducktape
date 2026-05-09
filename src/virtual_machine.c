@@ -290,9 +290,32 @@ static Value *vm_property_ref(VirtualMachine *vm, uint8_t pic_index, Value recei
 static Object *vm_method_ref(VirtualMachine *vm, uint8_t pic_index, Value receiver,
                              ObjFunction *function) {
   (void)vm;
-  ObjTraitObject *fat = AS_TRAIT_OBJECT(receiver);
   Pic *pic = &function->pic[pic_index];
-  ObjImpl *impl = fat->impl;
+  ObjImpl *impl = NULL;
+
+  if (!IS_OBJECT(receiver)) {
+    vm_panic(vm, "invalid receiver type for method access");
+  }
+
+  switch (AS_OBJECT(receiver)->type) {
+  case OBJ_TRAIT_OBJECT: {
+    ObjTraitObject *trait_object = AS_TRAIT_OBJECT(receiver);
+    impl = trait_object->impl;
+    break;
+  }
+  case OBJ_STRUCT_DEF: {
+    impl = AS_STRUCT_DEF(receiver)->inherent_impl;
+    break;
+  }
+  case OBJ_STRUCT_INST: {
+    ObjStructInst *inst = AS_STRUCT_INST(receiver);
+    impl = inst->def->inherent_impl;
+    break;
+  }
+  default:
+    vm_panic(vm, "invalid receiver type for method access");
+    break;
+  }
 
   ObjString *method_name = AS_STRING(function->chunk.constants->data[pic->name]);
 
@@ -758,6 +781,10 @@ static void vm_run(VirtualMachine *vm) {
 
       if (IS_TRAIT_DEF(subject)) {
         AS_TRAIT_DEF(subject)->default_impl = impl;
+      }
+
+      if (IS_STRUCT_DEF(subject)) {
+        AS_STRUCT_DEF(subject)->inherent_impl = impl;
       }
 
       vm_pop(vm); // pop subject

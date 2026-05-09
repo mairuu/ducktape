@@ -279,6 +279,7 @@ ObjStructDef //
     *obj_struct_def_new(ObjString *name, Allocator *al) {
   ObjStructDef *obj = obj_new(sizeof(ObjStructDef), OBJ_STRUCT_DEF, al);
   obj->name = name;
+  obj->inherent_impl = NULL;
   ht_init(&obj->fields);
   return obj;
 }

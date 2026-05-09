@@ -29,6 +29,8 @@ String str_copy_sv(StringView sv, Allocator *al);
 
 String str_concat(const String *a, const String *b, Allocator *al);
 
+String str_concat_sv(const String *a, StringView b, Allocator *al);
+
 void str_destroy(String *str, Allocator *al);
 
 // -----------------------------------------------------------------------------
