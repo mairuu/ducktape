@@ -180,16 +180,16 @@ DefinitionEntry *get_or_insert(DefinitionRegistry *reg, StringView name, Allocat
   return NULL;
 }
 
-bool defreg_add(DefinitionRegistry *reg, Definition def, Allocator *al) {
+Definition *defreg_add(DefinitionRegistry *reg, Definition def, Allocator *al) {
   bool exists = false;
   DefinitionEntry *entry = get_or_insert(reg, sv_from_str(def.name), al, &exists);
   if (exists) {
     def_destroy(&def, al);
-    return false;
+    return NULL;
   }
   entry->index = arr_count(reg->defs);
   arr_push(reg->defs, def, al);
-  return true;
+  return &reg->defs->data[entry->index];
 }
 
 Definition *defreg_find(DefinitionRegistry *reg, StringView name) {

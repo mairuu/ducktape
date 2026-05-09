@@ -1453,14 +1453,17 @@ static void declaration_fun(Context *ctx) {
   ctx_define_variable(ctx, name_const);
 }
 
-static void ctx_register_definition(Context *ctx, Token *name, Definition def) {
+static Definition *ctx_register_definition(Context *ctx, Token *name, Definition def) {
   assert(def.slot == -1 && "definition slot should be assigned by registration function");
 
   def.slot = ctx->slot_al->next_slot++;
 
-  if (!defreg_add(&ctx->def_reg, def, ctx->al)) {
+  Definition *added = defreg_add(&ctx->def_reg, def, ctx->al);
+  if (!added) {
     ctx_error_at(ctx, name, "definition with this name already exists.");
   }
+
+  return added;
 }
 
 static String parse_struct_field(StructFieldList *field_list, Context *ctx) {
@@ -1569,7 +1572,12 @@ static void declaration_trait(Context *ctx) {
   def.name = str_from_sv(sv_from_token(&name), ctx->al);
   def.slot = -1;
 
-  TraitDef *trait_def = &def.as.trait_def;
+  Definition *reg_def = ctx_register_definition(ctx, &name, def);
+  if (!reg_def) {
+    return;
+  }
+
+  TraitDef *trait_def = &(*reg_def).as.trait_def;
   trait_def->methods = arr_new();
 
   DefaultMethodList defaults = {0};
@@ -1577,7 +1585,6 @@ static void declaration_trait(Context *ctx) {
 
   parse_trait_body(ctx, trait_def, &defaults);
 
-  ctx_register_definition(ctx, &name, def);
   ctx_emit_default_methods(ctx, &name, &defaults);
 }
 

@@ -65,6 +65,6 @@ void defreg_destroy(DefinitionRegistry *reg, Allocator *al);
 
 // add definition to registry, return false if a definition with the same name already exists
 // registry takes ownership of the definition
-bool defreg_add(DefinitionRegistry *reg, Definition def, Allocator *al);
+Definition *defreg_add(DefinitionRegistry *reg, Definition def, Allocator *al);
 
 Definition *defreg_find(DefinitionRegistry *reg, StringView name);
