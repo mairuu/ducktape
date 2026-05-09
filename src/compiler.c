@@ -23,6 +23,8 @@ typedef struct {
   Token current;
   Token previous;
 
+  int brace_depth; // for error recovery
+
   bool had_error;
   bool in_panic_mode;
 } Parser;
@@ -241,6 +243,7 @@ static void ctx_init(Context *ctx, const char *source, const DefinitionArray *pr
   ctx->source = source;
 
   scanner_init(&ctx->parser.scanner, source);
+  ctx->parser.brace_depth = 0;
   ctx->parser.had_error = false;
   ctx->parser.in_panic_mode = false;
 
@@ -301,6 +304,9 @@ static void ctx_error_at(Context *ctx, Token *token, const char *fmt, ...) {
 }
 
 static void ctx_synchronize(Context *ctx) {
+  if (!ctx->parser.in_panic_mode) {
+    return;
+  }
   ctx->parser.in_panic_mode = false;
 
   while (ctx->parser.current.type != TOKEN_EOF) {
@@ -329,6 +335,24 @@ static void ctx_synchronize(Context *ctx) {
   }
 }
 
+// synchronize until we get back to the same brace depth
+// consume enclosing right brace
+static void ctx_brace_synchronize(Context *ctx, int target_depth) {
+  if (!ctx->parser.in_panic_mode) {
+    return;
+  }
+  ctx->parser.in_panic_mode = false;
+
+  while (ctx->parser.current.type != TOKEN_EOF) {
+    if (ctx->parser.current.type == TOKEN_RIGHT_BRACE && ctx->parser.brace_depth == target_depth) {
+      ctx_advance(ctx);
+      return;
+    }
+
+    ctx_advance(ctx);
+  }
+}
+
 // ===== parser token operations =====
 
 static void ctx_advance(Context *ctx) {
@@ -341,6 +365,12 @@ static void ctx_advance(Context *ctx) {
     }
 
     printf("error: %.*s\n", ctx->parser.current.length, ctx->parser.current.start);
+  }
+
+  if (ctx->parser.previous.type == TOKEN_LEFT_BRACE) {
+    ctx->parser.brace_depth++;
+  } else if (ctx->parser.previous.type == TOKEN_RIGHT_BRACE) {
+    ctx->parser.brace_depth--;
   }
 }
 
@@ -1518,6 +1548,7 @@ static void parse_trait_body(Context *ctx, TraitDef *trait_def, DefaultMethodLis
     int method_index = 0;
     do {
       TraitMethodDef method = parse_trait_method(ctx, defaults, method_index++);
+      ctx_synchronize(ctx);
       arr_push(trait_def->methods, method, ctx->al);
     } while (!ctx_check(ctx, TOKEN_RIGHT_BRACE) && !ctx_check(ctx, TOKEN_EOF));
   }
@@ -1560,7 +1591,7 @@ static int find_trait_method_index(TraitDef *trait, StringView name) {
   return -1;
 }
 
-static void parse_impl_body(Context *ctx, Definition *trait_def) {
+static void parse_impl_body(Context *ctx, Token *impl_token, Definition *trait_def) {
   TraitDef *trait = &trait_def->as.trait_def;
   int method_count = arr_count(trait->methods);
 
@@ -1581,12 +1612,10 @@ static void parse_impl_body(Context *ctx, Definition *trait_def) {
 
     int method_index = find_trait_method_index(trait, name_sv);
     if (method_index < 0) {
-      ctx_error_at(ctx, &method_token, "method not found in trait.");
-      ctx_consume(ctx, TOKEN_LEFT_PAREN, "");
-      ctx_parse_parameter_list(ctx, NULL, PARAM_LIST_FUNCTION); // ignore
-      ctx_consume(ctx, TOKEN_LEFT_BRACE, "");
-      statement_block(ctx); // ignore method body for error recovery
-      ctx->parser.in_panic_mode = true;
+      DIAGNOSTIC(ctx, "method not found in trait", {*impl_token, "in this impl block"},
+                 {method_token, "method declared here"});
+      ctx_compile_function(ctx, FUN_TYPE_IMPL);
+      ctx_synchronize(ctx);
       continue;
     }
 
@@ -1595,7 +1624,11 @@ static void parse_impl_body(Context *ctx, Definition *trait_def) {
     // is_duplicate_impl; allow if the method has a default implementation, in which case we will
     // override it
     if (implemented[method_index] && !method_def->has_default_impl) {
-      ctx_error_at(ctx, &method_token, "method already implemented in this impl block.");
+      DIAGNOSTIC(ctx, "method already implemented in this impl block",
+                 {*impl_token, "in this impl block"}, {method_token, "method re-declared here"});
+      ctx_compile_function(ctx, FUN_TYPE_IMPL);
+      ctx_synchronize(ctx);
+      continue;
     }
 
     Proto *proto = ctx_compile_function(ctx, FUN_TYPE_IMPL).proto;
@@ -1607,6 +1640,7 @@ static void parse_impl_body(Context *ctx, Definition *trait_def) {
     }
 
     implemented[method_index] = true;
+    ctx_synchronize(ctx);
   }
 
   ctx_consume(ctx, TOKEN_RIGHT_BRACE, "expect '}' after impl body.");
@@ -1617,32 +1651,33 @@ static void parse_impl_body(Context *ctx, Definition *trait_def) {
       char buf[256];
       snprintf(buf, sizeof(buf), "missing implementation for method '%s' with no default.",
                trait->methods->data[i].name.chars);
-      ctx_error_at(ctx, &ctx->parser.previous, buf);
+      ctx_error_at(ctx, impl_token, buf);
     }
   }
 
   al_free(ctx->al, implemented, sizeof(bool) * method_count);
-  ctx->parser.in_panic_mode = false; // note: if errors are not definition-related, this will
-                                     // explode with multiple error messages
 }
 
 static void declaration_impl(Context *ctx) {
+  Token impl_token = ctx->parser.previous;
   if (ctx->current_compiler->scope_depth > 0) {
-    ctx_error_at(ctx, &ctx->parser.current, "impl definitions are only allowed at the top level.");
+    ctx_error_at(ctx, &impl_token, "impl definitions are only allowed at the top level.");
   }
 
-  Definition _null_definition = {0};
+  int brace_depth = ctx->parser.brace_depth;
 
   Definition *trait_def = ctx_consume_expected_definition(ctx, DEFTYPE_TRAIT);
   if (!trait_def) {
-    trait_def = &_null_definition;
+    ctx_brace_synchronize(ctx, brace_depth);
+    return;
   }
 
   ctx_consume(ctx, TOKEN_FOR, "expect 'for' after trait name in impl.");
 
   Definition *struct_def = ctx_consume_expected_definition(ctx, DEFTYPE_STRUCT);
   if (!struct_def) {
-    struct_def = &_null_definition;
+    ctx_brace_synchronize(ctx, brace_depth);
+    return;
   }
 
   VarRef trait_ref = {.definition_index = trait_def->slot, .scope = REF_DEFINITION};
@@ -1651,7 +1686,7 @@ static void declaration_impl(Context *ctx) {
   ctx_emit_get(ctx, struct_ref);
   ctx_emit_byte(ctx, OP_IMPL);
 
-  parse_impl_body(ctx, trait_def);
+  parse_impl_body(ctx, &impl_token, trait_def);
 
   ctx_emit_byte(ctx, OP_POP);
 }
