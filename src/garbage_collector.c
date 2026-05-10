@@ -150,6 +150,11 @@ static void gc_blacken_object(GarbageCollector *gc, Object *obj) {
     gc_mark_object(gc, &trait_obj->impl->obj);
     break;
   }
+  case OBJ_ARRAY: {
+    ObjArray *array = (ObjArray *)obj;
+    gc_mark_values(gc, array->values->data, array->values->header.count);
+    break;
+  }
   default:
     assert(false && "unknown object type");
     break;

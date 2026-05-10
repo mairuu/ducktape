@@ -19,6 +19,7 @@ typedef enum {
   OBJ_TRAIT_DEF,
   OBJ_IMPL,
   OBJ_TRAIT_OBJECT,
+  OBJ_ARRAY,
 } ObjectType;
 
 typedef union {
@@ -125,6 +126,11 @@ typedef struct {
   ObjImpl *impl;
 } ObjTraitObject;
 
+typedef struct {
+  Object obj;
+  ValueArray *values;
+} ObjArray;
+
 // -----------------------------------------------------------------------------
 
 static inline bool value_is_obj_type(Value value, ObjectType type) {
@@ -141,6 +147,7 @@ static inline bool value_is_obj_type(Value value, ObjectType type) {
 #define IS_TRAIT_DEF(value) value_is_obj_type(value, OBJ_TRAIT_DEF)
 #define IS_IMPL(value) value_is_obj_type(value, OBJ_IMPL)
 #define IS_TRAIT_OBJECT(value) value_is_obj_type(value, OBJ_TRAIT_OBJECT)
+#define IS_ARRAY(value) value_is_obj_type(value, OBJ_ARRAY)
 
 // -----------------------------------------------------------------------------
 
@@ -154,6 +161,7 @@ static inline bool value_is_obj_type(Value value, ObjectType type) {
 #define AS_TRAIT_DEF(value) ((ObjTraitDef *)AS_OBJECT(value))
 #define AS_IMPL(value) ((ObjImpl *)AS_OBJECT(value))
 #define AS_TRAIT_OBJECT(value) ((ObjTraitObject *)AS_OBJECT(value))
+#define AS_ARRAY(value) ((ObjArray *)AS_OBJECT(value))
 
 // -----------------------------------------------------------------------------
 
@@ -236,3 +244,10 @@ ObjTraitObject //
     *obj_trait_object_new(Object *receiver, ObjImpl *impl, Allocator *al);
 
 void obj_trait_object_free(ObjTraitObject **trait_obj, Allocator *al);
+
+// -----------------------------------------------------------------------------
+
+ObjArray //
+    *obj_array_new(int initial_capacity, Allocator *al);
+
+void obj_array_free(ObjArray **array, Allocator *al);

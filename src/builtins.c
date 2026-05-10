@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <time.h>
 
+#include "garbage_collector.h"
+#include "object.h"
 #include "string_utils.h"
 #include "value.h"
 #include "virtual_machine.h"
@@ -49,6 +51,20 @@ static Value native_panic(VirtualMachine *vm, int arg_count, Value *args) {
   vm_panic(vm, "%s", buf);
 }
 
+static Value native_array(VirtualMachine *vm, int arg_count, Value *args) {
+  (void)args;
+  if (arg_count > 1) {
+    vm_panic(vm, "array() takes at most one argument");
+  }
+  Value size_arg = arg_count == 1 ? args[0] : NUMBER_VAL(0);
+  if (!IS_NUMBER(size_arg)) {
+    vm_panic(vm, "array size must be a number");
+  }
+  ObjArray *arr = obj_array_new((int)AS_NUMBER(size_arg), &vm->al);
+  vm_track_object(vm, &arr->obj);
+  return OBJECT_VAL(arr);
+}
+
 void builtin_register(VirtualMachine *vm) {
   struct {
     const char *name;
@@ -58,6 +74,7 @@ void builtin_register(VirtualMachine *vm) {
       {.name = "print", .function = native_print},
       {.name = "println", .function = native_println},
       {.name = "panic", .function = native_panic},
+      {.name = "array", .function = native_array},
   };
 
   for (size_t i = 0; i < ARRAY_COUNT(builtin_functions); i++) {

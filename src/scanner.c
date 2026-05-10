@@ -267,6 +267,10 @@ Token scanner_next_token(Scanner *s) {
     return token_create(s, TOKEN_LEFT_BRACE);
   case '}':
     return token_create(s, TOKEN_RIGHT_BRACE);
+  case '[':
+    return token_create(s, TOKEN_LEFT_SQUARE);
+  case ']':
+    return token_create(s, TOKEN_RIGHT_SQUARE);
   case ':':
     return token_create(s, TOKEN_COLON);
   case ';':

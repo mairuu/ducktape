@@ -11,9 +11,17 @@
 #include "value.h"
 
 static const char *obj_type_names[] = {
-    [OBJ_STRING] = "string",           [OBJ_FUNCTION] = "function", [OBJ_NATIVE] = "native",
-    [OBJ_UPVALUE] = "upvalue",         [OBJ_CLOSURE] = "closure",   [OBJ_STRUCT_DEF] = "struct-def",
+    [OBJ_STRING] = "string",
+    [OBJ_FUNCTION] = "function",
+    [OBJ_NATIVE] = "native",
+    [OBJ_UPVALUE] = "upvalue",
+    [OBJ_CLOSURE] = "closure",
+    [OBJ_STRUCT_DEF] = "struct-def",
     [OBJ_STRUCT_INST] = "struct-inst",
+    [OBJ_TRAIT_DEF] = "trait-def",
+    [OBJ_IMPL] = "impl",
+    [OBJ_TRAIT_OBJECT] = "trait-object",
+    [OBJ_ARRAY] = "array",
 };
 
 const char *obj_type_name(ObjectType type) {
@@ -77,6 +85,11 @@ int obj_sprintf(char *buf, int bufsize, Object *obj) {
   case OBJ_TRAIT_OBJECT: {
     ObjTraitObject *trait_obj = (ObjTraitObject *)obj;
     return snprintf(buf, bufsize, "<trait object at @%p>", (void *)trait_obj);
+  }
+  case OBJ_ARRAY: {
+    ObjArray *array = (ObjArray *)obj;
+    return snprintf(buf, bufsize, "<array of length %d at @%p>", arr_count(array->values),
+                    (void *)array);
   }
   default:
     assert(false && "unknown object type");
@@ -146,6 +159,9 @@ void obj_free(Object **obj, Allocator *al) {
     break;
   case OBJ_TRAIT_OBJECT:
     obj_trait_object_free((ObjTraitObject **)obj, al);
+    break;
+  case OBJ_ARRAY:
+    obj_array_free((ObjArray **)obj, al);
     break;
   default:
     assert(false && "unknown object type");
@@ -343,7 +359,7 @@ static inline size_t impl_size(int method_count) {
 }
 
 ObjImpl //
-    *obj_impl_new(ObjTraitDef *trait, Object* subject, Allocator *al) {
+    *obj_impl_new(ObjTraitDef *trait, Object *subject, Allocator *al) {
   ObjImpl *obj = obj_new(impl_size(trait->method_count), OBJ_IMPL, al);
   obj->trait = trait;
   obj->subject = subject;
@@ -378,4 +394,27 @@ void obj_trait_object_free(ObjTraitObject **trait_obj, Allocator *al) {
   }
   al_free(al, *trait_obj, sizeof(ObjTraitObject));
   *trait_obj = NULL;
+}
+
+// -----------------------------------------------------------------------------
+
+ObjArray //
+    *obj_array_new(int initial_capacity, Allocator *al) {
+  ObjArray *obj = obj_new(sizeof(ObjArray), OBJ_ARRAY, al);
+  obj->values = arr_new();
+  arr_reserve(&obj->values, initial_capacity, al);
+  for (int i = 0; i < initial_capacity; i++) {
+    obj->values->data[i] = NIL_VAL;
+  }
+  obj->values->header.count = initial_capacity;
+  return obj;
+}
+
+void obj_array_free(ObjArray **array, Allocator *al) {
+  if (!array) {
+    return;
+  }
+  arr_free(&(*array)->values, al);
+  al_free(al, *array, sizeof(ObjArray));
+  *array = NULL;
 }

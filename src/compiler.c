@@ -1095,12 +1095,15 @@ static void as(Context *ctx, bool can_assign);
 static void fun(Context *ctx, bool can_assign);
 static void if_(Context *ctx, bool can_assign);
 static void impl(Context *ctx, bool can_assign);
+static void index(Context *ctx, bool can_assign);
 
 static ParseRule rules[] = {
     [TOKEN_LEFT_PAREN] = {grouping, call, PREC_CALL}, //
     [TOKEN_RIGHT_PAREN] = {NULL, NULL, PREC_NONE},    //
     [TOKEN_LEFT_BRACE] = {NULL, NULL, PREC_NONE},     //
     [TOKEN_RIGHT_BRACE] = {NULL, NULL, PREC_NONE},    //
+    [TOKEN_LEFT_SQUARE] = {NULL, index, PREC_CALL},    //
+    [TOKEN_RIGHT_SQUARE] = {NULL, NULL, PREC_NONE},   //
     [TOKEN_COLON] = {NULL, NULL, PREC_NONE},          //
     [TOKEN_COMMA] = {NULL, NULL, PREC_NONE},          //
     [TOKEN_DOT] = {NULL, dot, PREC_CALL},             //
@@ -1686,7 +1689,7 @@ static void parse_impl_body_inherent(Context *ctx, Token *impl_token, Definition
 
     int method_index = find_trait_method_index(trait, name_sv);
     if (method_index >= 0) {
-      DIAGNOSTIC(ctx, "method name conflicts with method in inherent impl",   
+      DIAGNOSTIC(ctx, "method name conflicts with method in inherent impl",
                  {*impl_token, "in this impl block"}, {method_token, "method declared here"}, );
       ctx_compile_function(ctx, FUN_TYPE_IMPL);
       ctx_synchronize(ctx);
@@ -1706,7 +1709,6 @@ static void parse_impl_body_inherent(Context *ctx, Token *impl_token, Definition
   }
 
   ctx_consume(ctx, TOKEN_RIGHT_BRACE, "expect '}' after impl body.");
-
 }
 
 static void parse_impl_body(Context *ctx, Token *impl_token, Definition *trait_def,
@@ -2035,6 +2037,27 @@ static void impl(Context *ctx, bool can_assign) {
   ctx_emit_byte(ctx, OP_IMPL_ANON);
 
   parse_impl_body(ctx, &impl_token, trait_def, IMPL_TYPE_TRAIT);
+}
+
+static void index(Context *ctx, bool can_assign) {
+  (void)can_assign;
+
+  expression(ctx);
+  ctx_consume(ctx, TOKEN_RIGHT_SQUARE, "expect ']' after index expression.");
+
+  if (can_assign && ctx_match(ctx, TOKEN_EQUAL)) {
+    expression(ctx);
+    ctx_emit_byte(ctx, OP_SET_INDEX);
+  } else if (can_assign && ctx_match_compound_assignment(ctx)) {
+    TokenType operator = ctx->parser.previous.type;
+    ctx_emit_byte(ctx, OP_DUP);
+    ctx_emit_byte(ctx, OP_GET_INDEX);
+    expression(ctx);
+    ctx_emit_byte(ctx, compound_assignment_opcode(operator));
+    ctx_emit_byte(ctx, OP_SET_INDEX);
+  } else {
+    ctx_emit_byte(ctx, OP_GET_INDEX);
+  }
 }
 
 // ===== public api =====

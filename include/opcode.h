@@ -1,5 +1,6 @@
 #pragma once
 
+#include "value.h"
 typedef enum {
   OP_CONSTANT,
   OP_CLOSURE,
@@ -38,6 +39,9 @@ typedef enum {
 
   OP_GET_PROPERTY,
   OP_SET_PROPERTY,
+
+  OP_GET_INDEX,
+  OP_SET_INDEX,
 
   OP_LOOP,
   OP_JUMP,

@@ -734,6 +734,61 @@ static void vm_run(VirtualMachine *vm) {
       vm->stack_top--;
       break;
     }
+    case OP_GET_INDEX: {
+      Value receiver = vm_peek(vm, 1);
+      Value index = vm_peek(vm, 0);
+
+      if (!IS_ARRAY(receiver)) {
+        vm_panic(vm, "indexing is only supported on arrays");
+      }
+
+      if (!IS_NUMBER(index)) {
+        vm_panic(vm, "array index must be a number");
+      }
+
+      ObjArray *array = AS_ARRAY(receiver);
+      int64_t idx = AS_NUMBER(index);
+      if (idx < 0) {
+        idx += arr_count(array->values);
+      }
+
+      if (idx < 0 || idx >= arr_count(array->values)) {
+        vm_panic(vm, "array index out of bounds");
+      }
+
+      vm_pop(vm); // pop index
+      vm->stack_top[-1] = array->values->data[idx];
+      break;
+    }
+    case OP_SET_INDEX: {
+      Value receiver = vm_peek(vm, 2);
+      Value index = vm_peek(vm, 1);
+      Value value = vm_peek(vm, 0);
+
+      if (!IS_ARRAY(receiver)) {
+        vm_panic(vm, "indexing is only supported on arrays");
+      }
+
+      if (!IS_NUMBER(index)) {
+        vm_panic(vm, "array index must be a number");
+      }
+
+      ObjArray *array = AS_ARRAY(receiver);
+      int64_t idx = AS_NUMBER(index);
+      if (idx < 0) {
+        idx += arr_count(array->values);
+      }
+
+      if (idx < 0 || idx >= arr_count(array->values)) {
+        vm_panic(vm, "array index out of bounds");
+      }
+
+      array->values->data[idx] = value;
+      vm_pop(vm); // pop value
+      vm_pop(vm); // pop index
+      vm->stack_top[-1] = value;
+      break;
+    }
     case OP_LOOP: {
       uint16_t offset = READ_SHORT();
       ip -= offset;

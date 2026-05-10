@@ -148,6 +148,11 @@ int disassemble_chunk_instruction(Chunk *chunk, int offset) {
     return pic_instruction("OP_GET_PROPERTY", chunk, offset);
   case OP_SET_PROPERTY:
     return pic_instruction("OP_SET_PROPERTY", chunk, offset);
+  
+  case OP_GET_INDEX:
+    return simple_instruction("OP_GET_INDEX", offset);
+  case OP_SET_INDEX:
+    return simple_instruction("OP_SET_INDEX", offset);
 
   case OP_LOOP:
     return jump_instruction("OP_LOOP", chunk, false, offset);
