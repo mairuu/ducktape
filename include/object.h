@@ -20,6 +20,7 @@ typedef enum {
   OBJ_IMPL,
   OBJ_TRAIT_OBJECT,
   OBJ_ARRAY,
+  OBJ_MAP,
 } ObjectType;
 
 typedef union {
@@ -131,6 +132,11 @@ typedef struct {
   ValueArray *values;
 } ObjArray;
 
+typedef struct {
+  Object obj;
+  HashTable entries;
+} ObjMap;
+
 // -----------------------------------------------------------------------------
 
 static inline bool value_is_obj_type(Value value, ObjectType type) {
@@ -148,6 +154,7 @@ static inline bool value_is_obj_type(Value value, ObjectType type) {
 #define IS_IMPL(value) value_is_obj_type(value, OBJ_IMPL)
 #define IS_TRAIT_OBJECT(value) value_is_obj_type(value, OBJ_TRAIT_OBJECT)
 #define IS_ARRAY(value) value_is_obj_type(value, OBJ_ARRAY)
+#define IS_MAP(value) value_is_obj_type(value, OBJ_MAP)
 
 // -----------------------------------------------------------------------------
 
@@ -162,6 +169,7 @@ static inline bool value_is_obj_type(Value value, ObjectType type) {
 #define AS_IMPL(value) ((ObjImpl *)AS_OBJECT(value))
 #define AS_TRAIT_OBJECT(value) ((ObjTraitObject *)AS_OBJECT(value))
 #define AS_ARRAY(value) ((ObjArray *)AS_OBJECT(value))
+#define AS_MAP(value) ((ObjMap *)AS_OBJECT(value))
 
 // -----------------------------------------------------------------------------
 
@@ -251,3 +259,10 @@ ObjArray //
     *obj_array_new(int initial_capacity, Allocator *al);
 
 void obj_array_free(ObjArray **array, Allocator *al);
+
+// -----------------------------------------------------------------------------
+
+ObjMap //
+    *obj_map_new(Allocator *al);
+
+void obj_map_free(ObjMap **map, Allocator *al);

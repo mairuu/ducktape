@@ -65,16 +65,24 @@ static Value native_array(VirtualMachine *vm, int arg_count, Value *args) {
   return OBJECT_VAL(arr);
 }
 
+static Value native_map(VirtualMachine *vm, int arg_count, Value *args) {
+  (void)args;
+  if (arg_count != 0) {
+    vm_panic(vm, "map() takes no arguments");
+  }
+  ObjMap *map = obj_map_new(&vm->al);
+  vm_track_object(vm, &map->obj);
+  return OBJECT_VAL(map);
+}
+
 void builtin_register(VirtualMachine *vm) {
   struct {
     const char *name;
     NativeFunc function;
   } builtin_functions[] = {
-      {.name = "clock", .function = native_clock},
-      {.name = "print", .function = native_print},
-      {.name = "println", .function = native_println},
-      {.name = "panic", .function = native_panic},
-      {.name = "array", .function = native_array},
+      {.name = "clock", .function = native_clock},     {.name = "print", .function = native_print},
+      {.name = "println", .function = native_println}, {.name = "panic", .function = native_panic},
+      {.name = "array", .function = native_array},     {.name = "map", .function = native_map},
   };
 
   for (size_t i = 0; i < ARRAY_COUNT(builtin_functions); i++) {

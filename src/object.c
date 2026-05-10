@@ -22,6 +22,7 @@ static const char *obj_type_names[] = {
     [OBJ_IMPL] = "impl",
     [OBJ_TRAIT_OBJECT] = "trait-object",
     [OBJ_ARRAY] = "array",
+    [OBJ_MAP] = "map",
 };
 
 const char *obj_type_name(ObjectType type) {
@@ -90,6 +91,10 @@ int obj_sprintf(char *buf, int bufsize, Object *obj) {
     ObjArray *array = (ObjArray *)obj;
     return snprintf(buf, bufsize, "<array of length %d at @%p>", arr_count(array->values),
                     (void *)array);
+  }
+  case OBJ_MAP: {
+    ObjMap *map = (ObjMap *)obj;
+    return snprintf(buf, bufsize, "<map of size %d at @%p>", map->entries.count, (void *)map);
   }
   default:
     assert(false && "unknown object type");
@@ -162,6 +167,9 @@ void obj_free(Object **obj, Allocator *al) {
     break;
   case OBJ_ARRAY:
     obj_array_free((ObjArray **)obj, al);
+    break;
+  case OBJ_MAP:
+    obj_map_free((ObjMap **)obj, al);
     break;
   default:
     assert(false && "unknown object type");
@@ -417,4 +425,20 @@ void obj_array_free(ObjArray **array, Allocator *al) {
   arr_free(&(*array)->values, al);
   al_free(al, *array, sizeof(ObjArray));
   *array = NULL;
+}
+
+ObjMap //
+    *obj_map_new(Allocator *al) {
+  ObjMap *obj = obj_new(sizeof(ObjMap), OBJ_MAP, al);
+  ht_init(&obj->entries);
+  return obj;
+}
+
+void obj_map_free(ObjMap **map, Allocator *al) {
+  if (!map) {
+    return;
+  }
+  ht_destroy(&(*map)->entries, al);
+  al_free(al, *map, sizeof(ObjMap));
+  *map = NULL;
 }
