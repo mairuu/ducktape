@@ -312,6 +312,10 @@ static Object *vm_method_ref(VirtualMachine *vm, uint8_t pic_index, Value receiv
     impl = inst->def->inherent_impl;
     break;
   }
+  case OBJ_IMPL: {
+    impl = AS_IMPL(receiver);
+    break;
+  }
   default:
     vm_panic(vm, "invalid receiver type for method access");
     break;
@@ -329,10 +333,21 @@ static Object *vm_method_ref(VirtualMachine *vm, uint8_t pic_index, Value receiv
            "impl slot must be filled after default resolution");
 
     Object *slot = target_impl->impls[i];
-    assert(slot->type == OBJ_FUNCTION && "invalid method type in impl");
 
-    ObjFunction *method = (ObjFunction *)slot;
-    if (!obj_equal(&method->name->obj, &method_name->obj)) {
+    ObjFunction *func = NULL;
+    switch (slot->type) {
+    case OBJ_FUNCTION:
+      func = (ObjFunction *)slot;
+      break;
+    case OBJ_CLOSURE:
+      func = ((ObjClosure *)slot)->func;
+      break;
+    default:
+      assert(false && "invalid method type in impl");
+      break;
+    }
+
+    if (!obj_equal(&func->name->obj, &method_name->obj)) {
       continue;
     }
 
@@ -348,7 +363,7 @@ static Object *vm_method_ref(VirtualMachine *vm, uint8_t pic_index, Value receiv
       pic->count = UINT8_MAX; // megamorphic
     }
 
-    return &method->obj;
+    return slot;
   }
 
   return NULL;
@@ -374,6 +389,12 @@ Object *vm_cast_struct(VirtualMachine *vm, Value receiver_val, ObjStructDef *def
 
 Object *vm_cast_trait(VirtualMachine *vm, Value receiver_val, ObjTraitDef *trait) {
   Object *receiver = AS_OBJECT(receiver_val);
+
+  if (receiver->type == OBJ_IMPL) {
+    if (((ObjImpl *)receiver)->trait == trait) {
+      return receiver; // already an impl of the correct trait
+    }
+  }
   if (receiver->type == OBJ_TRAIT_OBJECT) {
     ObjTraitObject *trait_object = (ObjTraitObject *)receiver;
     if (trait_object->impl->trait == trait) {
@@ -766,7 +787,7 @@ static void vm_run(VirtualMachine *vm) {
       ObjTraitDef *trait_def = AS_TRAIT_DEF(trait);
 
       gc_begin_staging(&vm->gc);
-      ObjImpl *impl = obj_impl_new(AS_TRAIT_DEF(trait), AS_OBJECT(subject), &vm->al);
+      ObjImpl *impl = obj_impl_new(trait_def, AS_OBJECT(subject), &vm->al);
       vm_track_object(vm, &impl->obj);
 
       if (!impl_registry_put(&vm->impl_registry, impl, &vm->al)) {
@@ -794,6 +815,19 @@ static void vm_run(VirtualMachine *vm) {
       gc_end_staging(&vm->gc);
       break;
     }
+    case OP_IMPL_ANON: {
+      Value trait = vm_peek(vm, 0);
+      assert(IS_TRAIT_DEF(trait) && "expected trait definition");
+
+      ObjTraitDef *trait_def = AS_TRAIT_DEF(trait);
+
+      ObjImpl *impl = obj_impl_new(trait_def, &trait_def->obj, &vm->al);
+      vm_track_object(vm, &impl->obj);
+
+      vm->stack_top[-1] = OBJECT_VAL(impl);
+
+      break;
+    }
     case OP_IMPL_METHOD: {
       uint8_t method_idx = READ_BYTE();
 
@@ -801,7 +835,8 @@ static void vm_run(VirtualMachine *vm) {
       Value method_val = vm_peek(vm, 0);
 
       assert(IS_IMPL(impl_val) && "expected impl");
-      assert((IS_FUNCTION(method_val)) && "expected function as impl method");
+      assert((IS_FUNCTION(method_val) || IS_CLOSURE(method_val)) &&
+             "expected function as impl method");
 
       ObjImpl *impl = AS_IMPL(impl_val);
 

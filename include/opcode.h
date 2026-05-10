@@ -48,6 +48,7 @@ typedef enum {
 
   // beginning of impl block create a empty impl object
   OP_IMPL,
+  OP_IMPL_ANON,
   // wire a method implementation to the impl object
   OP_IMPL_METHOD,
 

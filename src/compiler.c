@@ -1094,6 +1094,7 @@ static void dot(Context *ctx, bool can_assign);
 static void as(Context *ctx, bool can_assign);
 static void fun(Context *ctx, bool can_assign);
 static void if_(Context *ctx, bool can_assign);
+static void impl(Context *ctx, bool can_assign);
 
 static ParseRule rules[] = {
     [TOKEN_LEFT_PAREN] = {grouping, call, PREC_CALL}, //
@@ -1141,7 +1142,7 @@ static ParseRule rules[] = {
     [TOKEN_IF] = {NULL, if_, PREC_CALL},        //
     [TOKEN_IN] = {NULL, NULL, PREC_NONE},       //
     [TOKEN_IS] = {NULL, NULL, PREC_NONE},       //
-    [TOKEN_IMPL] = {NULL, NULL, PREC_NONE},     //
+    [TOKEN_IMPL] = {impl, NULL, PREC_NONE},     //
     [TOKEN_MATCH] = {NULL, NULL, PREC_NONE},    //
     [TOKEN_NIL] = {literal, NULL, PREC_NONE},   //
     [TOKEN_OR] = {NULL, or_, PREC_OR},          //
@@ -2017,6 +2018,23 @@ static void if_(Context *ctx, bool can_assign) {
   expression(ctx);
 
   ctx_patch_jump(ctx, exit_jump);
+}
+
+// anon impl
+static void impl(Context *ctx, bool can_assign) {
+  (void)can_assign;
+
+  Token impl_token = ctx->parser.previous;
+
+  Definition *trait_def = ctx_consume_definition(ctx);
+  if (trait_def == NULL) {
+    return;
+  }
+  VarRef trait_ref = {.definition_index = trait_def->slot, .scope = REF_DEFINITION};
+  ctx_emit_get(ctx, trait_ref);
+  ctx_emit_byte(ctx, OP_IMPL_ANON);
+
+  parse_impl_body(ctx, &impl_token, trait_def, IMPL_TYPE_TRAIT);
 }
 
 // ===== public api =====
