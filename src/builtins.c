@@ -5,11 +5,30 @@
 
 #include "garbage_collector.h"
 #include "object.h"
-#include "string_utils.h"
 #include "value.h"
 #include "virtual_machine.h"
 
 #define ARRAY_COUNT(arr) (sizeof(arr) / sizeof((arr)[0]))
+
+typedef enum {
+  BUILTIN_ITERATOR,
+  BUILTIN_ITERABLE,
+} BuiltinBindTarget;
+
+const char *PRELUDE_SOURCE = //
+    "trait Iterator {\n"
+    "  fun has_next(self);\n"
+    "  fun next(self);\n"
+    "}\n"
+    "trait Iterable {\n"
+    "  fun iter(self) => self as Iterator;\n"
+    "}\n"
+    "{\n"
+    "  var bind = __builtin_bind;\n"
+    "  bind(__BUILTIN_ITERATOR, Iterator);\n"
+    "  bind(__BUILTIN_ITERABLE, Iterable);\n"
+    "}\n";
+
 
 static Value native_clock(VirtualMachine *vm, int arg_count, Value *args) {
   (void)args;
@@ -75,7 +94,79 @@ static Value native_map(VirtualMachine *vm, int arg_count, Value *args) {
   return OBJECT_VAL(map);
 }
 
-void builtin_register(VirtualMachine *vm) {
+static Value native_bind_builtin(VirtualMachine *vm, int arg_count, Value *args) {
+  if (arg_count != 2) {
+    vm_panic(vm, "__builtin_bind: takes exactly two arguments");
+  }
+  if (!IS_NUMBER(args[0])) {
+    vm_panic(vm, "__builtin_bind: first argument must be a number");
+  }
+
+  int target = (int)AS_NUMBER(args[0]);
+
+  switch (target) {
+  case BUILTIN_ITERABLE:
+    if (!IS_OBJECT(args[1]) || AS_OBJECT(args[1])->type != OBJ_TRAIT_DEF) {
+      vm_panic(vm, "__builtin_bind: BUILTIN_ITERABLE expects a trait definition");
+    }
+    vm->builtins.iterable = AS_TRAIT_DEF(args[1]);
+    break;
+  case BUILTIN_ITERATOR:
+    if (!IS_OBJECT(args[1]) || AS_OBJECT(args[1])->type != OBJ_TRAIT_DEF) {
+      vm_panic(vm, "__builtin_bind: BUILTIN_ITERATOR expects a trait definition");
+    }
+    vm->builtins.iterator = AS_TRAIT_DEF(args[1]);
+    break;
+  default:
+    vm_panic(vm, "__builtin_bind: unknown target %d", target);
+  }
+  return NIL_VAL;
+}
+
+bool builtin_register(BuiltinRegistry *registry, VirtualMachine *vm) {
+  (void)registry;
+  vm_define_native(vm, sv_from_cstr("__builtin_bind"), native_bind_builtin);
+
+  struct {
+    const char *name;
+    double value;
+  } constants[] = {
+      {"__BUILTIN_ITERATOR", BUILTIN_ITERATOR},
+      {"__BUILTIN_ITERABLE", BUILTIN_ITERABLE},
+  };
+
+  for (size_t i = 0; i < ARRAY_COUNT(constants); i++) {
+    vm_define_global(vm, sv_from_cstr(constants[i].name), NUMBER_VAL(constants[i].value));
+  }
+
+  InterpretResult result = vm_interpret(vm, PRELUDE_SOURCE);
+  if (result != INTERPRET_OK) {
+    fprintf(stderr, "failed to load prelude\n");
+    return false;
+  }
+
+  struct {
+    void *ptr;
+    const char *name;
+  } builtins_check[] = {
+      {.ptr = vm->builtins.iterable, .name = "iterable"},
+      {.ptr = vm->builtins.iterator, .name = "iterator"},
+  };
+  for (size_t i = 0; i < ARRAY_COUNT(builtins_check); i++) {
+    if (builtins_check[i].ptr == NULL) {
+      fprintf(stderr, "builtin '%s' was not bound\n", builtins_check[i].name);
+      return false;
+    }
+  }
+
+  vm_undefine_global(vm, sv_from_cstr("__builtin_bind"));
+
+  for (size_t i = 0; i < ARRAY_COUNT(constants); i++) {
+    vm_undefine_global(vm, sv_from_cstr(constants[i].name));
+  }
+
+  // ----------------------------------------------------------------------------------
+
   struct {
     const char *name;
     NativeFunc function;
@@ -88,4 +179,6 @@ void builtin_register(VirtualMachine *vm) {
   for (size_t i = 0; i < ARRAY_COUNT(builtin_functions); i++) {
     vm_define_native(vm, sv_from_cstr(builtin_functions[i].name), builtin_functions[i].function);
   }
+
+  return true;
 }

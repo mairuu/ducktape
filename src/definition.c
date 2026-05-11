@@ -18,6 +18,7 @@ const char *def_type_name(DefinitionType type) {
 
 Definition def_copy(const Definition *def, Allocator *al) {
   Definition copy = {
+      .slot = def->slot,
       .type = def->type,
       .name = str_copy(&def->name, al),
   };
@@ -42,6 +43,7 @@ Definition def_copy(const Definition *def, Allocator *al) {
       TraitMethodDef copy_method_def = {
           .name = str_copy(&method_def->name, al),
           .arity = method_def->arity,
+          .has_default_impl = method_def->has_default_impl,
       };
       arr_push(copy_trait_def->methods, copy_method_def, al);
     }

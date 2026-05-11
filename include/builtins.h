@@ -1,5 +1,10 @@
 #pragma once
 
-typedef struct VirtualMachine VirtualMachine;
+#include "object.h"
 
-void builtin_register(VirtualMachine *vm);
+typedef struct {
+  ObjTraitDef *iterator;
+  ObjTraitDef *iterable;
+} BuiltinRegistry;
+
+bool builtin_register(BuiltinRegistry *registry, VirtualMachine *vm);

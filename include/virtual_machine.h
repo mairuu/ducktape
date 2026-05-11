@@ -1,6 +1,7 @@
 #pragma once
 
 #include "allocator.h"
+#include "builtins.h"
 #include "compiler.h"
 #include "definition.h"
 #include "garbage_collector.h"
@@ -35,6 +36,8 @@ typedef struct VirtualMachine {
   int frame_count;
   CallFrame frames[VM_FRAMES_MAX];
 
+  BuiltinRegistry builtins;
+
   Object *objects; // linked list
   HashTable strings;
   HashTable globals;
@@ -62,6 +65,10 @@ void vm_destroy(VirtualMachine *vm);
 ObjString *vm_intern_string(VirtualMachine *vm, StringView str);
 
 void vm_track_object(VirtualMachine *vm, Object *object);
+
+void vm_define_global(VirtualMachine *vm, StringView name, Value value);
+
+void vm_undefine_global(VirtualMachine *vm, StringView name);
 
 void vm_define_native(VirtualMachine *vm, StringView name, NativeFunc function);
 

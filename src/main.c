@@ -18,7 +18,10 @@ int main(int argc, char *argv[]) {
 
   vm_init(&vm, al);
 
-  builtin_register(&vm);
+  if (!builtin_register(&vm.builtins, &vm)) {
+    fprintf(stderr, "bootstrap failed\n");
+    return 1;
+  }
 
   if (argc == 1) {
     repl(&vm);

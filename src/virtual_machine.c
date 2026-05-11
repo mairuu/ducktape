@@ -7,6 +7,7 @@
 #include <stdio.h>
 
 #include "allocator.h"
+#include "builtins.h"
 #include "chunk.h"
 #include "compiler.h"
 #include "definition.h"
@@ -979,6 +980,8 @@ void vm_init(VirtualMachine *vm, Allocator al) {
 
   vm->inner_al = al;
 
+  vm->builtins = (BuiltinRegistry){0};
+
   gc_init(&vm->gc, vm, &vm->inner_al);
   vm->al = gc_allocator_create(&vm->gc);
 
@@ -998,6 +1001,8 @@ void vm_init(VirtualMachine *vm, Allocator al) {
 
 void vm_destroy(VirtualMachine *vm) {
   vm_reset_stack(vm);
+
+  vm->builtins = (BuiltinRegistry){0};
 
   Object *obj = vm->objects;
   while (obj) {
@@ -1053,6 +1058,20 @@ void vm_track_object(VirtualMachine *vm, Object *object) {
   assert((object->next == NULL && vm->objects != object) && "object is already tracked");
   object->next = vm->objects;
   vm->objects = object;
+}
+
+void vm_define_global(VirtualMachine *vm, StringView name, Value value) {
+  gc_begin_staging(&vm->gc);
+  ObjString *str = vm_intern_string(vm, name);
+  if(!ht_put(&vm->globals, OBJECT_VAL(str), value, &vm->al)) {
+    vm_panic(vm, "variable '%s' is already defined", str->str.chars);
+  };
+  gc_end_staging(&vm->gc);
+}
+
+void vm_undefine_global(VirtualMachine *vm, StringView name) {
+  ObjString *str = vm_intern_string(vm, name);
+  ht_delete(&vm->globals, OBJECT_VAL(str));
 }
 
 void vm_define_native(VirtualMachine *vm, StringView name, NativeFunc function) {
