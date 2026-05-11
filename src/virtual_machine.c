@@ -131,7 +131,7 @@ static Object *vm_load_definition(VirtualMachine *vm, const Definition *def) {
   case DEFTYPE_STRUCT: {
     const StructDef *struct_def = &def->as.struct_def;
     ObjString *name = vm_intern_string(vm, sv_from_str(def->name));
-    ObjStructDef *obj_def = obj_struct_def_new(name, &vm->al);
+    ObjStructDef *obj_def = obj_struct_def_new(name, def->slot, &vm->al);
     vm_track_object(vm, &obj_def->obj);
 
     int field_count = arr_count(struct_def->field_names);
@@ -147,7 +147,7 @@ static Object *vm_load_definition(VirtualMachine *vm, const Definition *def) {
     int method_count = arr_count(trait_def->methods);
 
     ObjString *name = vm_intern_string(vm, sv_from_str(def->name));
-    ObjTraitDef *obj_def = obj_trait_def_new(name, method_count, &vm->al);
+    ObjTraitDef *obj_def = obj_trait_def_new(name, method_count, def->slot, &vm->al);
     vm_track_object(vm, &obj_def->obj);
 
     return &obj_def->obj;
@@ -322,6 +322,10 @@ static Object *vm_method_ref(VirtualMachine *vm, uint8_t pic_index, Value receiv
     break;
   }
 
+  if (impl == NULL) {
+    vm_panic(vm, "type does not have any methods");
+  }
+
   ObjString *method_name = AS_STRING(function->chunk.constants->data[pic->name]);
 
   // resolve the canonical impl up front by scanning for the method name.
@@ -335,24 +339,27 @@ static Object *vm_method_ref(VirtualMachine *vm, uint8_t pic_index, Value receiv
 
     Object *slot = target_impl->impls[i];
 
-    ObjFunction *func = NULL;
+    ObjString *func_name = NULL;
     switch (slot->type) {
     case OBJ_FUNCTION:
-      func = (ObjFunction *)slot;
+      func_name = ((ObjFunction *)slot)->name;
       break;
     case OBJ_CLOSURE:
-      func = ((ObjClosure *)slot)->func;
+      func_name = ((ObjClosure *)slot)->func->name;
+      break;
+    case OBJ_NATIVE:
+      func_name = ((ObjNative *)slot)->name;
       break;
     default:
       assert(false && "invalid method type in impl");
       break;
     }
 
-    if (!obj_equal(&func->name->obj, &method_name->obj)) {
+    if (!obj_equal(&func_name->obj, &method_name->obj)) {
       continue;
     }
 
-    uint16_t shape_id = (uint16_t)target_impl->subject->flags.def_id;
+    uint16_t shape_id = (uint16_t)target_impl->subject_id;
 
     if (pic->count < PIC_CACHE_SIZE) {
       for (int j = 0; j < pic->count; j++) {
@@ -419,18 +426,6 @@ Object *vm_cast_trait(VirtualMachine *vm, Value receiver_val, ObjTraitDef *trait
   return &trait_object->obj;
 }
 
-// panic if cast fails
-// returns null if target type is not supported (caller should handle this)
-Object *vm_cast(VirtualMachine *vm, Value receiver_val, Object *target) {
-  if (target->type == OBJ_STRUCT_DEF) {
-    return vm_cast_struct(vm, receiver_val, (ObjStructDef *)target);
-  } else if (target->type == OBJ_TRAIT_DEF) {
-    return vm_cast_trait(vm, receiver_val, (ObjTraitDef *)target);
-  } else {
-    return NULL; // caller handle error
-  }
-}
-
 // ===== vm execution =====
 
 static void vm_call_function(VirtualMachine *vm, ObjFunction *callee, int arg_count) {
@@ -467,9 +462,11 @@ static void vm_call_function(VirtualMachine *vm, ObjFunction *callee, int arg_co
 }
 
 static void vm_call_native(VirtualMachine *vm, ObjNative *native, int arg_count) {
+  gc_begin_staging(&vm->gc);
   Value result = native->func(vm, arg_count, vm->stack_top - arg_count);
   vm->stack_top -= arg_count + 1;
   vm_push(vm, result);
+  gc_end_staging(&vm->gc);
 }
 
 static void vm_call_closure(VirtualMachine *vm, ObjClosure *closure, int arg_count) {
@@ -853,6 +850,8 @@ static void vm_run(VirtualMachine *vm) {
       break;
     }
     case OP_IMPL: {
+      bool is_inherent = READ_BYTE();
+
       Value trait = vm_peek(vm, 1);
       Value subject = vm_peek(vm, 0);
 
@@ -863,7 +862,7 @@ static void vm_run(VirtualMachine *vm) {
       ObjTraitDef *trait_def = AS_TRAIT_DEF(trait);
 
       gc_begin_staging(&vm->gc);
-      ObjImpl *impl = obj_impl_new(trait_def, AS_OBJECT(subject), &vm->al);
+      ObjImpl *impl = obj_impl_new(trait_def, AS_OBJECT(subject)->flags.def_id, &vm->al);
       vm_track_object(vm, &impl->obj);
 
       if (!impl_registry_put(&vm->impl_registry, impl, &vm->al)) {
@@ -880,7 +879,7 @@ static void vm_run(VirtualMachine *vm) {
         AS_TRAIT_DEF(subject)->default_impl = impl;
       }
 
-      if (IS_STRUCT_DEF(subject)) {
+      if (is_inherent) {
         AS_STRUCT_DEF(subject)->inherent_impl = impl;
       }
 
@@ -897,7 +896,7 @@ static void vm_run(VirtualMachine *vm) {
 
       ObjTraitDef *trait_def = AS_TRAIT_DEF(trait);
 
-      ObjImpl *impl = obj_impl_new(trait_def, &trait_def->obj, &vm->al);
+      ObjImpl *impl = obj_impl_new(trait_def, trait_def->obj.flags.def_id, &vm->al);
       vm_track_object(vm, &impl->obj);
 
       vm->stack_top[-1] = OBJECT_VAL(impl);
@@ -1063,7 +1062,7 @@ void vm_track_object(VirtualMachine *vm, Object *object) {
 void vm_define_global(VirtualMachine *vm, StringView name, Value value) {
   gc_begin_staging(&vm->gc);
   ObjString *str = vm_intern_string(vm, name);
-  if(!ht_put(&vm->globals, OBJECT_VAL(str), value, &vm->al)) {
+  if (!ht_put(&vm->globals, OBJECT_VAL(str), value, &vm->al)) {
     vm_panic(vm, "variable '%s' is already defined", str->str.chars);
   };
   gc_end_staging(&vm->gc);
@@ -1081,6 +1080,71 @@ void vm_define_native(VirtualMachine *vm, StringView name, NativeFunc function) 
   vm_track_object(vm, &native->obj);
   ht_put(&vm->globals, OBJECT_VAL(str), OBJECT_VAL(native), &vm->al);
   gc_end_staging(&vm->gc);
+}
+
+ObjImpl *vm_impl_native(VirtualMachine *vm, ReservedDefID id, ObjTraitDef *trait,
+                        NativeMethodDef *methods, int method_count) {
+  gc_begin_staging(&vm->gc);
+
+  ObjImpl *impl = obj_impl_new(trait, id, &vm->al);
+  vm_track_object(vm, &impl->obj);
+  if (!impl_registry_put(&vm->impl_registry, impl, &vm->al)) {
+    gc_end_staging(&vm->gc);
+    assert(false && "duplicate impl for trait and subject with reserved id");
+    return NULL;
+  }
+
+  Definition *method_def = &vm->definitions->data[trait->def_slot];
+  assert(method_def->type == DEFTYPE_TRAIT && "trait definition expected for native impl");
+  TraitDef *trait_def = &method_def->as.trait_def;
+
+  int trait_method_count = arr_count(trait_def->methods);
+
+  bool *implemented = al_alloc(&vm->al, sizeof(bool) * trait_method_count);
+  for (int i = 0; i < trait_method_count; i++) {
+    implemented[i] = trait_def->methods->data[i].has_default_impl;
+  }
+
+  for (int i = 0; i < method_count; i++) {
+    NativeMethodDef *native_method = &methods[i];
+
+    int method_index = traitdef_find_method_index(trait_def, sv_from_cstr(native_method->name));
+    if (method_index == -1) {
+      assert(false && "method in native impl does not exist in trait");
+      gc_end_staging(&vm->gc);
+      al_free(&vm->al, implemented, sizeof(bool) * trait_method_count);
+      return NULL;
+    }
+
+    ObjNative *native = obj_native_new(native_method->func, &vm->al);
+    vm_track_object(vm, &native->obj);
+    native->name = vm_intern_string(vm, sv_from_cstr(native_method->name));
+    implemented[method_index] = true;
+    impl->impls[method_index] = &native->obj;
+  }
+
+  for (int i = 0; i < trait_method_count; i++) {
+    if (!implemented[i]) {
+      assert(false && "not all trait methods implemented in native impl");
+      gc_end_staging(&vm->gc);
+      al_free(&vm->al, implemented, sizeof(bool) * trait_method_count);
+      return NULL;
+    }
+  }
+
+  gc_end_staging(&vm->gc);
+  al_free(&vm->al, implemented, sizeof(bool) * trait_method_count);
+  return impl;
+}
+
+Object *vm_cast(VirtualMachine *vm, Value val, Object *target) {
+  if (target->type == OBJ_STRUCT_DEF) {
+    return vm_cast_struct(vm, val, (ObjStructDef *)target);
+  } else if (target->type == OBJ_TRAIT_DEF) {
+    return vm_cast_trait(vm, val, (ObjTraitDef *)target);
+  } else {
+    return NULL; // caller handle error
+  }
 }
 
 InterpretResult vm_interpret(VirtualMachine *vm, const char *source) {

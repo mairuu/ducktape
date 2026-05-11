@@ -20,6 +20,7 @@ typedef enum {
   OBJ_IMPL,
   OBJ_TRAIT_OBJECT,
   OBJ_ARRAY,
+  OBJ_ARRAY_ITERATOR,
   OBJ_MAP,
 } ObjectType;
 
@@ -33,7 +34,12 @@ typedef union {
   };
 } ObjectFlags;
 
-typedef enum { DEFID_NONE = 0, DEFID_START } ReservedDefID;
+typedef enum {
+  DEFID_NONE = 0, //
+  DEFID_ARRAY,
+  DEFID_ARRAY_ITERATOR,
+  DEFID_START
+} ReservedDefID;
 
 typedef struct Object {
   ObjectType type;
@@ -89,6 +95,7 @@ typedef Value (*NativeFunc)(VirtualMachine *vm, int arg_count, Value *args);
 
 typedef struct {
   Object obj;
+  ObjString *name;
   NativeFunc func;
 } ObjNative;
 
@@ -99,6 +106,7 @@ typedef struct {
   ObjString *name;
   ObjImpl *inherent_impl;
   HashTable fields;
+  int def_slot;
 } ObjStructDef;
 
 typedef struct {
@@ -112,12 +120,13 @@ typedef struct {
   ObjString *name;
   ObjImpl *default_impl; // null if no default impl provided
   int method_count;
+  int def_slot;
 } ObjTraitDef;
 
 typedef struct ObjImpl {
   Object obj;
   ObjTraitDef *trait;
-  Object *subject;
+  uint32_t subject_id;
   Object *impls[]; // length is trait->method_count
 } ObjImpl;
 
@@ -131,6 +140,12 @@ typedef struct {
   Object obj;
   ValueArray *values;
 } ObjArray;
+
+typedef struct {
+  Object obj;
+  ObjArray *array;
+  int index;
+} ObjArrayIterator;
 
 typedef struct {
   Object obj;
@@ -154,6 +169,7 @@ static inline bool value_is_obj_type(Value value, ObjectType type) {
 #define IS_IMPL(value) value_is_obj_type(value, OBJ_IMPL)
 #define IS_TRAIT_OBJECT(value) value_is_obj_type(value, OBJ_TRAIT_OBJECT)
 #define IS_ARRAY(value) value_is_obj_type(value, OBJ_ARRAY)
+#define IS_ARRAY_ITERATOR(value) value_is_obj_type(value, OBJ_ARRAY_ITERATOR)
 #define IS_MAP(value) value_is_obj_type(value, OBJ_MAP)
 
 // -----------------------------------------------------------------------------
@@ -169,6 +185,7 @@ static inline bool value_is_obj_type(Value value, ObjectType type) {
 #define AS_IMPL(value) ((ObjImpl *)AS_OBJECT(value))
 #define AS_TRAIT_OBJECT(value) ((ObjTraitObject *)AS_OBJECT(value))
 #define AS_ARRAY(value) ((ObjArray *)AS_OBJECT(value))
+#define AS_ARRAY_ITERATOR(value) ((ObjArrayIterator *)AS_OBJECT(value))
 #define AS_MAP(value) ((ObjMap *)AS_OBJECT(value))
 
 // -----------------------------------------------------------------------------
@@ -221,7 +238,7 @@ void obj_closure_free(ObjClosure **closure, Allocator *al);
 // -----------------------------------------------------------------------------
 
 ObjStructDef //
-    *obj_struct_def_new(ObjString *name, Allocator *al);
+    *obj_struct_def_new(ObjString *name, int def_slot, Allocator *al);
 
 void obj_struct_def_free(ObjStructDef **def, Allocator *al);
 
@@ -235,14 +252,14 @@ void obj_struct_inst_free(ObjStructInst **inst, Allocator *al);
 // -----------------------------------------------------------------------------
 
 ObjTraitDef //
-    *obj_trait_def_new(ObjString *name, int method_count, Allocator *al);
+    *obj_trait_def_new(ObjString *name, int method_count, int def_slot, Allocator *al);
 
 void obj_trait_def_free(ObjTraitDef **def, Allocator *al);
 
 // -----------------------------------------------------------------------------
 
 ObjImpl //
-    *obj_impl_new(ObjTraitDef *trait, Object *subject, Allocator *al);
+    *obj_impl_new(ObjTraitDef *trait, uint32_t subject_id, Allocator *al);
 
 void obj_impl_free(ObjImpl **impl, Allocator *al);
 
@@ -259,6 +276,11 @@ ObjArray //
     *obj_array_new(int initial_capacity, Allocator *al);
 
 void obj_array_free(ObjArray **array, Allocator *al);
+
+ObjArrayIterator //
+    *obj_array_iterator_new(ObjArray *array, Allocator *al);
+
+void obj_array_iterator_free(ObjArrayIterator **iter, Allocator *al);
 
 // -----------------------------------------------------------------------------
 

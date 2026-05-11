@@ -20,8 +20,9 @@ static const char *obj_type_names[] = {
     [OBJ_STRUCT_INST] = "struct-inst",
     [OBJ_TRAIT_DEF] = "trait-def",
     [OBJ_IMPL] = "impl",
-    [OBJ_TRAIT_OBJECT] = "trait-object",
+    [OBJ_TRAIT_OBJECT] = "trait-obj",
     [OBJ_ARRAY] = "array",
+    [OBJ_ARRAY_ITERATOR] = "array-it",
     [OBJ_MAP] = "map",
 };
 
@@ -91,6 +92,10 @@ int obj_sprintf(char *buf, int bufsize, Object *obj) {
     ObjArray *array = (ObjArray *)obj;
     return snprintf(buf, bufsize, "<array of length %d at @%p>", arr_count(array->values),
                     (void *)array);
+  }
+  case OBJ_ARRAY_ITERATOR: {
+    ObjArrayIterator *iter = (ObjArrayIterator *)obj;
+    return snprintf(buf, bufsize, "<array iterator at @%p>", (void *)iter);
   }
   case OBJ_MAP: {
     ObjMap *map = (ObjMap *)obj;
@@ -168,6 +173,9 @@ void obj_free(Object **obj, Allocator *al) {
   case OBJ_ARRAY:
     obj_array_free((ObjArray **)obj, al);
     break;
+  case OBJ_ARRAY_ITERATOR:
+    obj_array_iterator_free((ObjArrayIterator **)obj, al);
+    break;
   case OBJ_MAP:
     obj_map_free((ObjMap **)obj, al);
     break;
@@ -244,6 +252,7 @@ ObjNative //
     *obj_native_new(NativeFunc function, Allocator *al) {
   ObjNative *obj = obj_new(sizeof(ObjNative), OBJ_NATIVE, al);
   obj->func = function;
+  obj->name = NULL;
   return obj;
 }
 
@@ -299,11 +308,12 @@ void obj_closure_free(ObjClosure **closure, Allocator *al) {
 
 // -----------------------------------------------------------------------------
 
-ObjStructDef //
-    *obj_struct_def_new(ObjString *name, Allocator *al) {
+ObjStructDef // 
+    *obj_struct_def_new(ObjString *name, int def_slot, Allocator *al) {
   ObjStructDef *obj = obj_new(sizeof(ObjStructDef), OBJ_STRUCT_DEF, al);
   obj->name = name;
   obj->inherent_impl = NULL;
+  obj->def_slot = def_slot;
   ht_init(&obj->fields);
   return obj;
 }
@@ -344,11 +354,12 @@ void obj_struct_inst_free(ObjStructInst **inst, Allocator *al) {
 // -----------------------------------------------------------------------------
 
 ObjTraitDef //
-    *obj_trait_def_new(ObjString *name, int method_count, Allocator *al) {
+    *obj_trait_def_new(ObjString *name, int method_count, int def_slot, Allocator *al) {
   ObjTraitDef *obj = obj_new(sizeof(ObjTraitDef), OBJ_TRAIT_DEF, al);
   obj->name = name;
   obj->default_impl = NULL;
   obj->method_count = method_count;
+  obj->def_slot = def_slot;
   return obj;
 }
 
@@ -367,10 +378,10 @@ static inline size_t impl_size(int method_count) {
 }
 
 ObjImpl //
-    *obj_impl_new(ObjTraitDef *trait, Object *subject, Allocator *al) {
+    *obj_impl_new(ObjTraitDef *trait, uint32_t subject_id, Allocator *al) {
   ObjImpl *obj = obj_new(impl_size(trait->method_count), OBJ_IMPL, al);
   obj->trait = trait;
-  obj->subject = subject;
+  obj->subject_id = subject_id;
   for (int i = 0; i < trait->method_count; i++) {
     obj->impls[i] = NULL;
   }
@@ -409,6 +420,7 @@ void obj_trait_object_free(ObjTraitObject **trait_obj, Allocator *al) {
 ObjArray //
     *obj_array_new(int initial_capacity, Allocator *al) {
   ObjArray *obj = obj_new(sizeof(ObjArray), OBJ_ARRAY, al);
+  obj->obj.flags.def_id = DEFID_ARRAY;
   obj->values = arr_new();
   arr_reserve(&obj->values, initial_capacity, al);
   for (int i = 0; i < initial_capacity; i++) {
@@ -426,6 +438,25 @@ void obj_array_free(ObjArray **array, Allocator *al) {
   al_free(al, *array, sizeof(ObjArray));
   *array = NULL;
 }
+
+ObjArrayIterator //
+    *obj_array_iterator_new(ObjArray *array, Allocator *al) {
+  ObjArrayIterator *obj = obj_new(sizeof(ObjArrayIterator), OBJ_ARRAY_ITERATOR, al);
+  obj->obj.flags.def_id = DEFID_ARRAY_ITERATOR;
+  obj->array = array;
+  obj->index = 0;
+  return obj;
+}
+
+void obj_array_iterator_free(ObjArrayIterator **iter, Allocator *al) {
+  if (!iter) {
+    return;
+  }
+  al_free(al, *iter, sizeof(ObjArrayIterator));
+  *iter = NULL;
+}
+
+// -----------------------------------------------------------------------------
 
 ObjMap //
     *obj_map_new(Allocator *al) {

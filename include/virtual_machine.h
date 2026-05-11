@@ -58,6 +58,11 @@ typedef struct VirtualMachine {
   Allocator inner_al;
 } VirtualMachine;
 
+typedef struct {
+  const char *name;
+  NativeFunc func;
+} NativeMethodDef;
+
 void vm_init(VirtualMachine *vm, Allocator al);
 
 void vm_destroy(VirtualMachine *vm);
@@ -71,6 +76,10 @@ void vm_define_global(VirtualMachine *vm, StringView name, Value value);
 void vm_undefine_global(VirtualMachine *vm, StringView name);
 
 void vm_define_native(VirtualMachine *vm, StringView name, NativeFunc function);
+
+ObjImpl *vm_impl_native(VirtualMachine *vm, ReservedDefID def_id, ObjTraitDef *trait, NativeMethodDef *methods, int method_count);
+
+Object *vm_cast(VirtualMachine *vm, Value val, Object *target);
 
 void vm_panic(VirtualMachine *vm, const char *format, ...) __attribute__((noreturn));
 

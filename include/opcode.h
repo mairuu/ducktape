@@ -1,10 +1,9 @@
 #pragma once
 
-#include "value.h"
 typedef enum {
   OP_CONSTANT,
   OP_CLOSURE,
-  OP_BYTE, // push a single byte as a number (for small integers)
+  OP_BYTE,
 
   OP_POP,
   OP_DUP,
@@ -50,10 +49,8 @@ typedef enum {
   OP_CALL,
   OP_INVOKE,
 
-  // beginning of impl block create a empty impl object
-  OP_IMPL,
+  OP_IMPL, // operand: 0 for trait impl, 1 for inherent impl
   OP_IMPL_ANON,
-  // wire a method implementation to the impl object
   OP_IMPL_METHOD,
 
   OP_CAST,

@@ -82,6 +82,18 @@ void def_destroy(Definition *def, Allocator *al) {
   }
 }
 
+int traitdef_find_method_index(TraitDef *trait, StringView method_name) {
+  int method_count = arr_count(trait->methods);
+  for (int i = 0; i < method_count; i++) {
+    if (sv_equal(sv_from_str(trait->methods->data[i].name), method_name)) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+// -------------------------------------------------------------------------------
+
 void defreg_init(DefinitionRegistry *reg, Allocator *al) {
   (void)al;
   reg->defs = arr_new();

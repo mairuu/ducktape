@@ -155,6 +155,11 @@ static void gc_blacken_object(GarbageCollector *gc, Object *obj) {
     gc_mark_values(gc, array->values->data, array->values->header.count);
     break;
   }
+  case OBJ_ARRAY_ITERATOR: {
+    ObjArrayIterator *iter = (ObjArrayIterator *)obj;
+    gc_mark_object(gc, &iter->array->obj);
+    break;
+  }
   case OBJ_MAP: {
     ObjMap *map = (ObjMap *)obj;
     gc_mark_hash_table(gc, &map->entries);

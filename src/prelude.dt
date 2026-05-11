@@ -1,0 +1,64 @@
+trait Iterator {
+  fun has_next(self);
+  fun next(self);
+  fun map(self, fn) {
+    var inner = self;
+    return impl Iterator {
+      fun next(self) => fn(inner.next());
+      fun has_next(self) => inner.has_next();
+    };
+  }
+  fun filter(self, pred) {
+    var inner = self;
+    var peeked = nil;
+    return impl Iterator {
+      fun has_next(self) {
+        if peeked != nil {
+          return true;
+        }
+        for inner.has_next() {
+          var v = inner.next();
+          if pred(v) {
+              peeked = v;
+              return true;
+          }
+        }
+        return false;
+      }
+      fun next(self) {
+        self.has_next();
+        var v = peeked;
+        peeked = nil;
+        return v;
+      }
+    };
+  }
+  fun take(self, n) {
+    var inner = self;
+    var i = -1;
+    return impl Iterator {
+      fun has_next(self) => (i += 1) < n and inner.has_next();
+      fun next(self) => inner.next();
+    };
+  }
+  fun collect(self) {
+    var n = 10;
+    var res = array(n);
+    var i = -1;
+    n -= 1;
+    for i < n and self.has_next() {
+      res[i += 1] = self.next();
+    }
+    return res;
+  }
+}
+
+trait Iterable {
+  fun iter(self) => self as Iterator;
+}
+
+{
+  var bind = __builtin_bind;
+  bind(__BUILTIN_ITERATOR, Iterator);
+  bind(__BUILTIN_ITERABLE, Iterable);
+}

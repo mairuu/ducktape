@@ -175,7 +175,7 @@ int disassemble_chunk_instruction(Chunk *chunk, int offset) {
   }
 
   case OP_IMPL:
-    return simple_instruction("OP_IMPL", offset);
+    return byte_instruction("OP_IMPL", chunk,offset);
   case OP_IMPL_ANON:
     return simple_instruction("OP_IMPL_ANON", offset);
   case OP_IMPL_METHOD:

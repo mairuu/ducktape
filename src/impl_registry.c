@@ -1,4 +1,5 @@
 #include "impl_registry.h"
+#include "object.h"
 
 #include <assert.h>
 
@@ -31,10 +32,14 @@ void impl_registry_destroy(ImplRegistry *registry, Allocator *al) {
 
 bool impl_registry_put(ImplRegistry *registry, ObjImpl *impl, Allocator *al) {
   assert(impl != NULL);
-  assert(impl->subject != NULL);
   assert(impl->trait != NULL);
 
-  uint64_t key = pack_key(impl->subject->flags.def_id, impl->trait->obj.flags.def_id);
+  if (impl->subject_id == 0) {
+    assert(false && "subject_id of 0 is reserved for invalid subjects");
+    return false; // subject_id of 0 is reserved for invalid subjects
+  }
+
+  uint64_t key = pack_key(impl->subject_id, impl->trait->obj.flags.def_id);
   Value key_val = key_to_value(key);
 
   // conflict check
@@ -54,6 +59,10 @@ ObjImpl *impl_registry_get(ImplRegistry *registry, Object *receiver, ObjTraitDef
   switch (receiver->type) {
   case OBJ_STRUCT_INST:
     receiver_id = ((ObjStructInst *)receiver)->def->obj.flags.def_id;
+    break;
+  case OBJ_ARRAY:
+  case OBJ_ARRAY_ITERATOR:
+    receiver_id = receiver->flags.def_id;
     break;
   default:
     return NULL; // type cannot implement traits

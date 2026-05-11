@@ -748,7 +748,7 @@ static void ctx_emit_default_methods(Context *ctx, Token *trait_name, DefaultMet
 
   VarRef trait_ref = {.definition_index = trait_def->slot, .scope = REF_DEFINITION};
   ctx_emit_get(ctx, trait_ref);
-  ctx_emit_bytes(ctx, OP_DUP, OP_IMPL);
+  ctx_emit_bytes(ctx, OP_DUP, OP_IMPL, 0);
 
   for (int i = 0; i < defaults->count; i++) {
     ConstantRef fn_ref = ctx_make_constant(
@@ -1102,7 +1102,7 @@ static ParseRule rules[] = {
     [TOKEN_RIGHT_PAREN] = {NULL, NULL, PREC_NONE},    //
     [TOKEN_LEFT_BRACE] = {NULL, NULL, PREC_NONE},     //
     [TOKEN_RIGHT_BRACE] = {NULL, NULL, PREC_NONE},    //
-    [TOKEN_LEFT_SQUARE] = {NULL, index, PREC_CALL},    //
+    [TOKEN_LEFT_SQUARE] = {NULL, index, PREC_CALL},   //
     [TOKEN_RIGHT_SQUARE] = {NULL, NULL, PREC_NONE},   //
     [TOKEN_COLON] = {NULL, NULL, PREC_NONE},          //
     [TOKEN_COMMA] = {NULL, NULL, PREC_NONE},          //
@@ -1594,16 +1594,6 @@ static void declaration_trait(Context *ctx) {
   ctx_emit_default_methods(ctx, &name, &defaults);
 }
 
-static int find_trait_method_index(TraitDef *trait, StringView name) {
-  int method_count = arr_count(trait->methods);
-  for (int i = 0; i < method_count; i++) {
-    if (sv_equal(sv_from_str(trait->methods->data[i].name), name)) {
-      return i;
-    }
-  }
-  return -1;
-}
-
 typedef enum {
   IMPL_TYPE_TRAIT,
   IMPL_TYPE_INHERENT,
@@ -1628,7 +1618,7 @@ static void parse_impl_body_trait(Context *ctx, Token *impl_token, Definition *t
     Token method_token = ctx->parser.previous;
     StringView name_sv = sv_from_token(&method_token);
 
-    int method_index = find_trait_method_index(trait, name_sv);
+    int method_index = traitdef_find_method_index(trait, name_sv);
     if (method_index < 0) {
       DIAGNOSTIC(ctx, "method not found in trait", {*impl_token, "in this impl block"},
                  {method_token, "method declared here"});
@@ -1687,7 +1677,7 @@ static void parse_impl_body_inherent(Context *ctx, Token *impl_token, Definition
     Token method_token = ctx->parser.previous;
     StringView name_sv = sv_from_token(&method_token);
 
-    int method_index = find_trait_method_index(trait, name_sv);
+    int method_index = traitdef_find_method_index(trait, name_sv);
     if (method_index >= 0) {
       DIAGNOSTIC(ctx, "method name conflicts with method in inherent impl",
                  {*impl_token, "in this impl block"}, {method_token, "method declared here"}, );
@@ -1790,7 +1780,7 @@ static void declaration_impl(Context *ctx) {
   ctx_emit_get(ctx, trait_ref);
   VarRef struct_ref = {.definition_index = struct_def->slot, .scope = REF_DEFINITION};
   ctx_emit_get(ctx, struct_ref);
-  ctx_emit_byte(ctx, OP_IMPL);
+  ctx_emit_bytes(ctx, OP_IMPL, impl_type == IMPL_TYPE_INHERENT ? 1 : 0);
 
   parse_impl_body(ctx, &impl_token, trait_def, impl_type);
 

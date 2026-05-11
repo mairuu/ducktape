@@ -45,6 +45,10 @@ Definition def_copy(const Definition *def, Allocator *al);
 
 void def_destroy(Definition *def, Allocator *al);
 
+int traitdef_find_method_index(TraitDef *trait, StringView method_name);
+
+// -------------------------------------------------------------------------------
+
 typedef struct {
   StringView name;
   int index;
