@@ -33,6 +33,19 @@ trait Iterator {
       }
     };
   }
+  fun skip(self, n) {
+    var inner = self;
+    return impl Iterator {
+      fun has_next(self) {
+        for n > 0 and inner.has_next() {
+          inner.next();
+          n -= 1;
+        }
+        return inner.has_next();
+      } 
+      fun next(self) => inner.next();
+    };
+  }
   fun take(self, n) {
     var inner = self;
     var i = -1;
@@ -42,12 +55,9 @@ trait Iterator {
     };
   }
   fun collect(self) {
-    var n = 10;
-    var res = array(n);
-    var i = -1;
-    n -= 1;
-    for i < n and self.has_next() {
-      res[i += 1] = self.next();
+    var res = array();
+    for self.has_next() {
+      res.push(self.next());
     }
     return res;
   }

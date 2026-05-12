@@ -19,6 +19,7 @@ static const char *obj_type_names[] = {
     [OBJ_STRUCT_DEF] = "struct-def",
     [OBJ_STRUCT_INST] = "struct-inst",
     [OBJ_TRAIT_DEF] = "trait-def",
+    [OBJ_NATIVE_DEF] = "native-def",
     [OBJ_IMPL] = "impl",
     [OBJ_TRAIT_OBJECT] = "trait-obj",
     [OBJ_ARRAY] = "array",
@@ -80,6 +81,10 @@ int obj_sprintf(char *buf, int bufsize, Object *obj) {
     ObjTraitDef *def = (ObjTraitDef *)obj;
     return snprintf(buf, bufsize, "<trait %.*s>", def->name->str.length, def->name->str.chars);
   }
+  case OBJ_NATIVE_DEF: {
+    ObjNativeDef *def = (ObjNativeDef *)obj;
+    return snprintf(buf, bufsize, "<native def %.*s>", def->name->str.length, def->name->str.chars);
+  }   
   case OBJ_IMPL: {
     ObjImpl *impl = (ObjImpl *)obj;
     return snprintf(buf, bufsize, "<impl at @%p>", (void *)impl);
@@ -163,6 +168,9 @@ void obj_free(Object **obj, Allocator *al) {
     break;
   case OBJ_TRAIT_DEF:
     obj_trait_def_free((ObjTraitDef **)obj, al);
+    break;
+  case OBJ_NATIVE_DEF:
+    obj_native_def_free((ObjNativeDef **)obj, al);
     break;
   case OBJ_IMPL:
     obj_impl_free((ObjImpl **)obj, al);
@@ -368,6 +376,24 @@ void obj_trait_def_free(ObjTraitDef **def, Allocator *al) {
     return;
   }
   al_free(al, *def, sizeof(ObjTraitDef));
+  *def = NULL;
+}
+
+// -----------------------------------------------------------------------------
+
+ObjNativeDef //
+    *obj_native_def_new(ObjString *name, Allocator *al) {
+  ObjNativeDef *obj = obj_new(sizeof(ObjNativeDef), OBJ_NATIVE_DEF, al);
+  obj->name = name;
+  obj->inherent_impl = NULL;
+  return obj;
+}
+
+void obj_native_def_free(ObjNativeDef **def, Allocator *al) {
+  if (!def) {
+    return;
+  }
+  al_free(al, *def, sizeof(ObjNativeDef));
   *def = NULL;
 }
 

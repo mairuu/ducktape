@@ -6,6 +6,7 @@
 
 #include "garbage_collector.h"
 #include "object.h"
+#include "string_utils.h"
 #include "value.h"
 #include "virtual_machine.h"
 
@@ -113,11 +114,150 @@ static Value native_bind_builtin(VirtualMachine *vm, int arg_count, Value *args)
   return NIL_VAL;
 }
 
-static bool impl_iterable_for_obj_array(VirtualMachine *vm);
-static bool impl_iterator_for_obj_array_iter(VirtualMachine *vm);
+#define GET_SELF(Obj, self_var, obj_var)                                                           \
+  Value self_var = args[-1];                                                                       \
+  Obj *obj_var = (Obj *)AS_TRAIT_OBJECT(self_var)->receiver
 
-bool builtin_register(BuiltinRegistry *registry, VirtualMachine *vm) {
-  (void)registry;
+#define GET_SELF_INHERENT(Obj, self_var, obj_var)                                                  \
+  Value self_var = args[-1];                                                                       \
+  Obj *obj_var = (Obj *)AS_OBJECT(self_var)
+
+static Value _arr_iter(VirtualMachine *vm, int arg_count, Value *args) {
+  if (arg_count != 0) {
+    vm_panic(vm, "iter() takes no arguments");
+  }
+  GET_SELF(ObjArray, self, arr);
+
+  ObjArrayIterator *arr_iter = obj_array_iterator_new(arr, &vm->al);
+  vm_track_object(vm, &arr_iter->obj);
+
+  // Object *iter = vm_cast(vm, OBJECT_VAL(arr_iter), &vm->builtins.iterator->obj);
+  // assert(iter != NULL && "iter object should implement iterator trait");
+
+  Object *iter =
+      &obj_trait_object_new(&arr_iter->obj, vm->builtins.impl_iterator_for_obj_array_iter, &vm->al)
+           ->obj;
+  vm_track_object(vm, iter);
+
+  return OBJECT_VAL(iter);
+}
+
+static bool impl_iterable_for_obj_array(VirtualMachine *vm) {
+  NativeMethodDef methods[] = {
+      {.name = "iter", .func = _arr_iter},
+  };
+  vm->builtins.impl_iterable_for_obj_array = //
+      vm_impl_native(vm, DEFID_ARRAY, vm->builtins.iterable, methods, ARRAY_COUNT(methods));
+
+  return vm->builtins.impl_iterable_for_obj_array != NULL;
+}
+
+static Value _arr_iter_has_next(VirtualMachine *vm, int arg_count, Value *args) {
+  if (arg_count != 0) {
+    vm_panic(vm, "has_next() takes no arguments");
+  }
+  GET_SELF(ObjArrayIterator, self, iter);
+  return BOOL_VAL(iter->index < arr_count(iter->array->values));
+}
+
+static Value _arr_iter_next(VirtualMachine *vm, int arg_count, Value *args) {
+  if (arg_count != 0) {
+    vm_panic(vm, "next() takes no arguments");
+  }
+  GET_SELF(ObjArrayIterator, self, iter);
+
+  if (iter->index >= arr_count(iter->array->values)) {
+    vm_panic(vm, "iterator out of bounds");
+  }
+  return iter->array->values->data[iter->index++];
+}
+
+static bool impl_iterator_for_obj_array_iter(VirtualMachine *vm) {
+  NativeMethodDef methods[] = {
+      {.name = "has_next", .func = _arr_iter_has_next},
+      {.name = "next", .func = _arr_iter_next},
+  };
+  vm->builtins.impl_iterator_for_obj_array_iter = //
+      vm_impl_native(vm, DEFID_ARRAY_ITERATOR, vm->builtins.iterator, methods,
+                     ARRAY_COUNT(methods));
+
+  return vm->builtins.impl_iterator_for_obj_array_iter != NULL;
+}
+
+static Value _arr_push(VirtualMachine *vm, int arg_count, Value *args) {
+  if (arg_count != 1)
+    vm_panic(vm, "push() takes one argument");
+  GET_SELF_INHERENT(ObjArray, self, arr);
+  arr_push(arr->values, args[0], &vm->al);
+  return NIL_VAL;
+}
+
+static Value _arr_pop(VirtualMachine *vm, int arg_count, Value *args) {
+  if (arg_count != 0) {
+    vm_panic(vm, "pop() takes no arguments");
+  }
+  GET_SELF_INHERENT(ObjArray, self, arr);
+  if (arr_count(arr->values) == 0) {
+    vm_panic(vm, "pop() on empty array");
+  }
+  return arr_pop(arr->values);
+}
+
+static Value _arr_len(VirtualMachine *vm, int arg_count, Value *args) {
+  if (arg_count != 0) {
+    vm_panic(vm, "len() takes no arguments");
+  }
+  GET_SELF_INHERENT(ObjArray, self, arr);
+  return NUMBER_VAL(arr_count(arr->values));
+}
+
+static bool impl_inherent_for_obj_array(VirtualMachine *vm) {
+  NativeMethodDef methods[] = {
+      {.name = "push", .func = _arr_push},
+      {.name = "pop", .func = _arr_pop},
+      {.name = "len", .func = _arr_len},
+  };
+  ObjImpl *impl = vm_impl_native_inherent(vm, DEFID_ARRAY, methods, ARRAY_COUNT(methods));
+  if (!impl) {
+    return false;
+  }
+
+  vm->builtins.array_inherent_impl = impl;
+  vm->builtins.array->inherent_impl = impl; // wire up for dispatch
+  return true;
+}
+
+bool builtin_register(VirtualMachine *vm) {
+  struct {
+    ObjNativeDef **slot_ptr;
+    const char *name;
+    uint32_t def_id;
+    int slot;
+  } natives[] = {
+      {&vm->builtins.array, "Array", DEFID_ARRAY, SLOT_ARRAY},
+  };
+
+  gc_begin_staging(&vm->gc);
+  for (size_t i = 0; i < ARRAY_COUNT(natives); i++) {
+    ObjString *name = vm_intern_string(vm, sv_from_cstr(natives[i].name));
+
+    ObjNativeDef *def = obj_native_def_new(name, &vm->al);
+    def->obj.flags.def_id = natives[i].def_id;
+    vm_track_object(vm, &def->obj);
+
+    vm->definition_objects->data[natives[i].slot] = &def->obj;
+    vm->definitions->data[natives[i].slot] = (Definition){
+        .type = DEFTYPE_NATIVE,
+        .name = str_from_cstr(natives[i].name, &vm->al),
+        .slot = natives[i].slot,
+    };
+
+    *natives[i].slot_ptr = def;
+  }
+  gc_end_staging(&vm->gc);
+
+  // ----------------------------------------------------------------------------------
+
   vm_define_native(vm, sv_from_cstr("__builtin_bind"), native_bind_builtin);
 
   struct {
@@ -181,6 +321,7 @@ bool builtin_register(BuiltinRegistry *registry, VirtualMachine *vm) {
   } builtin_impls[] = {
       {impl_iterable_for_obj_array, "impl Iterable for ObjArray"},
       {impl_iterator_for_obj_array_iter, "impl Iterator for ObjArrayIterator"},
+      {impl_inherent_for_obj_array, "inherent impl for ObjArray"},
   };
 
   for (size_t i = 0; i < ARRAY_COUNT(builtin_impls); i++) {
@@ -191,70 +332,4 @@ bool builtin_register(BuiltinRegistry *registry, VirtualMachine *vm) {
   }
 
   return true;
-}
-
-#define GET_SELF(Obj, self_var, obj_var)                                                           \
-  Value self_var = args[-1];                                                                       \
-  Obj *obj_var = (Obj *)AS_TRAIT_OBJECT(self_var)->receiver
-
-static Value _arr_iter(VirtualMachine *vm, int arg_count, Value *args) {
-  if (arg_count != 0) {
-    vm_panic(vm, "iter() takes no arguments");
-  }
-  GET_SELF(ObjArray, self, arr);
-
-  ObjArrayIterator *arr_iter = obj_array_iterator_new(arr, &vm->al);
-  vm_track_object(vm, &arr_iter->obj);
-
-  // Object *iter = vm_cast(vm, OBJECT_VAL(arr_iter), &vm->builtins.iterator->obj);
-  // assert(iter != NULL && "iter object should implement iterator trait");
-
-  Object *iter =
-      &obj_trait_object_new(&arr_iter->obj, vm->builtins.impl_iterator_for_obj_array_iter, &vm->al)
-           ->obj;
-  vm_track_object(vm, iter);
-
-  return OBJECT_VAL(iter);
-}
-
-static bool impl_iterable_for_obj_array(VirtualMachine *vm) {
-  NativeMethodDef methods[] = {
-      {.name = "iter", .func = _arr_iter},
-  };
-  vm->builtins.impl_iterable_for_obj_array = //
-      vm_impl_native(vm, DEFID_ARRAY, vm->builtins.iterable, methods, ARRAY_COUNT(methods));
-
-  return vm->builtins.impl_iterable_for_obj_array != NULL;
-}
-
-static Value _arr_iter_has_next(VirtualMachine *vm, int arg_count, Value *args) {
-  if (arg_count != 0) {
-    vm_panic(vm, "has_next() takes no arguments");
-  }
-  GET_SELF(ObjArrayIterator, self, iter);
-  return BOOL_VAL(iter->index < arr_count(iter->array->values));
-}
-
-static Value _arr_iter_next(VirtualMachine *vm, int arg_count, Value *args) {
-  if (arg_count != 0) {
-    vm_panic(vm, "next() takes no arguments");
-  }
-  GET_SELF(ObjArrayIterator, self, iter);
-
-  if (iter->index >= arr_count(iter->array->values)) {
-    vm_panic(vm, "iterator out of bounds");
-  }
-  return iter->array->values->data[iter->index++];
-}
-
-static bool impl_iterator_for_obj_array_iter(VirtualMachine *vm) {
-  NativeMethodDef methods[] = {
-      {.name = "has_next", .func = _arr_iter_has_next},
-      {.name = "next", .func = _arr_iter_next},
-  };
-  vm->builtins.impl_iterator_for_obj_array_iter = //
-      vm_impl_native(vm, DEFID_ARRAY_ITERATOR, vm->builtins.iterator, methods,
-                     ARRAY_COUNT(methods));
-
-  return vm->builtins.impl_iterator_for_obj_array_iter != NULL;
 }

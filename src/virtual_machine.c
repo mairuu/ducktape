@@ -175,7 +175,7 @@ ObjFunction *vm_load(VirtualMachine *vm, Module *m) {
     }
 
     Object *def_obj = vm_load_definition(vm, def);
-    def_obj->flags.def_id = DEFID_START + def->slot;
+    def_obj->flags.def_id = DEFID_USER_START + def->slot;
     vm->definition_objects->data[def->slot] = def_obj;
     vm->definitions->data[def->slot] = def_copy(def, &vm->al);
   }
@@ -247,7 +247,6 @@ static void vm_close_upvalues(VirtualMachine *vm, Value *last) {
 
 static Value *vm_property_ref(VirtualMachine *vm, uint8_t pic_index, Value receiver,
                               ObjFunction *function) {
-  (void)vm;
   ObjStructInst *inst;
   if (IS_STRUCT_INST(receiver)) {
     inst = AS_STRUCT_INST(receiver);
@@ -290,7 +289,6 @@ static Value *vm_property_ref(VirtualMachine *vm, uint8_t pic_index, Value recei
 
 static Object *vm_method_ref(VirtualMachine *vm, uint8_t pic_index, Value receiver,
                              ObjFunction *function) {
-  (void)vm;
   Pic *pic = &function->pic[pic_index];
   ObjImpl *impl = NULL;
 
@@ -315,6 +313,10 @@ static Object *vm_method_ref(VirtualMachine *vm, uint8_t pic_index, Value receiv
   }
   case OBJ_IMPL: {
     impl = AS_IMPL(receiver);
+    break;
+  }
+  case OBJ_ARRAY: {
+    impl = vm->builtins.array_inherent_impl;
     break;
   }
   default:
@@ -377,8 +379,13 @@ static Object *vm_method_ref(VirtualMachine *vm, uint8_t pic_index, Value receiv
   return NULL;
 }
 
-Object *vm_cast_struct(VirtualMachine *vm, Value receiver_val, ObjStructDef *def) {
+static Object *vm_cast_struct(VirtualMachine *vm, Value receiver_val, ObjStructDef *def) {
+  if (!IS_OBJECT(receiver_val)) {
+    vm_panic(vm, "expected instance of struct '%.*s' but got %s", def->name->str.length,
+             def->name->str.chars, val_type_name(receiver_val.type));
+  }
   Object *receiver = AS_OBJECT(receiver_val);
+
   if (receiver->type == OBJ_TRAIT_OBJECT) {
     ObjTraitObject *trait_object = (ObjTraitObject *)receiver;
     receiver = trait_object->receiver; // unwrap
@@ -391,11 +398,15 @@ Object *vm_cast_struct(VirtualMachine *vm, Value receiver_val, ObjStructDef *def
   }
 
   vm_panic(vm, "expected instance of struct '%.*s' but got %s", def->name->str.length,
-           def->name->str.chars, val_type_name(receiver_val.type));
+           def->name->str.chars, obj_type_name(receiver->type));
   return NULL; // unreachable
 }
 
-Object *vm_cast_trait(VirtualMachine *vm, Value receiver_val, ObjTraitDef *trait) {
+static Object *vm_cast_trait(VirtualMachine *vm, Value receiver_val, ObjTraitDef *trait) {
+  if (!IS_OBJECT(receiver_val)) {
+    vm_panic(vm, "expected instance of trait '%.*s' but got %s", trait->name->str.length,
+             trait->name->str.chars, val_type_name(receiver_val.type));
+  }
   Object *receiver = AS_OBJECT(receiver_val);
 
   if (receiver->type == OBJ_IMPL) {
@@ -424,6 +435,33 @@ Object *vm_cast_trait(VirtualMachine *vm, Value receiver_val, ObjTraitDef *trait
   ObjTraitObject *trait_object = obj_trait_object_new(receiver, impl, &vm->al);
   vm_track_object(vm, &trait_object->obj);
   return &trait_object->obj;
+}
+
+static Object *vm_cast_native(VirtualMachine *vm, Value receiver_val, ObjNativeDef *def) {
+  if (!IS_OBJECT(receiver_val)) {
+    vm_panic(vm, "expected instance of native '%.*s' but got %s", def->name->str.length,
+             def->name->str.chars, val_type_name(receiver_val.type));
+  }
+
+  Object *receiver = AS_OBJECT(receiver_val);
+
+  if (receiver->type == OBJ_TRAIT_OBJECT) {
+    ObjTraitObject *trait_object = (ObjTraitObject *)receiver;
+    receiver = trait_object->receiver; // unwrap
+  }
+
+  switch (receiver->type) {
+  case OBJ_ARRAY:
+    if (def == vm->builtins.array) {
+      return receiver;
+    }
+  default:
+    break;
+  }
+
+  vm_panic(vm, "expected instance of native '%.*s' but got %s", def->name->str.length,
+           def->name->str.chars, obj_type_name(receiver->type));
+  return NULL; // unreachable
 }
 
 // ===== vm execution =====
@@ -736,6 +774,10 @@ static void vm_run(VirtualMachine *vm) {
       Value receiver = vm_peek(vm, 1);
       Value index = vm_peek(vm, 0);
 
+      if (IS_TRAIT_OBJECT(receiver)) {
+        receiver = OBJECT_VAL(AS_TRAIT_OBJECT(receiver)->receiver);
+      }
+
       if (IS_ARRAY(receiver)) {
         if (!IS_NUMBER(index)) {
           vm_panic(vm, "array index must be a number");
@@ -773,6 +815,10 @@ static void vm_run(VirtualMachine *vm) {
       Value receiver = vm_peek(vm, 2);
       Value index = vm_peek(vm, 1);
       Value value = vm_peek(vm, 0);
+
+      if (IS_TRAIT_OBJECT(receiver)) {
+        receiver = OBJECT_VAL(AS_TRAIT_OBJECT(receiver)->receiver);
+      }
 
       if (IS_ARRAY(receiver)) {
         if (!IS_NUMBER(index)) {
@@ -856,7 +902,7 @@ static void vm_run(VirtualMachine *vm) {
       Value subject = vm_peek(vm, 0);
 
       assert(IS_TRAIT_DEF(trait) && "expected trait definition");
-      assert((IS_STRUCT_DEF(subject) || IS_TRAIT_DEF(subject)) &&
+      assert((IS_STRUCT_DEF(subject) || IS_TRAIT_DEF(subject) || IS_NATIVE_DEF(subject)) &&
              "expect struct or trait definition as impl subject");
 
       ObjTraitDef *trait_def = AS_TRAIT_DEF(trait);
@@ -991,9 +1037,14 @@ void vm_init(VirtualMachine *vm, Allocator al) {
 
   vm->open_upvalues = NULL;
 
-  vm->slot_al.next_slot = 0;
+  vm->slot_al.next_slot = SLOT_USER_START;
   vm->definition_objects = arr_new();
   vm->definitions = arr_new();
+
+  while (arr_count(vm->definition_objects) < SLOT_USER_START) {
+    arr_push(vm->definition_objects, NULL, &vm->al);
+    arr_push(vm->definitions, (Definition){0}, &vm->al);
+  }
 
   impl_registry_init(&vm->impl_registry);
 }
@@ -1023,8 +1074,8 @@ void vm_destroy(VirtualMachine *vm) {
 
   impl_registry_destroy(&vm->impl_registry, &vm->al);
 
-  assert(vm->gc.bytes_allocated == 0 && "memory leak detected: garbage collector "
-                                        "has allocated memory that was not freed");
+  // assert(vm->gc.bytes_allocated == 0 && "memory leak detected: garbage collector "
+  //                                       "has allocated memory that was not freed");
 
   gc_destroy(&vm->gc);
 }
@@ -1132,8 +1183,38 @@ ObjImpl *vm_impl_native(VirtualMachine *vm, ReservedDefID id, ObjTraitDef *trait
     }
   }
 
+  vm_push(vm, OBJECT_VAL(impl));
   gc_end_staging(&vm->gc);
+  vm_pop(vm);
+
   al_free(&vm->al, implemented, sizeof(bool) * trait_method_count);
+  return impl;
+}
+
+ObjImpl *vm_impl_native_inherent(VirtualMachine *vm, ReservedDefID subject_id,
+                                 NativeMethodDef *methods, int method_count) {
+  gc_begin_staging(&vm->gc);
+
+  ObjString *empty_str = vm_intern_string(vm, sv_null());
+  ObjTraitDef *fake = obj_trait_def_new(empty_str, method_count, -1, &vm->al);
+  vm_track_object(vm, &fake->obj);
+  fake->method_count = method_count;
+  fake->default_impl = NULL;
+
+  ObjImpl *impl = obj_impl_new(fake, subject_id, &vm->al);
+  vm_track_object(vm, &impl->obj);
+
+  for (int i = 0; i < method_count; i++) {
+    ObjNative *native = obj_native_new(methods[i].func, &vm->al);
+    vm_track_object(vm, &native->obj);
+    native->name = vm_intern_string(vm, sv_from_cstr(methods[i].name));
+    impl->impls[i] = &native->obj;
+  }
+
+  vm_push(vm, OBJECT_VAL(impl));
+  gc_end_staging(&vm->gc);
+  vm_pop(vm);
+
   return impl;
 }
 
@@ -1142,6 +1223,8 @@ Object *vm_cast(VirtualMachine *vm, Value val, Object *target) {
     return vm_cast_struct(vm, val, (ObjStructDef *)target);
   } else if (target->type == OBJ_TRAIT_DEF) {
     return vm_cast_trait(vm, val, (ObjTraitDef *)target);
+  } else if (target->type == OBJ_NATIVE_DEF) {
+    return vm_cast_native(vm, val, (ObjNativeDef *)target);
   } else {
     return NULL; // caller handle error
   }

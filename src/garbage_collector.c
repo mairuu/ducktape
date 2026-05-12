@@ -1,6 +1,7 @@
 #include "garbage_collector.h"
 
 #include "array.h"
+#include "builtins.h"
 #include "impl_registry.h"
 #include "object.h"
 #include "virtual_machine.h"
@@ -84,6 +85,14 @@ static void gc_mark_roots(GarbageCollector *gc) {
   while (impl_registry_iter_next(&it)) {
     gc_mark_object(gc, &it.impl->obj);
   }
+
+  BuiltinRegistry *builtins = &gc->vm->builtins;
+  gc_mark_object(gc, (Object *)builtins->iterable);
+  gc_mark_object(gc, (Object *)builtins->iterator);
+  gc_mark_object(gc, (Object *)builtins->impl_iterable_for_obj_array);
+  gc_mark_object(gc, (Object *)builtins->impl_iterator_for_obj_array_iter);
+  gc_mark_object(gc, (Object *)builtins->array);
+  gc_mark_object(gc, (Object *)builtins->array_inherent_impl);
 }
 
 static void gc_blacken_object(GarbageCollector *gc, Object *obj) {
@@ -102,6 +111,8 @@ static void gc_blacken_object(GarbageCollector *gc, Object *obj) {
     break;
   }
   case OBJ_NATIVE:
+    ObjNative *native = (ObjNative *)obj;
+    gc_mark_object(gc, &native->name->obj);
     break;
   case OBJ_UPVALUE: {
     ObjUpvalue *upvalue = (ObjUpvalue *)obj;
@@ -134,6 +145,12 @@ static void gc_blacken_object(GarbageCollector *gc, Object *obj) {
     ObjTraitDef *def = (ObjTraitDef *)obj;
     gc_mark_object(gc, &def->name->obj);
     gc_mark_object(gc, &def->default_impl->obj);
+    break;
+  }
+  case OBJ_NATIVE_DEF: {
+    ObjNativeDef *def = (ObjNativeDef *)obj;
+    gc_mark_object(gc, &def->name->obj);
+    gc_mark_object(gc, (Object *)def->inherent_impl);
     break;
   }
   case OBJ_IMPL: {

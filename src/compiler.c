@@ -1743,7 +1743,7 @@ static void declaration_impl(Context *ctx) {
   int brace_depth = ctx->parser.brace_depth;
 
   Definition *trait_def = NULL;
-  Definition *struct_def = NULL;
+  Definition *target_def = NULL;
 
   trait_def = ctx_consume_definition(ctx);
   if (!trait_def) {
@@ -1756,15 +1756,23 @@ static void declaration_impl(Context *ctx) {
   if (trait_def->type == DEFTYPE_TRAIT) {
     ctx_consume(ctx, TOKEN_FOR, "expect 'for' after trait name in impl.");
 
-    struct_def = ctx_consume_expected_definition(ctx, DEFTYPE_STRUCT);
-    if (!struct_def) {
+    target_def = ctx_consume_definition(ctx);
+    Token name = ctx->parser.previous;
+    if (target_def->type != DEFTYPE_STRUCT && target_def->type != DEFTYPE_NATIVE) {
+      ctx_error_at(ctx, &name, "'%.*s' is a %s definition, expected struct or native.", name.length,
+                   name.start, def_type_name(target_def->type));
+      ctx_brace_synchronize(ctx, brace_depth);
+      return;
+    }
+
+    if (!target_def) {
       ctx_brace_synchronize(ctx, brace_depth);
       return;
     }
   } else if (trait_def->type == DEFTYPE_STRUCT) {
     // inherent impl
-    struct_def = trait_def;
-    trait_def = ctx_make_inherent_trait_def(ctx, struct_def);
+    target_def = trait_def;
+    trait_def = ctx_make_inherent_trait_def(ctx, target_def);
     impl_type = IMPL_TYPE_INHERENT;
     if (!trait_def) {
       ctx_brace_synchronize(ctx, brace_depth);
@@ -1778,7 +1786,7 @@ static void declaration_impl(Context *ctx) {
 
   VarRef trait_ref = {.definition_index = trait_def->slot, .scope = REF_DEFINITION};
   ctx_emit_get(ctx, trait_ref);
-  VarRef struct_ref = {.definition_index = struct_def->slot, .scope = REF_DEFINITION};
+  VarRef struct_ref = {.definition_index = target_def->slot, .scope = REF_DEFINITION};
   ctx_emit_get(ctx, struct_ref);
   ctx_emit_bytes(ctx, OP_IMPL, impl_type == IMPL_TYPE_INHERENT ? 1 : 0);
 

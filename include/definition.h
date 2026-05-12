@@ -6,6 +6,7 @@
 typedef enum {
   DEFTYPE_STRUCT,
   DEFTYPE_TRAIT,
+  DEFTYPE_NATIVE,
 } DefinitionType;
 
 DEFINE_ARRAY(String, StringArray);
@@ -29,12 +30,17 @@ typedef struct {
 } TraitDef;
 
 typedef struct {
+  int _unused;
+} NativeDef;
+
+typedef struct {
   DefinitionType type;
   String name;
   int slot; // stable slot
   union {
     StructDef struct_def;
     TraitDef trait_def;
+    NativeDef native_def;
   } as;
 } Definition;
 

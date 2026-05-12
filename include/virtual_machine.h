@@ -77,7 +77,13 @@ void vm_undefine_global(VirtualMachine *vm, StringView name);
 
 void vm_define_native(VirtualMachine *vm, StringView name, NativeFunc function);
 
-ObjImpl *vm_impl_native(VirtualMachine *vm, ReservedDefID def_id, ObjTraitDef *trait, NativeMethodDef *methods, int method_count);
+ObjImpl //
+    *vm_impl_native(VirtualMachine *vm, ReservedDefID def_id, ObjTraitDef *trait,
+                    NativeMethodDef *methods, int method_count);
+
+ObjImpl //
+    *vm_impl_native_inherent(VirtualMachine *vm, ReservedDefID subject_id, NativeMethodDef *methods,
+                             int method_count);
 
 Object *vm_cast(VirtualMachine *vm, Value val, Object *target);
 

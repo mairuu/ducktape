@@ -6,7 +6,6 @@
 #include "hash_table.h"
 #include "string_utils.h"
 #include "value.h"
-#include <stdint.h>
 
 typedef enum {
   OBJ_STRING,
@@ -17,6 +16,7 @@ typedef enum {
   OBJ_STRUCT_DEF,
   OBJ_STRUCT_INST,
   OBJ_TRAIT_DEF,
+  OBJ_NATIVE_DEF,
   OBJ_IMPL,
   OBJ_TRAIT_OBJECT,
   OBJ_ARRAY,
@@ -38,8 +38,13 @@ typedef enum {
   DEFID_NONE = 0, //
   DEFID_ARRAY,
   DEFID_ARRAY_ITERATOR,
-  DEFID_START
+  DEFID_USER_START
 } ReservedDefID;
+
+typedef enum {
+  SLOT_ARRAY = 0, //
+  SLOT_USER_START,
+} ReservedSlot;
 
 typedef struct Object {
   ObjectType type;
@@ -123,6 +128,12 @@ typedef struct {
   int def_slot;
 } ObjTraitDef;
 
+typedef struct {
+  Object obj;
+  ObjString *name;
+  ObjImpl *inherent_impl;
+} ObjNativeDef;
+
 typedef struct ObjImpl {
   Object obj;
   ObjTraitDef *trait;
@@ -166,6 +177,7 @@ static inline bool value_is_obj_type(Value value, ObjectType type) {
 #define IS_STRUCT_DEF(value) value_is_obj_type(value, OBJ_STRUCT_DEF)
 #define IS_STRUCT_INST(value) value_is_obj_type(value, OBJ_STRUCT_INST)
 #define IS_TRAIT_DEF(value) value_is_obj_type(value, OBJ_TRAIT_DEF)
+#define IS_NATIVE_DEF(value) value_is_obj_type(value, OBJ_NATIVE_DEF)
 #define IS_IMPL(value) value_is_obj_type(value, OBJ_IMPL)
 #define IS_TRAIT_OBJECT(value) value_is_obj_type(value, OBJ_TRAIT_OBJECT)
 #define IS_ARRAY(value) value_is_obj_type(value, OBJ_ARRAY)
@@ -182,6 +194,7 @@ static inline bool value_is_obj_type(Value value, ObjectType type) {
 #define AS_STRUCT_DEF(value) ((ObjStructDef *)AS_OBJECT(value))
 #define AS_STRUCT_INST(value) ((ObjStructInst *)AS_OBJECT(value))
 #define AS_TRAIT_DEF(value) ((ObjTraitDef *)AS_OBJECT(value))
+#define AS_NATIVE_DEF(value) ((ObjNativeDef *)AS_OBJECT(value))
 #define AS_IMPL(value) ((ObjImpl *)AS_OBJECT(value))
 #define AS_TRAIT_OBJECT(value) ((ObjTraitObject *)AS_OBJECT(value))
 #define AS_ARRAY(value) ((ObjArray *)AS_OBJECT(value))
@@ -255,6 +268,13 @@ ObjTraitDef //
     *obj_trait_def_new(ObjString *name, int method_count, int def_slot, Allocator *al);
 
 void obj_trait_def_free(ObjTraitDef **def, Allocator *al);
+
+// -----------------------------------------------------------------------------
+
+ObjNativeDef //
+    *obj_native_def_new(ObjString *name, Allocator *al);
+
+void obj_native_def_free(ObjNativeDef **def, Allocator *al);
 
 // -----------------------------------------------------------------------------
 

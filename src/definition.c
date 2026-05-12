@@ -7,6 +7,7 @@
 static const char *def_type_names[] = {
     [DEFTYPE_STRUCT] = "struct",
     [DEFTYPE_TRAIT] = "trait",
+    [DEFTYPE_NATIVE] = "native",
 };
 
 const char *def_type_name(DefinitionType type) {
@@ -49,6 +50,8 @@ Definition def_copy(const Definition *def, Allocator *al) {
     }
     break;
   }
+  case DEFTYPE_NATIVE:
+    return copy;
   default:
     assert(false && "unknown definition type");
   }
@@ -77,6 +80,8 @@ void def_destroy(Definition *def, Allocator *al) {
     arr_free(&trait_def->methods, al);
     break;
   }
+  case DEFTYPE_NATIVE:
+    break;
   default:
     assert(false && "unknown definition type");
   }
