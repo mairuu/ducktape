@@ -129,14 +129,19 @@ Type *ty_generic(StringView name, TraitDef **bounds, int bound_count,
 Type *ty_assoc(Type *base, StringView assoc_name, Allocator *al);
 Type *ty_struct(StructDef *def, Type **args, int argc, Allocator *al);
 Type *ty_enum(EnumDef *def, Type **args, int argc, Allocator *al);
+Type *ty_trait(TraitDef *def, Type **args, int argc, Allocator *al);
 
 static inline bool types_equal(const Type *a, const Type *b) { return a == b; }
 bool type_is_numeric(const Type *t);
-static inline bool type_is_poison(const Type *t) { return t->kind == TY_POISON; }
+static inline bool type_is_poison(const Type *t) {
+  return t->kind == TY_POISON;
+}
 
-const char *type_name(const Type *t); // shared underlying char buffer, not thread safe
+const char *
+type_name(const Type *t); // shared underlying char buffer, not thread safe
 int type_name_sprintf(const Type *t, char *buf, size_t buf_size);
-int type_sprintf(const Type *t, char *buf, size_t buf_size); // fully qualified, with type args
+int type_sprintf(const Type *t, char *buf,
+                 size_t buf_size); // fully qualified, with type args
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DEFINITION TABLES
@@ -204,6 +209,7 @@ typedef struct {
 
 struct TraitDef {
   StringView name;
+  Type *self_type;
 
   StringView *type_params;
   int type_param_count;

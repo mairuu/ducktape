@@ -15,6 +15,7 @@ typedef enum {
   SYM_FUN,
   SYM_VAR,
   SYM_ENUM,
+  SYM_TRAIT,
   SYM_TYPE_PARAM,
 } SymKind;
 
@@ -28,6 +29,7 @@ typedef struct {
     FunDef *fun_def;
     StructDef *struct_def;
     EnumDef *enum_def;
+    TraitDef *trait_def;
     Type *type_param;
   } as;
 } Symbol;
@@ -565,7 +567,7 @@ static PathRes resolve_path(TypeChecker *tc, Path *path) {
 
 static Type *resolve_typenode(TypeChecker *tc, TypeNode *tn);
 static void resolve_stmt(TypeChecker *tc, Stmt *stmt);
-static Type *resolve_expr(TypeChecker *tc, Expr *expr);
+static Type *resolve_expr(TypeChecker *tc, Expr *expr, Type *hint);
 
 static Type *resolve_typenode(TypeChecker *tc, TypeNode *tn) {
   Type *result = NULL;
@@ -734,15 +736,15 @@ static void resolve_stmt(TypeChecker *tc, Stmt *stmt) {
     default:
       break;
     }
-    resolve_expr(tc, stmt->as.expr_stmt.expr);
+    resolve_expr(tc, stmt->as.expr_stmt.expr, NULL);
     break;
 
   case STMT_VAR: {
-    Type *init_type = resolve_expr(tc, stmt->as.var_stmt.initializer);
     Type *ann_type =
         stmt->as.var_stmt.type_annotation
             ? resolve_typenode(tc, stmt->as.var_stmt.type_annotation)
             : ty_unknown(NULL, tc->al);
+    Type *init_type = resolve_expr(tc, stmt->as.var_stmt.initializer, ann_type);
 
     Type *resolved = init_type;
     if (!type_is_poison(ann_type) && !type_is_poison(init_type)) {
@@ -888,7 +890,7 @@ static void resolve_stmt(TypeChecker *tc, Stmt *stmt) {
   case STMT_RETURN: {
     Type *value_type = NULL;
     if (stmt->as.return_stmt.value != NULL) {
-      value_type = resolve_expr(tc, stmt->as.return_stmt.value);
+      value_type = resolve_expr(tc, stmt->as.return_stmt.value, NULL);
     } else {
       value_type = ty_unit();
     }
@@ -1046,7 +1048,7 @@ static Type *rewrite_tuple_struct_call(TypeChecker *tc, Expr *expr,
               .fields = fields,
           },
   };
-  return resolve_expr(tc, expr);
+  return resolve_expr(tc, expr, NULL);
 }
 
 static Type *resolve_callee(TypeChecker *tc, Expr *expr, FunDef **out_fun_def) {
@@ -1054,11 +1056,11 @@ static Type *resolve_callee(TypeChecker *tc, Expr *expr, FunDef **out_fun_def) {
   USE_INTERNAL(tc, tci);
 
   if (expr->as.call.callee->kind != EXPR_VAR)
-    return resolve_expr(tc, expr->as.call.callee);
+    return resolve_expr(tc, expr->as.call.callee, NULL);
 
   Symbol *sym = sym_lookup(&tci->type_syms, expr->as.call.callee->as.var.name);
   if (!sym) {
-    return resolve_expr(tc, expr->as.call.callee);
+    return resolve_expr(tc, expr->as.call.callee, NULL);
   }
 
   switch (sym->kind) {
@@ -1086,10 +1088,9 @@ static Type *resolve_callee(TypeChecker *tc, Expr *expr, FunDef **out_fun_def) {
 }
 
 // same as function definitions but for closures
-static Type *resolve_fun_expr(TypeChecker *tc, Expr *expr) {
+static Type *resolve_fun_expr(TypeChecker *tc, Expr *expr, Type *hint) {
   assert(expr->kind == EXPR_CLOSURE &&
          "resolve_fun_expr: expected closure expression");
-
   FunDef *def = al_alloc_zero_for(tc->al, FunDef);
 
   def->type_param_count = expr->as.closure.type_param_count;
@@ -1122,6 +1123,7 @@ static Type *resolve_fun_expr(TypeChecker *tc, Expr *expr) {
   // check
 
   USE_INTERNAL(tc, tci);
+  bool ok = true;
 
   // register type parameters as type symbols
   for (int i = 0; i < def->type_param_count; i++) {
@@ -1134,20 +1136,24 @@ static Type *resolve_fun_expr(TypeChecker *tc, Expr *expr) {
     if (expr->as.closure.type_params[i].bound_count > 0) {
       tc_error(tc, expr->as.closure.type_params[i].span,
                "type parameter bounds not supported yet");
+      ok = false;
     }
     sym_define(&tci->type_syms, tp_sym, tc->al);
   }
 
+  bool has_fun_hint = hint && hint->kind == TY_FUNCTION &&
+                      hint->as.fun.param_count == def->param_count;
+
   // resolve parameters
   for (int i = 0; i < def->param_count; i++) {
     ClosureParam *p = &expr->as.closure.params[i];
-    if (p->is_self) {
-      ps.ptr[i] = ty_poison();
-      def->params[i].is_self = true;
-      assert(false && "resolve_fun_expr: self params not supported yet");
+    if (p->type_annotation) {
+      ps.ptr[i] = resolve_typenode(tc, p->type_annotation);
+      ok = ok && !type_is_poison(ps.ptr[i]);
+    } else if (has_fun_hint) {
+      ps.ptr[i] = hint->as.fun.param_types[i];
     } else {
-      ps.ptr[i] = p->type_annotation ? resolve_typenode(tc, p->type_annotation)
-                                     : ty_unknown(NULL, tc->al);
+      ps.ptr[i] = ty_unknown(NULL, tc->al);
     }
   }
 
@@ -1155,8 +1161,10 @@ static Type *resolve_fun_expr(TypeChecker *tc, Expr *expr) {
   Type *return_type =
       expr->as.closure.return_type_annotation
           ? resolve_typenode(tc, expr->as.closure.return_type_annotation)
-          : ty_unknown(NULL, tc->al);
+      : has_fun_hint ? hint->as.fun.return_type
+                     : ty_unknown(NULL, tc->al);
   def->return_type = return_type;
+  ok = ok && !type_is_poison(return_type);
 
   FunDef *saved_fun = tci->current_fun;
   tci->current_fun = def;
@@ -1175,14 +1183,11 @@ static Type *resolve_fun_expr(TypeChecker *tc, Expr *expr) {
   }
 
   if (expr->as.closure.body != NULL) {
-    Type *body_type = resolve_expr(tc, expr->as.closure.body);
-
-    SubstEnv env;
-    subst_init(&env);
+    Type *body_type = resolve_expr(tc, expr->as.closure.body, NULL);
 
     if (!type_is_poison(body_type) && !type_is_poison(return_type)) {
-      if (!unify(tc, &env, return_type, body_type,
-                 expr->as.closure.body->span)) {
+      if (!types_equal(return_type, body_type)) {
+        ok = false;
         char expected_buf[64], value_buf[64];
         type_sprintf(return_type, expected_buf, sizeof(expected_buf));
         type_sprintf(body_type, value_buf, sizeof(value_buf));
@@ -1197,7 +1202,8 @@ static Type *resolve_fun_expr(TypeChecker *tc, Expr *expr) {
 
   tci->current_fun = saved_fun;
 
-  return ty_function(ps.ptr, ps.count, return_type, tc->al);
+  return ok ? ty_function(ps.ptr, ps.count, return_type, tc->al) //
+            : ty_poison();
 }
 
 static void check_match_pattern(TypeChecker *tc, SubstEnv *env, Pattern *pat,
@@ -1209,7 +1215,7 @@ static void check_match_pattern(TypeChecker *tc, SubstEnv *env, Pattern *pat,
   case PAT_WILDCARD:
     break;
   case PAT_LITERAL: {
-    Type *literal_ty = resolve_expr(tc, pat->as.literal_expr);
+    Type *literal_ty = resolve_expr(tc, pat->as.literal_expr, NULL);
     if (!type_is_poison(literal_ty) && !type_is_poison(subject_ty)) {
       if (!types_equal(literal_ty, subject_ty)) {
         char literal_buf[64], subject_buf[64];
@@ -1406,7 +1412,8 @@ static void check_match_exhaustiveness(TypeChecker *tc, Expr *match_expr,
   }
 }
 
-static Type *resolve_expr(TypeChecker *tc, Expr *expr) {
+static Type *resolve_expr(TypeChecker *tc, Expr *expr, Type *hint) {
+  (void)hint;
   USE_INTERNAL(tc, tci);
   Type *result = NULL;
 
@@ -1441,7 +1448,7 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr) {
   }
 
   case EXPR_UNARY: {
-    Type *operand = resolve_expr(tc, expr->as.unary.operand);
+    Type *operand = resolve_expr(tc, expr->as.unary.operand, NULL);
     if (type_is_poison(operand)) {
       result = ty_poison();
       break;
@@ -1474,18 +1481,18 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr) {
   }
 
   case EXPR_BINARY: {
-    Type *lhs = resolve_expr(tc, expr->as.binary.left);
-    Type *rhs = resolve_expr(tc, expr->as.binary.right);
+    Type *lhs = resolve_expr(tc, expr->as.binary.left, NULL);
+    Type *rhs = resolve_expr(tc, expr->as.binary.right, NULL);
 
     if (type_is_poison(lhs) || type_is_poison(rhs)) {
       result = ty_poison();
       break;
     }
 
-    if (lhs->kind == TY_UNKNOWN || rhs->kind == TY_UNKNOWN) {
-      result = ty_unknown(NULL, tc->al);
-      break;
-    }
+    // if (lhs->kind == TY_UNKNOWN || rhs->kind == TY_UNKNOWN) {
+    //   result = ty_unknown(NULL, tc->al);
+    //   break;
+    // }
 
     TokenType op = expr->as.binary.op;
 
@@ -1567,7 +1574,7 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr) {
     }
 
     if (expr->as.block.tail_expr != NULL) {
-      result = resolve_expr(tc, expr->as.block.tail_expr);
+      result = resolve_expr(tc, expr->as.block.tail_expr, NULL);
     } else {
       result = ty_unit();
     }
@@ -1577,14 +1584,14 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr) {
   }
 
   case EXPR_IF: {
-    Type *cond = resolve_expr(tc, expr->as.if_expr.condition);
+    Type *cond = resolve_expr(tc, expr->as.if_expr.condition, NULL);
     if (!type_is_poison(cond) && cond->kind != TY_BOOL) {
       tc_error(tc, expr->as.if_expr.condition->span,
                "if condition must be Bool, got '%s'", type_name(cond));
     }
-    Type *then_t = resolve_expr(tc, expr->as.if_expr.then_block);
+    Type *then_t = resolve_expr(tc, expr->as.if_expr.then_block, NULL);
     if (expr->as.if_expr.else_branch != NULL) {
-      Type *else_t = resolve_expr(tc, expr->as.if_expr.else_branch);
+      Type *else_t = resolve_expr(tc, expr->as.if_expr.else_branch, NULL);
       if (!type_is_poison(then_t) && !type_is_poison(else_t)) {
         if (!types_equal(then_t, else_t)) {
           char then_buf[64], else_buf[64];
@@ -1634,7 +1641,7 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr) {
                     .caller = expr->as.call.callee,
                 },
         };
-        return resolve_expr(tc, expr);
+        return resolve_expr(tc, expr, NULL);
       } else if (res.kind == PATH_RES_SYMBOL) {
         Symbol *sym = res.as.symbol;
         if (sym->kind == SYM_ENUM) {
@@ -1694,8 +1701,10 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr) {
     }
 
     bool ok = true;
+
     for (int i = 0; i < got; i++) {
-      Type *arg_ty = resolve_expr(tc, expr->as.call.args[i]);
+      Type *arg_ty = resolve_expr(tc, expr->as.call.args[i],
+                                  callee_type->as.fun.param_types[i]);
       Type *param_ty = substitute(tc, &env, callee_type->as.fun.param_types[i]);
       if (type_is_poison(arg_ty) || type_is_poison(param_ty)) {
         ok = false;
@@ -1719,13 +1728,16 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr) {
   }
 
   case EXPR_ASSIGN: {
-    Type *target_type = resolve_expr(tc, expr->as.assign.target);
-    Type *val_type = resolve_expr(tc, expr->as.assign.value);
+    Type *target_type = resolve_expr(tc, expr->as.assign.target, NULL);
+    Type *val_type = resolve_expr(tc, expr->as.assign.value, target_type);
     if (!type_is_poison(target_type) && !type_is_poison(val_type)) {
       if (!types_equal(target_type, val_type)) {
+        char target_buf[64], val_buf[64];
+        type_sprintf(target_type, target_buf, sizeof(target_buf));
+        type_sprintf(val_type, val_buf, sizeof(val_buf));
         tc_error(tc, expr->span,
-                 "cannot assign '%s' to a variable of type '%s'",
-                 type_name(val_type), type_name(target_type));
+                 "cannot assign '%s' to a variable of type '%s'", val_buf,
+                 target_buf);
         result = ty_poison();
       } else {
         result = target_type;
@@ -1793,7 +1805,7 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr) {
 
     for (int i = 0; i < provided; i++) {
       FieldInit *fi = &expr->as.struct_init.fields[i];
-      Type *init_t = resolve_expr(tc, fi->value);
+      Type *init_t = resolve_expr(tc, fi->value, NULL);
       Type *field_t;
       StringView fname;
 
@@ -1823,7 +1835,7 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr) {
   }
 
   case EXPR_FIELD: {
-    Type *target_type = resolve_expr(tc, expr->as.field.object);
+    Type *target_type = resolve_expr(tc, expr->as.field.object, NULL);
     if (type_is_poison(target_type)) {
       result = ty_poison();
       break;
@@ -1925,7 +1937,7 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr) {
     type_array_scratch_init(&elms, expr->as.tuple.count, tc->al);
     bool ok = true;
     for (int i = 0; i < elms.count; i++) {
-      elms.ptr[i] = resolve_expr(tc, expr->as.tuple.elems[i]);
+      elms.ptr[i] = resolve_expr(tc, expr->as.tuple.elems[i], NULL);
       ok = ok && !type_is_poison(elms.ptr[i]);
     }
     result = ok ? ty_tuple(elms.ptr, elms.count, tc->al) : ty_poison();
@@ -1974,7 +1986,7 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr) {
       new_expr->as.variant.path = expr->as.path_expr.path;
       new_expr->as.variant.caller = expr;
 
-      return resolve_expr(tc, new_expr);
+      return resolve_expr(tc, new_expr, NULL);
     }
     default:
       tc_error(tc, expr->span, "unsupported path resolution kind");
@@ -2027,7 +2039,7 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr) {
     }
 
     for (int i = 0; i < v->payload_count; i++) {
-      Type *arg_ty = resolve_expr(tc, expr->as.variant.payloads[i]);
+      Type *arg_ty = resolve_expr(tc, expr->as.variant.payloads[i], NULL);
       Type *param_ty = substitute(tc, &env, v->payload_types[i]);
 
       if (type_is_poison(arg_ty) || type_is_poison(param_ty)) {
@@ -2072,7 +2084,7 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr) {
     sym_push_scope(&tci->type_syms, tc->al);
 
     if (expr->as.for_expr.iterable != NULL) {
-      Type *iterable_type = resolve_expr(tc, expr->as.for_expr.iterable);
+      Type *iterable_type = resolve_expr(tc, expr->as.for_expr.iterable, NULL);
       if (!type_is_poison(iterable_type)) {
         tc_error(tc, expr->span,
                  "for loops over iterables not supported yet "
@@ -2082,7 +2094,7 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr) {
     }
 
     if (expr->as.for_expr.condition != NULL) {
-      Type *cond_type = resolve_expr(tc, expr->as.for_expr.condition);
+      Type *cond_type = resolve_expr(tc, expr->as.for_expr.condition, NULL);
       if (!type_is_poison(cond_type) && cond_type->kind != TY_BOOL) {
         tc_error(tc, expr->as.for_expr.condition->span,
                  "for loop condition must be Bool, got '%s'",
@@ -2091,7 +2103,7 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr) {
     }
 
     if (expr->as.for_expr.body != NULL) {
-      resolve_expr(tc, expr->as.for_expr.body);
+      resolve_expr(tc, expr->as.for_expr.body, NULL);
     }
 
     sym_pop_scope(&tci->type_syms, tc->al);
@@ -2101,11 +2113,11 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr) {
     break;
   }
   case EXPR_CLOSURE: {
-    result = resolve_fun_expr(tc, expr);
+    result = resolve_fun_expr(tc, expr, hint);
     break;
   }
   case EXPR_MATCH:
-    Type *subject_ty = resolve_expr(tc, expr->as.match.subject);
+    Type *subject_ty = resolve_expr(tc, expr->as.match.subject, NULL);
 
     Type *result_type = NULL;
 
@@ -2120,14 +2132,14 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr) {
       check_match_pattern(tc, &env, arm->pattern, subject_ty);
 
       if (arm->guard != NULL) {
-        Type *guard_ty = resolve_expr(tc, arm->guard);
+        Type *guard_ty = resolve_expr(tc, arm->guard, NULL);
         if (!type_is_poison(guard_ty) && guard_ty->kind != TY_BOOL) {
           tc_error(tc, arm->guard->span, "match guard must be Bool, got '%s'",
                    type_name(guard_ty));
         }
       }
 
-      Type *arm_ty = resolve_expr(tc, arm->body);
+      Type *arm_ty = resolve_expr(tc, arm->body, NULL);
 
       sym_pop_scope(&tci->val_syms, tc->al);
 
@@ -2318,6 +2330,84 @@ static void register_enum_decl(TypeChecker *tc, Decl *decl) {
   sym_define(&tci->type_syms, sym, tc->al);
 }
 
+static void register_trait_decl(TypeChecker *tc, Decl *decl) {
+  USE_INTERNAL(tc, tci);
+
+  TraitDef *def = al_alloc_zero_for(tc->al, TraitDef);
+  def->name = decl->as.trait_decl.name;
+  def->type_param_count = decl->as.trait_decl.type_param_count;
+
+  def->type_params =
+      al_alloc_zero(tc->al, def->type_param_count * sizeof(StringView));
+  for (int i = 0; i < def->type_param_count; i++) {
+    def->type_params[i] = decl->as.trait_decl.type_params[i].name;
+  }
+
+  TraitMethodDef scratch_methods[8];
+  int method_count = 0;
+  TraitAssocTypeDef scratch_assoc_types[8];
+  int assoc_type_count = 0;
+
+  for (int i = 0; i < decl->as.trait_decl.item_count; i++) {
+    TraitItemNode *item = &decl->as.trait_decl.items[i];
+    switch (item->kind) {
+    case TRAIT_ITEM_METHOD:
+      if (method_count >= 8) {
+        tc_error(tc, item->span, "too many trait methods (max 8 supported)");
+        break;
+      }
+      scratch_methods[method_count].name = item->name;
+      // scratch_methods[method_count].method_type
+      // scratch_methods[method_count].default_impl
+      method_count++;
+      break;
+    case TRAIT_ITEM_ASSOC_TYPE:
+      if (assoc_type_count >= 8) {
+        tc_error(tc, item->span,
+                 "too many associated types in trait (max 8 supported)");
+        break;
+      }
+      scratch_assoc_types[assoc_type_count].name = item->name;
+      assoc_type_count++;
+      break;
+    default:
+      assert(false && "register_trait_decl: unhandled trait item kind");
+      break;
+    }
+  }
+
+  def->method_count = method_count;
+  def->methods = al_alloc_zero(tc->al, method_count * sizeof(TraitMethodDef));
+  memcpy(def->methods, scratch_methods, method_count * sizeof(TraitMethodDef));
+
+  def->assoc_type_count = assoc_type_count;
+  def->assoc_types =
+      al_alloc_zero(tc->al, assoc_type_count * sizeof(TraitAssocTypeDef));
+  memcpy(def->assoc_types, scratch_assoc_types,
+         assoc_type_count * sizeof(TraitAssocTypeDef));
+
+  TypeArrayScratch args;
+  type_array_scratch_init(&args, def->type_param_count, tc->al);
+  for (int i = 0; i < def->type_param_count; i++) {
+    args.ptr[i] =
+        ty_generic(decl->as.trait_decl.type_params[i].name, NULL, 0, tc->al);
+  }
+
+  Type *ty = ty_trait(def, args.ptr, args.count, tc->al);
+  def->self_type = ty;
+  ty->as.trait.def = def;
+  decl->as.trait_decl.def = def;
+
+  Symbol sym = {
+      .name = def->name,
+      .kind = SYM_TRAIT,
+      .type = ty,
+      .slot = def->slot,
+      .as.trait_def = def,
+  };
+  sym_define(&tci->type_syms, sym, tc->al);
+}
+
 static void register_decl(TypeChecker *tc, Decl *decl) {
   switch (decl->kind) {
   case DECL_FUN:
@@ -2328,6 +2418,9 @@ static void register_decl(TypeChecker *tc, Decl *decl) {
     break;
   case DECL_ENUM:
     register_enum_decl(tc, decl);
+    break;
+  case DECL_TRAIT:
+    register_trait_decl(tc, decl);
     break;
   default:
     assert(false && "register_decl: unhandled decl kind");
@@ -2409,7 +2502,7 @@ static void check_fun_decl(TypeChecker *tc, Decl *decl) {
   }
 
   if (decl->as.fun_decl.body != NULL) {
-    Type *body_type = resolve_expr(tc, decl->as.fun_decl.body);
+    Type *body_type = resolve_expr(tc, decl->as.fun_decl.body, NULL);
 
     if (!type_is_poison(body_type) && !type_is_poison(return_type)) {
       if (!types_equal(body_type, return_type)) {
@@ -2497,6 +2590,111 @@ static void check_enum_decl(TypeChecker *tc, Decl *decl) {
   sym_pop_scope(&tci->type_syms, tc->al);
 }
 
+static void check_trait_method(TypeChecker *tc, TraitDef *trait_def,
+                               TraitItemNode *node, TraitMethodDef *method) {
+  USE_INTERNAL(tc, tci);
+  assert(node->kind == TRAIT_ITEM_METHOD);
+
+  Type *ret_ty = node->default_body ? resolve_expr(tc, node->default_body, NULL)
+                                    : ty_unit();
+
+  TypeArrayScratch ps;
+  type_array_scratch_init(&ps, 0, tc->al);
+
+  for (int i = 0; i < node->param_count; i++) {
+    if (node->params[i].is_self) {
+      ps.ptr[i] = trait_def->self_type;
+    } else {
+      ps.ptr[i] = resolve_typenode(tc, node->params[i].type_annotation);
+    }
+  }
+
+  if (node->default_body) {
+    method->has_default = true;
+
+    sym_push_scope(&tci->val_syms, tc->al);
+    for (int i = 0; i < node->param_count; i++) {
+      StringView name =
+          node->params[i].is_self ? sv_from_cstr("self") : node->params[i].name;
+      Symbol param_sym = {
+          .name = name,
+          .kind = SYM_VAR,
+          .type = ps.ptr[i],
+      };
+      sym_define(&tci->val_syms, param_sym, tc->al);
+    }
+
+    Type *body_ty = resolve_expr(tc, node->default_body, NULL);
+    sym_pop_scope(&tci->val_syms, tc->al);
+
+    if (!type_is_poison(body_ty) && !type_is_poison(ret_ty)) {
+      if (!types_equal(body_ty, ret_ty)) {
+        char expected_buf[64], value_buf[64];
+        type_sprintf(ret_ty, expected_buf, sizeof(expected_buf));
+        type_sprintf(body_ty, value_buf, sizeof(value_buf));
+        tc_error(tc, node->default_body->span,
+                 "default implementation of method '" SV_FMT
+                 "' returns '%s' but body has type '%s'",
+                 SV_ARG(method->name), expected_buf, value_buf);
+      }
+    }
+
+    method->default_impl = al_alloc_for(tc->al, FunDef);
+    // todo: fill in method->default_impl with the resolved default
+    // implementation
+  }
+
+  method->method_type = ty_function(ps.ptr, ps.count, ret_ty, tc->al);
+}
+
+static void check_trait_decl(TypeChecker *tc, Decl *decl) {
+  USE_INTERNAL(tc, tci);
+  TraitDef *def = decl->as.trait_decl.def;
+
+  sym_push_scope(&tci->type_syms, tc->al);
+
+  // register type parameters as type symbols
+  for (int i = 0; i < def->type_param_count; i++) {
+    StringView name = decl->as.trait_decl.type_params[i].name;
+    Symbol tp_sym = {
+        .name = name,
+        .kind = SYM_TYPE_PARAM,
+        .type = ty_generic(name, NULL, 0, tc->al),
+    };
+    if (decl->as.trait_decl.type_params[i].bound_count > 0) {
+      tc_error(tc, decl->as.trait_decl.type_params[i].span,
+               "type parameter bounds not supported yet");
+    }
+    sym_define(&tci->type_syms, tp_sym, tc->al);
+  }
+
+  // register associated types as type symbols
+  // for (int i = 0; i < def->assoc_type_count; i++) {
+  //   TraitAssocTypeDef *assoc = &def->assoc_types[i];
+  //   Symbol assoc_sym = {
+  //       .name = assoc->name,
+  //       .kind = SYM_ASSOC_TYPE,
+  //       .type = ty_unknown(NULL, tc->al), // to be filled in later
+  //       .as.assoc_type_def = assoc,
+  //   };
+  //   sym_define(&tci->type_syms, assoc_sym, tc->al);
+  // }
+
+  // check method signatures
+  int method_idx = -1;
+  for (int i = 0; i < decl->as.trait_decl.item_count; i++) {
+    method_idx++;
+    if (decl->as.trait_decl.items[i].kind != TRAIT_ITEM_METHOD) {
+      continue;
+    }
+
+    TraitMethodDef *method = &def->methods[method_idx];
+    check_trait_method(tc, def, &decl->as.trait_decl.items[i], method);
+  }
+
+  sym_pop_scope(&tci->type_syms, tc->al);
+}
+
 static void check_decl(TypeChecker *tc, Decl *decl) {
   switch (decl->kind) {
   case DECL_FUN:
@@ -2507,6 +2705,9 @@ static void check_decl(TypeChecker *tc, Decl *decl) {
     break;
   case DECL_ENUM:
     check_enum_decl(tc, decl);
+    break;
+  case DECL_TRAIT:
+    check_trait_decl(tc, decl);
     break;
   default:
     assert(false && "check_decl: unhandled decl kind");

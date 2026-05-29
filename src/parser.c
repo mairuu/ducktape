@@ -1011,7 +1011,7 @@ static Expr *parse_closure(Parser *p) {
     return ast_expr(EXPR_POISON, error_span, p->al);
   }
 
-  Expr *expr = ast_expr(EXPR_CLOSURE, token_span(&fun_tok), p->al);
+  Expr *expr = ast_expr(EXPR_CLOSURE, span_merge(token_span(&fun_tok), previous_tok_span(p)), p->al);
   expr->as.closure.type_params = type_params;
   expr->as.closure.type_param_count = type_param_count;
   expr->as.closure.params = al_alloc(p->al, sizeof(ClosureParam) * param_count);

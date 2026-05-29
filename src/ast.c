@@ -106,6 +106,15 @@ static bool type_structurally_equal(const Type *a, const Type *b) {
       if (a->as.enm.type_args[i] != b->as.enm.type_args[i])
         return false;
     return true;
+  case TY_TRAIT:
+    if (a->as.trait.def != b->as.trait.def)
+      return false;
+    if (a->as.trait.type_arg_count != b->as.trait.type_arg_count)
+      return false;
+    for (int i = 0; i < a->as.trait.type_arg_count; i++)
+      if (a->as.trait.type_args[i] != b->as.trait.type_args[i])
+        return false;
+    return true;
   default:
     return true; // singletons equal by kind
   }
@@ -301,6 +310,29 @@ Type *ty_enum(EnumDef *def, Type **args, int argc, Allocator *al) {
     t->as.enm.type_args[i] = args[i];
   }
   t->as.enm.type_arg_count = argc;
+  return type_intern(t);
+}
+
+Type *ty_trait(TraitDef *def, Type **args, int argc, Allocator *al) {
+  Type probe = {.kind = TY_TRAIT,
+                .as.trait = {
+                    .def = def,
+                    .type_args = args,
+                    .type_arg_count = argc,
+                }};
+  Type *interned = type_intern_lookup(&probe);
+  if (interned) {
+    return interned;
+  }
+
+  Type *t = al_alloc_zero_for(al, Type);
+  t->kind = TY_TRAIT;
+  t->as.trait.def = def;
+  t->as.trait.type_args = al_alloc(al, argc * sizeof(Type *));
+  for (int i = 0; i < argc; i++) {
+    t->as.trait.type_args[i] = args[i];
+  }
+  t->as.trait.type_arg_count = argc;
   return type_intern(t);
 }
 
