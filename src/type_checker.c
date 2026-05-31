@@ -1652,23 +1652,23 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr, Type *hint) {
       tc_error(tc, expr->as.if_expr.condition->span,
                "if condition must be Bool, got '%s'", type_name(cond));
     }
-    Type *then_t = resolve_expr(tc, expr->as.if_expr.then_block, NULL);
+    Type *then_ty = resolve_expr(tc, expr->as.if_expr.then_block, NULL);
     if (expr->as.if_expr.else_branch != NULL) {
-      Type *else_t = resolve_expr(tc, expr->as.if_expr.else_branch, NULL);
-      if (!type_is_poison(then_t) && !type_is_poison(else_t)) {
-        if (!types_equal(then_t, else_t)) {
+      Type *else_ty = resolve_expr(tc, expr->as.if_expr.else_branch, NULL);
+      if (!type_is_poison(then_ty) && !type_is_poison(else_ty)) {
+        if (!types_equal(then_ty, else_ty)) {
           char then_buf[64], else_buf[64];
-          type_sprintf(then_t, then_buf, sizeof(then_buf));
-          type_sprintf(else_t, else_buf, sizeof(else_buf));
+          type_sprintf(then_ty, then_buf, sizeof(then_buf));
+          type_sprintf(else_ty, else_buf, sizeof(else_buf));
           tc_error(tc, expr->span,
                    "if/else arms have different types: '%s' vs '%s'", then_buf,
                    else_buf);
           result = ty_poison();
         } else {
-          result = then_t;
+          result = then_ty;
         }
       } else {
-        result = type_is_poison(then_t) ? else_t : then_t;
+        result = type_is_poison(then_ty) ? else_ty : then_ty;
       }
     } else {
       // no else branch means the result type is unit.
@@ -2126,12 +2126,12 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr, Type *hint) {
 
     for (int i = 0; i < provided; i++) {
       FieldInit *fi = &expr->as.struct_init.fields[i];
-      Type *init_t = resolve_expr(tc, fi->value, NULL);
-      Type *field_t;
+      Type *init_ty = resolve_expr(tc, fi->value, NULL);
+      Type *field_ty;
       StringView fname;
 
       if (is_tuple) {
-        field_t = substitute(tc, &env, def->fields[i].type);
+        field_ty = substitute(tc, &env, def->fields[i].type);
         fname = (StringView){0};
       } else {
         FieldDef *fdef = struct_find_field(def, fi->name);
@@ -2142,11 +2142,11 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr, Type *hint) {
           ok = false;
           continue;
         }
-        field_t = substitute(tc, &env, fdef->type);
+        field_ty = substitute(tc, &env, fdef->type);
         fname = fdef->name;
       }
 
-      if (!check_field_type(tc, &env, field_t, init_t, fname, i, !is_tuple,
+      if (!check_field_type(tc, &env, field_ty, init_ty, fname, i, !is_tuple,
                             fi->span))
         ok = false;
     }
