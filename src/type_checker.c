@@ -137,6 +137,7 @@ typedef struct {
 } TypeCheckerInternal;
 
 #define USE_INTERNAL(_tc, name)                                                \
+  assert((_tc)->internal);                                                     \
   TypeCheckerInternal *name = (TypeCheckerInternal *)(_tc)->internal
 
 // ============================================================================
@@ -768,8 +769,8 @@ static Type *resolve_typenode(TypeChecker *tc, TypeNode *tn) {
 
   case TYNODE_SELF: {
     USE_INTERNAL(tc, tci);
-    if (tc->internal == NULL || tci->current_self_type == NULL) {
-      tc_error(tc, tn->span, "'Self' type is only allowed inside impl blocks");
+    if (tci->current_self_type == NULL) {
+      tc_error(tc, tn->span, "'Self' is not valid in this context");
       result = ty_poison();
     } else {
       result = tci->current_self_type;
@@ -2936,13 +2937,13 @@ static void resolve_impl_decl(TypeChecker *tc, Decl *decl) {
   Type *self_ty = resolve_typenode(tc, decl->as.impl_decl.self_type);
   impl_def->self_type = self_ty;
 
-  sym_pop_scope(&tci->type_syms, tc->al);
-
   if (type_is_poison(self_ty)) {
+    sym_pop_scope(&tci->type_syms, tc->al);
     return;
   }
 
   if (self_ty->kind != TY_STRUCT) {
+    sym_pop_scope(&tci->type_syms, tc->al);
     tc_error(tc, decl->as.impl_decl.self_type->span,
              "impl target must be a struct type, got '%s'", type_name(self_ty));
     return;
@@ -2953,7 +2954,35 @@ static void resolve_impl_decl(TypeChecker *tc, Decl *decl) {
                      .kind = SYM_STRUCT,
                      .type = self_ty,
                      .as.struct_def = struct_def};
-  sym_define(&tci->val_syms, self_sym, tc->al);
+  sym_define(&tci->type_syms, self_sym, tc->al);
+
+  Type *saved_self = tci->current_self_type;
+  tci->current_self_type = self_ty;
+
+  int method_count = 0;
+  int accoc_type_count = 0;
+  (void)accoc_type_count;
+
+  for (int i = 0; i < decl->as.impl_decl.item_count; i++) {
+    if (decl->as.impl_decl.items[i].kind == IMPL_ITEM_METHOD) {
+      method_count++;
+    } else if (decl->as.impl_decl.items[i].kind == IMPL_ITEM_ASSOC_TYPE) {
+      accoc_type_count++;
+    } else {
+      assert(false && "register_impl_decl: unhandled impl item kind");
+    }
+  }
+
+  if (struct_def->method_cap < method_count + struct_def->method_count) {
+    int new_cap = struct_def->method_cap == 0 ? 4 : struct_def->method_cap;
+    while (new_cap < method_count + struct_def->method_count) {
+      new_cap *= 2;
+    }
+    struct_def->methods = al_realloc(tc->al, struct_def->methods,
+                                     sizeof(MethodDef) * struct_def->method_cap,
+                                     sizeof(MethodDef) * new_cap);
+    struct_def->method_cap = new_cap;
+  }
 
   for (int i = 0; i < decl->as.impl_decl.item_count; i++) {
     ImplItemNode *item = &decl->as.impl_decl.items[i];
@@ -2984,27 +3013,47 @@ static void resolve_impl_decl(TypeChecker *tc, Decl *decl) {
     for (int j = 0; j < fun->param_count; j++) {
       fun->params[j].name = fdecl->as.fun_decl.params[j].name;
       fun->params[j].is_self = fdecl->as.fun_decl.params[j].is_self;
-      fun->params[j].param_type = ty_poison(); // resolved during check
     }
-    fun->return_type = ty_unit(); // resolved during check
+
+    // push method-level
+    sym_push_scope(&tci->type_syms, tc->al);
+    for (int j = 0; j < fdecl->as.fun_decl.type_param_count; j++) {
+      TypeParamNode *mtp = &fdecl->as.fun_decl.type_params[j];
+      Symbol mtp_sym = {
+          .name = mtp->name,
+          .kind = SYM_TYPE_PARAM,
+          .type = ty_generic(mtp->name, NULL, 0, tc->al),
+      };
+      if (mtp->bound_count > 0) {
+        tc_error(tc, mtp->span, "type parameter bounds not supported yet");
+      }
+      sym_define(&tci->type_syms, mtp_sym, tc->al);
+    }
+
+    // resolve each parameter's type; self gets the struct's self_type
+    TypeArrayScratch ps;
+    type_array_scratch_init(&ps, fun->param_count, tc->al);
+    for (int j = 0; j < fun->param_count; j++) {
+      ParamDeclNode *p = &fdecl->as.fun_decl.params[j];
+      if (p->is_self) {
+        ps.ptr[j] = decl->as.impl_decl.def->self_type;
+        fun->params[j].is_self = true;
+      } else {
+        ps.ptr[j] = resolve_typenode(tc, p->type_annotation);
+      }
+      fun->params[j].param_type = ps.ptr[j];
+    }
+
+    // resolve return type
+    Type *return_type =
+        fdecl->as.fun_decl.return_type
+            ? resolve_typenode(tc, fdecl->as.fun_decl.return_type)
+            : ty_unit();
+    fun->return_type = return_type;
+
+    sym_pop_scope(&tci->type_syms, tc->al);
 
     fdecl->as.fun_decl.def = fun;
-
-    // grow struct_def->methods if needed
-    if (struct_def->method_count == struct_def->method_cap) {
-      int new_cap =
-          struct_def->method_cap == 0 ? 4 : struct_def->method_cap * 2;
-      MethodDef *new_methods = al_alloc(tc->al, new_cap * sizeof(MethodDef));
-      for (int j = 0; j < struct_def->method_count; j++) {
-        new_methods[j] = struct_def->methods[j];
-      }
-      if (struct_def->method_cap > 0) {
-        al_free(tc->al, struct_def->methods,
-                struct_def->method_cap * sizeof(MethodDef));
-      }
-      struct_def->methods = new_methods;
-      struct_def->method_cap = new_cap;
-    }
 
     // duplicate method name check
     for (int j = 0; j < struct_def->method_count; j++) {
@@ -3012,13 +3061,16 @@ static void resolve_impl_decl(TypeChecker *tc, Decl *decl) {
         tc_error(tc, fdecl->span,
                  "duplicate method '" SV_FMT "' on struct '" SV_FMT "'",
                  SV_ARG(fun->name), SV_ARG(struct_def->name));
-        break;
+        continue;
       }
     }
 
     struct_def->methods[struct_def->method_count++] =
         (MethodDef){.name = fun->name, .fun = fun, .impl = impl_def};
   }
+
+  sym_pop_scope(&tci->type_syms, tc->al);
+  tci->current_self_type = saved_self;
 }
 
 static void resolve_decl(TypeChecker *tc, Decl *decl) {
@@ -3231,9 +3283,14 @@ static void check_impl_decl(TypeChecker *tc, Decl *decl) {
     return; // error already emitted during registration
   }
 
-  // push impl-level type params — method bodies see them as generic types,
-  // matching what register did so that resolve_typenode produces the same
-  // TY_GENERIC nodes the field types were written with
+  ImplDef *impl_def = decl->as.impl_decl.def;
+
+  if (type_is_poison(impl_def->self_type) ||
+      impl_def->self_type->kind != TY_STRUCT) {
+    return; // error already reported during registration
+  }
+
+  // push impl-level type params
   sym_push_scope(&tci->type_syms, tc->al);
   for (int i = 0; i < decl->as.impl_decl.type_param_count; i++) {
     TypeParamNode *tp = &decl->as.impl_decl.type_params[i];
@@ -3248,15 +3305,13 @@ static void check_impl_decl(TypeChecker *tc, Decl *decl) {
     sym_define(&tci->type_syms, tp_sym, tc->al);
   }
 
-  // re-resolve self_type to get the StructDef we're implementing on
-  Type *self_ty = resolve_typenode(tc, decl->as.impl_decl.self_type);
-  if (type_is_poison(self_ty) || self_ty->kind != TY_STRUCT) {
-    sym_pop_scope(&tci->type_syms, tc->al);
-    return; // error already reported during registration
-  }
-
   Type *saved_self = tci->current_self_type;
-  tci->current_self_type = self_ty;
+  tci->current_self_type = impl_def->self_type;
+  Symbol self_sym = {.name = sv_from_cstr("Self"),
+                     .kind = SYM_STRUCT,
+                     .type = tci->current_self_type,
+                     .as.struct_def = tci->current_self_type->as.struc.def};
+  sym_define(&tci->type_syms, self_sym, tc->al);
 
   for (int i = 0; i < decl->as.impl_decl.item_count; i++) {
     ImplItemNode *item = &decl->as.impl_decl.items[i];
@@ -3268,7 +3323,6 @@ static void check_impl_decl(TypeChecker *tc, Decl *decl) {
     FunDef *fun = fdecl->as.fun_decl.def;
     assert(fun != NULL && "check_impl_decl: fun_decl was not registered");
 
-    // push method-level type params on top of the impl-level ones
     sym_push_scope(&tci->type_syms, tc->al);
     for (int j = 0; j < fdecl->as.fun_decl.type_param_count; j++) {
       TypeParamNode *mtp = &fdecl->as.fun_decl.type_params[j];
@@ -3277,32 +3331,10 @@ static void check_impl_decl(TypeChecker *tc, Decl *decl) {
           .kind = SYM_TYPE_PARAM,
           .type = ty_generic(mtp->name, NULL, 0, tc->al),
       };
-      if (mtp->bound_count > 0) {
-        tc_error(tc, mtp->span, "type parameter bounds not supported yet");
-      }
       sym_define(&tci->type_syms, mtp_sym, tc->al);
     }
 
-    // resolve each parameter's type; self gets the struct's self_type
-    TypeArrayScratch ps;
-    type_array_scratch_init(&ps, fun->param_count, tc->al);
-    for (int j = 0; j < fun->param_count; j++) {
-      ParamDeclNode *p = &fdecl->as.fun_decl.params[j];
-      if (p->is_self) {
-        ps.ptr[j] = decl->as.impl_decl.def->self_type;
-        fun->params[j].is_self = true;
-      } else {
-        ps.ptr[j] = resolve_typenode(tc, p->type_annotation);
-      }
-      fun->params[j].param_type = ps.ptr[j];
-    }
-
-    // resolve return type
-    Type *return_type =
-        fdecl->as.fun_decl.return_type
-            ? resolve_typenode(tc, fdecl->as.fun_decl.return_type)
-            : ty_unit();
-    fun->return_type = return_type;
+    Type *return_type = fun->return_type;
 
     // type-check the body
     FunDef *saved_fun = tci->current_fun;
@@ -3316,18 +3348,19 @@ static void check_impl_decl(TypeChecker *tc, Decl *decl) {
       Symbol param_sym = {
           .name = name,
           .kind = SYM_VAR,
-          .type = ps.ptr[j],
+          .type = fun->params[j].param_type,
           .slot = j,
       };
       sym_define(&tci->val_syms, param_sym, tc->al);
     }
 
     if (fdecl->as.fun_decl.body != NULL) {
-      SubstEnv env;
-      subst_init(&env);
 
       Type *body_type = resolve_expr(tc, fdecl->as.fun_decl.body, NULL);
       if (!type_is_poison(body_type) && !type_is_poison(return_type)) {
+        SubstEnv env;
+        subst_init(&env);
+
         if (!unify(tc, &env, return_type, body_type, fdecl->span)) {
           Type *concrete_expected = substitute(tc, &env, return_type);
           Type *concrete_actual = substitute(tc, &env, body_type);
@@ -3418,4 +3451,12 @@ void tc_check_program(TypeChecker *tc, Program *program) {
   for (int i = 0; i < program->decl_count; i++) {
     check_decl(tc, program->decls[i]);
   }
+
+  USE_INTERNAL(tc, tci);
+  assert(tci->type_syms.scope_count == 1 &&
+         "tc_check_program: type symbol table scope count should be 1 after "
+         "checking program");
+  assert(tci->val_syms.scope_count == 1 &&
+         "tc_check_program: value symbol table scope count should be 1 after "
+         "checking program");
 }
