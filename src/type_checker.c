@@ -2893,20 +2893,15 @@ static void register_decl(TypeChecker *tc, Decl *decl) {
 // resolve signatures
 // ============================================================================
 
-static void resolve_fun_decl(TypeChecker *tc, Decl *decl) {
-}
+static void resolve_fun_decl(TypeChecker *tc, Decl *decl) {}
 
-static void resolve_struct_decl(TypeChecker *tc, Decl *decl) {
-}
+static void resolve_struct_decl(TypeChecker *tc, Decl *decl) {}
 
-static void resolve_enum_decl(TypeChecker *tc, Decl *decl) {
-}
+static void resolve_enum_decl(TypeChecker *tc, Decl *decl) {}
 
-static void resolve_trait_decl(TypeChecker *tc, Decl *decl) {
-}
+static void resolve_trait_decl(TypeChecker *tc, Decl *decl) {}
 
-static void resolve_impl_decl(TypeChecker *tc, Decl *decl) {
-}
+static void resolve_impl_decl(TypeChecker *tc, Decl *decl) {}
 
 static void resolve_decl(TypeChecker *tc, Decl *decl) {
   switch (decl->kind) {
@@ -3385,7 +3380,7 @@ void tc_check_program(TypeChecker *tc, Program *program) {
     register_decl(tc, program->decls[i]);
   }
 
-  // resolve signatures 
+  // resolve signatures
   for (int i = 0; i < program->decl_count; i++) {
     resolve_decl(tc, program->decls[i]);
   }
