@@ -133,6 +133,7 @@ typedef struct {
   int loop_depth;
 
   FunDef *current_fun;
+  Type *current_self_type;
 } TypeCheckerInternal;
 
 #define USE_INTERNAL(_tc, name)                                                \
@@ -142,7 +143,38 @@ typedef struct {
 // internals implementation
 // ============================================================================
 
-// definition helpers
+// subtract span b from a, returning the remaining parts of a before and after b
+// can be different lines
+static Span span_subtract(Span a, Span b) {
+  if (a.line == b.line) {
+    // same line: can only have a single remaining part
+    if (a.col < b.col) {
+      return (Span){
+          .line = a.line, .col = a.col, .line_end = a.line, .col_end = b.col};
+    } else if (a.col_end > b.col_end) {
+      return (Span){.line = a.line,
+                    .col = b.col_end,
+                    .line_end = a.line,
+                    .col_end = a.col_end};
+    } else {
+      return (Span){0}; // no remaining span
+    }
+  } else {
+    // different lines: can have two remaining parts, but we return the first
+    // one
+    if (a.line < b.line) {
+      return (Span){
+          .line = a.line, .col = a.col, .line_end = a.line, .col_end = 1000};
+    } else if (a.line_end > b.line_end) {
+      return (Span){.line = a.line_end,
+                    .col = 0,
+                    .line_end = a.line_end,
+                    .col_end = a.col_end};
+    } else {
+      return (Span){0}; // no remaining span
+    }
+  }
+}
 
 #define TYPE_ARRAY_SCRATCH_CAP 8
 
@@ -164,6 +196,15 @@ static FieldDef *struct_find_field(const StructDef *def, StringView name) {
   for (int i = 0; i < def->field_count; i++) {
     if (sv_equal(def->fields[i].name, name)) {
       return &def->fields[i];
+    }
+  }
+  return NULL;
+}
+
+static MethodDef *struct_find_method(const StructDef *def, StringView name) {
+  for (int i = 0; i < def->method_count; i++) {
+    if (sv_equal(def->methods[i].name, name)) {
+      return &def->methods[i];
     }
   }
   return NULL;
@@ -506,6 +547,21 @@ static PathRes resolve_path(TypeChecker *tc, Path *path) {
         sym = sym_lookup(&tci->val_syms, seg);
       }
 
+      // if (sv_equal_cstr(seg, "Self") && tci->current_self_type) {
+      //   assert(tci->current_self_type->kind == TY_STRUCT &&
+      //          "Self type should always be a struct");
+
+      //   static Symbol tmp_sym;
+      //   // todo:
+      //   tmp_sym = (Symbol){
+      //       .name = seg,
+      //       .kind = SYM_STRUCT,
+      //       .type = tci->current_self_type,
+      //       .as.struct_def = tci->current_self_type->as.struc.def,
+      //   };
+      //   sym = &tmp_sym;
+      // }
+
       if (sym == NULL) {
         // tc_error(tc, path->span, "unknown symbol '" SV_FMT "'", SV_ARG(seg));
         return (PathRes){.kind = PATH_RES_UNRESOLVED};
@@ -533,18 +589,13 @@ static PathRes resolve_path(TypeChecker *tc, Path *path) {
       break;
     }
     case RCTX_STRUCT: {
-      tc_error(tc, path->span,
-               "member access not supported yet (struct context for '" SV_FMT
-               "')",
-               SV_ARG(seg));
-      return (PathRes){.kind = PATH_RES_UNRESOLVED};
-      // StructDef *def = ctx.as.struct_def;
-      // MethodDef *m = struct_find_method(def, seg);
-      // if (m == NULL) {
-      //   return (PathRes){.kind = PATH_RES_UNRESOLVED};
-      // }
-      // return (PathRes){.kind = PATH_RES_METHOD,
-      //                  .as.method = {.def = def, .method = m}};
+      StructDef *def = ctx.as.struct_def;
+      MethodDef *m = struct_find_method(def, seg);
+      if (m == NULL) {
+        return (PathRes){.kind = PATH_RES_UNRESOLVED};
+      }
+      return (PathRes){.kind = PATH_RES_METHOD,
+                       .as.method = {.def = def, .method = m}};
     }
     case RCTX_ENUM:
       EnumDef *def = ctx.as.enum_def;
@@ -712,6 +763,17 @@ static Type *resolve_typenode(TypeChecker *tc, TypeNode *tn) {
       ok = ok && !type_is_poison(elms.ptr[i]);
     }
     result = ok ? ty_tuple(elms.ptr, elms.count, tc->al) : ty_poison();
+    break;
+  }
+
+  case TYNODE_SELF: {
+    USE_INTERNAL(tc, tci);
+    if (tc->internal == NULL || tci->current_self_type == NULL) {
+      tc_error(tc, tn->span, "'Self' type is only allowed inside impl blocks");
+      result = ty_poison();
+    } else {
+      result = tci->current_self_type;
+    }
     break;
   }
 
@@ -1656,6 +1718,23 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr, Type *hint) {
             res.as.symbol->type->as.struc.def->is_tuple_struct) {
           return rewrite_tuple_struct_call(tc, expr, res.as.symbol);
         }
+      } else if (res.kind == PATH_RES_METHOD) {
+        MethodDef *method = res.as.method.method;
+
+        Expr new_expr = {
+            .kind = EXPR_ASSOCIATED_CALL,
+            .span = expr->span,
+            .as.assoc_call =
+                {
+                    .resolved_method = method,
+                    .caller = expr->as.call.callee,
+                    .args = expr->as.call.args,
+                    .arg_count = expr->as.call.arg_count,
+                },
+        };
+
+        *expr = new_expr;
+        return resolve_expr(tc, expr, NULL);
       }
     }
 
@@ -1724,6 +1803,247 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr, Type *hint) {
     }
     result = ok ? substitute(tc, &env, callee_type->as.fun.return_type) //
                 : ty_poison();
+    break;
+  }
+
+  case EXPR_METHOD_CALL: {
+    Type *object_type = resolve_expr(tc, expr->as.method_call.object, NULL);
+    if (type_is_poison(object_type)) {
+      result = ty_poison();
+      break;
+    }
+
+    if (object_type->kind != TY_STRUCT) {
+      tc_error(tc, expr->span, "method call requires a struct type, got '%s'",
+               type_name(object_type));
+      result = ty_poison();
+      break;
+    }
+
+    StructDef *def = object_type->as.struc.def;
+    StringView method_name = expr->as.method_call.method_name;
+
+    // look up the method on the struct def
+    MethodDef *method = NULL;
+    for (int i = 0; i < def->method_count; i++) {
+      if (sv_equal(def->methods[i].name, method_name)) {
+        method = &def->methods[i];
+        break;
+      }
+    }
+
+    if (method == NULL) {
+      char obj_buf[64];
+      type_sprintf(object_type, obj_buf, sizeof(obj_buf));
+      tc_error(tc, expr->span, "type '%s' has no method named '" SV_FMT "'",
+               obj_buf, SV_ARG(method_name));
+      result = ty_poison();
+      break;
+    }
+
+    expr->as.method_call.resolved_method = method;
+
+    FunDef *fun = method->fun;
+    ImplDef *impl = method->impl;
+
+    // build substitution env: bind each struct type param to the
+    // concrete type arg from the object's instantiated type
+    SubstEnv env;
+    subst_init(&env);
+
+    // pre-bind impl type params to unknowns for inference
+    for (int i = 0; i < impl->type_param_count; i++) {
+      Type *concrete = ty_unknown(NULL, tc->al);
+      subst_bind(tc, &env, impl->type_params[i], concrete, expr->span);
+    }
+
+    // if the method's return type is generic, we can use the caller's expected
+    // return type as a hint to infer it; bind the method's return type param to
+    // the hint
+    if (fun->return_type->kind == TY_GENERIC && hint != NULL) {
+      subst_bind(tc, &env, fun->return_type->as.generic.name, hint, expr->span);
+    }
+
+    // Infer impl type params from the concrete object type.
+    // impl->self_type is e.g. TY_STRUCT Person<T> (T is TY_GENERIC).
+    // object_type    is e.g. TY_STRUCT Person<Int>.
+    // We zip their type_args to derive T → Int.
+
+    assert(impl->self_type->kind == TY_STRUCT);
+    assert(impl->self_type->as.struc.def == object_type->as.struc.def);
+
+    int n = impl->self_type->as.struc.type_arg_count;
+    assert(n == object_type->as.struc.type_arg_count);
+
+    for (int i = 0; i < n; i++) {
+      Type *impl_arg = impl->self_type->as.struc.type_args[i]; // TY_GENERIC "T"
+      Type *object_arg = object_type->as.struc.type_args[i];   // TY_INT, etc.
+
+      if (impl_arg->kind != TY_GENERIC) {
+        continue;
+      }
+
+      if (!subst_bind(tc, &env, impl_arg->as.generic.name, object_arg,
+                      expr->span)) {
+        Type *concrete = substitute(tc, &env, impl_arg);
+        char concrete_buf[64], impl_arg_buf[64], object_arg_buf[64];
+        type_sprintf(concrete, concrete_buf, sizeof(concrete_buf));
+        type_sprintf(impl_arg, impl_arg_buf, sizeof(impl_arg_buf));
+        type_sprintf(object_arg, object_arg_buf, sizeof(object_arg_buf));
+        tc_error(tc, expr->span,
+                 "cannot unify impl self type arg '%s' (was '%s') with object "
+                 "type arg '%s'",
+                 impl_arg_buf, concrete_buf, object_arg_buf);
+      };
+    }
+
+    // also bind any method-level type params to unknowns for inference,
+    // or to explicit type args if the caller supplied them
+    int explicit_ty_args = expr->as.method_call.type_arg_count;
+    if (explicit_ty_args > 0 && explicit_ty_args != fun->type_param_count) {
+      tc_error(tc, expr->span,
+               "method '" SV_FMT
+               "' has %d type parameter(s) but %d were provided",
+               SV_ARG(method_name), fun->type_param_count, explicit_ty_args);
+      result = ty_poison();
+      break;
+    }
+    for (int i = 0; i < fun->type_param_count; i++) {
+      Type *concrete =
+          (explicit_ty_args > 0)
+              ? resolve_typenode(tc, expr->as.method_call.type_args[i])
+              : ty_unknown(NULL, tc->al);
+      subst_bind(tc, &env, fun->type_params[i], concrete, expr->span);
+    }
+
+    // count non-self params - the first param with is_self is provided by
+    // the object, not by the argument list
+    int first_value_param = 0;
+    if (fun->param_count > 0 && fun->params[0].is_self) {
+      first_value_param = 1;
+    }
+    int expected_args = fun->param_count - first_value_param;
+    int got_args = expr->as.method_call.arg_count;
+
+    if (expected_args != got_args) {
+      tc_error(tc, expr->span,
+               "method '" SV_FMT
+               "' expects %d argument(s) but %d were provided",
+               SV_ARG(method_name), expected_args, got_args);
+      result = ty_poison();
+      break;
+    }
+
+    bool ok = true;
+    for (int i = 0; i < got_args; i++) {
+      Type *param_ty =
+          substitute(tc, &env, fun->params[first_value_param + i].param_type);
+      Type *arg_ty = resolve_expr(tc, expr->as.method_call.args[i], param_ty);
+
+      if (type_is_poison(arg_ty) || type_is_poison(param_ty)) {
+        ok = false;
+        continue;
+      }
+
+      if (!unify(tc, &env, param_ty, arg_ty,
+                 expr->as.method_call.args[i]->span)) {
+        Type *concrete = substitute(tc, &env, param_ty);
+        if (!types_equal(concrete, arg_ty)) {
+          char concrete_buf[64], arg_buf[64];
+          type_sprintf(concrete, concrete_buf, sizeof(concrete_buf));
+          type_sprintf(arg_ty, arg_buf, sizeof(arg_buf));
+          tc_error(tc, expr->as.method_call.args[i]->span,
+                   "argument %d: expected '%s', got '%s'", i + 1, concrete_buf,
+                   arg_buf);
+        }
+        ok = false;
+      }
+    }
+
+    result = ok ? substitute(tc, &env, fun->return_type) : ty_poison();
+    break;
+  }
+
+  case EXPR_ASSOCIATED_CALL: {
+    MethodDef *method = expr->as.assoc_call.resolved_method;
+    StringView method_name = method->name;
+
+    FunDef *fun = method->fun;
+    ImplDef *impl = method->impl;
+
+    // build substitution env: bind each struct type param to the
+    // concrete type arg from the object's instantiated type
+    SubstEnv env;
+    subst_init(&env);
+    for (int i = 0; i < impl->type_param_count; i++) {
+      Type *concrete = ty_unknown(NULL, tc->al);
+      subst_bind(tc, &env, impl->type_params[i], concrete, expr->span);
+    }
+
+    // also bind any method-level type params to unknowns for inference,
+    // or to explicit type args if the caller supplied them
+    int explicit_ty_args = expr->as.assoc_call.type_arg_count;
+    if (explicit_ty_args > 0 && explicit_ty_args != fun->type_param_count) {
+      tc_error(tc, expr->span,
+               "method '" SV_FMT
+               "' has %d type parameter(s) but %d were provided",
+               SV_ARG(method_name), fun->type_param_count, explicit_ty_args);
+      result = ty_poison();
+      break;
+    }
+    for (int i = 0; i < fun->type_param_count; i++) {
+      Type *concrete =
+          (explicit_ty_args > 0)
+              ? resolve_typenode(tc, expr->as.assoc_call.type_args[i])
+              : ty_unknown(NULL, tc->al);
+      subst_bind(tc, &env, fun->type_params[i], concrete, expr->span);
+    }
+
+    // count non-self params — the first param with is_self is provided by
+    // the object, not by the argument list
+    int first_value_param = 0;
+    if (fun->param_count > 0 && fun->params[0].is_self) {
+      first_value_param = 1;
+    }
+    int expected_args = fun->param_count - first_value_param;
+    int got_args = expr->as.assoc_call.arg_count;
+
+    if (expected_args != got_args) {
+      tc_error(tc, expr->span,
+               "method '" SV_FMT
+               "' expects %d argument(s) but %d were provided",
+               SV_ARG(method_name), expected_args, got_args);
+      result = ty_poison();
+      break;
+    }
+
+    bool ok = true;
+    for (int i = 0; i < got_args; i++) {
+      Type *param_ty =
+          substitute(tc, &env, fun->params[first_value_param + i].param_type);
+      Type *arg_ty = resolve_expr(tc, expr->as.assoc_call.args[i], param_ty);
+
+      if (type_is_poison(arg_ty) || type_is_poison(param_ty)) {
+        ok = false;
+        continue;
+      }
+
+      if (!unify(tc, &env, param_ty, arg_ty,
+                 expr->as.assoc_call.args[i]->span)) {
+        Type *concrete = substitute(tc, &env, param_ty);
+        if (!types_equal(concrete, arg_ty)) {
+          char concrete_buf[64], arg_buf[64];
+          type_sprintf(concrete, concrete_buf, sizeof(concrete_buf));
+          type_sprintf(arg_ty, arg_buf, sizeof(arg_buf));
+          tc_error(tc, expr->as.assoc_call.args[i]->span,
+                   "argument %d: expected '%s', got '%s'", i + 1, concrete_buf,
+                   arg_buf);
+        }
+        ok = false;
+      }
+    }
+
+    result = ok ? substitute(tc, &env, fun->return_type) : ty_poison();
     break;
   }
 
@@ -1988,6 +2308,15 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr, Type *hint) {
 
       return resolve_expr(tc, new_expr, NULL);
     }
+    case PATH_RES_METHOD: {
+      tc_error(tc, expr->span,
+               "method '" SV_FMT
+               "' cannot be used as a value (did you forget to call it with "
+               "the method call syntax 'object.method()'?)",
+               SV_ARG(res.as.method.method->name));
+      result = ty_poison();
+      break;
+    }
     default:
       tc_error(tc, expr->span, "unsupported path resolution kind");
       result = ty_poison();
@@ -2170,6 +2499,16 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr, Type *hint) {
 
     result = result_type ? result_type : ty_unit();
     break;
+  case EXPR_SELF: {
+    Symbol *sym = sym_lookup(&tci->val_syms, sv_from_cstr("self"));
+    if (!sym) {
+      tc_error(tc, expr->span, "'self' is not valid in this context");
+      result = ty_poison();
+    } else {
+      result = sym->type;
+    }
+    break;
+  }
   default:
     result = ty_poison();
     assert(false && "resolve_expr: unhandled expr kind");
@@ -2408,6 +2747,125 @@ static void register_trait_decl(TypeChecker *tc, Decl *decl) {
   sym_define(&tci->type_syms, sym, tc->al);
 }
 
+static void register_impl_decl(TypeChecker *tc, Decl *decl) {
+  USE_INTERNAL(tc, tci);
+
+  // trait impls not supported yet
+  if (decl->as.impl_decl.trait_type != NULL) {
+    tc_error(tc, decl->span, "trait impls not supported yet");
+    return;
+  }
+
+  // push impl-level type params so resolve_typenode can see them when
+  sym_push_scope(&tci->type_syms, tc->al);
+  for (int i = 0; i < decl->as.impl_decl.type_param_count; i++) {
+    StringView name = decl->as.impl_decl.type_params[i].name;
+    Symbol tp_sym = {
+        .name = name,
+        .kind = SYM_TYPE_PARAM,
+        .type = ty_generic(name, NULL, 0, tc->al),
+    };
+    sym_define(&tci->type_syms, tp_sym, tc->al);
+  }
+
+  Type *self_ty = resolve_typenode(tc, decl->as.impl_decl.self_type);
+
+  ImplDef *impl_def = al_alloc_zero_for(tc->al, ImplDef);
+
+  impl_def->type_param_count = decl->as.impl_decl.type_param_count;
+  impl_def->type_params =
+      al_alloc_zero(tc->al, impl_def->type_param_count * sizeof(StringView));
+  for (int i = 0; i < impl_def->type_param_count; i++) {
+    impl_def->type_params[i] = decl->as.impl_decl.type_params[i].name;
+  }
+  impl_def->self_type = self_ty;
+  decl->as.impl_decl.def = impl_def;
+
+  sym_pop_scope(&tci->type_syms, tc->al);
+
+  if (type_is_poison(self_ty)) {
+    return;
+  }
+
+  if (self_ty->kind != TY_STRUCT) {
+    tc_error(tc, decl->as.impl_decl.self_type->span,
+             "impl target must be a struct type, got '%s'", type_name(self_ty));
+    return;
+  }
+
+  StructDef *struct_def = self_ty->as.struc.def;
+  Symbol self_sym = {.name = sv_from_cstr("Self"),
+                     .kind = SYM_STRUCT,
+                     .type = self_ty,
+                     .as.struct_def = struct_def};
+  sym_define(&tci->val_syms, self_sym, tc->al);
+
+  for (int i = 0; i < decl->as.impl_decl.item_count; i++) {
+    ImplItemNode *item = &decl->as.impl_decl.items[i];
+
+    if (item->kind == IMPL_ITEM_ASSOC_TYPE) {
+      tc_error(tc, item->span,
+               "associated types in impl blocks not supported yet");
+      continue;
+    }
+
+    assert(item->kind == IMPL_ITEM_METHOD && item->fun_decl != NULL);
+    Decl *fdecl = item->fun_decl;
+    assert(fdecl->kind == DECL_FUN);
+
+    // build a stub FunDef — param types and return type filled in during check
+    FunDef *fun = al_alloc_zero_for(tc->al, FunDef);
+    fun->name = fdecl->as.fun_decl.name;
+
+    fun->type_param_count = fdecl->as.fun_decl.type_param_count;
+    fun->type_params =
+        al_alloc_zero(tc->al, fun->type_param_count * sizeof(StringView));
+    for (int j = 0; j < fun->type_param_count; j++) {
+      fun->type_params[j] = fdecl->as.fun_decl.type_params[j].name;
+    }
+
+    fun->param_count = fdecl->as.fun_decl.param_count;
+    fun->params = al_alloc_zero(tc->al, fun->param_count * sizeof(ParamDef));
+    for (int j = 0; j < fun->param_count; j++) {
+      fun->params[j].name = fdecl->as.fun_decl.params[j].name;
+      fun->params[j].is_self = fdecl->as.fun_decl.params[j].is_self;
+      fun->params[j].param_type = ty_poison(); // resolved during check
+    }
+    fun->return_type = ty_unit(); // resolved during check
+
+    fdecl->as.fun_decl.def = fun;
+
+    // grow struct_def->methods if needed
+    if (struct_def->method_count == struct_def->method_cap) {
+      int new_cap =
+          struct_def->method_cap == 0 ? 4 : struct_def->method_cap * 2;
+      MethodDef *new_methods = al_alloc(tc->al, new_cap * sizeof(MethodDef));
+      for (int j = 0; j < struct_def->method_count; j++) {
+        new_methods[j] = struct_def->methods[j];
+      }
+      if (struct_def->method_cap > 0) {
+        al_free(tc->al, struct_def->methods,
+                struct_def->method_cap * sizeof(MethodDef));
+      }
+      struct_def->methods = new_methods;
+      struct_def->method_cap = new_cap;
+    }
+
+    // duplicate method name check
+    for (int j = 0; j < struct_def->method_count; j++) {
+      if (sv_equal(struct_def->methods[j].name, fun->name)) {
+        tc_error(tc, fdecl->span,
+                 "duplicate method '" SV_FMT "' on struct '" SV_FMT "'",
+                 SV_ARG(fun->name), SV_ARG(struct_def->name));
+        break;
+      }
+    }
+
+    struct_def->methods[struct_def->method_count++] =
+        (MethodDef){.name = fun->name, .fun = fun, .impl = impl_def};
+  }
+}
+
 static void register_decl(TypeChecker *tc, Decl *decl) {
   switch (decl->kind) {
   case DECL_FUN:
@@ -2422,6 +2880,9 @@ static void register_decl(TypeChecker *tc, Decl *decl) {
   case DECL_TRAIT:
     register_trait_decl(tc, decl);
     break;
+  case DECL_IMPL:
+    register_impl_decl(tc, decl);
+    break;
   default:
     assert(false && "register_decl: unhandled decl kind");
     break;
@@ -2429,8 +2890,46 @@ static void register_decl(TypeChecker *tc, Decl *decl) {
 }
 
 // ============================================================================
-// re-write ambiguous
+// resolve signatures
 // ============================================================================
+
+static void resolve_fun_decl(TypeChecker *tc, Decl *decl) {
+}
+
+static void resolve_struct_decl(TypeChecker *tc, Decl *decl) {
+}
+
+static void resolve_enum_decl(TypeChecker *tc, Decl *decl) {
+}
+
+static void resolve_trait_decl(TypeChecker *tc, Decl *decl) {
+}
+
+static void resolve_impl_decl(TypeChecker *tc, Decl *decl) {
+}
+
+static void resolve_decl(TypeChecker *tc, Decl *decl) {
+  switch (decl->kind) {
+  case DECL_FUN:
+    resolve_fun_decl(tc, decl);
+    break;
+  case DECL_STRUCT:
+    resolve_struct_decl(tc, decl);
+    break;
+  case DECL_ENUM:
+    resolve_enum_decl(tc, decl);
+    break;
+  case DECL_TRAIT:
+    resolve_trait_decl(tc, decl);
+    break;
+  case DECL_IMPL:
+    resolve_impl_decl(tc, decl);
+    break;
+  default:
+    assert(false && "resolve_decl: unhandled decl kind");
+    break;
+  }
+}
 
 // ============================================================================
 // checking
@@ -2509,7 +3008,8 @@ static void check_fun_decl(TypeChecker *tc, Decl *decl) {
         char expected_buf[64], value_buf[64];
         type_sprintf(return_type, expected_buf, sizeof(expected_buf));
         type_sprintf(body_type, value_buf, sizeof(value_buf));
-        tc_error(tc, decl->span,
+        Span def_span = span_subtract(decl->span, decl->as.fun_decl.body->span);
+        tc_error(tc, def_span,
                  "function '" SV_FMT "' returns '%s' but body has type '%s'",
                  SV_ARG(def->name), expected_buf, value_buf);
       }
@@ -2695,6 +3195,139 @@ static void check_trait_decl(TypeChecker *tc, Decl *decl) {
   sym_pop_scope(&tci->type_syms, tc->al);
 }
 
+static void check_impl_decl(TypeChecker *tc, Decl *decl) {
+  USE_INTERNAL(tc, tci);
+
+  if (decl->as.impl_decl.trait_type != NULL) {
+    return; // error already emitted during registration
+  }
+
+  // push impl-level type params — method bodies see them as generic types,
+  // matching what register did so that resolve_typenode produces the same
+  // TY_GENERIC nodes the field types were written with
+  sym_push_scope(&tci->type_syms, tc->al);
+  for (int i = 0; i < decl->as.impl_decl.type_param_count; i++) {
+    TypeParamNode *tp = &decl->as.impl_decl.type_params[i];
+    Symbol tp_sym = {
+        .name = tp->name,
+        .kind = SYM_TYPE_PARAM,
+        .type = ty_generic(tp->name, NULL, 0, tc->al),
+    };
+    if (tp->bound_count > 0) {
+      tc_error(tc, tp->span, "type parameter bounds not supported yet");
+    }
+    sym_define(&tci->type_syms, tp_sym, tc->al);
+  }
+
+  // re-resolve self_type to get the StructDef we're implementing on
+  Type *self_ty = resolve_typenode(tc, decl->as.impl_decl.self_type);
+  if (type_is_poison(self_ty) || self_ty->kind != TY_STRUCT) {
+    sym_pop_scope(&tci->type_syms, tc->al);
+    return; // error already reported during registration
+  }
+
+  Type *saved_self = tci->current_self_type;
+  tci->current_self_type = self_ty;
+
+  // StructDef *struct_def = self_ty->as.struc.def;
+
+  for (int i = 0; i < decl->as.impl_decl.item_count; i++) {
+    ImplItemNode *item = &decl->as.impl_decl.items[i];
+    if (item->kind != IMPL_ITEM_METHOD || item->fun_decl == NULL) {
+      continue; // assoc types already errored during registration
+    }
+
+    Decl *fdecl = item->fun_decl;
+    FunDef *fun = fdecl->as.fun_decl.def;
+    assert(fun != NULL && "check_impl_decl: fun_decl was not registered");
+
+    // push method-level type params on top of the impl-level ones
+    sym_push_scope(&tci->type_syms, tc->al);
+    for (int j = 0; j < fdecl->as.fun_decl.type_param_count; j++) {
+      TypeParamNode *mtp = &fdecl->as.fun_decl.type_params[j];
+      Symbol mtp_sym = {
+          .name = mtp->name,
+          .kind = SYM_TYPE_PARAM,
+          .type = ty_generic(mtp->name, NULL, 0, tc->al),
+      };
+      if (mtp->bound_count > 0) {
+        tc_error(tc, mtp->span, "type parameter bounds not supported yet");
+      }
+      sym_define(&tci->type_syms, mtp_sym, tc->al);
+    }
+
+    // resolve each parameter's type; self gets the struct's self_type
+    TypeArrayScratch ps;
+    type_array_scratch_init(&ps, fun->param_count, tc->al);
+    for (int j = 0; j < fun->param_count; j++) {
+      ParamDeclNode *p = &fdecl->as.fun_decl.params[j];
+      if (p->is_self) {
+        ps.ptr[j] = decl->as.impl_decl.def->self_type;
+        fun->params[j].is_self = true;
+      } else {
+        ps.ptr[j] = resolve_typenode(tc, p->type_annotation);
+      }
+      fun->params[j].param_type = ps.ptr[j];
+    }
+
+    // resolve return type
+    Type *return_type =
+        fdecl->as.fun_decl.return_type
+            ? resolve_typenode(tc, fdecl->as.fun_decl.return_type)
+            : ty_unit();
+    fun->return_type = return_type;
+
+    // type-check the body
+    FunDef *saved_fun = tci->current_fun;
+    tci->current_fun = fun;
+    tci->loop_depth = 0;
+
+    sym_push_scope(&tci->val_syms, tc->al);
+    for (int j = 0; j < fun->param_count; j++) {
+      StringView name =
+          fun->params[j].is_self ? sv_from_cstr("self") : fun->params[j].name;
+
+      Symbol param_sym = {
+          .name = name,
+          .kind = SYM_VAR,
+          .type = ps.ptr[j],
+          .slot = j,
+      };
+      sym_define(&tci->val_syms, param_sym, tc->al);
+    }
+
+    if (fdecl->as.fun_decl.body != NULL) {
+      SubstEnv env;
+      subst_init(&env);
+
+      Type *body_type = resolve_expr(tc, fdecl->as.fun_decl.body, NULL);
+      if (!type_is_poison(body_type) && !type_is_poison(return_type)) {
+        if (!unify(tc, &env, return_type, body_type, fdecl->span)) {
+          Type *concrete_expected = substitute(tc, &env, return_type);
+          Type *concrete_actual = substitute(tc, &env, body_type);
+          char expected_buf[64], actual_buf[64];
+          type_sprintf(concrete_expected, expected_buf, sizeof(expected_buf));
+          type_sprintf(concrete_actual, actual_buf, sizeof(actual_buf));
+          Span def_span =
+              span_subtract(fdecl->span, fdecl->as.fun_decl.body->span);
+          tc_error(tc, def_span,
+                   "method '" SV_FMT "' returns '%s' but body has type '%s'",
+                   SV_ARG(fun->name), expected_buf, actual_buf);
+        }
+      }
+    }
+
+    sym_pop_scope(&tci->val_syms, tc->al);
+    sym_pop_scope(&tci->type_syms, tc->al); // method-level type params
+
+    tci->current_fun = saved_fun;
+  }
+
+  tci->current_self_type = saved_self;
+
+  sym_pop_scope(&tci->type_syms, tc->al); // impl-level type params
+}
+
 static void check_decl(TypeChecker *tc, Decl *decl) {
   switch (decl->kind) {
   case DECL_FUN:
@@ -2708,6 +3341,9 @@ static void check_decl(TypeChecker *tc, Decl *decl) {
     break;
   case DECL_TRAIT:
     check_trait_decl(tc, decl);
+    break;
+  case DECL_IMPL:
+    check_impl_decl(tc, decl);
     break;
   default:
     assert(false && "check_decl: unhandled decl kind");
@@ -2744,10 +3380,17 @@ void tc_destroy(TypeChecker *tc) {
 }
 
 void tc_check_program(TypeChecker *tc, Program *program) {
+  // register names
   for (int i = 0; i < program->decl_count; i++) {
     register_decl(tc, program->decls[i]);
   }
 
+  // resolve signatures 
+  for (int i = 0; i < program->decl_count; i++) {
+    resolve_decl(tc, program->decls[i]);
+  }
+
+  // check bodies
   for (int i = 0; i < program->decl_count; i++) {
     check_decl(tc, program->decls[i]);
   }

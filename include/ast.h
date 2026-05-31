@@ -30,6 +30,7 @@ typedef struct Path Path;
 typedef struct StructDef StructDef;
 typedef struct EnumDef EnumDef;
 typedef struct TraitDef TraitDef;
+typedef struct ImplDef ImplDef;
 typedef struct FunDef FunDef;
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -155,6 +156,7 @@ typedef struct {
 typedef struct {
   StringView name;
   FunDef *fun;
+  ImplDef *impl;
 } MethodDef;
 
 struct StructDef {
@@ -223,6 +225,25 @@ struct TraitDef {
   int slot;
 };
 
+struct ImplDef {
+  StringView name; // for error messages only; always empty for inherent impls
+
+  // Type *trait; // NULL for inherent impls
+  // Type *self_type;
+
+  StringView *type_params;
+  int type_param_count;
+
+  Type *self_type;
+
+  // MethodDef *methods;
+  // int method_count;
+  // int method_cap;
+
+  // TraitAssocTypeDef *assoc_types;
+  // int assoc_type_count;
+};
+
 typedef struct {
   StringView name;
   Type *param_type;
@@ -233,6 +254,7 @@ struct FunDef {
   StringView name;
   bool is_closure;
 
+  Type **type_args;
   StringView *type_params;
   int type_param_count;
 
@@ -382,12 +404,13 @@ typedef enum {
   EXPR_RANGE,  // a..b, a..=b
 
   // ── Postfix (pass 1+) ─────────────────────────────────
-  EXPR_CALL,        // f(a, b)
-  EXPR_INDEX,       // arr[i]
-  EXPR_FIELD,       // obj.field
-  EXPR_METHOD_CALL, // obj.method(args)
-  EXPR_CAST,        // expr as Type
-  EXPR_PROPAGATE,   // expr?              — Result propagation
+  EXPR_CALL,            // f(a, b)
+  EXPR_INDEX,           // arr[i]
+  EXPR_FIELD,           // obj.field
+  EXPR_METHOD_CALL,     // obj.method(args)
+  EXPR_ASSOCIATED_CALL, // T::method(args)
+  EXPR_CAST,            // expr as Type
+  EXPR_PROPAGATE,       // expr?              — Result propagation
 
   // ── Structural (pass 2+) ──────────────────────────────
   EXPR_BLOCK, // { stmts... expr? }
@@ -544,6 +567,16 @@ struct Expr {
       int type_arg_count;
       MethodDef *resolved_method;
     } method_call;
+
+    // EXPR_ASSOCIATED_CALL
+    struct {
+      Expr **args;
+      int arg_count;
+      TypeNode **type_args;
+      int type_arg_count;
+      MethodDef *resolved_method;
+      Expr *caller;
+    } assoc_call;
 
     // EXPR_CAST
     struct {
@@ -833,6 +866,10 @@ struct Decl {
       TypeNode *trait_type;
       ImplItemNode *items;
       int item_count;
+
+      ImplDef *def;
+      // // todo: create ImplDef
+      // Type *resolved_self_type;
     } impl_decl;
 
     // DECL_FUN

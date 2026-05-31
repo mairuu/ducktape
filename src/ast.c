@@ -436,7 +436,8 @@ int type_sprintf(const Type *t, char *buf, size_t buf_size) {
   case TY_TUPLE: {
     int n = snprintf(buf, buf_size, "(");
     for (int i = 0; i < t->as.tuple.elem_count; i++) {
-      if (i > 0)        n += snprintf(buf + n, buf_size - n, ", ");
+      if (i > 0)
+        n += snprintf(buf + n, buf_size - n, ", ");
       n += type_sprintf(t->as.tuple.elem_types[i], buf + n, buf_size - n);
     }
     n += snprintf(buf + n, buf_size - n, ")");
@@ -798,6 +799,9 @@ void dump_expr(const Expr *e, int indent) {
     for (int i = 0; i < e->as.method_call.arg_count; i++) {
       dump_expr(e->as.method_call.args[i], indent + 2);
     }
+    break;
+  case EXPR_ASSOCIATED_CALL:
+    fprintf(stdout, "AssociatedCall: ");
     break;
   case EXPR_BLOCK:
     fprintf(stdout, "Block\n");

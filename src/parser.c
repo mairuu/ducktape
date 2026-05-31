@@ -1419,7 +1419,7 @@ static Expr *parse_primary(Parser *p) {
   }
 
   // path / struct-init / variant
-  if (match_tok(p, TOKEN_IDENT)) {
+  if (match_tok(p, TOKEN_IDENT) || match_tok(p, TOKEN_SELF_TYPE)) {
     StringView segments[16];
     int segment_count = 1;
     segments[0] = previous_tok(p)->lexeme;
@@ -1750,6 +1750,12 @@ static Expr *parse_primary(Parser *p) {
   // block
   if (check_tok(p, TOKEN_LBRACE)) {
     return parse_block(p);
+  }
+
+  if (check_tok(p, TOKEN_SELF)) {
+    advance_tok(p);
+    Expr *expr = ast_expr(EXPR_SELF, token_span(previous_tok(p)), p->al);
+    return expr;
   }
 
   // nothing matched
