@@ -253,8 +253,8 @@ typedef struct {
 struct FunDef {
   StringView name;
   bool is_closure;
+  Type *fun_type;
 
-  Type **type_args;
   StringView *type_params;
   int type_param_count;
 

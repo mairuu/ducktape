@@ -2505,6 +2505,7 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr, Type *hint) {
       tc_error(tc, expr->span, "'self' is not valid in this context");
       result = ty_poison();
     } else {
+      assert(sym->type && "symbol for 'self' has no type");
       result = sym->type;
     }
     break;
@@ -2748,13 +2749,177 @@ static void register_trait_decl(TypeChecker *tc, Decl *decl) {
 }
 
 static void register_impl_decl(TypeChecker *tc, Decl *decl) {
-  USE_INTERNAL(tc, tci);
-
   // trait impls not supported yet
   if (decl->as.impl_decl.trait_type != NULL) {
     tc_error(tc, decl->span, "trait impls not supported yet");
     return;
   }
+
+  ImplDef *impl_def = al_alloc_zero_for(tc->al, ImplDef);
+
+  impl_def->type_param_count = decl->as.impl_decl.type_param_count;
+  impl_def->type_params =
+      al_alloc_zero(tc->al, impl_def->type_param_count * sizeof(StringView));
+  for (int i = 0; i < impl_def->type_param_count; i++) {
+    impl_def->type_params[i] = decl->as.impl_decl.type_params[i].name;
+  }
+
+  decl->as.impl_decl.def = impl_def;
+}
+
+static void register_decl(TypeChecker *tc, Decl *decl) {
+  switch (decl->kind) {
+  case DECL_FUN:
+    register_fun_decl(tc, decl);
+    break;
+  case DECL_STRUCT:
+    register_struct_decl(tc, decl);
+    break;
+  case DECL_ENUM:
+    register_enum_decl(tc, decl);
+    break;
+  case DECL_TRAIT:
+    register_trait_decl(tc, decl);
+    break;
+  case DECL_IMPL:
+    register_impl_decl(tc, decl);
+    break;
+  default:
+    assert(false && "register_decl: unhandled decl kind");
+    break;
+  }
+}
+
+// ============================================================================
+// resolve signatures
+// ============================================================================
+
+static void resolve_fun_decl(TypeChecker *tc, Decl *decl) {
+  USE_INTERNAL(tc, tci);
+
+  FunDef *def = decl->as.fun_decl.def;
+
+  sym_push_scope(&tci->type_syms, tc->al);
+
+  for (int i = 0; i < def->type_param_count; i++) {
+    StringView name = decl->as.fun_decl.type_params[i].name;
+    Symbol tp_sym = {
+        .name = name,
+        .kind = SYM_TYPE_PARAM,
+        .type = ty_generic(name, NULL, 0, tc->al),
+    };
+    if (decl->as.fun_decl.type_params[i].bound_count > 0) {
+      tc_error(tc, decl->as.fun_decl.type_params[i].span,
+               "type parameter bounds not supported yet");
+    }
+    sym_define(&tci->type_syms, tp_sym, tc->al);
+  }
+
+  TypeArrayScratch ps;
+  type_array_scratch_init(&ps, def->param_count, tc->al);
+
+  for (int i = 0; i < def->param_count; i++) {
+    ParamDeclNode *p = &decl->as.fun_decl.params[i];
+    if (p->is_self) {
+      ps.ptr[i] = ty_poison();
+      def->params[i].is_self = true;
+    } else {
+      ps.ptr[i] = resolve_typenode(tc, p->type_annotation);
+    }
+  }
+
+  // resolve return type
+  Type *return_type = decl->as.fun_decl.return_type
+                          ? resolve_typenode(tc, decl->as.fun_decl.return_type)
+                          : ty_unit();
+  def->return_type = return_type;
+
+  Type *new_ty = ty_function(ps.ptr, ps.count, return_type, tc->al);
+  Symbol *sym = sym_lookup(&tci->type_syms, def->name);
+  assert(sym && sym->kind == SYM_FUN &&
+         "check_fun_decl: function symbol not found");
+  sym->type = new_ty;
+  def->fun_type = new_ty;
+
+  sym_pop_scope(&tci->type_syms, tc->al);
+}
+
+static void resolve_struct_decl(TypeChecker *tc, Decl *decl) {
+  USE_INTERNAL(tc, tci);
+  StructDef *def = decl->as.struct_decl.def;
+
+  sym_push_scope(&tci->type_syms, tc->al);
+
+  // register type parameters as type symbols
+  for (int i = 0; i < def->type_param_count; i++) {
+    StringView name = decl->as.struct_decl.type_params[i].name;
+    Symbol tp_sym = {
+        .name = name,
+        .kind = SYM_TYPE_PARAM,
+        .type = ty_generic(name, NULL, 0, tc->al),
+    };
+    if (decl->as.struct_decl.type_params[i].bound_count > 0) {
+      tc_error(tc, decl->as.struct_decl.type_params[i].span,
+               "type parameter bounds not supported yet");
+    }
+    sym_define(&tci->type_syms, tp_sym, tc->al);
+  }
+
+  if (def->is_tuple_struct) {
+    for (int i = 0; i < def->field_count; i++) {
+      def->fields[i].type =
+          resolve_typenode(tc, decl->as.struct_decl.tuple_types[i]);
+    }
+  } else {
+    for (int i = 0; i < def->field_count; i++) {
+      def->fields[i].type =
+          resolve_typenode(tc, decl->as.struct_decl.fields[i].type_annotation);
+    }
+  }
+
+  sym_pop_scope(&tci->type_syms, tc->al);
+}
+
+static void resolve_enum_decl(TypeChecker *tc, Decl *decl) {
+  USE_INTERNAL(tc, tci);
+  EnumDef *def = decl->as.enum_decl.def;
+
+  sym_push_scope(&tci->type_syms, tc->al);
+
+  // register type parameters as type symbols
+  for (int i = 0; i < def->type_param_count; i++) {
+    StringView name = decl->as.enum_decl.type_params[i].name;
+    Symbol tp_sym = {
+        .name = name,
+        .kind = SYM_TYPE_PARAM,
+        .type = ty_generic(name, NULL, 0, tc->al),
+    };
+    if (decl->as.enum_decl.type_params[i].bound_count > 0) {
+      tc_error(tc, decl->as.enum_decl.type_params[i].span,
+               "type parameter bounds not supported yet");
+    }
+    sym_define(&tci->type_syms, tp_sym, tc->al);
+  }
+
+  for (int i = 0; i < def->variant_count; i++) {
+    VariantDef *variant = &def->variants[i];
+    for (int j = 0; j < variant->payload_count; j++) {
+      variant->payload_types[j] =
+          resolve_typenode(tc, decl->as.enum_decl.variants[i].payload_types[j]);
+    }
+  }
+
+  sym_pop_scope(&tci->type_syms, tc->al);
+}
+
+static void resolve_trait_decl(TypeChecker *tc, Decl *decl) {
+  (void)tc;
+  (void)decl;
+}
+
+static void resolve_impl_decl(TypeChecker *tc, Decl *decl) {
+  USE_INTERNAL(tc, tci);
+  ImplDef *impl_def = decl->as.impl_decl.def;
 
   // push impl-level type params so resolve_typenode can see them when
   sym_push_scope(&tci->type_syms, tc->al);
@@ -2769,17 +2934,7 @@ static void register_impl_decl(TypeChecker *tc, Decl *decl) {
   }
 
   Type *self_ty = resolve_typenode(tc, decl->as.impl_decl.self_type);
-
-  ImplDef *impl_def = al_alloc_zero_for(tc->al, ImplDef);
-
-  impl_def->type_param_count = decl->as.impl_decl.type_param_count;
-  impl_def->type_params =
-      al_alloc_zero(tc->al, impl_def->type_param_count * sizeof(StringView));
-  for (int i = 0; i < impl_def->type_param_count; i++) {
-    impl_def->type_params[i] = decl->as.impl_decl.type_params[i].name;
-  }
   impl_def->self_type = self_ty;
-  decl->as.impl_decl.def = impl_def;
 
   sym_pop_scope(&tci->type_syms, tc->al);
 
@@ -2866,43 +3021,6 @@ static void register_impl_decl(TypeChecker *tc, Decl *decl) {
   }
 }
 
-static void register_decl(TypeChecker *tc, Decl *decl) {
-  switch (decl->kind) {
-  case DECL_FUN:
-    register_fun_decl(tc, decl);
-    break;
-  case DECL_STRUCT:
-    register_struct_decl(tc, decl);
-    break;
-  case DECL_ENUM:
-    register_enum_decl(tc, decl);
-    break;
-  case DECL_TRAIT:
-    register_trait_decl(tc, decl);
-    break;
-  case DECL_IMPL:
-    register_impl_decl(tc, decl);
-    break;
-  default:
-    assert(false && "register_decl: unhandled decl kind");
-    break;
-  }
-}
-
-// ============================================================================
-// resolve signatures
-// ============================================================================
-
-static void resolve_fun_decl(TypeChecker *tc, Decl *decl) {}
-
-static void resolve_struct_decl(TypeChecker *tc, Decl *decl) {}
-
-static void resolve_enum_decl(TypeChecker *tc, Decl *decl) {}
-
-static void resolve_trait_decl(TypeChecker *tc, Decl *decl) {}
-
-static void resolve_impl_decl(TypeChecker *tc, Decl *decl) {}
-
 static void resolve_decl(TypeChecker *tc, Decl *decl) {
   switch (decl->kind) {
   case DECL_FUN:
@@ -2934,6 +3052,17 @@ static void check_fun_decl(TypeChecker *tc, Decl *decl) {
   USE_INTERNAL(tc, tci);
 
   FunDef *def = decl->as.fun_decl.def;
+  Type *sym_ty = def->fun_type;
+
+  if (sym_ty == NULL) {
+    return;
+  }
+
+  assert(sym_ty->kind == TY_FUNCTION &&
+         "check_fun_decl: function symbol has non-function type");
+
+  Type **ps = sym_ty->as.fun.param_types;
+  Type *return_type = sym_ty->as.fun.return_type;
 
   sym_push_scope(&tci->type_syms, tc->al);
 
@@ -2952,33 +3081,6 @@ static void check_fun_decl(TypeChecker *tc, Decl *decl) {
     sym_define(&tci->type_syms, tp_sym, tc->al);
   }
 
-  // resolve parameters
-  TypeArrayScratch ps;
-  type_array_scratch_init(&ps, def->param_count, tc->al);
-
-  for (int i = 0; i < def->param_count; i++) {
-    ParamDeclNode *p = &decl->as.fun_decl.params[i];
-    if (p->is_self) {
-      ps.ptr[i] = ty_poison();
-      def->params[i].is_self = true;
-      assert(false && "check_fun_decl: self params not supported yet");
-    } else {
-      ps.ptr[i] = resolve_typenode(tc, p->type_annotation);
-    }
-  }
-
-  // resolve return type
-  Type *return_type = decl->as.fun_decl.return_type
-                          ? resolve_typenode(tc, decl->as.fun_decl.return_type)
-                          : ty_unit();
-  def->return_type = return_type;
-
-  Type *new_ty = ty_function(ps.ptr, ps.count, return_type, tc->al);
-  Symbol *sym = sym_lookup(&tci->type_syms, def->name);
-  assert(sym && sym->kind == SYM_FUN &&
-         "check_fun_decl: function symbol not found");
-  sym->type = new_ty;
-
   FunDef *saved_fun = tci->current_fun;
   tci->current_fun = def;
   tci->loop_depth = 0;
@@ -2989,7 +3091,7 @@ static void check_fun_decl(TypeChecker *tc, Decl *decl) {
     Symbol param_sym = {
         .name = def->params[i].name,
         .kind = SYM_VAR,
-        .type = ps.ptr[i],
+        .type = ps[i],
         .slot = i,
     };
     sym_define(&tci->val_syms, param_sym, tc->al);
@@ -3015,74 +3117,6 @@ static void check_fun_decl(TypeChecker *tc, Decl *decl) {
   sym_pop_scope(&tci->type_syms, tc->al);
 
   tci->current_fun = saved_fun;
-}
-
-static void check_struct_decl(TypeChecker *tc, Decl *decl) {
-  USE_INTERNAL(tc, tci);
-  StructDef *def = decl->as.struct_decl.def;
-
-  sym_push_scope(&tci->type_syms, tc->al);
-
-  // register type parameters as type symbols
-  for (int i = 0; i < def->type_param_count; i++) {
-    StringView name = decl->as.struct_decl.type_params[i].name;
-    Symbol tp_sym = {
-        .name = name,
-        .kind = SYM_TYPE_PARAM,
-        .type = ty_generic(name, NULL, 0, tc->al),
-    };
-    if (decl->as.struct_decl.type_params[i].bound_count > 0) {
-      tc_error(tc, decl->as.struct_decl.type_params[i].span,
-               "type parameter bounds not supported yet");
-    }
-    sym_define(&tci->type_syms, tp_sym, tc->al);
-  }
-
-  if (def->is_tuple_struct) {
-    for (int i = 0; i < def->field_count; i++) {
-      def->fields[i].type =
-          resolve_typenode(tc, decl->as.struct_decl.tuple_types[i]);
-    }
-  } else {
-    for (int i = 0; i < def->field_count; i++) {
-      def->fields[i].type =
-          resolve_typenode(tc, decl->as.struct_decl.fields[i].type_annotation);
-    }
-  }
-
-  sym_pop_scope(&tci->type_syms, tc->al);
-}
-
-static void check_enum_decl(TypeChecker *tc, Decl *decl) {
-  USE_INTERNAL(tc, tci);
-  EnumDef *def = decl->as.enum_decl.def;
-
-  sym_push_scope(&tci->type_syms, tc->al);
-
-  // register type parameters as type symbols
-  for (int i = 0; i < def->type_param_count; i++) {
-    StringView name = decl->as.enum_decl.type_params[i].name;
-    Symbol tp_sym = {
-        .name = name,
-        .kind = SYM_TYPE_PARAM,
-        .type = ty_generic(name, NULL, 0, tc->al),
-    };
-    if (decl->as.enum_decl.type_params[i].bound_count > 0) {
-      tc_error(tc, decl->as.enum_decl.type_params[i].span,
-               "type parameter bounds not supported yet");
-    }
-    sym_define(&tci->type_syms, tp_sym, tc->al);
-  }
-
-  for (int i = 0; i < def->variant_count; i++) {
-    VariantDef *variant = &def->variants[i];
-    for (int j = 0; j < variant->payload_count; j++) {
-      variant->payload_types[j] =
-          resolve_typenode(tc, decl->as.enum_decl.variants[i].payload_types[j]);
-    }
-  }
-
-  sym_pop_scope(&tci->type_syms, tc->al);
 }
 
 static void check_trait_method(TypeChecker *tc, TraitDef *trait_def,
@@ -3224,8 +3258,6 @@ static void check_impl_decl(TypeChecker *tc, Decl *decl) {
   Type *saved_self = tci->current_self_type;
   tci->current_self_type = self_ty;
 
-  // StructDef *struct_def = self_ty->as.struc.def;
-
   for (int i = 0; i < decl->as.impl_decl.item_count; i++) {
     ImplItemNode *item = &decl->as.impl_decl.items[i];
     if (item->kind != IMPL_ITEM_METHOD || item->fun_decl == NULL) {
@@ -3281,7 +3313,6 @@ static void check_impl_decl(TypeChecker *tc, Decl *decl) {
     for (int j = 0; j < fun->param_count; j++) {
       StringView name =
           fun->params[j].is_self ? sv_from_cstr("self") : fun->params[j].name;
-
       Symbol param_sym = {
           .name = name,
           .kind = SYM_VAR,
@@ -3329,10 +3360,8 @@ static void check_decl(TypeChecker *tc, Decl *decl) {
     check_fun_decl(tc, decl);
     break;
   case DECL_STRUCT:
-    check_struct_decl(tc, decl);
-    break;
   case DECL_ENUM:
-    check_enum_decl(tc, decl);
+    // no body to check for structs or enums
     break;
   case DECL_TRAIT:
     check_trait_decl(tc, decl);
