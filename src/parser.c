@@ -652,6 +652,48 @@ static Expr *parse_postfix(Parser *p) {
       if (match_tok(p, TOKEN_IDENT)) {
         Token name = *previous_tok(p);
 
+        TypeNode *type_args[8];
+        int type_arg_count = 0;
+        Span start_span = current_tok_span(p);
+
+        if (match_tok(p, TOKEN_LT)) {
+          bool had_error = false;
+
+          if (!check_tok(p, TOKEN_GT)) {
+            do {
+              if (type_arg_count >= 8) {
+                error_at(p, span_merge(start_span, previous_tok_span(p)),
+                         "too many type arguments in method call");
+                had_error = true;
+                break;
+              }
+              TypeNode *ty = parse_type(p);
+              if (ty->kind == TYNODE_POISON) {
+                had_error = true;
+                break;
+              }
+              type_args[type_arg_count++] = ty;
+            } while (match_tok(p, TOKEN_COMMA));
+          }
+
+          consume_tok(p, TOKEN_GT, "expected '>' after type arguments");
+
+          if (type_arg_count == 0) {
+            error_at(p, current_tok_span(p),
+                     "expected at least one type argument in type application");
+            had_error = true;
+          }
+
+          if (had_error) {
+            return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
+          }
+        }
+
+        if (type_arg_count != 0 && !check_tok(p, TOKEN_LPAREN)) {
+          error_at(p, span_merge(start_span, previous_tok_span(p)),
+                   "unexpected type arguments");
+        }
+
         if (match_tok(p, TOKEN_LPAREN)) {
           // method call: obj.method(args)
           Expr **args = NULL;
@@ -669,6 +711,7 @@ static Expr *parse_postfix(Parser *p) {
           Expr *expr =
               ast_expr(EXPR_METHOD_CALL,
                        span_merge(base->span, previous_tok_span(p)), p->al);
+
           expr->as.method_call.object = base;
           expr->as.method_call.method_name = name.lexeme;
           expr->as.method_call.args = args;
@@ -676,6 +719,13 @@ static Expr *parse_postfix(Parser *p) {
           expr->as.method_call.type_args = NULL;
           expr->as.method_call.type_arg_count = 0;
           expr->as.method_call.resolved_method = NULL;
+          if (type_arg_count > 0) {
+            expr->as.method_call.type_args =
+                al_alloc(p->al, sizeof(TypeNode *) * type_arg_count);
+            memcpy(expr->as.method_call.type_args, type_args,
+                   sizeof(TypeNode *) * type_arg_count);
+            expr->as.method_call.type_arg_count = type_arg_count;
+          }
           base = expr;
         } else {
           // field access: obj.field
@@ -1011,7 +1061,9 @@ static Expr *parse_closure(Parser *p) {
     return ast_expr(EXPR_POISON, error_span, p->al);
   }
 
-  Expr *expr = ast_expr(EXPR_CLOSURE, span_merge(token_span(&fun_tok), previous_tok_span(p)), p->al);
+  Expr *expr =
+      ast_expr(EXPR_CLOSURE,
+               span_merge(token_span(&fun_tok), previous_tok_span(p)), p->al);
   expr->as.closure.type_params = type_params;
   expr->as.closure.type_param_count = type_param_count;
   expr->as.closure.params = al_alloc(p->al, sizeof(ClosureParam) * param_count);
