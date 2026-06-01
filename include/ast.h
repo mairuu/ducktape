@@ -86,8 +86,8 @@ struct Type {
 
     struct {
       TraitDef *def;
-      Type **type_args;
-      int type_arg_count;
+      // Type **type_args;
+      // int type_arg_count;
     } trait;
 
     struct {
@@ -130,7 +130,7 @@ Type *ty_generic(StringView name, TraitDef **bounds, int bound_count,
 Type *ty_assoc(Type *base, StringView assoc_name, Allocator *al);
 Type *ty_struct(StructDef *def, Type **args, int argc, Allocator *al);
 Type *ty_enum(EnumDef *def, Type **args, int argc, Allocator *al);
-Type *ty_trait(TraitDef *def, Type **args, int argc, Allocator *al);
+Type *ty_trait(TraitDef *def, Allocator *al);
 
 static inline bool types_equal(const Type *a, const Type *b) { return a == b; }
 bool type_is_numeric(const Type *t);
@@ -164,8 +164,8 @@ struct StructDef {
   StringView name;
   bool is_tuple_struct;
 
-  Type **type_params; // e.g. ["T", "U"]
-  int type_param_count;    // if generic, else 0
+  Type **type_params;   // e.g. ["T", "U"]
+  int type_param_count; // if generic, else 0
 
   FieldDef *fields;
   int field_count;
@@ -201,6 +201,8 @@ struct EnumDef {
 typedef struct {
   StringView name;
   Type *method_type; // TY_FUNCTION with Self still unresolved
+  Type **type_params;
+  int type_param_count;
   bool has_default;
   FunDef *default_impl; // NULL if required
 } TraitMethodDef;
@@ -213,7 +215,7 @@ struct TraitDef {
   StringView name;
   Type *self_type;
 
-  StringView *type_params;
+  Type **type_params;
   int type_param_count;
 
   TraitMethodDef *methods;

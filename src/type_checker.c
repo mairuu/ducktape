@@ -351,8 +351,8 @@ static bool occurs_in(Type *unknown_ty, Type *target_ty) {
         return true;
     return false;
   case TY_TRAIT:
-    for (int i = 0; i < target_ty->as.trait.type_arg_count; i++)
-      if (occurs_in(unknown_ty, target_ty->as.trait.type_args[i]))
+    for (int i = 0; i < target_ty->as.trait.def->type_param_count; i++)
+      if (occurs_in(unknown_ty, target_ty->as.trait.def->type_params[i]))
         return true;
     return false;
   case TY_ARRAY:
@@ -2683,9 +2683,6 @@ static void register_trait_decl(TypeChecker *tc, Decl *decl) {
 
   def->type_params =
       al_alloc_zero(tc->al, def->type_param_count * sizeof(Type *));
-  for (int i = 0; i < def->type_param_count; i++) {
-    def->type_params[i] = decl->as.trait_decl.type_params[i].name;
-  }
 
   TraitMethodDef scratch_methods[8];
   int method_count = 0;
@@ -2701,6 +2698,9 @@ static void register_trait_decl(TypeChecker *tc, Decl *decl) {
         break;
       }
       scratch_methods[method_count].name = item->name;
+      scratch_methods[method_count].type_param_count = item->type_param_count;
+      scratch_methods[method_count].type_params =
+          al_alloc_zero(tc->al, item->type_param_count * sizeof(Type *));
       method_count++;
       break;
     case TRAIT_ITEM_ASSOC_TYPE:
@@ -2728,15 +2728,7 @@ static void register_trait_decl(TypeChecker *tc, Decl *decl) {
   memcpy(def->assoc_types, scratch_assoc_types,
          assoc_type_count * sizeof(TraitAssocTypeDef));
 
-  TypeArrayScratch args;
-  type_array_scratch_init(&args, def->type_param_count, tc->al);
-  for (int i = 0; i < def->type_param_count; i++) {
-    args.ptr[i] =
-        ty_generic(decl->as.trait_decl.type_params[i].name, NULL, 0, tc->al);
-  }
-
-  Type *ty = ty_trait(def, args.ptr, args.count, tc->al);
-  def->self_type = ty;
+  Type *ty = ty_trait(def, tc->al);
   ty->as.trait.def = def;
   decl->as.trait_decl.def = def;
 
@@ -2928,8 +2920,90 @@ static void resolve_enum_decl(TypeChecker *tc, Decl *decl) {
 }
 
 static void resolve_trait_decl(TypeChecker *tc, Decl *decl) {
-  (void)tc;
-  (void)decl;
+  USE_INTERNAL(tc, tci);
+
+  TraitDef *def = decl->as.trait_decl.def;
+
+  // resolve trait type parameters
+  for (int i = 0; i < def->type_param_count; i++) {
+    if (decl->as.trait_decl.type_params[i].bound_count > 0) {
+      tc_error(tc, decl->as.trait_decl.type_params[i].span,
+               "type parameter bounds not supported yet");
+    }
+    def->type_params[i] =
+        ty_generic(decl->as.trait_decl.type_params[i].name, NULL, 0, tc->al);
+  }
+
+  sym_push_scope(&tci->type_syms, tc->al);
+
+  // register trait type parameters as type symbols
+  for (int i = 0; i < def->type_param_count; i++) {
+    Symbol tp_sym = {
+        .name = def->type_params[i]->as.generic.name,
+        .kind = SYM_TYPE_PARAM,
+        .type = def->type_params[i],
+    };
+    sym_define(&tci->type_syms, tp_sym, tc->al);
+  }
+
+  def->self_type = ty_generic(sv_from_cstr("Self"), NULL, 0, tc->al);
+  
+  Type *saved_self = tci->current_self_type;
+  tci->current_self_type = def->self_type;
+
+  int method_idx = -1;
+  for (int i = 0; i < decl->as.trait_decl.item_count; i++) {
+    method_idx++;
+    if (decl->as.trait_decl.items[i].kind != TRAIT_ITEM_METHOD) {
+      continue;
+    }
+
+    TraitMethodDef *method = &def->methods[method_idx];
+    TraitItemNode *node = &decl->as.trait_decl.items[i];
+
+    // resolve method type parameters
+    for (int i = 0; i < node->type_param_count; i++) {
+      if (node->type_params[i].bound_count > 0) {
+        tc_error(tc, node->type_params[i].span,
+                 "type parameter bounds not supported yet");
+      }
+      method->type_params[i] =
+          ty_generic(node->type_params[i].name, NULL, 0, tc->al);
+    }
+
+    sym_push_scope(&tci->type_syms, tc->al);
+
+    // register method type parameters as type symbols
+    for (int i = 0; i < method->type_param_count; i++) {
+      Symbol tp_sym = {
+          .name = method->type_params[i]->as.generic.name,
+          .kind = SYM_TYPE_PARAM,
+          .type = method->type_params[i],
+      };
+      sym_define(&tci->type_syms, tp_sym, tc->al);
+    }
+
+    TypeArrayScratch ps;
+    type_array_scratch_init(&ps, 0, tc->al);
+
+    for (int i = 0; i < node->param_count; i++) {
+      if (node->params[i].is_self) {
+        ps.ptr[i] = def->self_type;
+      } else {
+        ps.ptr[i] = resolve_typenode(tc, node->params[i].type_annotation);
+      }
+    }
+
+    Type *return_type =
+        node->return_type ? resolve_typenode(tc, node->return_type) : ty_unit();
+
+    method->method_type = ty_function(ps.ptr, ps.count, return_type, tc->al);
+
+    sym_pop_scope(&tci->type_syms, tc->al);
+  }
+
+  sym_pop_scope(&tci->type_syms, tc->al);
+  tci->current_self_type = saved_self;
 }
 
 static void resolve_impl_decl(TypeChecker *tc, Decl *decl) {
@@ -3186,41 +3260,52 @@ static void check_fun_decl(TypeChecker *tc, Decl *decl) {
   tci->current_fun = saved_fun;
 }
 
-static void check_trait_method(TypeChecker *tc, TraitDef *trait_def,
-                               TraitItemNode *node, TraitMethodDef *method) {
+static void check_trait_decl(TypeChecker *tc, Decl *decl) {
   USE_INTERNAL(tc, tci);
-  assert(node->kind == TRAIT_ITEM_METHOD);
+  TraitDef *def = decl->as.trait_decl.def;
 
-  Type *ret_ty = node->default_body ? resolve_expr(tc, node->default_body, NULL)
-                                    : ty_unit();
+  sym_push_scope(&tci->type_syms, tc->al);
 
-  TypeArrayScratch ps;
-  type_array_scratch_init(&ps, 0, tc->al);
-
-  for (int i = 0; i < node->param_count; i++) {
-    if (node->params[i].is_self) {
-      ps.ptr[i] = trait_def->self_type;
-    } else {
-      ps.ptr[i] = resolve_typenode(tc, node->params[i].type_annotation);
-    }
+  // trait level
+  for (int i = 0; i < def->type_param_count; i++) {
+    Symbol sym = {
+        .name = def->type_params[i]->as.generic.name,
+        .kind = SYM_TYPE_PARAM,
+        .type = def->type_params[i],
+    };
+    sym_define(&tci->type_syms, sym, tc->al);
   }
 
-  if (node->default_body) {
-    method->has_default = true;
+  Type *saved_self = tci->current_self_type;
+  tci->current_self_type = def->self_type;
 
-    sym_push_scope(&tci->val_syms, tc->al);
-    for (int i = 0; i < node->param_count; i++) {
-      StringView name =
-          node->params[i].is_self ? sv_from_cstr("self") : node->params[i].name;
-      Symbol param_sym = {
-          .name = name,
-          .kind = SYM_VAR,
-          .type = ps.ptr[i],
-      };
-      sym_define(&tci->val_syms, param_sym, tc->al);
+  int method_idx = -1;
+  for (int i = 0; i < decl->as.trait_decl.item_count; i++) {
+    method_idx++;
+    if (decl->as.trait_decl.items[i].kind != TRAIT_ITEM_METHOD) {
+      continue;
     }
 
-    Type *body_ty = resolve_expr(tc, node->default_body, NULL);
+    TraitMethodDef *method = &def->methods[method_idx];
+    TraitItemNode *node = &decl->as.trait_decl.items[i];
+
+    if (node->default_body == NULL) {
+      continue;
+    }
+
+    // method level
+    sym_push_scope(&tci->type_syms, tc->al);
+    for (int i = 0; i < method->type_param_count; i++) {
+      Symbol sym = {
+          .name = method->type_params[i]->as.generic.name,
+          .kind = SYM_TYPE_PARAM,
+          .type = method->type_params[i],
+      };
+      sym_define(&tci->type_syms, sym, tc->al);
+    }
+
+    Type *ret_ty = method->method_type->as.fun.return_type;
+    Type *body_ty = resolve_expr(tc, node->default_body, ret_ty);
     sym_pop_scope(&tci->val_syms, tc->al);
 
     if (!type_is_poison(body_ty) && !type_is_poison(ret_ty)) {
@@ -3235,60 +3320,11 @@ static void check_trait_method(TypeChecker *tc, TraitDef *trait_def,
       }
     }
 
-    method->default_impl = al_alloc_for(tc->al, FunDef);
-    // todo: fill in method->default_impl with the resolved default
-    // implementation
-  }
-
-  method->method_type = ty_function(ps.ptr, ps.count, ret_ty, tc->al);
-}
-
-static void check_trait_decl(TypeChecker *tc, Decl *decl) {
-  USE_INTERNAL(tc, tci);
-  TraitDef *def = decl->as.trait_decl.def;
-
-  sym_push_scope(&tci->type_syms, tc->al);
-
-  // register type parameters as type symbols
-  for (int i = 0; i < def->type_param_count; i++) {
-    StringView name = decl->as.trait_decl.type_params[i].name;
-    Symbol tp_sym = {
-        .name = name,
-        .kind = SYM_TYPE_PARAM,
-        .type = ty_generic(name, NULL, 0, tc->al),
-    };
-    if (decl->as.trait_decl.type_params[i].bound_count > 0) {
-      tc_error(tc, decl->as.trait_decl.type_params[i].span,
-               "type parameter bounds not supported yet");
-    }
-    sym_define(&tci->type_syms, tp_sym, tc->al);
-  }
-
-  // register associated types as type symbols
-  // for (int i = 0; i < def->assoc_type_count; i++) {
-  //   TraitAssocTypeDef *assoc = &def->assoc_types[i];
-  //   Symbol assoc_sym = {
-  //       .name = assoc->name,
-  //       .kind = SYM_ASSOC_TYPE,
-  //       .type = ty_unknown(NULL, tc->al), // to be filled in later
-  //       .as.assoc_type_def = assoc,
-  //   };
-  //   sym_define(&tci->type_syms, assoc_sym, tc->al);
-  // }
-
-  // check method signatures
-  int method_idx = -1;
-  for (int i = 0; i < decl->as.trait_decl.item_count; i++) {
-    method_idx++;
-    if (decl->as.trait_decl.items[i].kind != TRAIT_ITEM_METHOD) {
-      continue;
-    }
-
-    TraitMethodDef *method = &def->methods[method_idx];
-    check_trait_method(tc, def, &decl->as.trait_decl.items[i], method);
+    sym_pop_scope(&tci->type_syms, tc->al);
   }
 
   sym_pop_scope(&tci->type_syms, tc->al);
+  tci->current_self_type = saved_self;
 }
 
 static void check_impl_decl(TypeChecker *tc, Decl *decl) {

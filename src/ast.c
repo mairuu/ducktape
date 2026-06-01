@@ -45,6 +45,11 @@ static uint32_t type_hash(const Type *t) {
     for (int i = 0; i < t->as.enm.type_arg_count; i++)
       h = h * 31 + (uint32_t)(uintptr_t)t->as.enm.type_args[i];
     break;
+  case TY_TRAIT:
+    h = h * 31 + (uint32_t)(uintptr_t)t->as.trait.def;
+    // for (int i = 0; i < t->as.trait.type_arg_count; i++)
+    //   h = h * 31 + (uint32_t)(uintptr_t)t->as.trait.type_args[i];
+    break;
   case TY_UNKNOWN:
     h = h * 31 + t->as.unknown.id;
     h = h * 31 + (uint32_t)(uintptr_t)t->as.unknown.bound;
@@ -107,14 +112,7 @@ static bool type_structurally_equal(const Type *a, const Type *b) {
         return false;
     return true;
   case TY_TRAIT:
-    if (a->as.trait.def != b->as.trait.def)
-      return false;
-    if (a->as.trait.type_arg_count != b->as.trait.type_arg_count)
-      return false;
-    for (int i = 0; i < a->as.trait.type_arg_count; i++)
-      if (a->as.trait.type_args[i] != b->as.trait.type_args[i])
-        return false;
-    return true;
+    return a->as.trait.def == b->as.trait.def;
   default:
     return true; // singletons equal by kind
   }
@@ -262,7 +260,7 @@ Type *ty_generic(StringView name, TraitDef **bounds, int bound_count,
   t->as.generic.name = name;
   t->as.generic.bounds = bounds;
   t->as.generic.bound_count = bound_count;
-  return type_intern(t);
+  return t;
 }
 
 Type *ty_assoc(Type *base, StringView assoc_name, Allocator *al);
@@ -313,12 +311,10 @@ Type *ty_enum(EnumDef *def, Type **args, int argc, Allocator *al) {
   return type_intern(t);
 }
 
-Type *ty_trait(TraitDef *def, Type **args, int argc, Allocator *al) {
+Type *ty_trait(TraitDef *def, Allocator *al) {
   Type probe = {.kind = TY_TRAIT,
                 .as.trait = {
                     .def = def,
-                    .type_args = args,
-                    .type_arg_count = argc,
                 }};
   Type *interned = type_intern_lookup(&probe);
   if (interned) {
@@ -328,11 +324,6 @@ Type *ty_trait(TraitDef *def, Type **args, int argc, Allocator *al) {
   Type *t = al_alloc_zero_for(al, Type);
   t->kind = TY_TRAIT;
   t->as.trait.def = def;
-  t->as.trait.type_args = al_alloc(al, argc * sizeof(Type *));
-  for (int i = 0; i < argc; i++) {
-    t->as.trait.type_args[i] = args[i];
-  }
-  t->as.trait.type_arg_count = argc;
   return type_intern(t);
 }
 
