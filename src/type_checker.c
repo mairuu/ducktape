@@ -1001,7 +1001,9 @@ static bool resolve_type_args(TypeChecker *tc, SubstEnv *env, StructDef *def,
                               int type_arg_count, Span span) {
   if (type_arg_count == 0) {
     for (int i = 0; i < def->type_param_count; i++) {
-      subst_bind(tc, env, def->type_params[i], ty_unknown(NULL, tc->al), span);
+      assert(def->type_params[i]->kind == TY_GENERIC);
+      subst_bind(tc, env, def->type_params[i]->as.generic.name,
+                 ty_unknown(NULL, tc->al), span);
     }
     return true;
   }
@@ -1013,8 +1015,9 @@ static bool resolve_type_args(TypeChecker *tc, SubstEnv *env, StructDef *def,
     return false;
   }
   for (int i = 0; i < type_arg_count; i++) {
+    assert(def->type_params[i]->kind == TY_GENERIC);
     Type *concrete = resolve_typenode(tc, type_args[i]);
-    subst_bind(tc, env, def->type_params[i], concrete, span);
+    subst_bind(tc, env, def->type_params[i]->as.generic.name, concrete, span);
   }
   return true;
 }
@@ -1059,7 +1062,9 @@ static bool resolve_call_type_args(TypeChecker *tc, SubstEnv *env,
   if (explicit_count == 0) {
     // if no explicit type arguments, bind all to unknowns
     for (int i = 0; i < def->type_param_count; i++) {
-      subst_bind(tc, env, def->type_params[i], ty_unknown(NULL, tc->al), span);
+      assert(def->type_params[i]->kind == TY_GENERIC);
+      subst_bind(tc, env, def->type_params[i]->as.generic.name,
+                 ty_unknown(NULL, tc->al), span);
     }
     return true;
   }
@@ -1073,7 +1078,7 @@ static bool resolve_call_type_args(TypeChecker *tc, SubstEnv *env,
   for (int i = 0; i < explicit_count; i++) {
     Type *concrete =
         resolve_typenode(tc, callee_expr->as.path_expr.type_args[i]);
-    subst_bind(tc, env, def->type_params[i], concrete, span);
+    subst_bind(tc, env, def->type_params[i]->as.generic.name, concrete, span);
   }
   return true;
 }
@@ -1158,10 +1163,11 @@ static Type *resolve_fun_expr(TypeChecker *tc, Expr *expr, Type *hint) {
 
   def->type_param_count = expr->as.closure.type_param_count;
   def->type_params =
-      al_alloc_zero(tc->al, def->type_param_count * sizeof(StringView));
+      al_alloc_zero(tc->al, def->type_param_count * sizeof(Type *));
 
   for (int i = 0; i < def->type_param_count; i++) {
-    def->type_params[i] = expr->as.closure.type_params[i].name;
+    def->type_params[i] =
+        ty_generic(expr->as.closure.type_params[i].name, NULL, 0, tc->al);
   }
 
   def->param_count = expr->as.closure.param_count;
@@ -1175,10 +1181,6 @@ static Type *resolve_fun_expr(TypeChecker *tc, Expr *expr, Type *hint) {
   TypeArrayScratch ps;
   type_array_scratch_init(&ps, def->param_count, tc->al);
 
-  for (int i = 0; i < def->param_count; i++) {
-    ps.ptr[i] = ty_poison();
-  }
-
   // todo: slot assignment
 
   expr->as.closure.def = def;
@@ -1190,11 +1192,10 @@ static Type *resolve_fun_expr(TypeChecker *tc, Expr *expr, Type *hint) {
 
   // register type parameters as type symbols
   for (int i = 0; i < def->type_param_count; i++) {
-    StringView name = expr->as.closure.type_params[i].name;
     Symbol tp_sym = {
-        .name = name,
+        .name = def->type_params[i]->as.generic.name,
         .kind = SYM_TYPE_PARAM,
-        .type = ty_generic(name, NULL, 0, tc->al),
+        .type = def->type_params[i],
     };
     if (expr->as.closure.type_params[i].bound_count > 0) {
       tc_error(tc, expr->as.closure.type_params[i].span,
@@ -1637,7 +1638,7 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr, Type *hint) {
     }
 
     if (expr->as.block.tail_expr != NULL) {
-      result = resolve_expr(tc, expr->as.block.tail_expr, NULL);
+      result = resolve_expr(tc, expr->as.block.tail_expr, hint);
     } else {
       result = ty_unit();
     }
@@ -1775,8 +1776,9 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr, Type *hint) {
         return ty_poison();
     } else if (fun_def) {
       for (int i = 0; i < fun_def->type_param_count; i++) {
-        subst_bind(tc, &env, fun_def->type_params[i], ty_unknown(NULL, tc->al),
-                   expr->span);
+        assert(fun_def->type_params[i]->kind == TY_GENERIC);
+        subst_bind(tc, &env, fun_def->type_params[i]->as.generic.name,
+                   ty_unknown(NULL, tc->al), expr->span);
       }
     }
 
@@ -1854,8 +1856,9 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr, Type *hint) {
 
     // pre-bind impl type params to unknowns for inference
     for (int i = 0; i < impl->type_param_count; i++) {
-      Type *concrete = ty_unknown(NULL, tc->al);
-      subst_bind(tc, &env, impl->type_params[i], concrete, expr->span);
+      assert(impl->type_params[i]->kind == TY_GENERIC);
+      subst_bind(tc, &env, impl->type_params[i]->as.generic.name,
+                 ty_unknown(NULL, tc->al), expr->span);
     }
 
     // if the method's return type is generic, we can use the caller's expected
@@ -1910,11 +1913,13 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr, Type *hint) {
       break;
     }
     for (int i = 0; i < fun->type_param_count; i++) {
+      assert(fun->type_params[i]->kind == TY_GENERIC);
       Type *concrete =
           (explicit_ty_args > 0)
               ? resolve_typenode(tc, expr->as.method_call.type_args[i])
               : ty_unknown(NULL, tc->al);
-      subst_bind(tc, &env, fun->type_params[i], concrete, expr->span);
+      subst_bind(tc, &env, fun->type_params[i]->as.generic.name, concrete,
+                 expr->span);
     }
 
     // count non-self params - the first param with is_self is provided by
@@ -1977,8 +1982,9 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr, Type *hint) {
     SubstEnv env;
     subst_init(&env);
     for (int i = 0; i < impl->type_param_count; i++) {
-      Type *concrete = ty_unknown(NULL, tc->al);
-      subst_bind(tc, &env, impl->type_params[i], concrete, expr->span);
+      assert(impl->type_params[i]->kind == TY_GENERIC);
+      subst_bind(tc, &env, impl->type_params[i]->as.generic.name,
+                 ty_unknown(NULL, tc->al), expr->span);
     }
 
     // also bind any method-level type params to unknowns for inference,
@@ -1993,11 +1999,13 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr, Type *hint) {
       break;
     }
     for (int i = 0; i < fun->type_param_count; i++) {
+      assert(fun->type_params[i]->kind == TY_GENERIC);
       Type *concrete =
           (explicit_ty_args > 0)
               ? resolve_typenode(tc, expr->as.assoc_call.type_args[i])
               : ty_unknown(NULL, tc->al);
-      subst_bind(tc, &env, fun->type_params[i], concrete, expr->span);
+      subst_bind(tc, &env, fun->type_params[i]->as.generic.name, concrete,
+                 expr->span);
     }
 
     // count non-self params — the first param with is_self is provided by
@@ -2232,7 +2240,8 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr, Type *hint) {
           subst_init(&env);
           for (int i = 0; i < def->type_param_count; i++) {
             Type *concrete = target_type->as.struc.type_args[i];
-            subst_bind(tc, &env, def->type_params[i], concrete,
+            assert(def->type_params[i]->kind == TY_GENERIC);
+            subst_bind(tc, &env, def->type_params[i]->as.generic.name, concrete,
                        expr->as.field.object->span);
           }
           if (target_type->as.struc.type_arg_count > 0) {
@@ -2348,8 +2357,9 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr, Type *hint) {
 
       if (explicit_count == 0) {
         for (int i = 0; i < e->type_param_count; i++) {
-          subst_bind(tc, &env, e->type_params[i], ty_unknown(NULL, tc->al),
-                     callee_expr->span);
+          assert(e->type_params[i]->kind == TY_GENERIC);
+          subst_bind(tc, &env, e->type_params[i]->as.generic.name,
+                     ty_unknown(NULL, tc->al), callee_expr->span);
         }
       } else {
         if (explicit_count != e->type_param_count) {
@@ -2361,9 +2371,11 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr, Type *hint) {
           break;
         }
         for (int i = 0; i < explicit_count; i++) {
+          assert(e->type_params[i]->kind == TY_GENERIC);
           Type *concrete =
               resolve_typenode(tc, callee_expr->as.path_expr.type_args[i]);
-          subst_bind(tc, &env, e->type_params[i], concrete, callee_expr->span);
+          subst_bind(tc, &env, e->type_params[i]->as.generic.name, concrete,
+                     callee_expr->span);
         }
       }
     }
@@ -2401,7 +2413,8 @@ static Type *resolve_expr(TypeChecker *tc, Expr *expr, Type *hint) {
     TypeArrayScratch args;
     type_array_scratch_init(&args, e->type_param_count, tc->al);
     for (int i = 0; i < e->type_param_count; i++) {
-      Type *bound = subst_lookup(&env, e->type_params[i]);
+      assert(e->type_params[i]->kind == TY_GENERIC);
+      Type *bound = subst_lookup(&env, e->type_params[i]->as.generic.name);
       args.ptr[i] = bound ? bound : ty_unknown(NULL, tc->al);
     }
 
@@ -2534,11 +2547,7 @@ static void register_fun_decl(TypeChecker *tc, Decl *decl) {
 
   def->type_param_count = decl->as.fun_decl.type_param_count;
   def->type_params =
-      al_alloc_zero(tc->al, def->type_param_count * sizeof(StringView));
-
-  for (int i = 0; i < def->type_param_count; i++) {
-    def->type_params[i] = decl->as.fun_decl.type_params[i].name;
-  }
+      al_alloc_zero(tc->al, def->type_param_count * sizeof(Type *));
 
   def->param_count = decl->as.fun_decl.param_count;
   def->params = al_alloc_zero(tc->al, def->param_count * sizeof(ParamDef));
@@ -2579,10 +2588,7 @@ static void register_struct_decl(TypeChecker *tc, Decl *decl) {
   def->type_param_count = decl->as.struct_decl.type_param_count;
 
   def->type_params =
-      al_alloc_zero(tc->al, def->type_param_count * sizeof(StringView));
-  for (int i = 0; i < def->type_param_count; i++) {
-    def->type_params[i] = decl->as.struct_decl.type_params[i].name;
-  }
+      al_alloc_zero(tc->al, def->type_param_count * sizeof(Type *));
 
   if (def->is_tuple_struct) {
     def->field_count = decl->as.struct_decl.tuple_type_count;
@@ -2627,10 +2633,7 @@ static void register_enum_decl(TypeChecker *tc, Decl *decl) {
   def->type_param_count = decl->as.enum_decl.type_param_count;
 
   def->type_params =
-      al_alloc_zero(tc->al, def->type_param_count * sizeof(StringView));
-  for (int i = 0; i < def->type_param_count; i++) {
-    def->type_params[i] = decl->as.enum_decl.type_params[i].name;
-  }
+      al_alloc_zero(tc->al, def->type_param_count * sizeof(Type *));
 
   int variant_count = decl->as.enum_decl.variant_count;
   def->variant_count = variant_count;
@@ -2679,7 +2682,7 @@ static void register_trait_decl(TypeChecker *tc, Decl *decl) {
   def->type_param_count = decl->as.trait_decl.type_param_count;
 
   def->type_params =
-      al_alloc_zero(tc->al, def->type_param_count * sizeof(StringView));
+      al_alloc_zero(tc->al, def->type_param_count * sizeof(Type *));
   for (int i = 0; i < def->type_param_count; i++) {
     def->type_params[i] = decl->as.trait_decl.type_params[i].name;
   }
@@ -2698,8 +2701,6 @@ static void register_trait_decl(TypeChecker *tc, Decl *decl) {
         break;
       }
       scratch_methods[method_count].name = item->name;
-      // scratch_methods[method_count].method_type
-      // scratch_methods[method_count].default_impl
       method_count++;
       break;
     case TRAIT_ITEM_ASSOC_TYPE:
@@ -2760,10 +2761,7 @@ static void register_impl_decl(TypeChecker *tc, Decl *decl) {
 
   impl_def->type_param_count = decl->as.impl_decl.type_param_count;
   impl_def->type_params =
-      al_alloc_zero(tc->al, impl_def->type_param_count * sizeof(StringView));
-  for (int i = 0; i < impl_def->type_param_count; i++) {
-    impl_def->type_params[i] = decl->as.impl_decl.type_params[i].name;
-  }
+      al_alloc_zero(tc->al, impl_def->type_param_count * sizeof(Type *));
 
   decl->as.impl_decl.def = impl_def;
 }
@@ -2800,19 +2798,24 @@ static void resolve_fun_decl(TypeChecker *tc, Decl *decl) {
 
   FunDef *def = decl->as.fun_decl.def;
 
-  sym_push_scope(&tci->type_syms, tc->al);
-
+  // resolve type parameters
   for (int i = 0; i < def->type_param_count; i++) {
-    StringView name = decl->as.fun_decl.type_params[i].name;
-    Symbol tp_sym = {
-        .name = name,
-        .kind = SYM_TYPE_PARAM,
-        .type = ty_generic(name, NULL, 0, tc->al),
-    };
     if (decl->as.fun_decl.type_params[i].bound_count > 0) {
       tc_error(tc, decl->as.fun_decl.type_params[i].span,
                "type parameter bounds not supported yet");
     }
+    def->type_params[i] =
+        ty_generic(decl->as.fun_decl.type_params[i].name, NULL, 0, tc->al);
+  }
+
+  sym_push_scope(&tci->type_syms, tc->al);
+
+  for (int i = 0; i < def->type_param_count; i++) {
+    Symbol tp_sym = {
+        .name = def->type_params[i]->as.generic.name,
+        .kind = SYM_TYPE_PARAM,
+        .type = def->type_params[i],
+    };
     sym_define(&tci->type_syms, tp_sym, tc->al);
   }
 
@@ -2826,6 +2829,7 @@ static void resolve_fun_decl(TypeChecker *tc, Decl *decl) {
       def->params[i].is_self = true;
     } else {
       ps.ptr[i] = resolve_typenode(tc, p->type_annotation);
+      def->params[i].param_type = ps.ptr[i];
     }
   }
 
@@ -2849,20 +2853,25 @@ static void resolve_struct_decl(TypeChecker *tc, Decl *decl) {
   USE_INTERNAL(tc, tci);
   StructDef *def = decl->as.struct_decl.def;
 
-  sym_push_scope(&tci->type_syms, tc->al);
-
-  // register type parameters as type symbols
-  for (int i = 0; i < def->type_param_count; i++) {
-    StringView name = decl->as.struct_decl.type_params[i].name;
-    Symbol tp_sym = {
-        .name = name,
-        .kind = SYM_TYPE_PARAM,
-        .type = ty_generic(name, NULL, 0, tc->al),
-    };
+  // resolve type parameters
+  for (int i = 0; i < def->field_count; i++) {
     if (decl->as.struct_decl.type_params[i].bound_count > 0) {
       tc_error(tc, decl->as.struct_decl.type_params[i].span,
                "type parameter bounds not supported yet");
     }
+    def->type_params[i] =
+        ty_generic(decl->as.struct_decl.type_params[i].name, NULL, 0, tc->al);
+  }
+
+  sym_push_scope(&tci->type_syms, tc->al);
+
+  // register type parameters as type symbols
+  for (int i = 0; i < def->type_param_count; i++) {
+    Symbol tp_sym = {
+        .name = def->type_params[i]->as.generic.name,
+        .kind = SYM_TYPE_PARAM,
+        .type = def->type_params[i],
+    };
     sym_define(&tci->type_syms, tp_sym, tc->al);
   }
 
@@ -2885,20 +2894,25 @@ static void resolve_enum_decl(TypeChecker *tc, Decl *decl) {
   USE_INTERNAL(tc, tci);
   EnumDef *def = decl->as.enum_decl.def;
 
-  sym_push_scope(&tci->type_syms, tc->al);
-
-  // register type parameters as type symbols
+  // resolve type parameters
   for (int i = 0; i < def->type_param_count; i++) {
-    StringView name = decl->as.enum_decl.type_params[i].name;
-    Symbol tp_sym = {
-        .name = name,
-        .kind = SYM_TYPE_PARAM,
-        .type = ty_generic(name, NULL, 0, tc->al),
-    };
     if (decl->as.enum_decl.type_params[i].bound_count > 0) {
       tc_error(tc, decl->as.enum_decl.type_params[i].span,
                "type parameter bounds not supported yet");
     }
+    def->type_params[i] =
+        ty_generic(decl->as.enum_decl.type_params[i].name, NULL, 0, tc->al);
+  }
+
+  sym_push_scope(&tci->type_syms, tc->al);
+
+  // register type parameters as type symbols
+  for (int i = 0; i < def->type_param_count; i++) {
+    Symbol tp_sym = {
+        .name = def->type_params[i]->as.generic.name,
+        .kind = SYM_TYPE_PARAM,
+        .type = def->type_params[i],
+    };
     sym_define(&tci->type_syms, tp_sym, tc->al);
   }
 
@@ -2922,14 +2936,22 @@ static void resolve_impl_decl(TypeChecker *tc, Decl *decl) {
   USE_INTERNAL(tc, tci);
   ImplDef *impl_def = decl->as.impl_decl.def;
 
+  for (int i = 0; i < impl_def->type_param_count; i++) {
+    if (decl->as.impl_decl.type_params[i].bound_count > 0) {
+      tc_error(tc, decl->as.impl_decl.type_params[i].span,
+               "type parameter bounds not supported yet");
+    }
+    impl_def->type_params[i] =
+        ty_generic(decl->as.impl_decl.type_params[i].name, NULL, 0, tc->al);
+  }
+
   // push impl-level type params so resolve_typenode can see them when
   sym_push_scope(&tci->type_syms, tc->al);
-  for (int i = 0; i < decl->as.impl_decl.type_param_count; i++) {
-    StringView name = decl->as.impl_decl.type_params[i].name;
+  for (int i = 0; i < impl_def->type_param_count; i++) {
     Symbol tp_sym = {
-        .name = name,
+        .name = impl_def->type_params[i]->as.generic.name,
         .kind = SYM_TYPE_PARAM,
-        .type = ty_generic(name, NULL, 0, tc->al),
+        .type = impl_def->type_params[i],
     };
     sym_define(&tci->type_syms, tp_sym, tc->al);
   }
@@ -3003,9 +3025,10 @@ static void resolve_impl_decl(TypeChecker *tc, Decl *decl) {
 
     fun->type_param_count = fdecl->as.fun_decl.type_param_count;
     fun->type_params =
-        al_alloc_zero(tc->al, fun->type_param_count * sizeof(StringView));
+        al_alloc_zero(tc->al, fun->type_param_count * sizeof(Type *));
     for (int j = 0; j < fun->type_param_count; j++) {
-      fun->type_params[j] = fdecl->as.fun_decl.type_params[j].name;
+      fun->type_params[j] =
+          ty_generic(fdecl->as.fun_decl.type_params[j].name, NULL, 0, tc->al);
     }
 
     fun->param_count = fdecl->as.fun_decl.param_count;
@@ -3017,16 +3040,15 @@ static void resolve_impl_decl(TypeChecker *tc, Decl *decl) {
 
     // push method-level
     sym_push_scope(&tci->type_syms, tc->al);
-    for (int j = 0; j < fdecl->as.fun_decl.type_param_count; j++) {
-      TypeParamNode *mtp = &fdecl->as.fun_decl.type_params[j];
+    for (int j = 0; j < fun->type_param_count; j++) {
       Symbol mtp_sym = {
-          .name = mtp->name,
+          .name = fun->type_params[j]->as.generic.name,
           .kind = SYM_TYPE_PARAM,
-          .type = ty_generic(mtp->name, NULL, 0, tc->al),
+          .type = fun->type_params[j],
       };
-      if (mtp->bound_count > 0) {
-        tc_error(tc, mtp->span, "type parameter bounds not supported yet");
-      }
+      // if (mtp->bound_count > 0) {
+      //   tc_error(tc, mtp->span, "type parameter bounds not supported yet");
+      // }
       sym_define(&tci->type_syms, mtp_sym, tc->al);
     }
 
@@ -3104,32 +3126,25 @@ static void check_fun_decl(TypeChecker *tc, Decl *decl) {
   USE_INTERNAL(tc, tci);
 
   FunDef *def = decl->as.fun_decl.def;
-  Type *sym_ty = def->fun_type;
+  Type *fun_ty = def->fun_type;
 
-  if (sym_ty == NULL) {
+  if (fun_ty == NULL) {
     return;
   }
 
-  assert(sym_ty->kind == TY_FUNCTION &&
+  assert(fun_ty->kind == TY_FUNCTION &&
          "check_fun_decl: function symbol has non-function type");
 
-  Type **ps = sym_ty->as.fun.param_types;
-  Type *return_type = sym_ty->as.fun.return_type;
+  Type *return_type = fun_ty->as.fun.return_type;
 
   sym_push_scope(&tci->type_syms, tc->al);
 
-  // register type parameters as type symbols
   for (int i = 0; i < def->type_param_count; i++) {
-    StringView name = decl->as.fun_decl.type_params[i].name;
     Symbol tp_sym = {
-        .name = name,
+        .name = def->type_params[i]->as.generic.name,
         .kind = SYM_TYPE_PARAM,
-        .type = ty_generic(name, NULL, 0, tc->al),
+        .type = def->type_params[i],
     };
-    if (decl->as.fun_decl.type_params[i].bound_count > 0) {
-      tc_error(tc, decl->as.fun_decl.type_params[i].span,
-               "type parameter bounds not supported yet");
-    }
     sym_define(&tci->type_syms, tp_sym, tc->al);
   }
 
@@ -3143,14 +3158,14 @@ static void check_fun_decl(TypeChecker *tc, Decl *decl) {
     Symbol param_sym = {
         .name = def->params[i].name,
         .kind = SYM_VAR,
-        .type = ps[i],
+        .type = def->params[i].param_type,
         .slot = i,
     };
     sym_define(&tci->val_syms, param_sym, tc->al);
   }
 
   if (decl->as.fun_decl.body != NULL) {
-    Type *body_type = resolve_expr(tc, decl->as.fun_decl.body, NULL);
+    Type *body_type = resolve_expr(tc, decl->as.fun_decl.body, return_type);
 
     if (!type_is_poison(body_type) && !type_is_poison(return_type)) {
       if (!types_equal(body_type, return_type)) {
@@ -3283,30 +3298,25 @@ static void check_impl_decl(TypeChecker *tc, Decl *decl) {
     return; // error already emitted during registration
   }
 
-  ImplDef *impl_def = decl->as.impl_decl.def;
+  ImplDef *def = decl->as.impl_decl.def;
 
-  if (type_is_poison(impl_def->self_type) ||
-      impl_def->self_type->kind != TY_STRUCT) {
+  if (type_is_poison(def->self_type) || def->self_type->kind != TY_STRUCT) {
     return; // error already reported during registration
   }
 
   // push impl-level type params
   sym_push_scope(&tci->type_syms, tc->al);
-  for (int i = 0; i < decl->as.impl_decl.type_param_count; i++) {
-    TypeParamNode *tp = &decl->as.impl_decl.type_params[i];
+  for (int i = 0; i < def->type_param_count; i++) {
     Symbol tp_sym = {
-        .name = tp->name,
+        .name = def->type_params[i]->as.generic.name,
         .kind = SYM_TYPE_PARAM,
-        .type = ty_generic(tp->name, NULL, 0, tc->al),
+        .type = def->type_params[i],
     };
-    if (tp->bound_count > 0) {
-      tc_error(tc, tp->span, "type parameter bounds not supported yet");
-    }
     sym_define(&tci->type_syms, tp_sym, tc->al);
   }
 
   Type *saved_self = tci->current_self_type;
-  tci->current_self_type = impl_def->self_type;
+  tci->current_self_type = def->self_type;
   Symbol self_sym = {.name = sv_from_cstr("Self"),
                      .kind = SYM_STRUCT,
                      .type = tci->current_self_type,
@@ -3324,12 +3334,11 @@ static void check_impl_decl(TypeChecker *tc, Decl *decl) {
     assert(fun != NULL && "check_impl_decl: fun_decl was not registered");
 
     sym_push_scope(&tci->type_syms, tc->al);
-    for (int j = 0; j < fdecl->as.fun_decl.type_param_count; j++) {
-      TypeParamNode *mtp = &fdecl->as.fun_decl.type_params[j];
+    for (int j = 0; j < fun->type_param_count; j++) {
       Symbol mtp_sym = {
-          .name = mtp->name,
+          .name = fun->type_params[j]->as.generic.name,
           .kind = SYM_TYPE_PARAM,
-          .type = ty_generic(mtp->name, NULL, 0, tc->al),
+          .type = fun->type_params[j],
       };
       sym_define(&tci->type_syms, mtp_sym, tc->al);
     }
@@ -3355,7 +3364,6 @@ static void check_impl_decl(TypeChecker *tc, Decl *decl) {
     }
 
     if (fdecl->as.fun_decl.body != NULL) {
-
       Type *body_type = resolve_expr(tc, fdecl->as.fun_decl.body, NULL);
       if (!type_is_poison(body_type) && !type_is_poison(return_type)) {
         SubstEnv env;

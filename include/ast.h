@@ -164,7 +164,7 @@ struct StructDef {
   StringView name;
   bool is_tuple_struct;
 
-  StringView *type_params; // e.g. ["T", "U"]
+  Type **type_params; // e.g. ["T", "U"]
   int type_param_count;    // if generic, else 0
 
   FieldDef *fields;
@@ -189,7 +189,7 @@ struct EnumDef {
   Type *self_type;
   StringView name;
 
-  StringView *type_params;
+  Type **type_params;
   int type_param_count;
 
   VariantDef *variants;
@@ -231,7 +231,7 @@ struct ImplDef {
   // Type *trait; // NULL for inherent impls
   // Type *self_type;
 
-  StringView *type_params;
+  Type **type_params;
   int type_param_count;
 
   Type *self_type;
@@ -255,14 +255,14 @@ struct FunDef {
   bool is_closure;
   Type *fun_type;
 
-  StringView *type_params;
+  Type **type_params;
   int type_param_count;
 
   ParamDef *params;
   int param_count;
   Type *return_type;
 
-  struct Chunk *chunk;
+  // struct Chunk *chunk;
   int slot;
 };
 
