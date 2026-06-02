@@ -792,7 +792,7 @@ void dump_expr(const Expr *e, int indent) {
     }
     break;
   case EXPR_ASSOCIATED_CALL:
-    fprintf(stdout, "AssociatedCall: ");
+    fprintf(stdout, "AssociatedCall: \n");
     break;
   case EXPR_BLOCK:
     fprintf(stdout, "Block\n");

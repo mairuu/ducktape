@@ -156,7 +156,6 @@ typedef struct {
 typedef struct {
   StringView name;
   FunDef *fun;
-  ImplDef *impl;
 } MethodDef;
 
 struct StructDef {
@@ -170,9 +169,13 @@ struct StructDef {
   FieldDef *fields;
   int field_count;
 
-  MethodDef *methods; // for inherent impls
-  int method_count;
-  int method_cap;
+  ImplDef **inherent_impls;
+  int inherent_impl_count;
+  int inherent_impl_cap;
+
+  ImplDef **trait_impls;
+  int trait_impl_count;
+  int trait_impl_cap;
 
   int slot;
 };
@@ -230,17 +233,15 @@ struct TraitDef {
 struct ImplDef {
   StringView name; // for error messages only; always empty for inherent impls
 
-  // Type *trait; // NULL for inherent impls
-  // Type *self_type;
+  Type *trait; // NULL for inherent impls
+  Type *self_type;
 
   Type **type_params;
   int type_param_count;
 
-  Type *self_type;
-
-  // MethodDef *methods;
-  // int method_count;
-  // int method_cap;
+  MethodDef *methods;
+  int method_count;
+  int method_cap;
 
   // TraitAssocTypeDef *assoc_types;
   // int assoc_type_count;
@@ -577,6 +578,7 @@ struct Expr {
       TypeNode **type_args;
       int type_arg_count;
       MethodDef *resolved_method;
+      ImplDef *resolved_impl;
       Expr *caller;
     } assoc_call;
 
