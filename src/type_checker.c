@@ -544,7 +544,9 @@ static Type *resolve_concrete_assoc_from_base(TypeChecker *tc, Type *base_ty,
 
   ImplDef *impl = find_trait_impl(tc, base_ty, trait);
   if (impl == NULL) {
-    tc_error(tc, span, "type '%s' does not implement '%s'", type_name(base_ty),
+    char type_name_buf[64];
+    type_sprintf(base_ty, type_name_buf, sizeof(type_name_buf));
+    tc_error(tc, span, "type '%s' does not implement '%s'", type_name_buf,
              type_name(trait->self_type));
     return ty_poison();
   }
@@ -555,7 +557,8 @@ static Type *resolve_concrete_assoc_from_base(TypeChecker *tc, Type *base_ty,
     }
   }
 
-  tc_error(tc, span, "impl is missing associated type '%s'", assoc_name.chars);
+  tc_error(tc, span, "impl is missing associated type '" SV_FMT "'",
+           SV_ARG(assoc_name));
   return ty_poison();
 }
 
