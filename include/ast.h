@@ -103,7 +103,8 @@ struct Type {
 
     // TY_ASSOC — T.Item before resolution
     struct {
-      Type *base;            // the T in T.Item
+      Type *base; // the T in T.Item
+      TraitDef *trait;
       StringView assoc_name; // the "Item" in T.Item
     } assoc;
 
@@ -127,7 +128,7 @@ Type *ty_tuple(Type **elems, int elem_count, Allocator *al);
 Type *ty_array(Type *elem, Allocator *al);
 Type *ty_generic(StringView name, TraitDef **bounds, int bound_count,
                  Allocator *al);
-Type *ty_assoc(Type *base, StringView assoc_name, Allocator *al);
+Type *ty_assoc(Type *base, StringView assoc_name, TraitDef *trait, Allocator *al);
 Type *ty_struct(StructDef *def, Type **args, int argc, Allocator *al);
 Type *ty_enum(EnumDef *def, Type **args, int argc, Allocator *al);
 Type *ty_trait(TraitDef *def, Allocator *al);
@@ -212,6 +213,7 @@ typedef struct {
 
 typedef struct {
   StringView name;
+  Type *type;
 } TraitAssocTypeDef;
 
 struct TraitDef {
@@ -233,7 +235,7 @@ struct TraitDef {
 struct ImplDef {
   StringView name; // for error messages only; always empty for inherent impls
 
-  Type *trait; // NULL for inherent impls
+  Type *trait_type; // NULL for inherent impls
   Type *self_type;
 
   Type **type_params;
@@ -243,8 +245,9 @@ struct ImplDef {
   int method_count;
   int method_cap;
 
-  // TraitAssocTypeDef *assoc_types;
-  // int assoc_type_count;
+  TraitAssocTypeDef *assoc_types;
+  int assoc_type_count;
+  int assoc_type_cap;
 };
 
 typedef struct {

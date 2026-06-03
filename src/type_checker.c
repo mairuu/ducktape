@@ -135,6 +135,7 @@ typedef struct {
   int loop_depth;
 
   FunDef *current_fun;
+  TraitDef *current_trait;
   Type *current_self_type;
 } TypeCheckerInternal;
 
@@ -195,6 +196,20 @@ static inline void type_array_scratch_init(TypeArrayScratch *s, int n,
   assert(s->ptr && "param_scratch_init: allocation failed");
 }
 
+typedef struct {
+  TraitDef *buf[TYPE_ARRAY_SCRATCH_CAP];
+  TraitDef **ptr;
+  int count;
+} TraitDefScratchArray;
+
+static inline void trait_def_scratch_array_init(TraitDefScratchArray *s, int n,
+                                                Allocator *al) {
+  s->count = n;
+  s->ptr = n <= TYPE_ARRAY_SCRATCH_CAP ? s->buf
+                                       : al_alloc(al, n * sizeof(TraitDef *));
+  assert(s->ptr && "trait_def_scratch_array_init: allocation failed");
+}
+
 static FieldDef *struct_find_field(const StructDef *def, StringView name) {
   for (int i = 0; i < def->field_count; i++) {
     if (sv_equal(def->fields[i].name, name)) {
@@ -208,6 +223,21 @@ static MethodDef *impl_find_method(const ImplDef *def, StringView name) {
   for (int i = 0; i < def->method_count; i++) {
     if (sv_equal(def->methods[i].name, name)) {
       return &def->methods[i];
+    }
+  }
+  return NULL;
+}
+
+static ImplDef *find_trait_impl(TypeChecker *tc, Type *ty,
+                                TraitDef *trait_def) {
+  (void)tc;
+  assert(ty->kind == TY_STRUCT);
+  assert(trait_def->type_param_count == 0);
+  StructDef *struct_def = ty->as.struc.def;
+  for (int i = 0; i < struct_def->trait_impl_count; i++) {
+    ImplDef *impl = struct_def->trait_impls[i];
+    if (impl->trait_type->as.trait.def == trait_def) {
+      return impl;
     }
   }
   return NULL;
@@ -412,6 +442,17 @@ static bool unify(TypeChecker *tc, SubstEnv *env, Type *param_ty, Type *arg_ty,
     return true;
   }
 
+  if (param_ty->kind == TY_ASSOC) {
+    Type *resolved = substitute(tc, env, param_ty);
+    if (resolved != param_ty)
+      return unify(tc, env, resolved, arg_ty, span);
+  }
+  if (arg_ty->kind == TY_ASSOC) {
+    Type *resolved = substitute(tc, env, arg_ty);
+    if (resolved != arg_ty)
+      return unify(tc, env, param_ty, resolved, span);
+  }
+
   if (param_ty->kind == TY_UNKNOWN) {
     if (param_ty->as.unknown.bound)
       return unify(tc, env, param_ty->as.unknown.bound, arg_ty, span);
@@ -488,12 +529,34 @@ static bool unify(TypeChecker *tc, SubstEnv *env, Type *param_ty, Type *arg_ty,
                  arg_ty->as.enm.type_args[i], span))
         return false;
     return true;
-
   default:
     // concrete scalars (Int, Float, Bool, String, Unit) — kind equality above
     // is enough
     return true;
   }
+}
+
+static Type *resolve_concrete_assoc_from_base(TypeChecker *tc, Type *base_ty,
+                                              TraitDef *trait,
+                                              StringView assoc_name,
+                                              Span span) {
+  assert(base_ty->kind == TY_STRUCT);
+
+  ImplDef *impl = find_trait_impl(tc, base_ty, trait);
+  if (impl == NULL) {
+    tc_error(tc, span, "type '%s' does not implement '%s'", type_name(base_ty),
+             type_name(trait->self_type));
+    return ty_poison();
+  }
+
+  for (int i = 0; i < impl->assoc_type_count; i++) {
+    if (sv_equal(impl->assoc_types[i].name, assoc_name)) {
+      return impl->assoc_types[i].type;
+    }
+  }
+
+  tc_error(tc, span, "impl is missing associated type '%s'", assoc_name.chars);
+  return ty_poison();
 }
 
 static Type *substitute(TypeChecker *tc, const SubstEnv *env, Type *ty) {
@@ -564,6 +627,21 @@ static Type *substitute(TypeChecker *tc, const SubstEnv *env, Type *ty) {
     }
     return ok ? ty_enum(ty->as.enm.def, args.ptr, args.count, tc->al)
               : ty_poison();
+  }
+  case TY_ASSOC: {
+    Type *base = substitute(tc, env, ty->as.assoc.base);
+
+    if (type_is_poison(base))
+      return ty_poison();
+
+    // still symbolic
+    if (base->kind == TY_GENERIC || base->kind == TY_UNKNOWN) {
+      return ty_assoc(base, ty->as.assoc.assoc_name, ty->as.assoc.trait,
+                      tc->al);
+    }
+
+    return resolve_concrete_assoc_from_base(tc, base, ty->as.assoc.trait,
+                                            ty->as.assoc.assoc_name, (Span){0});
   }
   default:
     return ty; // concrete scalar — no substitution needed
@@ -816,6 +894,70 @@ static Type *resolve_typenode(TypeChecker *tc, TypeNode *tn) {
       result = ty_poison();
     } else {
       result = tci->current_self_type;
+    }
+    break;
+  }
+
+  case TYNODE_ASSOC: {
+    Type *base = resolve_typenode(tc, tn->as.assoc.base);
+    if (type_is_poison(base)) {
+      result = ty_poison();
+      break;
+    }
+    USE_INTERNAL(tc, tci);
+    switch (tci->current_self_type->kind) {
+    case TY_GENERIC: {
+      TraitDef *owner = NULL;
+      for (int i = 0; i < tci->current_self_type->as.generic.bound_count; i++) {
+        TraitDef *t = tci->current_self_type->as.generic.bounds[i];
+        for (int j = 0; j < t->assoc_type_count; j++) {
+          if (sv_equal(t->assoc_types[j].name, tn->as.assoc.assoc_name)) {
+            owner = t;
+            break;
+          }
+        }
+        if (owner)
+          break;
+      }
+      if (owner == NULL) {
+        tc_error(tc, tn->span, "'Self' has no associated type '%.*s'",
+                 SV_ARG(tn->as.assoc.assoc_name));
+        result = ty_poison();
+        break;
+      }
+      result = ty_assoc(base, tn->as.assoc.assoc_name, owner, tc->al);
+      break;
+    }
+    case TY_STRUCT: {
+      // find which trait declares this assoc type
+      // current_trait tells us which impl we're inside
+      TraitDef *trait = tci->current_trait;
+      if (trait == NULL) {
+        tc_error(tc, tn->span,
+                 "associated type access 'Self.%.*s' outside of a trait impl",
+                 SV_ARG(tn->as.assoc.assoc_name));
+        result = ty_poison();
+        break;
+      }
+      // validate the assoc type actually exists in the trait
+      bool found = false;
+      for (int i = 0; i < trait->assoc_type_count; i++) {
+        if (sv_equal(trait->assoc_types[i].name, tn->as.assoc.assoc_name)) {
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        tc_error(tc, tn->span, "trait '%.*s' has no associated type '%.*s'",
+                 SV_ARG(trait->name), SV_ARG(tn->as.assoc.assoc_name));
+        result = ty_poison();
+        break;
+      }
+      result = ty_assoc(base, tn->as.assoc.assoc_name, trait, tc->al);
+      break;
+    }
+    default:
+      assert(false);
     }
     break;
   }
@@ -2780,14 +2922,13 @@ static void register_impl_decl(TypeChecker *tc, Decl *decl) {
   ImplDef *def = al_alloc_zero_for(tc->al, ImplDef);
 
   int method_count = 0;
-  int accoc_type_count = 0;
-  (void)accoc_type_count;
+  int assoc_type_count = 0;
 
   for (int i = 0; i < decl->as.impl_decl.item_count; i++) {
     if (decl->as.impl_decl.items[i].kind == IMPL_ITEM_METHOD) {
       method_count++;
     } else if (decl->as.impl_decl.items[i].kind == IMPL_ITEM_ASSOC_TYPE) {
-      accoc_type_count++;
+      assoc_type_count++;
     } else {
       assert(false && "register_impl_decl: unhandled impl item kind");
     }
@@ -2799,6 +2940,10 @@ static void register_impl_decl(TypeChecker *tc, Decl *decl) {
 
   def->method_cap = method_count;
   def->methods = al_alloc_zero(tc->al, method_count * sizeof(MethodDef));
+
+  def->assoc_type_cap = assoc_type_count;
+  def->assoc_types =
+      al_alloc_zero(tc->al, assoc_type_count * sizeof(TraitAssocTypeDef));
 
   decl->as.impl_decl.def = def;
 }
@@ -2891,7 +3036,7 @@ static void resolve_struct_decl(TypeChecker *tc, Decl *decl) {
   StructDef *def = decl->as.struct_decl.def;
 
   // resolve type parameters
-  for (int i = 0; i < def->field_count; i++) {
+  for (int i = 0; i < def->type_param_count; i++) {
     if (decl->as.struct_decl.type_params[i].bound_count > 0) {
       tc_error(tc, decl->as.struct_decl.type_params[i].span,
                "type parameter bounds not supported yet");
@@ -2967,43 +3112,69 @@ static void resolve_enum_decl(TypeChecker *tc, Decl *decl) {
 static void resolve_trait_decl(TypeChecker *tc, Decl *decl) {
   USE_INTERNAL(tc, tci);
 
-  TraitDef *def = decl->as.trait_decl.def;
+  TraitDef *trait_def = decl->as.trait_decl.def;
 
   // resolve trait type parameters
-  for (int i = 0; i < def->type_param_count; i++) {
+  for (int i = 0; i < trait_def->type_param_count; i++) {
     if (decl->as.trait_decl.type_params[i].bound_count > 0) {
       tc_error(tc, decl->as.trait_decl.type_params[i].span,
                "type parameter bounds not supported yet");
     }
-    def->type_params[i] =
+    trait_def->type_params[i] =
         ty_generic(decl->as.trait_decl.type_params[i].name, NULL, 0, tc->al);
   }
 
   sym_push_scope(&tci->type_syms, tc->al);
 
   // register trait type parameters as type symbols
-  for (int i = 0; i < def->type_param_count; i++) {
+  for (int i = 0; i < trait_def->type_param_count; i++) {
     Symbol tp_sym = {
-        .name = def->type_params[i]->as.generic.name,
+        .name = trait_def->type_params[i]->as.generic.name,
         .kind = SYM_TYPE_PARAM,
-        .type = def->type_params[i],
+        .type = trait_def->type_params[i],
     };
     sym_define(&tci->type_syms, tp_sym, tc->al);
   }
 
-  def->self_type = ty_generic(sv_from_cstr("Self"), NULL, 0, tc->al);
+  {
+    TraitDefScratchArray bounds;
+    trait_def_scratch_array_init(&bounds, 1, tc->al);
+    bounds.ptr[0] = trait_def;
+
+    trait_def->self_type =
+        ty_generic(sv_from_cstr("Self"), bounds.ptr, bounds.count, tc->al);
+  }
 
   Type *saved_self = tci->current_self_type;
-  tci->current_self_type = def->self_type;
+  tci->current_self_type = trait_def->self_type;
 
-  int method_idx = -1;
-  for (int i = 0; i < decl->as.trait_decl.item_count; i++) {
-    method_idx++;
+  for (int i = 0, assoc_idx = -1; i < decl->as.trait_decl.item_count; i++) {
+    if (decl->as.trait_decl.items[i].kind != TRAIT_ITEM_ASSOC_TYPE) {
+      continue;
+    }
+    assoc_idx++;
+
+    TraitAssocTypeDef *assoc = &trait_def->assoc_types[assoc_idx];
+    TraitItemNode *node = &decl->as.trait_decl.items[i];
+
+    assoc->name = node->name;
+
+    // resolve associated type parameter bounds (not supported yet)
+    for (int i = 0; i < node->type_param_count; i++) {
+      if (node->type_params[i].bound_count > 0) {
+        tc_error(tc, node->type_params[i].span,
+                 "type parameter bounds not supported yet");
+      }
+    }
+  }
+
+  for (int i = 0, method_idx = -1; i < decl->as.trait_decl.item_count; i++) {
     if (decl->as.trait_decl.items[i].kind != TRAIT_ITEM_METHOD) {
       continue;
     }
+    method_idx++;
 
-    TraitMethodDef *method = &def->methods[method_idx];
+    TraitMethodDef *method = &trait_def->methods[method_idx];
     TraitItemNode *node = &decl->as.trait_decl.items[i];
 
     // resolve method type parameters
@@ -3033,7 +3204,7 @@ static void resolve_trait_decl(TypeChecker *tc, Decl *decl) {
 
     for (int i = 0; i < node->param_count; i++) {
       if (node->params[i].is_self) {
-        ps.ptr[i] = def->self_type;
+        ps.ptr[i] = trait_def->self_type;
       } else {
         ps.ptr[i] = resolve_typenode(tc, node->params[i].type_annotation);
       }
@@ -3081,11 +3252,11 @@ static void resolve_impl_decl(TypeChecker *tc, Decl *decl) {
 
   if (decl->as.impl_decl.trait_type) {
     Type *trait_ty = resolve_typenode(tc, decl->as.impl_decl.trait_type);
-    def->trait = trait_ty;
+    def->trait_type = trait_ty;
 
     if (!type_is_poison(trait_ty) && trait_ty->kind != TY_TRAIT) {
       sym_pop_scope(&tci->type_syms, tc->al);
-      def->trait = ty_poison();
+      def->trait_type = ty_poison();
       tc_error(tc, decl->as.impl_decl.trait_type->span,
                "impl trait must be a trait type, got '%s'",
                type_name(trait_ty));
@@ -3109,6 +3280,8 @@ static void resolve_impl_decl(TypeChecker *tc, Decl *decl) {
 
   Type *saved_self = tci->current_self_type;
   tci->current_self_type = self_ty;
+  TraitDef *saved_trait = tci->current_trait;
+  tci->current_trait = def->trait_type ? def->trait_type->as.trait.def : NULL;
 
   int *impl_count;
   int *impl_cap;
@@ -3136,8 +3309,9 @@ static void resolve_impl_decl(TypeChecker *tc, Decl *decl) {
     ImplItemNode *item = &decl->as.impl_decl.items[i];
 
     if (item->kind == IMPL_ITEM_ASSOC_TYPE) {
-      tc_error(tc, item->span,
-               "associated types in impl blocks not supported yet");
+      def->assoc_types[def->assoc_type_count].type =
+          resolve_typenode(tc, item->assoc_type);
+      def->assoc_types[def->assoc_type_count++].name = item->name;
       continue;
     }
 
@@ -3223,6 +3397,7 @@ static void resolve_impl_decl(TypeChecker *tc, Decl *decl) {
 
   sym_pop_scope(&tci->type_syms, tc->al);
   tci->current_self_type = saved_self;
+  tci->current_trait = saved_trait;
 }
 
 static void resolve_decl(TypeChecker *tc, Decl *decl) {
@@ -3389,7 +3564,7 @@ static void check_impl_decl(TypeChecker *tc, Decl *decl) {
   ImplDef *def = decl->as.impl_decl.def;
 
   if (type_is_poison(def->self_type) || def->self_type->kind != TY_STRUCT ||
-      (def->trait && type_is_poison(def->trait))) {
+      (def->trait_type && type_is_poison(def->trait_type))) {
     return; // error already reported during registration
   }
 

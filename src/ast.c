@@ -258,12 +258,22 @@ Type *ty_generic(StringView name, TraitDef **bounds, int bound_count,
   Type *t = al_alloc_zero_for(al, Type);
   t->kind = TY_GENERIC;
   t->as.generic.name = name;
-  t->as.generic.bounds = bounds;
+  t->as.generic.bounds = al_alloc(al, bound_count * sizeof(TraitDef *));
+  for (int i = 0; i < bound_count; i++) {
+    t->as.generic.bounds[i] = bounds[i];
+  }
   t->as.generic.bound_count = bound_count;
   return t;
 }
 
-Type *ty_assoc(Type *base, StringView assoc_name, Allocator *al);
+Type *ty_assoc(Type *base, StringView assoc_name, TraitDef *trait, Allocator *al) {
+  Type *t = al_alloc_zero_for(al, Type);
+  t->kind = TY_ASSOC;
+  t->as.assoc.base = base;
+  t->as.assoc.assoc_name = assoc_name;
+  t->as.assoc.trait = trait;
+  return t;
+}
 
 Type *ty_struct(StructDef *def, Type **args, int argc, Allocator *al) {
   Type probe = {.kind = TY_STRUCT,
