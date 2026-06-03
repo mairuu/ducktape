@@ -130,6 +130,10 @@ static void sort_bounds(TraitDef **bounds, int count) {
   }
 }
 
+static inline bool type_is_concrete(Type *t) {
+  return t->kind != TY_GENERIC && t->kind != TY_UNKNOWN;
+}
+
 static Type *type_intern(Type *t) {
   uint32_t h = type_hash(t);
   uint32_t mask = TYPE_INTERN_CAP - 1;
@@ -218,15 +222,17 @@ Type *ty_function(Type **params, int param_count, Type *ret, Allocator *al) {
     return interned;
   }
 
+  bool all_concrete = true;
   Type *t = al_alloc_for(al, Type);
   t->kind = TY_FUNCTION;
   t->as.fun.param_types = al_alloc(al, param_count * sizeof(Type *));
   for (int i = 0; i < param_count; i++) {
+    all_concrete = all_concrete && type_is_concrete(params[i]);
     t->as.fun.param_types[i] = params[i];
   }
   t->as.fun.param_count = param_count;
   t->as.fun.return_type = ret;
-  return type_intern(t);
+  return all_concrete ? type_intern(t) : t;
 }
 
 Type *ty_tuple(Type **elems, int elem_count, Allocator *al) {
@@ -240,14 +246,16 @@ Type *ty_tuple(Type **elems, int elem_count, Allocator *al) {
     return interned;
   }
 
+  bool all_concrete = true;
   Type *t = al_alloc_for(al, Type);
   t->kind = TY_TUPLE;
   t->as.tuple.elem_types = al_alloc(al, elem_count * sizeof(Type *));
   for (int i = 0; i < elem_count; i++) {
+    all_concrete = all_concrete && type_is_concrete(elems[i]);
     t->as.tuple.elem_types[i] = elems[i];
   }
   t->as.tuple.elem_count = elem_count;
-  return type_intern(t);
+  return all_concrete ? type_intern(t) : t;
 }
 
 // todo:
@@ -266,7 +274,8 @@ Type *ty_generic(StringView name, TraitDef **bounds, int bound_count,
   return t;
 }
 
-Type *ty_assoc(Type *base, StringView assoc_name, TraitDef *trait, Allocator *al) {
+Type *ty_assoc(Type *base, StringView assoc_name, TraitDef *trait,
+               Allocator *al) {
   Type *t = al_alloc_zero_for(al, Type);
   t->kind = TY_ASSOC;
   t->as.assoc.base = base;
@@ -287,15 +296,17 @@ Type *ty_struct(StructDef *def, Type **args, int argc, Allocator *al) {
     return interned;
   }
 
+  bool all_concrete = true;
   Type *t = al_alloc_zero_for(al, Type);
   t->kind = TY_STRUCT;
   t->as.struc.def = def;
   t->as.struc.type_args = al_alloc(al, argc * sizeof(Type *));
   for (int i = 0; i < argc; i++) {
+    all_concrete = all_concrete && type_is_concrete(args[i]);
     t->as.struc.type_args[i] = args[i];
   }
   t->as.struc.type_arg_count = argc;
-  return type_intern(t);
+  return all_concrete ? type_intern(t) : t;
 }
 
 Type *ty_enum(EnumDef *def, Type **args, int argc, Allocator *al) {
@@ -310,15 +321,17 @@ Type *ty_enum(EnumDef *def, Type **args, int argc, Allocator *al) {
     return interned;
   }
 
+  bool all_concrete = true;
   Type *t = al_alloc_zero_for(al, Type);
   t->kind = TY_ENUM;
   t->as.enm.def = def;
   t->as.enm.type_args = al_alloc(al, argc * sizeof(Type *));
   for (int i = 0; i < argc; i++) {
+    all_concrete = all_concrete && type_is_concrete(args[i]);
     t->as.enm.type_args[i] = args[i];
   }
   t->as.enm.type_arg_count = argc;
-  return type_intern(t);
+  return all_concrete ? type_intern(t) : t;
 }
 
 Type *ty_trait(TraitDef *def, Allocator *al) {
