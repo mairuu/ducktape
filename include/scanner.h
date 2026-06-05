@@ -43,6 +43,7 @@ typedef enum {
   TOKEN_TYPE,
   TOKEN_USE,
   TOKEN_VAR,
+  TOKEN_WHERE,
 
   TOKEN_LPAREN,   // (
   TOKEN_RPAREN,   // )

@@ -61,7 +61,7 @@ static const char *token_type_string[] = {
     [TOKEN_ARROW] = "ARROW",           // =>
     [TOKEN_DOTDOT] = "DOTDOT",
     [TOKEN_DOTDOTEQ] = "DOTDOTEQ", // ..  ..=
-    [TOKEN_UNDER] = "UNDER",     // _
+    [TOKEN_UNDER] = "UNDER",       // _
 
     [TOKEN_PLUS] = "PLUS",
     [TOKEN_MINUS] = "MINUS",
@@ -247,11 +247,8 @@ static const Keyword kw4[] = { //
     {"true", TOKEN_TRUE},      {NULL, 0}};
 
 static const Keyword kw5[] = { //
-    {"break", TOKEN_BREAK},
-    {"match", TOKEN_MATCH},
-    {"trait", TOKEN_TRAIT},
-    {"false", TOKEN_FALSE},
-    {NULL, 0}};
+    {"break", TOKEN_BREAK}, {"match", TOKEN_MATCH}, {"trait", TOKEN_TRAIT},
+    {"false", TOKEN_FALSE}, {"where", TOKEN_WHERE}, {NULL, 0}};
 
 static const Keyword kw6[] = { //
     {"return", TOKEN_RETURN},
@@ -315,7 +312,7 @@ Token scanner_next_token(Scanner *s) {
   case ')':
     return make_token(s, TOKEN_RPAREN);
   case '{':
-    s->brace_depth++; 
+    s->brace_depth++;
     return make_token(s, TOKEN_LBRACE);
 
   case '}':

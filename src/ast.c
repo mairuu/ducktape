@@ -748,6 +748,34 @@ static void dump_binding_pat(const BindingPat *bp, int indent) {
 // EXPRESSIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 
+static void dump_bound(const TraitBound *bound, int indent) {
+  if (bound->ref_count == 0)
+    return;
+  ind(indent);
+  fprintf(stdout, "Bound:\n");
+  for (int i = 0; i < bound->ref_count; i++) {
+    ind(indent + 1);
+    fprintf(stdout, "Ref: ");
+    dump_path(&bound->refs[i].path);
+    fprintf(stdout, "\n");
+    for (int j = 0; j < bound->refs[i].type_arg_count; j++) {
+      dump_typenode(bound->refs[i].type_args[j], indent + 2);
+    }
+  }
+}
+
+static void dump_where_clause(const WhereClause *where, int indent) {
+  if (!where || where->pred_count == 0)
+    return;
+  ind(indent);
+  fprintf(stdout, "Where Clause:\n");
+  for (int i = 0; i < where->pred_count; i++) {
+    ind(indent + 1);
+    fprintf(stdout, "Predicate: "SV_FMT "\n", SV_ARG(where->preds[i].type_param));
+    dump_bound(&where->preds[i].bound, indent + 2);
+  }
+}
+
 void dump_expr(const Expr *e, int indent) {
   if (!e)
     return;
@@ -964,11 +992,7 @@ void dump_expr(const Expr *e, int indent) {
         ind(indent + 2);
         fprintf(stdout, "TypeParam: " SV_FMT "\n",
                 SV_ARG(e->as.closure.type_params[i].name));
-        for (int j = 0; j < e->as.closure.type_params[i].bound_count; j++) {
-          ind(indent + 3);
-          fprintf(stdout, "Bound: " SV_FMT "\n",
-                  SV_ARG(e->as.closure.type_params[i].bounds[j]));
-        }
+        dump_bound(&e->as.closure.type_params[i].inline_bound, indent + 3);
       }
     }
     for (int i = 0; i < e->as.closure.param_count; i++) {
@@ -1042,11 +1066,7 @@ void dump_decl(const Decl *d, int indent) {
       ind(indent + 1);
       fprintf(stdout, "TypeParam: " SV_FMT "\n",
               SV_ARG(d->as.fun_decl.type_params[i].name));
-      for (int j = 0; j < d->as.fun_decl.type_params[i].bound_count; j++) {
-        ind(indent + 2);
-        fprintf(stdout, "Bound: " SV_FMT "\n",
-                SV_ARG(d->as.fun_decl.type_params[i].bounds[j]));
-      }
+      dump_bound(&d->as.fun_decl.type_params[i].inline_bound, indent + 2);
     }
     for (int i = 0; i < d->as.fun_decl.param_count; i++) {
       ind(indent + 1);
@@ -1059,6 +1079,7 @@ void dump_decl(const Decl *d, int indent) {
       fprintf(stdout, "Returns:\n");
       dump_typenode(d->as.fun_decl.return_type, indent + 2);
     }
+    dump_where_clause(d->as.fun_decl.where_clause, indent + 1);
     if (d->as.fun_decl.body) {
       dump_expr(d->as.fun_decl.body, indent + 1);
     }
@@ -1117,11 +1138,7 @@ void dump_decl(const Decl *d, int indent) {
       ind(indent + 1);
       fprintf(stdout, "TypeParam: " SV_FMT "\n",
               SV_ARG(d->as.trait_decl.type_params[i].name));
-      for (int j = 0; j < d->as.trait_decl.type_params[i].bound_count; j++) {
-        ind(indent + 2);
-        fprintf(stdout, "Bound: " SV_FMT "\n",
-                SV_ARG(d->as.trait_decl.type_params[i].bounds[j]));
-      }
+      dump_bound(&d->as.trait_decl.type_params[i].inline_bound, indent + 2);
     }
     for (int i = 0; i < d->as.trait_decl.item_count; i++) {
       ind(indent + 2);
@@ -1141,14 +1158,8 @@ void dump_decl(const Decl *d, int indent) {
             ind(indent + 5);
             fprintf(stdout, "TypeParam: " SV_FMT "\n",
                     SV_ARG(d->as.trait_decl.items[i].type_params[j].name));
-            for (int k = 0;
-                 k < d->as.trait_decl.items[i].type_params[j].bound_count;
-                 k++) {
-              ind(indent + 6);
-              fprintf(
-                  stdout, "Bound: " SV_FMT "\n",
-                  SV_ARG(d->as.trait_decl.items[i].type_params[j].bounds[k]));
-            }
+            dump_bound(&d->as.trait_decl.items[i].type_params[j].inline_bound,
+                       indent + 6);
           }
         }
 
@@ -1188,11 +1199,7 @@ void dump_decl(const Decl *d, int indent) {
         ind(indent + 2);
         fprintf(stdout, "TypeParam: " SV_FMT "\n",
                 SV_ARG(d->as.impl_decl.type_params[i].name));
-        for (int j = 0; j < d->as.impl_decl.type_params[i].bound_count; j++) {
-          ind(indent + 3);
-          fprintf(stdout, "Bound: " SV_FMT "\n",
-                  SV_ARG(d->as.impl_decl.type_params[i].bounds[j]));
-        }
+        dump_bound(&d->as.impl_decl.type_params[i].inline_bound, indent + 3);
       }
     }
     ind(indent + 1);

@@ -139,7 +139,8 @@ Type *ty_tuple(Type **elems, int elem_count, Allocator *al);
 Type *ty_array(Type *elem, Allocator *al);
 Type *ty_generic(StringView name, TraitDef **bounds, int bound_count,
                  Allocator *al);
-Type *ty_assoc(Type *base, StringView assoc_name, TraitDef *trait, Allocator *al);
+Type *ty_assoc(Type *base, StringView assoc_name, TraitDef *trait,
+               Allocator *al);
 Type *ty_struct(StructDef *def, Type **args, int argc, Allocator *al);
 Type *ty_enum(EnumDef *def, Type **args, int argc, Allocator *al);
 Type *ty_trait(TraitDef *def, Allocator *al);
@@ -400,6 +401,39 @@ struct Pattern {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// TRAIT REFERENCES AND WHERE CLAUSES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// A single trait in a bound, optionally generic: Clone, Iterator<Int>, From<T>
+typedef struct {
+  Path path; // the trait name, possibly qualified: std::fmt::Display
+  TypeNode **type_args;
+  int type_arg_count; // 0 for non-generic traits
+  Span span;
+} TraitRef;
+
+// One or more trait refs joined by +: Clone + Iterator<Int> + From<T>
+typedef struct {
+  TraitRef *refs;
+  int ref_count; // always >= 1
+} TraitBound;
+
+// A single predicate inside a where clause: T: Clone + Display
+typedef struct {
+  StringView type_param; // must name a type parameter already in scope
+  TraitBound bound;
+  Span span;
+} WherePred;
+
+// The whole where clause: where T: Clone, U: Into<String>
+// NULL pointer on any decl means no where clause was written.
+typedef struct {
+  WherePred *preds;
+  int pred_count; // always >= 1 when the node exists
+  Span span;
+} WhereClause;
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // EXPRESSIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -475,8 +509,8 @@ typedef struct {
 
 typedef struct {
   StringView name;
-  StringView *bounds; // trait names as strings, resolved later
-  int bound_count;
+  TraitBound
+      inline_bound; // refs == NULL / ref_count == 0 means no inline bound
   Span span;
 } TypeParamNode;
 
@@ -857,6 +891,8 @@ typedef struct {
   StringView name;
   TypeParamNode *type_params;
   int type_param_count;
+  WhereClause *where_clause; // NULL if no where clause
+
   bool is_tuple_struct;
 
   // c-style fields (is_tuple_struct == false)
@@ -875,6 +911,7 @@ typedef struct {
   StringView name;
   TypeParamNode *type_params;
   int type_param_count;
+  WhereClause *where_clause;
   VariantDeclNode *variants;
   int variant_count;
   EnumDef *def;
@@ -884,6 +921,7 @@ typedef struct {
   StringView name;
   TypeParamNode *type_params;
   int type_param_count;
+  WhereClause *where_clause;
   TraitItemNode *items;
   int item_count;
   TraitDef *def;
@@ -894,6 +932,7 @@ typedef struct {
   int type_param_count;
   TypeNode *self_type;
   TypeNode *trait_type;
+  WhereClause *where_clause;
   ImplItemNode *items;
   int item_count;
 
@@ -908,9 +947,10 @@ typedef struct {
   int type_param_count;
   ParamDeclNode *params;
   int param_count;
-  TypeNode *return_type; // NULL -> unit
-  bool shorthand;        // => expr; form
-  Expr *body;            // EXPR_BLOCK or shorthand
+  TypeNode *return_type;     // NULL -> unit
+  WhereClause *where_clause; // NULL if no where clause
+  bool shorthand;            // => expr; form
+  Expr *body;                // EXPR_BLOCK or shorthand
   // resolved:
   FunDef *def;
 } DeclFun;
