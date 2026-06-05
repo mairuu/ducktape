@@ -771,7 +771,13 @@ static void dump_where_clause(const WhereClause *where, int indent) {
   fprintf(stdout, "Where Clause:\n");
   for (int i = 0; i < where->pred_count; i++) {
     ind(indent + 1);
-    fprintf(stdout, "Predicate: "SV_FMT "\n", SV_ARG(where->preds[i].type_param));
+    fprintf(stdout, "Predicate: ");
+    for (int j = 0; j < where->preds[i].lhs.segment_count; j++) {
+      fprintf(stdout, SV_FMT, SV_ARG(where->preds[i].lhs.segments[j]));
+      if (j < where->preds[i].lhs.segment_count - 1)
+        fprintf(stdout, ".");
+    }
+    fprintf(stdout, "\n");
     dump_bound(&where->preds[i].bound, indent + 2);
   }
 }
@@ -810,6 +816,14 @@ void dump_expr(const Expr *e, int indent) {
     fprintf(stdout, "Path: ");
     dump_path(&e->as.path_expr.path);
     fprintf(stdout, "\n");
+    if (e->as.path_expr.type_arg_count > 0) {
+      for (int i = 0; i < e->as.path_expr.type_arg_count; i++) {
+        dump_typenode(e->as.path_expr.type_args[i], indent + 1);
+        if (i < e->as.path_expr.type_arg_count - 1) {
+          fprintf(stdout, ", ");
+        }
+      }
+    }
     break;
   case EXPR_BINARY:
     fprintf(stdout, "BinaryOp (%s)\n", token_type_to_string(e->as.binary.op));
@@ -830,6 +844,8 @@ void dump_expr(const Expr *e, int indent) {
   case EXPR_CALL:
     fprintf(stdout, "Call\n");
     dump_expr(e->as.call.callee, indent + 1);
+    ind(indent + 1);
+    fprintf(stdout, "Arguments:\n");
     for (int i = 0; i < e->as.call.arg_count; i++) {
       dump_expr(e->as.call.args[i], indent + 2);
     }

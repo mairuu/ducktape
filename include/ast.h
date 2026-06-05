@@ -418,9 +418,15 @@ typedef struct {
   int ref_count; // always >= 1
 } TraitBound;
 
+typedef struct {
+  StringView *segments; // e.g. {"T"}  or  {"T", "ID"}
+  int segment_count;    // always >= 1
+  Span span;
+} WhereLhs;
+
 // A single predicate inside a where clause: T: Clone + Display
 typedef struct {
-  StringView type_param; // must name a type parameter already in scope
+  WhereLhs lhs;
   TraitBound bound;
   Span span;
 } WherePred;

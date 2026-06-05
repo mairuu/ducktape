@@ -899,6 +899,9 @@ static bool parse_trait_ref(Parser *p, TraitRef *out) {
   if (!consume_tok(p, TOKEN_IDENT, "expected trait name in trait bound")) {
     return false;
   }
+
+  Token *start_tok = previous_tok(p);
+
   segments[0] = previous_tok(p)->lexeme;
 
   if (check_tok(p, TOKEN_COLONCOLON)) {
@@ -920,16 +923,64 @@ static bool parse_trait_ref(Parser *p, TraitRef *out) {
     } while (check_tok(p, TOKEN_COLONCOLON));
   }
 
+  TypeNode **type_args = NULL;
+  int type_arg_count = 0;
   if (check_tok(p, TOKEN_LT)) {
-    out->type_arg_count = parse_type_args(p, &out->type_args);
+    type_arg_count = parse_type_args(p, &type_args);
+    if (type_arg_count < 0) {
+      return false;
+    }
   }
 
   out->path.segments = al_alloc(p->al, sizeof(StringView) * segment_count);
   memcpy(out->path.segments, segments, sizeof(StringView) * segment_count);
   out->path.count = segment_count;
-  out->type_args = NULL;
-  out->type_arg_count = 0;
-  out->span = previous_tok_span(p);
+  out->type_arg_count = type_arg_count;
+  out->type_args = type_args;
+  out->span = span_merge(token_span(start_tok), previous_tok_span(p));
+
+  return true;
+}
+
+static bool parse_bound_lhs(Parser *p, WhereLhs *out) {
+  if (!consume_tok(p, TOKEN_IDENT,
+                   "expected type parameter name in where clause predicate")) {
+    return false;
+  }
+  bool had_error = false;
+
+  StringView segments[4];
+  int segment_count = 1;
+  segments[0] = previous_tok(p)->lexeme;
+
+  if (check_tok(p, TOKEN_DOT)) {
+    do {
+      if (!consume_tok(p, TOKEN_DOT,
+                       "expected '.' in where clause predicate")) {
+        had_error = true;
+        break;
+      }
+      if (!consume_tok(
+              p, TOKEN_IDENT,
+              "expected identifier after '.' in where clause predicate")) {
+        had_error = true;
+        break;
+      }
+      if (segment_count >= 4) {
+        error_at(p, current_tok_span(p),
+                 "too many segments in type parameter path in where clause");
+        had_error = true;
+        break;
+      }
+      segments[segment_count++] = previous_tok(p)->lexeme;
+    } while (check_tok(p, TOKEN_DOT));
+  }
+  if (had_error) {
+    return false;
+  }
+  out->segment_count = segment_count;
+  out->segments = al_alloc(p->al, sizeof(StringView) * segment_count);
+  memcpy(out->segments, segments, sizeof(StringView) * segment_count);
   return true;
 }
 
@@ -962,6 +1013,8 @@ static bool parse_where_clause(Parser *p, WhereClause **out) {
     return false;
   }
 
+  Token where_tok = *previous_tok(p);
+
   WherePred preds[8];
   int pred_count = 0;
   bool had_error = false;
@@ -976,13 +1029,11 @@ static bool parse_where_clause(Parser *p, WhereClause **out) {
       break;
     }
 
-    if (!consume_tok(p, TOKEN_IDENT,
-                     "expected type parameter name in where clause")) {
-      had_error = true;
+    WherePred *pred = &preds[pred_count++];
+    had_error = had_error || !parse_bound_lhs(p, &pred->lhs);
+    if (had_error) {
       break;
     }
-
-    StringView type_param = previous_tok(p)->lexeme;
 
     if (!consume_tok(p, TOKEN_COLON,
                      "expected ':' after type parameter in where clause")) {
@@ -990,12 +1041,14 @@ static bool parse_where_clause(Parser *p, WhereClause **out) {
       break;
     }
 
-    WherePred *pred = &preds[pred_count++];
-    pred->type_param = type_param;
     had_error = had_error || !parse_trait_bound(p, &pred->bound);
   } while (!had_error && match_tok(p, TOKEN_COMMA));
 
   if (had_error) {
+    while (!is_at_end(p) && !check_tok(p, TOKEN_LBRACE) &&
+           !check_tok(p, TOKEN_SEMICOLON)) {
+      advance_tok(p);
+    }
     return false;
   }
 
@@ -1003,6 +1056,9 @@ static bool parse_where_clause(Parser *p, WhereClause **out) {
   (*out)->pred_count = pred_count;
   (*out)->preds = al_alloc(p->al, sizeof(WherePred) * pred_count);
   memcpy((*out)->preds, preds, sizeof(WherePred) * pred_count);
+
+  (*out)->span = span_merge(token_span(&where_tok), current_tok_span(p));
+
   return true;
 }
 
@@ -1010,100 +1066,43 @@ static int parse_type_params(Parser *p, TypeParamNode **out) {
   if (!consume_tok(p, TOKEN_LT, "expected '<'"))
     return -1;
 
-  TypeParamNode tmp[32];
+  TypeParamNode tmp[8];
   int count = 0;
-  bool had_error = true;
+  bool had_error = false;
 
   do {
-    if (count >= 32) {
+    if (count >= 8) {
       error_at(p, current_tok_span(p), "too many type parameters");
-      had_error = false;
+      had_error = true;
       break;
     }
 
     if (!consume_tok(p, TOKEN_IDENT, "expected type parameter name")) {
-      had_error = false;
+      had_error = true;
       break;
     }
+
     Token name_tok = *previous_tok(p);
-
-    TraitRef bounds[8];
-    int bound_count = 0;
-
-    if (match_tok(p, TOKEN_COLON)) {
-      do {
-        if (!consume_tok(p, TOKEN_IDENT, "expected trait bound")) {
-          had_error = false;
-          break;
-        }
-        StringView segments[4];
-        int segment_count = 1;
-        segments[0] = previous_tok(p)->lexeme;
-
-        if (check_tok(p, TOKEN_COLONCOLON)) {
-          do {
-            if (!consume_tok(p, TOKEN_COLONCOLON,
-                             "expected '::' in trait path")) {
-              had_error = false;
-              break;
-            }
-            if (!consume_tok(p, TOKEN_IDENT,
-                             "expected identifier in trait path")) {
-              had_error = false;
-              break;
-            }
-            if (segment_count >= 4) {
-              error_at(p, current_tok_span(p),
-                       "too many segments in trait path");
-              had_error = false;
-              break;
-            }
-            segments[segment_count++] = previous_tok(p)->lexeme;
-          } while (check_tok(p, TOKEN_COLONCOLON));
-        }
-
-        if (bound_count < 8) {
-          TraitRef *bound = &bounds[bound_count++];
-          bound->path.segments =
-              al_alloc(p->al, sizeof(StringView) * segment_count);
-          memcpy(bound->path.segments, segments,
-                 sizeof(StringView) * segment_count);
-          bound->path.count = segment_count;
-          bound->type_args = NULL;
-          bound->type_arg_count = 0;
-          bound->span = previous_tok_span(p);
-        } else {
-          error_at(p, current_tok_span(p), "too many trait bounds");
-        }
-      } while (had_error && match_tok(p, TOKEN_PLUS));
-    }
-
-    if (!had_error)
-      break;
-
     TypeParamNode *param = &tmp[count++];
     param->name = name_tok.lexeme;
-    param->span = token_span(&name_tok);
-    if (bound_count > 0) {
-      param->inline_bound.ref_count = bound_count;
-      param->inline_bound.refs =
-          al_alloc(p->al, sizeof(TraitRef) * bound_count);
-      memcpy(param->inline_bound.refs, bounds, sizeof(TraitRef) * bound_count);
+    // param->span = token_span(&name_tok);
+
+    if (match_tok(p, TOKEN_COLON)) {
+      had_error = had_error || !parse_trait_bound(p, &param->inline_bound);
+    } else {
+      param->inline_bound = (TraitBound){.ref_count = 0, .refs = NULL};
     }
-    // param->bound_count = bound_count;
-    // param->bounds = al_alloc(p->al, sizeof(StringView) * bound_count);
-    // memcpy(param->bounds, bounds, sizeof(StringView) * bound_count);
+    param->span = span_merge(token_span(&name_tok), current_tok_span(p));
+  } while (!had_error && match_tok(p, TOKEN_COMMA));
 
-  } while (had_error && match_tok(p, TOKEN_COMMA));
-
-  if (!had_error) {
+  if (had_error) {
     while (!is_at_end(p) && !check_tok(p, TOKEN_GT)) {
       advance_tok(p);
     }
   }
 
   consume_tok(p, TOKEN_GT, "expected '>'");
-  if (!had_error) {
+  if (had_error) {
     return -1;
   }
 
@@ -2904,8 +2903,15 @@ static Decl *parse_impl_decl(Parser *p, bool is_pub) {
     }
   }
 
-  ImplItemNode items[64];
+  ImplItemNode items[16];
   int item_count = 0;
+
+  WhereClause *where_clause = NULL;
+  if (check_tok(p, TOKEN_WHERE)) {
+    if (!parse_where_clause(p, &where_clause)) {
+      had_error = true;
+    }
+  }
 
   if (!consume_tok(p, TOKEN_LBRACE, "expected '{' after impl header")) {
     had_error = true;
@@ -2913,7 +2919,7 @@ static Decl *parse_impl_decl(Parser *p, bool is_pub) {
 
   if (!check_tok(p, TOKEN_RBRACE)) {
     do {
-      if (item_count >= 64) {
+      if (item_count >= 16) {
         error_at(p, current_tok_span(p), "too many items in impl");
         had_error = true;
         break;
@@ -2986,6 +2992,7 @@ static Decl *parse_impl_decl(Parser *p, bool is_pub) {
   impl_decl->trait_type = trait;
   impl_decl->type_params = type_params;
   impl_decl->type_param_count = type_param_count;
+  impl_decl->where_clause = where_clause;
   impl_decl->items = al_alloc(p->al, sizeof(ImplItemNode) * item_count);
   memcpy(impl_decl->items, items, sizeof(ImplItemNode) * item_count);
   impl_decl->item_count = item_count;
