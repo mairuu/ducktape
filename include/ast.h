@@ -58,60 +58,71 @@ typedef enum {
   TY_POISON,  // sentinel: error already reported, suppress downstream errors
 } TypeKind;
 
+// Type union variants
+typedef struct {
+  Type **param_types;
+  int param_count;
+  Type *return_type;
+} TypeFun;
+
+typedef struct {
+  Type **elem_types;
+  int elem_count;
+} TypeTuple;
+
+typedef struct {
+  StructDef *def;
+  Type **type_args;
+  int type_arg_count;
+} TypeStruct;
+
+typedef struct {
+  EnumDef *def;
+  Type **type_args;
+  int type_arg_count;
+} TypeEnum;
+
+typedef struct {
+  TraitDef *def;
+  // Type **type_args;
+  // int type_arg_count;
+} TypeTrait;
+
+typedef struct {
+  Type *elem_type;
+} TypeArray;
+
+// TY_GENERIC — an unresolved type parameter like T
+typedef struct {
+  StringView name;   // e.g. "T"
+  TraitDef **bounds; // e.g. [Display, Clone]
+  int bound_count;
+} TypeGeneric;
+
+// TY_ASSOC — T.Item before resolution
+typedef struct {
+  Type *base; // the T in T.Item
+  TraitDef *trait;
+  StringView assoc_name; // the "Item" in T.Item
+} TypeAssoc;
+
+typedef struct {
+  uint32_t id;
+  Type *bound;
+} TypeUnknown;
+
 struct Type {
   TypeKind kind;
   union {
-    struct {
-      Type **param_types;
-      int param_count;
-      Type *return_type;
-    } fun;
-
-    struct {
-      Type **elem_types;
-      int elem_count;
-    } tuple;
-
-    struct {
-      StructDef *def;
-      Type **type_args;
-      int type_arg_count;
-    } struc;
-
-    struct {
-      EnumDef *def;
-      Type **type_args;
-      int type_arg_count;
-    } enm;
-
-    struct {
-      TraitDef *def;
-      // Type **type_args;
-      // int type_arg_count;
-    } trait;
-
-    struct {
-      Type *elem_type;
-    } array;
-
-    // TY_GENERIC — an unresolved type parameter like T
-    struct {
-      StringView name;   // e.g. "T"
-      TraitDef **bounds; // e.g. [Display, Clone]
-      int bound_count;
-    } generic;
-
-    // TY_ASSOC — T.Item before resolution
-    struct {
-      Type *base; // the T in T.Item
-      TraitDef *trait;
-      StringView assoc_name; // the "Item" in T.Item
-    } assoc;
-
-    struct {
-      uint32_t id;
-      Type *bound;
-    } unknown;
+    TypeFun fun;
+    TypeTuple tuple;
+    TypeStruct struc;
+    TypeEnum enm;
+    TypeTrait trait;
+    TypeArray array;
+    TypeGeneric generic;
+    TypeAssoc assoc;
+    TypeUnknown unknown;
   } as;
 };
 
@@ -296,37 +307,39 @@ typedef enum {
   TYNODE_POISON // sentinel
 } TypeNodeKind;
 
+// TypeNode union variants
+typedef struct {
+  Path path;
+  TypeNode **type_args;
+  int type_arg_count;
+} TypeNodeNamed;
+
+typedef struct {
+  TypeNode **elems;
+  int count;
+} TypeNodeTuple;
+
+typedef struct {
+  TypeNode **param_types;
+  int param_count;
+  TypeNode *return_type;
+} TypeNodeFun;
+
+typedef struct {
+  TypeNode *base;
+  StringView assoc_name;
+} TypeNodeAssoc;
+
 struct TypeNode {
   TypeNodeKind kind;
   Span span;
   Type *resolved; // filled in by type checker; NULL util then
 
   union {
-    // TYNODE_NAMED
-    struct {
-      Path path;
-      TypeNode **type_args;
-      int type_arg_count;
-    } named;
-
-    // TYNODE_TUPLE
-    struct {
-      TypeNode **elems;
-      int count;
-    } tuple;
-
-    // TYNODE_FUN
-    struct {
-      TypeNode **param_types;
-      int param_count;
-      TypeNode *return_type;
-    } fun;
-
-    // TYNODE_ASSOC: T.Item
-    struct {
-      TypeNode *base;
-      StringView assoc_name;
-    } assoc;
+    TypeNodeNamed named;
+    TypeNodeTuple tuple;
+    TypeNodeFun fun;
+    TypeNodeAssoc assoc;
   } as;
 };
 
@@ -349,40 +362,40 @@ typedef struct {
   Span span;
 } FieldPat;
 
+// Pattern union variants
+typedef struct {
+  StringView name;
+} PatternBind;
+
+typedef struct {
+  Path path;
+  Pattern **payloads;
+  int payload_count;
+  VariantDef *resolved_variant;
+} PatternVariant;
+
+typedef struct {
+  Path path;
+  FieldPat *fields;
+  int field_count;
+} PatternStruct;
+
+typedef struct {
+  Pattern **elems;
+  int count;
+} PatternTuple;
+
 struct Pattern {
   PatternKind kind;
   Span span;
   Type *resolved_type;
 
   union {
-    // PAT_LITERAL
     Expr *literal_expr;
-
-    // PAT_BIND
-    struct {
-      StringView name;
-    } bind;
-
-    // PAT_VARIANT
-    struct {
-      Path path;
-      Pattern **payloads;
-      int payload_count;
-      VariantDef *resolved_variant;
-    } variant;
-
-    // PAT_STRUCT
-    struct {
-      Path path;
-      FieldPat *fields;
-      int field_count;
-    } struc;
-
-    // PAT_TUPLE
-    struct {
-      Pattern **elems;
-      int count;
-    } tuple;
+    PatternBind bind;
+    PatternVariant variant;
+    PatternStruct struc;
+    PatternTuple tuple;
   } as;
 };
 
@@ -421,7 +434,6 @@ typedef enum {
   // ── Structural (pass 2+) ──────────────────────────────
   EXPR_BLOCK, // { stmts... expr? }
   EXPR_IF,    // if cond { } else { }
-  EXPR_WHILE, // while cond { }
   EXPR_FOR,   // for x in iter { }
   EXPR_MATCH, // match expr { arms }
   // EXPR_RETURN, // return expr? (also appears as Stmt; duplicated for
@@ -475,206 +487,221 @@ typedef struct {
   Expr *expr;      // ISEG_EXPR
 } InterpolSeg;
 
+// Expr union variants
+typedef struct {
+  StringView value;
+} ExprString;
+
+typedef struct {
+  InterpolSeg *segs;
+  int seg_count;
+} ExprInterpolated;
+
+typedef struct {
+  StringView name;
+  int resolved_slot; // -1 until resolver runs
+  bool is_upvalue;
+  int upvalue_index;
+} ExprVar;
+
+typedef struct {
+  Path path;
+  TypeNode **type_args;
+  int type_arg_count;
+} ExprPath;
+
+typedef struct {
+  Expr *left;
+  Expr *right;
+  TokenType op;
+} ExprBinary;
+
+typedef struct {
+  Expr *operand;
+  TokenType op;
+} ExprUnary;
+
+typedef struct {
+  Expr *target;
+  Expr *value;
+  TokenType op;
+} ExprAssign;
+
+typedef struct {
+  Expr *start;
+  Expr *end;
+  bool inclusive; // true for ..=, false for ..
+} ExprRange;
+
+typedef struct {
+  Expr *callee;
+  Expr **args;
+  int arg_count;
+} ExprCall;
+
+typedef struct {
+  Expr *object;
+  Expr *index;
+} ExprIndex;
+
+typedef struct {
+  Expr *object;
+  bool is_tuple_field;
+  int tuple_index;       // if is_tuple_field
+  StringView field_name; // if !is_tuple_field
+  int resolved_index;
+} ExprField;
+
+typedef struct {
+  Expr *object;
+  StringView method_name;
+  Expr **args;
+  int arg_count;
+  TypeNode **type_args;
+  int type_arg_count;
+  MethodDef *resolved_method;
+} ExprMethodCall;
+
+typedef struct {
+  Expr **args;
+  int arg_count;
+  TypeNode **type_args;
+  int type_arg_count;
+  MethodDef *resolved_method;
+  ImplDef *resolved_impl;
+  Expr *caller;
+} ExprAssocCall;
+
+typedef struct {
+  Expr *operand;
+  TypeNode *target_type;
+} ExprCast;
+
+typedef struct {
+  Expr *operand;
+} ExprPropagate;
+
+typedef struct {
+  Stmt **stmts;
+  int stmt_count;
+  Expr *tail_expr;
+} ExprBlock;
+
+typedef struct {
+  Expr *condition;
+  Expr *then_block;
+  Expr *else_branch;
+} ExprIf;
+
+typedef struct {
+  StringView var_name;
+  Expr *iterable;
+  Expr *condition;
+  Expr *body;
+  bool is_while; // true if this is a while loop desugared into for
+} ExprFor;
+
+typedef struct {
+  Expr *subject;
+  MatchArm *arms;
+  int arm_count;
+  bool enforce_exhaustiveness;
+} ExprMatch;
+
+typedef struct {
+  Expr **elems;
+  int count;
+} ExprTuple;
+
+typedef struct {
+  Expr **elems;
+  int count;
+} ExprArray;
+
+typedef struct {
+  Path path;
+  TypeNode **type_args;
+  int type_arg_count;
+  FieldInit *fields;
+  int field_count;
+  StructDef *resolved_def; // NULL until resolver runs
+} ExprStructInit;
+
+typedef struct {
+  Path path;
+  Expr *caller;
+  Expr **payloads;
+  int payload_count;
+  VariantDef *resolved_variant; // NULL until resolver runs
+  EnumDef *resolved_enum;       // NULL until resolver runs
+} ExprVariant;
+
+typedef struct {
+  TypeParamNode *type_params;
+  int type_param_count;
+  ClosureParam *params;
+  int param_count;
+  TypeNode *return_type_annotation; // NULL if inferred
+  Expr *body;                       // EXPR_BLOCK or shorthand
+  FunDef *def;
+} ExprClosure;
+
 struct Expr {
   ExprKind kind;
   Type *resolved_type;
   Span span;
 
   union {
-    // EXPR_INT
     int64_t int_val;
-    // EXPR_FLOAT
     double float_val;
-    //  EXPR_BOOL
     bool bool_val;
+    ExprString string;
 
-    // EXPR_STRING — owned because escape processing allocates
-    struct {
-      StringView value;
-    } string;
+    ExprInterpolated interpolated;
 
-    // EXPR_INTERPOLATED
-    struct {
-      InterpolSeg *segs;
-      int seg_count;
-    } interpolated;
+    ExprVar var;
 
-    // EXPR_VAR
-    struct {
-      StringView name;
-      int resolved_slot; // -1 until resolver runs
-      bool is_upvalue;
-      int upvalue_index;
-    } var;
+    ExprPath path_expr;
 
-    // EXPR_PATH
-    struct {
-      Path path;
-      TypeNode **type_args;
-      int type_arg_count;
-    } path_expr;
+    ExprBinary binary;
 
-    // EXPR_BINARY; op is TOKEN_PLUS, TOKEN_MINUS, TOKEN_EQEQ, etc.
-    struct {
-      Expr *left;
-      Expr *right;
-      TokenType op;
-    } binary;
+    ExprUnary unary;
 
-    // EXPR_UNARY; op is TOKEN_MINUS or TOKEN_NOT
-    struct {
-      Expr *operand;
-      TokenType op;
-    } unary;
+    ExprAssign assign;
 
-    // EXPR_ASSIGN; op is TOKEN_EQ, TOKEN_PLUS_EQ, TOKEN_MINUS_EQ, etc.
-    struct {
-      Expr *target;
-      Expr *value;
-      TokenType op;
-    } assign;
+    ExprRange range;
 
-    // EXPR_RANGE; op distinguishes .. from ..=
-    struct {
-      Expr *start;
-      Expr *end;
-      bool inclusive; // true for ..=, false for ..
-    } range;
+    ExprCall call;
 
-    // EXPR_CALL
-    struct {
-      Expr *callee;
-      Expr **args;
-      int arg_count;
-    } call;
+    ExprIndex index;
 
-    // EXPR_INDEX
-    struct {
-      Expr *object;
-      Expr *index;
-    } index;
+    ExprField field;
 
-    // EXPR_FIELD
-    struct {
-      Expr *object;
-      bool is_tuple_field;
-      int tuple_index;       // if is_tuple_field
-      StringView field_name; // if !is_tuple_field
-      int resolved_index;
-    } field;
+    ExprMethodCall method_call;
 
-    // EXPR_METHOD_CALL
-    struct {
-      Expr *object;
-      StringView method_name;
-      Expr **args;
-      int arg_count;
-      TypeNode **type_args;
-      int type_arg_count;
-      MethodDef *resolved_method;
-    } method_call;
+    ExprAssocCall assoc_call;
 
-    // EXPR_ASSOCIATED_CALL
-    struct {
-      Expr **args;
-      int arg_count;
-      TypeNode **type_args;
-      int type_arg_count;
-      MethodDef *resolved_method;
-      ImplDef *resolved_impl;
-      Expr *caller;
-    } assoc_call;
+    ExprCast cast;
 
-    // EXPR_CAST
-    struct {
-      Expr *operand;
-      TypeNode *target_type;
-    } cast;
+    ExprPropagate propagate;
 
-    // EXPR_PROPAGATE
-    struct {
-      Expr *operand;
-    } propagate;
+    ExprBlock block;
 
-    // EXPR_BLOCK
-    struct {
-      Stmt **stmts;
-      int stmt_count;
-      Expr *tail_expr;
-    } block;
+    ExprIf if_expr;
 
-    // EXPR_IF
-    struct {
-      Expr *condition;
-      Expr *then_block;
-      Expr *else_branch;
-    } if_expr;
+    ExprFor for_expr;
 
-    // EXPR_WHILE
-    // struct {
-    //   Expr *condition;
-    //   Expr *body;
-    // } while_expr;
+    ExprMatch match;
 
-    // EXPR_FOR
-    struct {
-      StringView var_name;
-      Expr *iterable;
-      Expr *condition;
-      Expr *body;
-      bool is_while; // true if this is a while loop desugared into for
-    } for_expr;
+    ExprTuple tuple;
 
-    // EXPR_MATCH
-    struct {
-      Expr *subject;
-      MatchArm *arms;
-      int arm_count;
-      bool enforce_exhaustiveness;
-    } match;
+    ExprArray array;
 
-    // EXPR_TUPLE
-    struct {
-      Expr **elems;
-      int count;
-    } tuple;
+    ExprStructInit struct_init;
 
-    // EXPR_ARRAY
-    struct {
-      Expr **elems;
-      int count;
-    } array;
+    ExprVariant variant;
 
-    // EXPR_STRUCT_INIT
-    struct {
-      Path path;
-      TypeNode **type_args;
-      int type_arg_count;
-      FieldInit *fields;
-      int field_count;
-      StructDef *resolved_def; // NULL until resolver runs
-    } struct_init;
-
-    // EXPR_VARIANT
-    struct {
-      Path path;
-      Expr *caller;
-      Expr **payloads;
-      int payload_count;
-      VariantDef *resolved_variant; // NULL until resolver runs
-      EnumDef *resolved_enum;       // NULL until resolver runs
-    } variant;
-
-    // EXPR_CLOSURE
-    struct {
-      TypeParamNode *type_params;
-      int type_param_count;
-      ClosureParam *params;
-      int param_count;
-      TypeNode *return_type_annotation; // NULL if inferred
-      Expr *body;                       // EXPR_BLOCK or shorthand
-      FunDef *def;
-    } closure;
+    ExprClosure closure;
   } as;
 };
 
@@ -698,47 +725,52 @@ typedef enum {
   BIND_POISON, // sentinel
 } BindKind;
 
+// BindingPat union variants
+typedef struct {
+  StringView *names;
+  int count;
+} BindingPatTuple;
+
+typedef struct {
+  StringView struct_name;
+  StringView *field_names;
+  int field_count;
+} BindingPatStruct;
+
 typedef struct {
   BindKind kind;
   Span span;
 
   union {
     StringView ident;
-
-    struct {
-      StringView *names;
-      int count;
-    } tuple;
-
-    struct {
-      StringView struct_name;
-      StringView *field_names;
-      int field_count;
-    } struc;
+    BindingPatTuple tuple;
+    BindingPatStruct struc;
   } as;
 } BindingPat;
+
+// Stmt union variants
+typedef struct {
+  Expr *expr;
+} StmtExpr;
+
+typedef struct {
+  BindingPat binding;
+  TypeNode *type_annotation; // NULL if inferred
+  Expr *initializer;
+} StmtVar;
+
+typedef struct {
+  Expr *value; // NULL for bare "return;"
+} StmtReturn;
 
 struct Stmt {
   StmtKind kind;
   Span span;
 
   union {
-    // STMT_EXPR
-    struct {
-      Expr *expr;
-    } expr_stmt;
-
-    // STMT_VAR
-    struct {
-      BindingPat binding;
-      TypeNode *type_annotation; // NULL if inferred
-      Expr *initializer;
-    } var_stmt;
-
-    // STMT_RETURN
-    struct {
-      Expr *value; // NULL for bare "return;"
-    } return_stmt;
+    StmtExpr expr_stmt;
+    StmtVar var_stmt;
+    StmtReturn return_stmt;
   } as;
 };
 
@@ -815,90 +847,92 @@ typedef struct {
   Span span;
 } ImplItemNode;
 
+// Decl union variants
+typedef struct {
+  Path path;
+  UseTarget target;
+} DeclUse;
+
+typedef struct {
+  StringView name;
+  TypeParamNode *type_params;
+  int type_param_count;
+  bool is_tuple_struct;
+
+  // c-style fields (is_tuple_struct == false)
+  FieldDeclNode *fields;
+  int field_count;
+
+  // tuple struct fields (is_tuple_struct == true)
+  TypeNode **tuple_types;
+  int tuple_type_count;
+
+  // resolved:
+  StructDef *def;
+} DeclStruct;
+
+typedef struct {
+  StringView name;
+  TypeParamNode *type_params;
+  int type_param_count;
+  VariantDeclNode *variants;
+  int variant_count;
+  EnumDef *def;
+} DeclEnum;
+
+typedef struct {
+  StringView name;
+  TypeParamNode *type_params;
+  int type_param_count;
+  TraitItemNode *items;
+  int item_count;
+  TraitDef *def;
+} DeclTrait;
+
+typedef struct {
+  TypeParamNode *type_params;
+  int type_param_count;
+  TypeNode *self_type;
+  TypeNode *trait_type;
+  ImplItemNode *items;
+  int item_count;
+
+  ImplDef *def;
+  // // todo: create ImplDef
+  // Type *resolved_self_type;
+} DeclImpl;
+
+typedef struct {
+  StringView name;
+  TypeParamNode *type_params;
+  int type_param_count;
+  ParamDeclNode *params;
+  int param_count;
+  TypeNode *return_type; // NULL -> unit
+  bool shorthand;        // => expr; form
+  Expr *body;            // EXPR_BLOCK or shorthand
+  // resolved:
+  FunDef *def;
+} DeclFun;
+
+typedef struct {
+  BindingPat binding;
+  TypeNode *type_annotation;
+  Expr *initializer;
+} DeclVar;
+
 struct Decl {
   DeclKind kind;
   bool is_pub;
   Span span;
   union {
-    // DECL_USE
-    struct {
-      Path path;
-      UseTarget target;
-    } use_decl;
-
-    // DECL_STRUCT
-    struct {
-      StringView name;
-      TypeParamNode *type_params;
-      int type_param_count;
-      bool is_tuple_struct;
-
-      // c-style fields (is_tuple_struct == false)
-      FieldDeclNode *fields;
-      int field_count;
-
-      // tuple struct fields (is_tuple_struct == true)
-      TypeNode **tuple_types;
-      int tuple_type_count;
-
-      // resolved:
-      StructDef *def;
-    } struct_decl;
-
-    // DECL_ENUM
-    struct {
-      StringView name;
-      TypeParamNode *type_params;
-      int type_param_count;
-      VariantDeclNode *variants;
-      int variant_count;
-      EnumDef *def;
-    } enum_decl;
-
-    // DECL_TRAIT
-    struct {
-      StringView name;
-      TypeParamNode *type_params;
-      int type_param_count;
-      TraitItemNode *items;
-      int item_count;
-      TraitDef *def;
-    } trait_decl;
-
-    // DECL_IMPL
-    struct {
-      TypeParamNode *type_params;
-      int type_param_count;
-      TypeNode *self_type;
-      TypeNode *trait_type;
-      ImplItemNode *items;
-      int item_count;
-
-      ImplDef *def;
-      // // todo: create ImplDef
-      // Type *resolved_self_type;
-    } impl_decl;
-
-    // DECL_FUN
-    struct {
-      StringView name;
-      TypeParamNode *type_params;
-      int type_param_count;
-      ParamDeclNode *params;
-      int param_count;
-      TypeNode *return_type; // NULL -> unit
-      bool shorthand;        // => expr; form
-      Expr *body;            // EXPR_BLOCK or shorthand
-      // resolved:
-      FunDef *def;
-    } fun_decl;
-
-    // DECL_VAR (top-level only)
-    struct {
-      BindingPat binding;
-      TypeNode *type_annotation;
-      Expr *initializer;
-    } var_decl;
+    DeclUse use_decl;
+    DeclStruct struct_decl;
+    DeclEnum enum_decl;
+    DeclTrait trait_decl;
+    DeclImpl impl_decl;
+    DeclFun fun_decl;
+    DeclVar var_decl;
   } as;
 };
 

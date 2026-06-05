@@ -2105,16 +2105,16 @@ static Decl *parse_fun_decl(Parser *p, bool is_pub) {
   Span full = span_merge(token_span(&fun_tok), previous_tok_span(p));
   Decl *decl = ast_decl(DECL_FUN, full, p->al);
   decl->is_pub = is_pub;
-  decl->as.fun_decl.name = name_sv;
-  decl->as.fun_decl.return_type = return_type;
-  decl->as.fun_decl.body = body;
-  decl->as.fun_decl.param_count = param_count;
-  decl->as.fun_decl.params =
-      al_alloc(p->al, sizeof(ParamDeclNode) * param_count);
-  memcpy(decl->as.fun_decl.params, params, sizeof(ParamDeclNode) * param_count);
-  decl->as.fun_decl.shorthand = body->kind != EXPR_BLOCK;
-  decl->as.fun_decl.type_param_count = type_param_count;
-  decl->as.fun_decl.type_params = type_params;
+  DeclFun *fun = &decl->as.fun_decl;
+  fun->name = name_sv;
+  fun->return_type = return_type;
+  fun->body = body;
+  fun->param_count = param_count;
+  fun->params = al_alloc(p->al, sizeof(ParamDeclNode) * param_count);
+  memcpy(fun->params, params, sizeof(ParamDeclNode) * param_count);
+  fun->shorthand = body->kind != EXPR_BLOCK;
+  fun->type_param_count = type_param_count;
+  fun->type_params = type_params;
 
   return decl;
 }
@@ -2255,28 +2255,27 @@ static Decl *parse_struct_decl(Parser *p, bool is_pub) {
 
   Decl *decl = ast_decl(DECL_STRUCT, token_span(&struct_tok), p->al);
   decl->is_pub = is_pub;
-  decl->as.struct_decl.name = name_sv;
-  decl->as.struct_decl.type_param_count = type_param_count;
-  decl->as.struct_decl.type_params = type_params;
-  decl->as.struct_decl.is_tuple_struct = is_tuple_struct;
+  DeclStruct *struct_decl = &decl->as.struct_decl;
+  struct_decl->name = name_sv;
+  struct_decl->type_param_count = type_param_count;
+  struct_decl->type_params = type_params;
+  struct_decl->is_tuple_struct = is_tuple_struct;
 
   if (is_tuple_struct) {
-    decl->as.struct_decl.fields = NULL;
-    decl->as.struct_decl.field_count = 0;
-    decl->as.struct_decl.tuple_types =
+    struct_decl->fields = NULL;
+    struct_decl->field_count = 0;
+    struct_decl->tuple_types =
         al_alloc(p->al, sizeof(TypeNode *) * field_count);
     for (int i = 0; i < field_count; i++) {
-      decl->as.struct_decl.tuple_types[i] = fields[i].type_annotation;
+      struct_decl->tuple_types[i] = fields[i].type_annotation;
     }
-    decl->as.struct_decl.tuple_type_count = field_count;
+    struct_decl->tuple_type_count = field_count;
   } else {
-    decl->as.struct_decl.fields =
-        al_alloc(p->al, sizeof(FieldDeclNode) * field_count);
-    memcpy(decl->as.struct_decl.fields, fields,
-           sizeof(FieldDeclNode) * field_count);
-    decl->as.struct_decl.field_count = field_count;
-    decl->as.struct_decl.tuple_types = NULL;
-    decl->as.struct_decl.tuple_type_count = 0;
+    struct_decl->fields = al_alloc(p->al, sizeof(FieldDeclNode) * field_count);
+    memcpy(struct_decl->fields, fields, sizeof(FieldDeclNode) * field_count);
+    struct_decl->field_count = field_count;
+    struct_decl->tuple_types = NULL;
+    struct_decl->tuple_type_count = 0;
   }
 
   return decl;
@@ -2401,14 +2400,15 @@ static Decl *parse_enum_decl(Parser *p, bool is_pub) {
 
   Decl *decl = ast_decl(DECL_ENUM, token_span(&enum_tok), p->al);
   decl->is_pub = is_pub;
-  decl->as.enum_decl.name = name_sv;
-  decl->as.enum_decl.type_param_count = type_param_count;
-  decl->as.enum_decl.type_params = type_params;
-  decl->as.enum_decl.variants =
+  DeclEnum *enum_decl = &decl->as.enum_decl;
+  enum_decl->name = name_sv;
+  enum_decl->type_param_count = type_param_count;
+  enum_decl->type_params = type_params;
+  enum_decl->variants =
       al_alloc(p->al, sizeof(VariantDeclNode) * variant_count);
-  memcpy(decl->as.enum_decl.variants, variants,
+  memcpy(enum_decl->variants, variants,
          sizeof(VariantDeclNode) * variant_count);
-  decl->as.enum_decl.variant_count = variant_count;
+  enum_decl->variant_count = variant_count;
   return decl;
 }
 
@@ -2665,13 +2665,13 @@ static Decl *parse_trait_decl(Parser *p, bool is_pub) {
 
   Decl *decl = ast_decl(DECL_TRAIT, token_span(&trait_tok), p->al);
   decl->is_pub = is_pub;
-  decl->as.trait_decl.name = name_sv;
-  decl->as.trait_decl.type_params = type_params;
-  decl->as.trait_decl.type_param_count = type_param_count;
-  decl->as.trait_decl.items =
-      al_alloc(p->al, sizeof(TraitItemNode) * item_count);
-  memcpy(decl->as.trait_decl.items, items, sizeof(TraitItemNode) * item_count);
-  decl->as.trait_decl.item_count = item_count;
+  DeclTrait *trait_decl = &decl->as.trait_decl;
+  trait_decl->name = name_sv;
+  trait_decl->type_params = type_params;
+  trait_decl->type_param_count = type_param_count;
+  trait_decl->items = al_alloc(p->al, sizeof(TraitItemNode) * item_count);
+  memcpy(trait_decl->items, items, sizeof(TraitItemNode) * item_count);
+  trait_decl->item_count = item_count;
   return decl;
 }
 
@@ -2782,13 +2782,14 @@ static Decl *parse_impl_decl(Parser *p, bool is_pub) {
 
   Decl *decl = ast_decl(DECL_IMPL, token_span(&impl_tok), p->al);
   decl->is_pub = is_pub;
-  decl->as.impl_decl.self_type = target;
-  decl->as.impl_decl.trait_type = trait;
-  decl->as.impl_decl.type_params = type_params;
-  decl->as.impl_decl.type_param_count = type_param_count;
-  decl->as.impl_decl.items = al_alloc(p->al, sizeof(ImplItemNode) * item_count);
-  memcpy(decl->as.impl_decl.items, items, sizeof(ImplItemNode) * item_count);
-  decl->as.impl_decl.item_count = item_count;
+  DeclImpl *impl_decl = &decl->as.impl_decl;
+  impl_decl->self_type = target;
+  impl_decl->trait_type = trait;
+  impl_decl->type_params = type_params;
+  impl_decl->type_param_count = type_param_count;
+  impl_decl->items = al_alloc(p->al, sizeof(ImplItemNode) * item_count);
+  memcpy(impl_decl->items, items, sizeof(ImplItemNode) * item_count);
+  impl_decl->item_count = item_count;
   return decl;
 }
 

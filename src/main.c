@@ -5,7 +5,6 @@
 #include "parser.h"
 #include "scanner.h"
 #include "string_utils.h"
-#include "type_checker.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -60,15 +59,15 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  TypeChecker tc;
-  tc_init(&tc, &reporter, &arena_al);
-  tc_check_program(&tc, program);
-  tc_destroy(&tc);
+  // TypeChecker tc;
+  // tc_init(&tc, &reporter, &arena_al);
+  // tc_check_program(&tc, program);
+  // tc_destroy(&tc);
 
-  if (reporter.had_error) {
-    reporter_print_all(&reporter, stdout);
-    return 1;
-  }
+  // if (reporter.had_error) {
+  //   reporter_print_all(&reporter, stdout);
+  //   return 1;
+  // }
 
   dump_program(program, 0);
 
