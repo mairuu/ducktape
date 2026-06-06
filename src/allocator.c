@@ -4,6 +4,9 @@
 #include <string.h>
 
 void *_allocate_zero(Allocator *al, size_t size) {
+  if (size == 0) {
+    return NULL;
+  }
   void *ptr = al_alloc(al, size);
   if (ptr) {
     memset(ptr, 0, size);
@@ -13,6 +16,9 @@ void *_allocate_zero(Allocator *al, size_t size) {
 
 static void *_heap_alloc(void *ctx, size_t size) {
   (void)ctx; // unused
+  if (size == 0) {
+    return NULL;
+  }
   return malloc(size);
 }
 

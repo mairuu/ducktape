@@ -130,11 +130,44 @@ static void sort_bounds(TraitDef **bounds, int count) {
   }
 }
 
-static inline bool type_is_concrete(Type *t) {
-  return t->kind != TY_GENERIC && t->kind != TY_UNKNOWN;
+static inline bool type_is_internable(Type *t) {
+  if (t->kind == TY_UNKNOWN || t->kind == TY_POISON) {
+    return false;
+  }
+  switch (t->kind) {
+    // for container
+  case TY_TUPLE:
+    for (int i = 0; i < t->as.tuple.elem_count; i++) {
+      if (!type_is_internable(t->as.tuple.elem_types[i])) {
+        return false;
+      }
+    }
+  case TY_ARRAY:
+    if (!type_is_internable(t->as.array.elem_type)) {
+      return false;
+    }
+  case TY_STRUCT:
+    for (int i = 0; i < t->as.struc.type_arg_count; i++) {
+      if (!type_is_internable(t->as.struc.type_args[i])) {
+        return false;
+      }
+    }
+  case TY_ENUM:
+    for (int i = 0; i < t->as.enm.type_arg_count; i++) {
+      if (!type_is_internable(t->as.enm.type_args[i])) {
+        return false;
+      }
+    }
+  default:
+    return true;
+  }
 }
 
 static Type *type_intern(Type *t) {
+  if (!type_is_internable(t)) {
+    return t;
+  }
+
   uint32_t h = type_hash(t);
   uint32_t mask = TYPE_INTERN_CAP - 1;
   uint32_t slot = h & mask;
@@ -210,7 +243,7 @@ Type *ty_unknown(Type *bound, Allocator *al) {
   return t; // unkowns are not interned
 }
 
-Type *ty_function(Type **params, int param_count, Type *ret, Allocator *al) {
+Type *ty_fun(Type **params, int param_count, Type *ret, Allocator *al) {
   Type probe = {.kind = TY_FUNCTION,
                 .as.fun = {
                     .param_types = params,
@@ -222,17 +255,15 @@ Type *ty_function(Type **params, int param_count, Type *ret, Allocator *al) {
     return interned;
   }
 
-  bool all_concrete = true;
   Type *t = al_alloc_for(al, Type);
   t->kind = TY_FUNCTION;
   t->as.fun.param_types = al_alloc(al, param_count * sizeof(Type *));
   for (int i = 0; i < param_count; i++) {
-    all_concrete = all_concrete && type_is_concrete(params[i]);
     t->as.fun.param_types[i] = params[i];
   }
   t->as.fun.param_count = param_count;
   t->as.fun.return_type = ret;
-  return all_concrete ? type_intern(t) : t;
+  return type_intern(t);
 }
 
 Type *ty_tuple(Type **elems, int elem_count, Allocator *al) {
@@ -245,17 +276,14 @@ Type *ty_tuple(Type **elems, int elem_count, Allocator *al) {
   if (interned) {
     return interned;
   }
-
-  bool all_concrete = true;
   Type *t = al_alloc_for(al, Type);
   t->kind = TY_TUPLE;
   t->as.tuple.elem_types = al_alloc(al, elem_count * sizeof(Type *));
   for (int i = 0; i < elem_count; i++) {
-    all_concrete = all_concrete && type_is_concrete(elems[i]);
     t->as.tuple.elem_types[i] = elems[i];
   }
   t->as.tuple.elem_count = elem_count;
-  return all_concrete ? type_intern(t) : t;
+  return type_intern(t);
 }
 
 // todo:
@@ -296,17 +324,15 @@ Type *ty_struct(StructDef *def, Type **args, int argc, Allocator *al) {
     return interned;
   }
 
-  bool all_concrete = true;
   Type *t = al_alloc_zero_for(al, Type);
   t->kind = TY_STRUCT;
   t->as.struc.def = def;
   t->as.struc.type_args = al_alloc(al, argc * sizeof(Type *));
   for (int i = 0; i < argc; i++) {
-    all_concrete = all_concrete && type_is_concrete(args[i]);
     t->as.struc.type_args[i] = args[i];
   }
   t->as.struc.type_arg_count = argc;
-  return all_concrete ? type_intern(t) : t;
+  return type_intern(t);
 }
 
 Type *ty_enum(EnumDef *def, Type **args, int argc, Allocator *al) {
@@ -321,17 +347,16 @@ Type *ty_enum(EnumDef *def, Type **args, int argc, Allocator *al) {
     return interned;
   }
 
-  bool all_concrete = true;
   Type *t = al_alloc_zero_for(al, Type);
   t->kind = TY_ENUM;
   t->as.enm.def = def;
   t->as.enm.type_args = al_alloc(al, argc * sizeof(Type *));
   for (int i = 0; i < argc; i++) {
-    all_concrete = all_concrete && type_is_concrete(args[i]);
+    type_is_internable(args[i]);
     t->as.enm.type_args[i] = args[i];
   }
   t->as.enm.type_arg_count = argc;
-  return all_concrete ? type_intern(t) : t;
+  return type_intern(t);
 }
 
 Type *ty_trait(TraitDef *def, Allocator *al) {
@@ -463,7 +488,7 @@ int type_sprintf(const Type *t, char *buf, size_t buf_size) {
       return n;
     }
 
-    bool is_tuple_struct = t->as.struc.def->is_tuple_struct;
+    bool is_tuple_struct = t->as.struc.def->is_tuple;
 
     n += snprintf(buf + n, buf_size - n, is_tuple_struct ? "(" : "<");
     for (int i = 0; i < t->as.struc.type_arg_count; i++) {
@@ -910,10 +935,13 @@ void dump_expr(const Expr *e, int indent) {
     fprintf(stdout, "StructInit: ");
     dump_path(&e->as.struct_init.path);
     fprintf(stdout, "\n");
+    for (int i = 0; i < e->as.struct_init.type_arg_count; i++) {
+      dump_typenode(e->as.struct_init.type_args[i], indent + 1);
+    }
     for (int i = 0; i < e->as.struct_init.field_count; i++) {
       ind(indent + 1);
       fprintf(stdout, "Field: " SV_FMT "\n",
-              SV_ARG(e->as.struct_init.fields[i].name));
+              SV_ARG(e->as.struct_init.fields[i].ident.name));
       dump_expr(e->as.struct_init.fields[i].value, indent + 2);
     }
     break;
@@ -1103,16 +1131,16 @@ void dump_decl(const Decl *d, int indent) {
 
   case DECL_STRUCT:
     fprintf(stdout, "StructDecl: " SV_FMT "\n", SV_ARG(d->as.struct_decl.name));
-    if (!d->as.struct_decl.is_tuple_struct) {
+    if (d->as.struct_decl.is_tuple) {
+      for (int i = 0; i < d->as.struct_decl.field_count; i++) {
+        dump_typenode(d->as.struct_decl.fields[i].type_annotation, indent + 1);
+      }
+    } else {
       for (int i = 0; i < d->as.struct_decl.field_count; i++) {
         ind(indent + 1);
         fprintf(stdout, "Field: " SV_FMT "\n",
-                SV_ARG(d->as.struct_decl.fields[i].name));
+                SV_ARG(d->as.struct_decl.fields[i].ident.name));
         dump_typenode(d->as.struct_decl.fields[i].type_annotation, indent + 2);
-      }
-    } else {
-      for (int i = 0; i < d->as.struct_decl.tuple_type_count; i++) {
-        dump_typenode(d->as.struct_decl.tuple_types[i], indent + 1);
       }
     }
     break;
@@ -1123,6 +1151,23 @@ void dump_decl(const Decl *d, int indent) {
       ind(indent + 1);
       fprintf(stdout, "Variant: " SV_FMT "\n",
               SV_ARG(d->as.enum_decl.variants[i].name));
+      if (d->as.enum_decl.variants[i].field_count == 0) {
+        continue; // No payload
+      }
+      if (d->as.enum_decl.variants[i].is_tuple) {
+        for (int j = 0; j < d->as.enum_decl.variants[i].field_count; j++) {
+          dump_typenode(d->as.enum_decl.variants[i].fields[j].type_annotation,
+                        indent + 2);
+        }
+      } else {
+        for (int j = 0; j < d->as.enum_decl.variants[i].field_count; j++) {
+          ind(indent + 2);
+          fprintf(stdout, "Field: " SV_FMT "\n",
+                  SV_ARG(d->as.enum_decl.variants[i].fields[j].ident.name));
+          dump_typenode(d->as.enum_decl.variants[i].fields[j].type_annotation,
+                        indent + 3);
+        }
+      }
     }
     break;
 

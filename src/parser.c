@@ -1747,7 +1747,7 @@ static Expr *parse_primary(Parser *p) {
             return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
           }
 
-          fields[field_count].name = field_name;
+          fields[field_count].ident.name = field_name;
           fields[field_count].value = field_value;
           fields[field_count].span =
               span_merge(token_span(field_tok), field_value->span);
@@ -2317,6 +2317,114 @@ static Decl *parse_fun_decl(Parser *p, bool is_pub) {
   return decl;
 }
 
+static bool parse_field_decl(Parser *p, FieldDeclNode **out, int *out_count,
+                             bool *out_is_tuple) {
+  FieldDeclNode fields[16];
+  int field_count = 0;
+  bool is_tuple_fields = false;
+  bool had_error = false;
+
+  if (match_tok(p, TOKEN_LBRACE)) {
+    if (!check_tok(p, TOKEN_RBRACE)) {
+      do {
+        if (check_tok(p, TOKEN_RBRACE)) {
+          break; // trailing comma
+        }
+
+        if (field_count >= 16) {
+          error_at(p, current_tok_span(p), "too many fields in struct");
+          had_error = true;
+          break;
+        }
+
+        if (!consume_tok(p, TOKEN_IDENT, "expected field name")) {
+          had_error = true;
+          break;
+        }
+        Token name_tok = *previous_tok(p);
+
+        if (!consume_tok(p, TOKEN_COLON, "expected ':' after field name")) {
+          had_error = true;
+          break;
+        }
+
+        TypeNode *ty = parse_type(p);
+        if (ty->kind == TYNODE_POISON) {
+          had_error = true;
+          break;
+        }
+
+        fields[field_count].ident.name = name_tok.lexeme;
+        fields[field_count].type_annotation = ty;
+        fields[field_count].span = span_merge(token_span(&name_tok), ty->span);
+        field_count++;
+      } while (match_tok(p, TOKEN_COMMA));
+    }
+
+    if (had_error) {
+      // sync to '}'
+      while (!is_at_end(p) && !check_tok(p, TOKEN_RBRACE)) {
+        advance_tok(p);
+      }
+    }
+
+    if (!consume_tok(p, TOKEN_RBRACE, "expected '}' after struct fields")) {
+      had_error = true;
+    }
+  } else if (match_tok(p, TOKEN_LPAREN)) {
+    is_tuple_fields = true;
+
+    if (!check_tok(p, TOKEN_RPAREN)) {
+      do {
+        if (field_count >= 16) {
+          error_at(p, current_tok_span(p), "too many fields in struct");
+          had_error = true;
+          break;
+        }
+
+        TypeNode *ty = parse_type(p);
+        if (ty->kind == TYNODE_POISON) {
+          had_error = true;
+          break;
+        }
+
+        fields[field_count].ident.index = field_count;
+        fields[field_count].type_annotation = ty;
+        fields[field_count].span = ty->span;
+        field_count++;
+      } while (match_tok(p, TOKEN_COMMA));
+    }
+
+    if (had_error) {
+      // sync to ')'
+      while (!is_at_end(p) && !check_tok(p, TOKEN_RPAREN)) {
+        advance_tok(p);
+      }
+    }
+
+    if (!consume_tok(p, TOKEN_RPAREN, "expected ')' after struct fields")) {
+      had_error = true;
+    }
+  }
+  // else {
+  //   error_at(p, current_tok_span(p), "expected '{' or '(' after struct name");
+  //   had_error = true;
+  // }
+
+  if (had_error) {
+    return false;
+  }
+
+  assert(out);
+  assert(out_count);
+  assert(out_is_tuple);
+  *out = al_alloc(p->al, sizeof(FieldDeclNode) * field_count);
+  memcpy(*out, fields, sizeof(FieldDeclNode) * field_count);
+  *out_is_tuple = is_tuple_fields;
+  *out_count = field_count;
+  return true;
+}
+
 static Decl *parse_struct_decl(Parser *p, bool is_pub) {
   if (!consume_tok(p, TOKEN_STRUCT, "expected 'struct'")) {
     return ast_decl(DECL_POISON, current_tok_span(p), p->al);
@@ -2356,93 +2464,15 @@ static Decl *parse_struct_decl(Parser *p, bool is_pub) {
     }
   }
 
-  FieldDeclNode fields[64];
   int field_count = 0;
+  FieldDeclNode *fields = NULL;
   bool is_tuple_struct = false;
+  had_error = !parse_field_decl(p, &fields, &field_count, &is_tuple_struct) ||
+              had_error;
 
-  if (match_tok(p, TOKEN_LBRACE)) {
-    if (!check_tok(p, TOKEN_RBRACE)) {
-      do {
-        if (check_tok(p, TOKEN_RBRACE)) {
-          break; // trailing comma
-        }
-
-        if (field_count >= 64) {
-          error_at(p, current_tok_span(p), "too many fields in struct");
-          had_error = true;
-          break;
-        }
-
-        if (!consume_tok(p, TOKEN_IDENT, "expected field name")) {
-          had_error = true;
-          break;
-        }
-        Token name_tok = *previous_tok(p);
-
-        if (!consume_tok(p, TOKEN_COLON, "expected ':' after field name")) {
-          had_error = true;
-          break;
-        }
-
-        TypeNode *ty = parse_type(p);
-        if (ty->kind == TYNODE_POISON) {
-          had_error = true;
-          break;
-        }
-
-        fields[field_count].name = name_tok.lexeme;
-        fields[field_count].type_annotation = ty;
-        fields[field_count].span = span_merge(token_span(&name_tok), ty->span);
-        field_count++;
-      } while (match_tok(p, TOKEN_COMMA));
-    }
-
-    if (had_error) {
-      // sync to '}'
-      while (!is_at_end(p) && !check_tok(p, TOKEN_RBRACE)) {
-        advance_tok(p);
-      }
-    }
-
-    if (!consume_tok(p, TOKEN_RBRACE, "expected '}' after struct fields")) {
-      had_error = true;
-    }
-  } else if (match_tok(p, TOKEN_LPAREN)) {
-    is_tuple_struct = true;
-
-    if (!check_tok(p, TOKEN_RPAREN)) {
-      do {
-        if (field_count >= 64) {
-          error_at(p, current_tok_span(p), "too many fields in struct");
-          had_error = true;
-          break;
-        }
-
-        TypeNode *ty = parse_type(p);
-        if (ty->kind == TYNODE_POISON) {
-          had_error = true;
-          break;
-        }
-
-        fields[field_count].type_annotation = ty;
-        fields[field_count].span = ty->span;
-        field_count++;
-      } while (match_tok(p, TOKEN_COMMA));
-    }
-
-    if (had_error) {
-      // sync to ')'
-      while (!is_at_end(p) && !check_tok(p, TOKEN_RPAREN)) {
-        advance_tok(p);
-      }
-    }
-
-    if (!consume_tok(p, TOKEN_RPAREN, "expected ')' after struct fields")) {
-      had_error = true;
-    }
-  } else {
-    error_at(p, current_tok_span(p), "expected '{' or '(' after struct name");
-    had_error = true;
+  if (field_count == 0) {
+    consume_tok(p, TOKEN_SEMICOLON,
+                "expected ';' after unit struct declaration");
   }
 
   if (had_error) {
@@ -2453,29 +2483,14 @@ static Decl *parse_struct_decl(Parser *p, bool is_pub) {
 
   Decl *decl = ast_decl(DECL_STRUCT, token_span(&struct_tok), p->al);
   decl->is_pub = is_pub;
-  DeclStruct *struct_decl = &decl->as.struct_decl;
-  struct_decl->name = name_sv;
-  struct_decl->type_param_count = type_param_count;
-  struct_decl->type_params = type_params;
-  struct_decl->is_tuple_struct = is_tuple_struct;
-
-  if (is_tuple_struct) {
-    struct_decl->fields = NULL;
-    struct_decl->field_count = 0;
-    struct_decl->tuple_types =
-        al_alloc(p->al, sizeof(TypeNode *) * field_count);
-    for (int i = 0; i < field_count; i++) {
-      struct_decl->tuple_types[i] = fields[i].type_annotation;
-    }
-    struct_decl->tuple_type_count = field_count;
-  } else {
-    struct_decl->fields = al_alloc(p->al, sizeof(FieldDeclNode) * field_count);
-    memcpy(struct_decl->fields, fields, sizeof(FieldDeclNode) * field_count);
-    struct_decl->field_count = field_count;
-    struct_decl->tuple_types = NULL;
-    struct_decl->tuple_type_count = 0;
-  }
-
+  decl->as.struct_decl = (DeclStruct){
+      .name = name_sv,
+      .type_param_count = type_param_count,
+      .type_params = type_params,
+      .fields = fields,
+      .field_count = field_count,
+      .is_tuple = is_tuple_struct,
+  };
   return decl;
 }
 
@@ -2517,13 +2532,13 @@ static Decl *parse_enum_decl(Parser *p, bool is_pub) {
     }
   }
 
-  VariantDeclNode variants[64];
+  VariantDeclNode variants[16];
   int variant_count = 0;
 
   if (match_tok(p, TOKEN_LBRACE)) {
     if (!check_tok(p, TOKEN_RBRACE)) {
       do {
-        if (variant_count >= 64) {
+        if (variant_count >= 16) {
           error_at(p, current_tok_span(p), "too many variants in enum");
           had_error = true;
           break;
@@ -2539,46 +2554,23 @@ static Decl *parse_enum_decl(Parser *p, bool is_pub) {
         }
         Token name_tok = *previous_tok(p);
 
-        TypeNode *payload[16];
-        int payload_count = 0;
-        if (match_tok(p, TOKEN_LPAREN)) {
-          if (!check_tok(p, TOKEN_RPAREN)) {
-            do {
-              if (payload_count >= 16) {
-                error_at(p, current_tok_span(p), "too many fields in variant");
-                had_error = true;
-                break;
-              }
-              TypeNode *ty = parse_type(p);
-              if (ty->kind == TYNODE_POISON) {
-                had_error = true;
-                break;
-              }
-              payload[payload_count++] = ty;
-            } while (match_tok(p, TOKEN_COMMA));
-          }
+        bool is_tuple = false;
+        int field_count = 0;
+        FieldDeclNode *fields = NULL;
+        had_error =
+            !parse_field_decl(p, &fields, &field_count, &is_tuple) || had_error;
 
-          if (had_error) {
-            // sync to ')'
-            while (!is_at_end(p) && !check_tok(p, TOKEN_RPAREN)) {
-              advance_tok(p);
-            }
-          }
-
-          if (!consume_tok(p, TOKEN_RPAREN,
-                           "expected ')' after variant payload")) {
-            had_error = true;
-          }
+        if (had_error) {
+          break;
         }
 
-        variants[variant_count].name = name_tok.lexeme;
-        variants[variant_count].payload_types =
-            al_alloc(p->al, sizeof(TypeNode *) * payload_count);
-        memcpy(variants[variant_count].payload_types, payload,
-               sizeof(TypeNode *) * payload_count);
-        variants[variant_count].payload_count = payload_count;
-        variants[variant_count].span = token_span(&name_tok);
-        variant_count++;
+        variants[variant_count++] = (VariantDeclNode){
+            .name = name_tok.lexeme,
+            .fields = fields,
+            .field_count = field_count,
+            .is_tuple = is_tuple,
+            .span = span_merge(token_span(&name_tok), previous_tok_span(p)),
+        };
       } while (match_tok(p, TOKEN_COMMA));
     }
 

@@ -134,7 +134,7 @@ Type *ty_unit(void);
 Type *ty_poison(void);
 
 Type *ty_unknown(Type *bound, Allocator *al);
-Type *ty_function(Type **params, int param_count, Type *ret, Allocator *al);
+Type *ty_fun(Type **params, int param_count, Type *ret, Allocator *al);
 Type *ty_tuple(Type **elems, int elem_count, Allocator *al);
 Type *ty_array(Type *elem, Allocator *al);
 Type *ty_generic(StringView name, TraitDef **bounds, int bound_count,
@@ -162,7 +162,10 @@ int type_sprintf(const Type *t, char *buf,
 // ═══════════════════════════════════════════════════════════════════════════════
 
 typedef struct {
-  StringView name;
+  union {
+    StringView name; // for named fields
+    int index;       // for tuple fields, 0-based
+  } ident;
   Type *type; // resolved field type
 } FieldDef;
 
@@ -173,22 +176,15 @@ typedef struct {
 
 struct StructDef {
   Type *self_type;
+
   StringView name;
-  bool is_tuple_struct;
 
   Type **type_params;   // e.g. ["T", "U"]
   int type_param_count; // if generic, else 0
 
   FieldDef *fields;
   int field_count;
-
-  ImplDef **inherent_impls;
-  int inherent_impl_count;
-  int inherent_impl_cap;
-
-  ImplDef **trait_impls;
-  int trait_impl_count;
-  int trait_impl_cap;
+  bool is_tuple;
 
   int slot;
 };
@@ -230,6 +226,7 @@ typedef struct {
 
 struct TraitDef {
   StringView name;
+
   Type *self_type;
 
   Type **type_params;
@@ -245,9 +242,7 @@ struct TraitDef {
 };
 
 struct ImplDef {
-  StringView name; // for error messages only; always empty for inherent impls
-
-  Type *trait_type; // NULL for inherent impls
+  Type *trait_type; // NULL => inherent impl
   Type *self_type;
 
   Type **type_params;
@@ -260,6 +255,8 @@ struct ImplDef {
   TraitAssocTypeDef *assoc_types;
   int assoc_type_count;
   int assoc_type_cap;
+
+  int slot;
 };
 
 typedef struct {
@@ -501,7 +498,10 @@ typedef struct {
 } MatchArm;
 
 typedef struct {
-  StringView name;
+  union {
+    StringView name; // for named fields
+    int tuple_index; // for tuple fields, 0-based index
+  } ident;
   Expr *value;
   Span span;
 } FieldInit;
@@ -669,7 +669,6 @@ typedef struct {
 
 typedef struct {
   Path path;
-  Expr *caller;
   Expr **payloads;
   int payload_count;
   VariantDef *resolved_variant; // NULL until resolver runs
@@ -840,15 +839,19 @@ typedef struct {
 } UseTarget;
 
 typedef struct {
-  StringView name;
+  union {
+    StringView name;
+    int index; // for tuple structs
+  } ident;
   TypeNode *type_annotation;
   Span span;
 } FieldDeclNode;
 
 typedef struct {
   StringView name;
-  TypeNode **payload_types;
-  int payload_count;
+  FieldDeclNode *fields;
+  int field_count;
+  bool is_tuple;
   Span span;
 } VariantDeclNode;
 
@@ -899,17 +902,10 @@ typedef struct {
   int type_param_count;
   WhereClause *where_clause; // NULL if no where clause
 
-  bool is_tuple_struct;
-
-  // c-style fields (is_tuple_struct == false)
   FieldDeclNode *fields;
   int field_count;
+  bool is_tuple;
 
-  // tuple struct fields (is_tuple_struct == true)
-  TypeNode **tuple_types;
-  int tuple_type_count;
-
-  // resolved:
   StructDef *def;
 } DeclStruct;
 
@@ -918,8 +914,10 @@ typedef struct {
   TypeParamNode *type_params;
   int type_param_count;
   WhereClause *where_clause;
+
   VariantDeclNode *variants;
   int variant_count;
+
   EnumDef *def;
 } DeclEnum;
 
