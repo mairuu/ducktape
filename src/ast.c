@@ -352,7 +352,6 @@ Type *ty_enum(EnumDef *def, Type **args, int argc, Allocator *al) {
   t->as.enm.def = def;
   t->as.enm.type_args = al_alloc(al, argc * sizeof(Type *));
   for (int i = 0; i < argc; i++) {
-    type_is_internable(args[i]);
     t->as.enm.type_args[i] = args[i];
   }
   t->as.enm.type_arg_count = argc;
