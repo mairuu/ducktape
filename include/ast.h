@@ -285,8 +285,14 @@ struct FunDef {
 // PATH
 // ═══════════════════════════════════════════════════════════════════════════════
 
+typedef struct {
+  StringView name;
+  TypeNode **type_args;
+  int type_arg_count; // 0 for non-generic segments
+} PathSegment;
+
 struct Path {
-  StringView *segments; // e.g. ["std", "io", "File"]
+  PathSegment *segments;
   int count;
   Span span;
 };
@@ -308,8 +314,6 @@ typedef enum {
 // TypeNode union variants
 typedef struct {
   Path path;
-  TypeNode **type_args;
-  int type_arg_count;
 } TypeNodeNamed;
 
 typedef struct {
@@ -404,8 +408,6 @@ struct Pattern {
 // A single trait in a bound, optionally generic: Clone, Iterator<Int>, From<T>
 typedef struct {
   Path path; // the trait name, possibly qualified: std::fmt::Display
-  TypeNode **type_args;
-  int type_arg_count; // 0 for non-generic traits
   Span span;
 } TraitRef;
 
@@ -546,8 +548,8 @@ typedef struct {
 
 typedef struct {
   Path path;
-  TypeNode **type_args;
-  int type_arg_count;
+  // TypeNode **type_args;
+  // int type_arg_count;
 } ExprPath;
 
 typedef struct {
@@ -660,8 +662,6 @@ typedef struct {
 
 typedef struct {
   Path path;
-  TypeNode **type_args;
-  int type_arg_count;
   FieldInit *fields;
   int field_count;
   StructDef *resolved_def; // NULL until resolver runs

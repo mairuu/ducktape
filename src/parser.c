@@ -281,6 +281,14 @@ static BindingPat parse_binding(Parser *p) {
   return (BindingPat){.kind = BIND_POISON, .span = current_tok_span(p)};
 }
 
+typedef enum {
+  PATH_EXPR,
+  PATH_TYPE,
+  PATH_USE,
+} PathParseMode;
+
+static bool parse_path(Parser *p, PathParseMode mode, Path *out);
+
 static TypeNode *parse_type(Parser *p) {
   TypeNode *base = NULL;
 
@@ -394,77 +402,18 @@ static TypeNode *parse_type(Parser *p) {
     base = ast_type_node(TYNODE_SELF, token_span(previous_tok(p)), p->al);
   }
 
-  if (match_tok(p, TOKEN_IDENT)) {
+  if (check_tok(p, TOKEN_IDENT)) {
     Token start = *previous_tok(p);
 
-    StringView segments[16];
-    int segment_count = 1;
-    segments[0] = previous_tok(p)->lexeme;
-
-    while (match_tok(p, TOKEN_COLONCOLON)) {
-      if (!match_tok(p, TOKEN_IDENT)) {
-        error_at(p, current_tok_span(p), "expected identifier after '::'");
-        return ast_type_node(
-            TYNODE_POISON, span_merge(token_span(&start), current_tok_span(p)),
-            p->al);
-      }
-      if (segment_count >= 16) {
-        Span error_span = span_merge(token_span(&start), current_tok_span(p));
-        error_at(p, error_span, "too many segments in type path");
-        return ast_type_node(TYNODE_POISON, error_span, p->al);
-      }
-      segments[segment_count++] = previous_tok(p)->lexeme;
-    }
-
-    TypeNode *ty_params[16];
-    int ty_param_count = 0;
-
-    if (match_tok(p, TOKEN_LT)) {
-      if (!check_tok(p, TOKEN_GT)) {
-        do {
-          if (ty_param_count >= 16) {
-            error_at(p, current_tok_span(p),
-                     "too many type arguments in type application");
-            return ast_type_node(
-                TYNODE_POISON,
-                span_merge(token_span(&start), current_tok_span(p)), p->al);
-          }
-          TypeNode *ty = parse_type(p);
-          if (ty->kind == TYNODE_POISON) {
-            return ast_type_node(
-                TYNODE_POISON,
-                span_merge(token_span(&start), current_tok_span(p)), p->al);
-          }
-          ty_params[ty_param_count++] = ty;
-        } while (match_tok(p, TOKEN_COMMA));
-      }
-
-      if (!consume_tok(p, TOKEN_GT, "expected '>' after type arguments")) {
-        return ast_type_node(
-            TYNODE_POISON, span_merge(token_span(&start), current_tok_span(p)),
-            p->al);
-      }
+    Path path = {0};
+    if (!parse_path(p, PATH_TYPE, &path)) {
+      return ast_type_node(TYNODE_POISON, current_tok_span(p), p->al);
     }
 
     base = ast_type_node(TYNODE_NAMED,
                          span_merge(token_span(&start), previous_tok_span(p)),
                          p->al);
-    base->as.named.path.segments =
-        al_alloc(p->al, sizeof(StringView) * segment_count);
-    memcpy(base->as.named.path.segments, segments,
-           sizeof(StringView) * segment_count);
-    base->as.named.path.count = segment_count;
-    base->as.named.path.span =
-        span_merge(token_span(&start), previous_tok_span(p));
-    base->as.named.type_arg_count = ty_param_count;
-    if (ty_param_count > 0) {
-      base->as.named.type_args =
-          al_alloc(p->al, sizeof(TypeNode *) * ty_param_count);
-      memcpy(base->as.named.type_args, ty_params,
-             sizeof(TypeNode *) * ty_param_count);
-    } else {
-      base->as.named.type_args = NULL;
-    }
+    base->as.named.path = path;
   }
 
   if (match_tok(p, TOKEN_DOT)) {
@@ -489,6 +438,60 @@ static TypeNode *parse_type(Parser *p) {
 
   error_at(p, current_tok_span(p), "expected type");
   return ast_type_node(TYNODE_POISON, current_tok_span(p), p->al);
+}
+
+static int parse_type_args(Parser *p, TypeNode ***out_args);
+
+static bool parse_path(Parser *p, PathParseMode mode, Path *out) {
+  PathSegment segments[8];
+  int segment_count = 0;
+  Token *start_tok = current_tok(p);
+
+  if (check_tok(p, TOKEN_IDENT)) {
+    do {
+      if (segment_count >= 8) {
+        error_at(p, current_tok_span(p), "too many segments in path");
+        return false;
+      }
+      if (mode == PATH_USE && check_tok(p, TOKEN_LBRACE)) {
+        break;
+      }
+      if (!consume_tok(p, TOKEN_IDENT, "expected identifier in path")) {
+        return false;
+      }
+      PathSegment *segment = &segments[segment_count++];
+      *segment = (PathSegment){
+          .name = previous_tok(p)->lexeme,
+          .type_arg_count = 0,
+          .type_args = NULL,
+      };
+
+      if (segment_count == 1 && mode == PATH_TYPE && check_tok(p, TOKEN_LT)) {
+        segment->type_arg_count = parse_type_args(p, &segment->type_args);
+        if (segment->type_arg_count < 0) {
+          return false;
+        }
+        continue;
+      }
+
+      if (check_tok(p, TOKEN_COLONCOLON) &&
+          peek_ahead(p, 1)->type == TOKEN_LT) {
+        advance_tok(p); // consume '::'
+        segment->type_arg_count = parse_type_args(p, &segment->type_args);
+        if (segment->type_arg_count < 0) {
+          return false;
+        }
+      }
+    } while (match_tok(p, TOKEN_COLONCOLON));
+  }
+
+  assert(out);
+  out->segments = al_alloc(p->al, sizeof(PathSegment) * segment_count);
+  memcpy(out->segments, segments, sizeof(PathSegment) * segment_count);
+  out->count = segment_count;
+  out->span = span_merge(token_span(start_tok), previous_tok_span(p));
+
+  return true;
 }
 
 static Expr *parse_assign(Parser *p);
@@ -893,50 +896,15 @@ static int parse_type_args(Parser *p, TypeNode ***out_args) {
 }
 
 static bool parse_trait_ref(Parser *p, TraitRef *out) {
-  StringView segments[4];
-  int segment_count = 1;
-
-  if (!consume_tok(p, TOKEN_IDENT, "expected trait name in trait bound")) {
+  if (!check_tok(p, TOKEN_IDENT)) {
+    error_at(p, current_tok_span(p), "expected trait name in trait bound");
     return false;
   }
-
   Token *start_tok = previous_tok(p);
 
-  segments[0] = previous_tok(p)->lexeme;
-
-  if (check_tok(p, TOKEN_COLONCOLON)) {
-    do {
-      if (!consume_tok(p, TOKEN_COLONCOLON,
-                       "expected '::' in trait path in trait bound")) {
-        return false;
-      }
-      if (!consume_tok(p, TOKEN_IDENT,
-                       "expected identifier in trait path in trait bound")) {
-        return false;
-      }
-      if (segment_count >= 4) {
-        error_at(p, current_tok_span(p),
-                 "too many segments in trait path in trait bound");
-        return false;
-      }
-      segments[segment_count++] = previous_tok(p)->lexeme;
-    } while (check_tok(p, TOKEN_COLONCOLON));
+  if (!parse_path(p, PATH_TYPE, &out->path)) {
+    return false;
   }
-
-  TypeNode **type_args = NULL;
-  int type_arg_count = 0;
-  if (check_tok(p, TOKEN_LT)) {
-    type_arg_count = parse_type_args(p, &type_args);
-    if (type_arg_count < 0) {
-      return false;
-    }
-  }
-
-  out->path.segments = al_alloc(p->al, sizeof(StringView) * segment_count);
-  memcpy(out->path.segments, segments, sizeof(StringView) * segment_count);
-  out->path.count = segment_count;
-  out->type_arg_count = type_arg_count;
-  out->type_args = type_args;
   out->span = span_merge(token_span(start_tok), previous_tok_span(p));
 
   return true;
@@ -1213,7 +1181,7 @@ static Expr *parse_closure(Parser *p) {
     }
   }
 
-  if(!consume_tok(p, TOKEN_FAT_ARROW, "expected '=>' before closure body")) {
+  if (!consume_tok(p, TOKEN_FAT_ARROW, "expected '=>' before closure body")) {
     had_error = true;
     // sync_to_fun_body(p);
   }
@@ -1255,27 +1223,11 @@ static Pattern *parse_pattern(Parser *p) {
     pattern.kind = PAT_LITERAL;
     pattern.as.literal_expr = parse_primary(p);
     pattern.span = previous_tok_span(p);
-  } else if (match_tok(p, TOKEN_IDENT)) {
-    StringView segments[16];
-    int segment_count = 1;
-    segments[0] = previous_tok(p)->lexeme;
-    Span start_path_span = token_span(previous_tok(p));
-
-    if (match_tok(p, TOKEN_COLONCOLON)) {
-      do {
-        if (segment_count >= 16) {
-          error_at(p, current_tok_span(p), "too many segments in path");
-          return NULL;
-        }
-        if (!match_tok(p, TOKEN_IDENT)) {
-          error_at(p, current_tok_span(p), "expected identifier after '::'");
-          return NULL;
-        }
-        segments[segment_count++] = previous_tok(p)->lexeme;
-      } while (match_tok(p, TOKEN_COLONCOLON));
+  } else if (check_tok(p, TOKEN_IDENT)) {
+    Path path = {0};
+    if (!parse_path(p, PATH_TYPE, &path)) {
+      return NULL;
     }
-
-    Span path_span = span_merge(start_path_span, previous_tok_span(p));
 
     if (match_tok(p, TOKEN_LPAREN)) {
       // variant pattern: Enum::Variant(...) or Enum::Variant
@@ -1307,12 +1259,7 @@ static Pattern *parse_pattern(Parser *p) {
       if (!had_error) {
         pattern.kind = PAT_VARIANT;
         pattern.span = span_merge(start_span, previous_tok_span(p));
-        pattern.as.variant.path.segments =
-            al_alloc(p->al, sizeof(StringView) * segment_count);
-        memcpy(pattern.as.variant.path.segments, segments,
-               sizeof(StringView) * segment_count);
-        pattern.as.variant.path.count = segment_count;
-        pattern.as.variant.path.span = path_span;
+        pattern.as.variant.path = path;
         pattern.as.variant.payloads =
             al_alloc(p->al, sizeof(Pattern *) * subpat_count);
         memcpy(pattern.as.variant.payloads, subpats,
@@ -1373,23 +1320,18 @@ static Pattern *parse_pattern(Parser *p) {
             al_alloc(p->al, sizeof(FieldPat) * field_count);
         memcpy(pattern.as.struc.fields, fields, sizeof(FieldPat) * field_count);
         pattern.as.struc.field_count = field_count;
-        pattern.as.struc.path.segments =
-            al_alloc(p->al, sizeof(StringView) * segment_count);
-        memcpy(pattern.as.struc.path.segments, segments,
-               sizeof(StringView) * segment_count);
-        pattern.as.struc.path.count = segment_count;
-        pattern.as.struc.path.span = path_span;
+        pattern.as.struc.path = path;
       } else {
         return NULL;
       }
-    } else if (segment_count == 1 && pattern.kind == 0) {
+    } else if (path.count == 1 && pattern.kind == 0) {
       // variable pattern: just an identifier
       pattern.kind = PAT_BIND;
-      pattern.span = path_span;
-      pattern.as.bind.name = segments[0];
+      pattern.span = path.span;
+      pattern.as.bind.name = path.segments[0].name;
     } else {
       // path without tuple or struct syntax is not a valid pattern
-      error_at(p, path_span, "unexpected path in pattern");
+      error_at(p, path.span, "unexpected path in pattern");
       return NULL;
     }
   } else if (match_tok(p, TOKEN_LPAREN)) {
@@ -1508,7 +1450,8 @@ static Expr *parse_match(Parser *p) {
       arm->guard = NULL;
     }
 
-    if (!consume_tok(p, TOKEN_FAT_ARROW, "expected '=>' after match arm pattern")) {
+    if (!consume_tok(p, TOKEN_FAT_ARROW,
+                     "expected '=>' after match arm pattern")) {
       had_error = true;
       sync_to_next_arm(p);
       continue;
@@ -1639,59 +1582,10 @@ static Expr *parse_primary(Parser *p) {
   }
 
   // path / struct-init / variant
-  if (match_tok(p, TOKEN_IDENT) || match_tok(p, TOKEN_SELF_TYPE)) {
-    StringView segments[16];
-    int segment_count = 1;
-    segments[0] = previous_tok(p)->lexeme;
-
-    if (match_tok(p, TOKEN_COLONCOLON)) {
-      do {
-        if (segment_count >= 16) {
-          error_at(p, current_tok_span(p), "too many segments in path");
-          return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
-        }
-        if (!match_tok(p, TOKEN_IDENT)) {
-          error_at(p, current_tok_span(p), "expected identifier after '::'");
-          return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
-        }
-        segments[segment_count++] = previous_tok(p)->lexeme;
-      } while (match_tok(p, TOKEN_COLONCOLON));
-    }
-
-    // typeArgs
-    TypeNode *ty_args[16];
-    int ty_arg_count = 0;
-    if (p->allow_struct_init && match_tok(p, TOKEN_LT)) {
-      bool had_error = false;
-
-      if (!check_tok(p, TOKEN_GT)) {
-        do {
-          if (ty_arg_count >= 16) {
-            error_at(p, current_tok_span(p),
-                     "too many type arguments in type application");
-            had_error = true;
-            break;
-          }
-          TypeNode *ty = parse_type(p);
-          if (ty->kind == TYNODE_POISON) {
-            had_error = true;
-            break;
-          }
-          ty_args[ty_arg_count++] = ty;
-        } while (match_tok(p, TOKEN_COMMA));
-      }
-
-      consume_tok(p, TOKEN_GT, "expected '>' after type arguments");
-
-      if (ty_arg_count == 0) {
-        error_at(p, current_tok_span(p),
-                 "expected at least one type argument in type application");
-        had_error = true;
-      }
-
-      if (had_error) {
-        return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
-      }
+  if (check_tok(p, TOKEN_IDENT) || match_tok(p, TOKEN_SELF_TYPE)) {
+    Path path = {0};
+    if (!parse_path(p, PATH_EXPR, &path)) {
+      return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
     }
 
     // c-style init
@@ -1740,52 +1634,25 @@ static Expr *parse_primary(Parser *p) {
       Expr *expr =
           ast_expr(EXPR_STRUCT_INIT,
                    span_merge(token_span(t), previous_tok_span(p)), p->al);
-      expr->as.struct_init.path.segments =
-          al_alloc(p->al, sizeof(StringView) * segment_count);
-      memcpy(expr->as.struct_init.path.segments, segments,
-             sizeof(StringView) * segment_count);
-      expr->as.struct_init.path.count = segment_count;
-      expr->as.struct_init.path.span =
-          span_merge(token_span(t), previous_tok_span(p));
+      expr->as.struct_init.path = path;
+      span_merge(token_span(t), previous_tok_span(p));
       expr->as.struct_init.field_count = field_count;
       expr->as.struct_init.fields =
           al_alloc(p->al, sizeof(expr->as.struct_init.fields[0]) * field_count);
       memcpy(expr->as.struct_init.fields, fields,
              sizeof(expr->as.struct_init.fields[0]) * field_count);
-      expr->as.struct_init.type_arg_count = ty_arg_count;
-      if (ty_arg_count > 0) {
-        expr->as.struct_init.type_args =
-            al_alloc(p->al, sizeof(TypeNode *) * ty_arg_count);
-        memcpy(expr->as.struct_init.type_args, ty_args,
-               sizeof(TypeNode *) * ty_arg_count);
-      } else {
-        expr->as.struct_init.type_args = NULL;
-      }
       return expr;
     }
 
-    if (segment_count == 1 && ty_arg_count == 0) {
+    if (path.count == 1 && path.segments[0].type_arg_count == 0) {
       Expr *expr = ast_expr(EXPR_VAR, token_span(t), p->al);
-      expr->as.var.name = segments[0];
+      expr->as.var.name = path.segments[0].name;
       return expr;
     }
 
     Expr *expr = ast_expr(
         EXPR_PATH, span_merge(token_span(t), previous_tok_span(p)), p->al);
-    ExprPath *path_expr = &expr->as.path_expr;
-    path_expr->path.segments =
-        al_alloc(p->al, sizeof(StringView) * segment_count);
-    memcpy(path_expr->path.segments, segments,
-           sizeof(StringView) * segment_count);
-    path_expr->path.count = segment_count;
-    path_expr->path.span = span_merge(token_span(t), previous_tok_span(p));
-    path_expr->type_arg_count = ty_arg_count;
-    if (ty_arg_count > 0) {
-      path_expr->type_args = al_alloc(p->al, sizeof(TypeNode *) * ty_arg_count);
-      memcpy(path_expr->type_args, ty_args, sizeof(TypeNode *) * ty_arg_count);
-    } else {
-      path_expr->type_args = NULL;
-    }
+    expr->as.path_expr.path = path;
     return expr;
   }
 
@@ -2280,17 +2147,18 @@ static Decl *parse_fun_decl(Parser *p, bool is_pub) {
   Span full = span_merge(token_span(&fun_tok), previous_tok_span(p));
   Decl *decl = ast_decl(DECL_FUN, full, p->al);
   decl->is_pub = is_pub;
-  DeclFun *fun = &decl->as.fun_decl;
-  fun->name = name_sv;
-  fun->return_type = return_type;
-  fun->body = body;
-  fun->param_count = param_count;
-  fun->params = al_alloc(p->al, sizeof(ParamDeclNode) * param_count);
-  memcpy(fun->params, params, sizeof(ParamDeclNode) * param_count);
-  fun->where_clause = where_clause;
-  fun->shorthand = body->kind != EXPR_BLOCK;
-  fun->type_param_count = type_param_count;
-  fun->type_params = type_params;
+  decl->as.fun_decl = (DeclFun){
+      .name = name_sv,
+      .return_type = return_type,
+      .body = body,
+      .param_count = param_count,
+      .params = al_alloc(p->al, sizeof(ParamDeclNode) * param_count),
+      .where_clause = where_clause,
+      .shorthand = body->kind != EXPR_BLOCK,
+      .type_param_count = type_param_count,
+      .type_params = type_params,
+  };
+  memcpy(decl->as.fun_decl.params, params, sizeof(ParamDeclNode) * param_count);
 
   return decl;
 }
@@ -2586,27 +2454,16 @@ static Decl *parse_use_decl(Parser *p) {
   }
   Token use_tok = *previous_tok(p);
 
-  StringView segments[16];
-  int segment_count = 0;
-
   UseTarget target = {0};
+  Path path = {0};
 
-  do {
-    if (segment_count >= 16) {
-      error_at(p, current_tok_span(p), "too many segments in use path");
-      return ast_decl(DECL_POISON, token_span(&use_tok), p->al);
-    }
-    if (check_tok(p, TOKEN_LBRACE)) {
-      break;
-    }
-    if (!consume_tok(p, TOKEN_IDENT, "expected identifier in use path")) {
-      return ast_decl(DECL_POISON, token_span(&use_tok), p->al);
-    }
-    segments[segment_count++] = previous_tok(p)->lexeme;
-  } while (match_tok(p, TOKEN_COLONCOLON));
+  if (!parse_path(p, PATH_USE, &path)) {
+    error_at(p, current_tok_span(p), "expected path in use declaration");
+    return ast_decl(DECL_POISON, token_span(&use_tok), p->al);
+  }
 
   if (match_tok(p, TOKEN_LBRACE)) {
-    UseAlias aliases[16];
+    UseAlias aliases[8];
     int alias_count = 0;
 
     // glob import: use foo::{...}
@@ -2614,6 +2471,10 @@ static Decl *parse_use_decl(Parser *p) {
       do {
         if (match_tok(p, TOKEN_COMMA)) {
           break;
+        }
+        if (alias_count >= 8) {
+          error_at(p, current_tok_span(p), "too many items in use glob");
+          return ast_decl(DECL_POISON, token_span(&use_tok), p->al);
         }
         if (!consume_tok(p, TOKEN_IDENT, "expected identifier in use glob")) {
           return ast_decl(DECL_POISON, token_span(&use_tok), p->al);
@@ -2639,7 +2500,7 @@ static Decl *parse_use_decl(Parser *p) {
     memcpy(target.aliases, aliases, sizeof(UseAlias) * alias_count);
     target.count = alias_count;
   } else {
-    StringView alias_name = segments[segment_count - 1];
+    StringView alias_name = path.segments[path.count - 1].name;
     if (match_tok(p, TOKEN_AS)) {
       if (!consume_tok(p, TOKEN_IDENT, "expected identifier after 'as'")) {
         return ast_decl(DECL_POISON, token_span(&use_tok), p->al);
@@ -2648,10 +2509,17 @@ static Decl *parse_use_decl(Parser *p) {
     }
 
     target.aliases = al_alloc(p->al, sizeof(UseAlias));
-    target.aliases[0].name = segments[segment_count - 1];
+    target.aliases[0].name = path.segments[path.count - 1].name;
     target.aliases[0].alias = alias_name;
     target.count = 1;
-    segment_count--;
+    path.count--;
+
+    if (path.count == 0) {
+      // targetless import: use foo;
+      error_at(p, current_tok_span(p),
+               "expected path with at least one segment in use declaration");
+      return ast_decl(DECL_POISON, token_span(&use_tok), p->al);
+    }
   }
 
   if (!consume_tok(p, TOKEN_SEMICOLON, "expected ';' after use declaration")) {
@@ -2661,11 +2529,7 @@ static Decl *parse_use_decl(Parser *p) {
   }
 
   Decl *decl = ast_decl(DECL_USE, token_span(&use_tok), p->al);
-  decl->as.use_decl.path.segments =
-      al_alloc(p->al, sizeof(StringView) * segment_count);
-  memcpy(decl->as.use_decl.path.segments, segments,
-         sizeof(StringView) * segment_count);
-  decl->as.use_decl.path.count = segment_count;
+  decl->as.use_decl.path = path;
   decl->as.use_decl.target = target;
   return decl;
 }

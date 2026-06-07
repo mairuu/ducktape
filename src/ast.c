@@ -565,11 +565,15 @@ static void ind(int indent) {
   }
 }
 
-static void dump_path(const Path *path) {
+static void dump_typenode(const TypeNode *tn, int indent);
+
+static void dump_path(const Path *path, int indent) {
   for (int i = 0; i < path->count; i++) {
-    fprintf(stdout, SV_FMT, SV_ARG(path->segments[i]));
-    if (i < path->count - 1)
-      fprintf(stdout, "::");
+    ind(indent);
+    fprintf(stdout, "::" SV_FMT "\n", SV_ARG(path->segments[i].name));
+    for (int j = 0; j < path->segments[i].type_arg_count; j++) {
+      dump_typenode(path->segments[i].type_args[j], indent + 1);
+    }
   }
 }
 
@@ -664,16 +668,8 @@ static void dump_typenode(const TypeNode *tn, int indent) {
     fprintf(stdout, "TypeNode: <POISON>\n");
     break;
   case TYNODE_NAMED:
-    fprintf(stdout, "TypeNode: Named(");
-    dump_path(&tn->as.named.path);
-    fprintf(stdout, ")\n");
-    if (tn->as.named.type_arg_count > 0) {
-      ind(indent + 1);
-      fprintf(stdout, "Type Arguments:\n");
-      for (int i = 0; i < tn->as.named.type_arg_count; i++) {
-        dump_typenode(tn->as.named.type_args[i], indent + 2);
-      }
-    }
+    fprintf(stdout, "TypeNode: Named\n");
+    dump_path(&tn->as.named.path, indent + 1);
     break;
   case TYNODE_TUPLE:
     fprintf(stdout, "TypeNode: Tuple\n");
@@ -719,16 +715,15 @@ void dump_pattern(const Pattern *p, int indent) {
     fprintf(stdout, "Pattern: Bind(" SV_FMT ")\n", SV_ARG(p->as.bind.name));
     break;
   case PAT_VARIANT:
-    fprintf(stdout, "Pattern: Variant(");
-    dump_path(&p->as.variant.path);
-    fprintf(stdout, ")\n");
+    fprintf(stdout, "Pattern: Variant\n");
+    dump_path(&p->as.variant.path, indent + 1);
     for (int i = 0; i < p->as.variant.payload_count; i++) {
       dump_pattern(p->as.variant.payloads[i], indent + 1);
     }
     break;
   case PAT_STRUCT:
     fprintf(stdout, "Pattern: Struct(");
-    dump_path(&p->as.struc.path);
+    dump_path(&p->as.struc.path, indent + 1);
     fprintf(stdout, ")\n");
     for (int i = 0; i < p->as.struc.field_count; i++) {
       ind(indent + 1);
@@ -785,11 +780,7 @@ static void dump_bound(const TraitBound *bound, int indent) {
   for (int i = 0; i < bound->ref_count; i++) {
     ind(indent + 1);
     fprintf(stdout, "Ref: ");
-    dump_path(&bound->refs[i].path);
-    fprintf(stdout, "\n");
-    for (int j = 0; j < bound->refs[i].type_arg_count; j++) {
-      dump_typenode(bound->refs[i].type_args[j], indent + 2);
-    }
+    dump_path(&bound->refs[i].path, indent + 2);
   }
 }
 
@@ -842,17 +833,8 @@ void dump_expr(const Expr *e, int indent) {
     fprintf(stdout, "Var: " SV_FMT "\n", SV_ARG(e->as.var.name));
     break;
   case EXPR_PATH:
-    fprintf(stdout, "Path: ");
-    dump_path(&e->as.path_expr.path);
-    fprintf(stdout, "\n");
-    if (e->as.path_expr.type_arg_count > 0) {
-      for (int i = 0; i < e->as.path_expr.type_arg_count; i++) {
-        dump_typenode(e->as.path_expr.type_args[i], indent + 1);
-        if (i < e->as.path_expr.type_arg_count - 1) {
-          fprintf(stdout, ", ");
-        }
-      }
-    }
+    fprintf(stdout, "Path:\n");
+    dump_path(&e->as.path_expr.path, indent + 1);
     break;
   case EXPR_BINARY:
     fprintf(stdout, "BinaryOp (%s)\n", token_type_to_string(e->as.binary.op));
@@ -937,11 +919,8 @@ void dump_expr(const Expr *e, int indent) {
     break;
   case EXPR_STRUCT_INIT:
     fprintf(stdout, "StructInit: ");
-    dump_path(&e->as.struct_init.path);
+    dump_path(&e->as.struct_init.path, indent + 1);
     fprintf(stdout, "\n");
-    for (int i = 0; i < e->as.struct_init.type_arg_count; i++) {
-      dump_typenode(e->as.struct_init.type_args[i], indent + 1);
-    }
     for (int i = 0; i < e->as.struct_init.field_count; i++) {
       ind(indent + 1);
       fprintf(stdout, "Field: " SV_FMT "\n",
@@ -1025,7 +1004,7 @@ void dump_expr(const Expr *e, int indent) {
   // case EXPR_ARRAY:
   case EXPR_VARIANT:
     fprintf(stdout, "Variant: ");
-    dump_path(&e->as.variant.path);
+    dump_path(&e->as.variant.path, indent + 1);
     fprintf(stdout, "\n");
     for (int i = 0; i < e->as.variant.payload_count; i++) {
       dump_expr(e->as.variant.payloads[i], indent + 1);
@@ -1166,17 +1145,20 @@ void dump_decl(const Decl *d, int indent) {
     break;
 
   case DECL_USE:
-    fprintf(stdout, "UseDecl: ");
-    dump_path(&d->as.use_decl.path);
+    fprintf(stdout, "UseDecl:\n");
 
+    ind(indent + 1);
+    printf("Path:\n");
+    dump_path(&d->as.use_decl.path, indent + 2);
+
+    ind(indent + 1);
+    printf("Aliases:\n");
     for (int i = 0; i < d->as.use_decl.target.count; i++) {
-      fprintf(stdout, "\n");
-      ind(indent + 1);
-      fprintf(stdout, "Alias: " SV_FMT " as " SV_FMT "",
+      ind(indent + 2);
+      fprintf(stdout, SV_FMT " as " SV_FMT "\n",
               SV_ARG(d->as.use_decl.target.aliases[i].name),
               SV_ARG(d->as.use_decl.target.aliases[i].alias));
     }
-    fprintf(stdout, "\n");
     break;
 
   case DECL_VAR:
