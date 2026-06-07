@@ -676,8 +676,6 @@ typedef struct {
 } ExprVariant;
 
 typedef struct {
-  TypeParamNode *type_params;
-  int type_param_count;
   ClosureParam *params;
   int param_count;
   TypeNode *return_type_annotation; // NULL if inferred

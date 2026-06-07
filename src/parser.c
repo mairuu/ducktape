@@ -361,9 +361,9 @@ static TypeNode *parse_type(Parser *p) {
       had_error = true;
     }
 
-    if (!match_tok(p, TOKEN_COLON)) {
+    if (!match_tok(p, TOKEN_THIN_ARROW)) {
       error_at(p, current_tok_span(p),
-               "expected ':' after function type parameters");
+               "expected '->' after function type parameters");
       had_error = true;
     }
 
@@ -1116,7 +1116,7 @@ static void sync_to_fun_body(Parser *p) {
   while (!is_at_end(p)) {
     switch (peek_tok(p)->type) {
     case TOKEN_LBRACE:
-    case TOKEN_ARROW:
+    case TOKEN_FAT_ARROW:
       return;
     default:
       advance_tok(p);
@@ -1186,82 +1186,59 @@ static bool parse_closure_param_list(Parser *p, ClosureParam *out, int *count,
 }
 
 static Expr *parse_closure(Parser *p) {
-  Token fun_tok = *previous_tok(p);
+  Token start = *previous_tok(p);
   bool had_error = false;
 
-  TypeParamNode *type_params = NULL;
-  int type_param_count = 0;
-  if (check_tok(p, TOKEN_LT)) {
-    type_param_count = parse_type_params(p, &type_params);
-    if (type_param_count < 0) {
-      had_error = true;
-    }
-  }
-
-  if (!consume_tok(p, TOKEN_LPAREN, "expected '(' after function name")) {
-    had_error = true;
-    sync_to_fun_body(p);
-  }
-
-  ClosureParam params[64];
+  ClosureParam params[16];
   int param_count = 0;
 
   if (!check_tok(p, TOKEN_RPAREN)) {
-    if (!parse_closure_param_list(p, params, &param_count, 64)) {
+    if (!parse_closure_param_list(p, params, &param_count, 16)) {
       had_error = true;
       sync_to_fun_body(p);
     }
   }
 
-  if (!consume_tok(p, TOKEN_RPAREN, "expected ')'")) {
+  if (!consume_tok(p, TOKEN_RBRACKET, "expected ']'")) {
     had_error = true;
     sync_to_fun_body(p);
   }
 
   TypeNode *return_type = NULL;
-  if (match_tok(p, TOKEN_COLON)) {
+  if (match_tok(p, TOKEN_THIN_ARROW)) {
     return_type = parse_type(p);
-    assert(return_type && "return type should not be NULL");
     if (return_type->kind == TYNODE_POISON) {
       had_error = true;
       sync_to_fun_body(p);
     }
   }
 
-  Expr *body = NULL;
-  if (match_tok(p, TOKEN_ARROW)) {
-    body = parse_expr(p);
-    assert(body && "function body should not be NULL");
-    if (body->kind == EXPR_POISON) {
-      had_error = true;
-    }
-  } else {
-    bool was_panic = p->panic_mode;
-    p->panic_mode = false;
-    body = parse_block(p);
-    p->panic_mode = was_panic;
-    assert(body && "function body should not be NULL");
-    if (body->kind == EXPR_POISON) {
-      had_error = true;
-    }
+  if(!consume_tok(p, TOKEN_FAT_ARROW, "expected '=>' before closure body")) {
+    had_error = true;
+    // sync_to_fun_body(p);
+  }
+
+  Expr *body = parse_expr(p);
+  assert(body && "function body should not be NULL");
+  if (body->kind == EXPR_POISON) {
+    had_error = true;
   }
 
   if (had_error) {
-    Span error_span = span_merge(token_span(&fun_tok),
-                                 body ? body->span : token_span(&fun_tok));
+    Span error_span =
+        span_merge(token_span(&start), body ? body->span : token_span(&start));
     return ast_expr(EXPR_POISON, error_span, p->al);
   }
 
   Expr *expr =
       ast_expr(EXPR_CLOSURE,
-               span_merge(token_span(&fun_tok), previous_tok_span(p)), p->al);
-  expr->as.closure.type_params = type_params;
-  expr->as.closure.type_param_count = type_param_count;
-  expr->as.closure.params = al_alloc(p->al, sizeof(ClosureParam) * param_count);
-  memcpy(expr->as.closure.params, params, sizeof(ClosureParam) * param_count);
-  expr->as.closure.param_count = param_count;
-  expr->as.closure.return_type_annotation = return_type;
-  expr->as.closure.body = body;
+               span_merge(token_span(&start), previous_tok_span(p)), p->al);
+  ExprClosure *closure = &expr->as.closure;
+  closure->params = al_alloc(p->al, sizeof(ClosureParam) * param_count);
+  memcpy(closure->params, params, sizeof(ClosureParam) * param_count);
+  closure->param_count = param_count;
+  closure->return_type_annotation = return_type;
+  closure->body = body;
   return expr;
 }
 
@@ -1531,7 +1508,7 @@ static Expr *parse_match(Parser *p) {
       arm->guard = NULL;
     }
 
-    if (!consume_tok(p, TOKEN_ARROW, "expected '=>' after match arm pattern")) {
+    if (!consume_tok(p, TOKEN_FAT_ARROW, "expected '=>' after match arm pattern")) {
       had_error = true;
       sync_to_next_arm(p);
       continue;
@@ -1873,10 +1850,11 @@ static Expr *parse_primary(Parser *p) {
   }
 
   // closure
-  if (match_tok(p, TOKEN_FUN)) {
+  if (match_tok(p, TOKEN_LBRACKET)) {
     return parse_closure(p);
   }
 
+  // match
   if (match_tok(p, TOKEN_MATCH)) {
     return parse_match(p);
   }
@@ -2245,11 +2223,11 @@ static Decl *parse_fun_decl(Parser *p, bool is_pub) {
     sync_to_fun_body(p);
   }
 
-  ParamDeclNode params[64];
+  ParamDeclNode params[16];
   int param_count = 0;
 
   if (!check_tok(p, TOKEN_RPAREN)) {
-    if (!parse_param_list(p, params, &param_count, 64)) {
+    if (!parse_param_list(p, params, &param_count, 16)) {
       had_error = true;
       sync_to_fun_body(p);
     }
@@ -2261,7 +2239,7 @@ static Decl *parse_fun_decl(Parser *p, bool is_pub) {
   }
 
   TypeNode *return_type = NULL;
-  if (match_tok(p, TOKEN_COLON)) {
+  if (match_tok(p, TOKEN_THIN_ARROW)) {
     return_type = parse_type(p);
     assert(return_type && "return type should not be NULL");
     if (return_type->kind == TYNODE_POISON) {
@@ -2278,7 +2256,7 @@ static Decl *parse_fun_decl(Parser *p, bool is_pub) {
   }
 
   Expr *body = NULL;
-  if (match_tok(p, TOKEN_ARROW)) {
+  if (match_tok(p, TOKEN_FAT_ARROW)) {
     body = parse_expr(p);
     assert(body && "function body should not be NULL");
     if (body->kind == EXPR_POISON) {
@@ -2407,8 +2385,8 @@ static bool parse_field_decl(Parser *p, FieldDeclNode **out, int *out_count,
     }
   }
   // else {
-  //   error_at(p, current_tok_span(p), "expected '{' or '(' after struct name");
-  //   had_error = true;
+  //   error_at(p, current_tok_span(p), "expected '{' or '(' after struct
+  //   name"); had_error = true;
   // }
 
   if (had_error) {
@@ -2800,7 +2778,7 @@ static Decl *parse_trait_decl(Parser *p, bool is_pub) {
         Expr *body = NULL;
         if (match_tok(p, TOKEN_SEMICOLON)) {
           // no default implementation
-        } else if (match_tok(p, TOKEN_ARROW)) {
+        } else if (match_tok(p, TOKEN_FAT_ARROW)) {
           body = parse_expr(p);
           assert(body && "function body should not be NULL");
           if (body->kind == EXPR_POISON) {

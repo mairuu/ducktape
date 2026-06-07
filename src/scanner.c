@@ -58,7 +58,8 @@ static const char *token_type_string[] = {
     [TOKEN_COLON] = "COLON",
     [TOKEN_DOT] = "DOT",
     [TOKEN_COLONCOLON] = "COLONCOLON", // ::
-    [TOKEN_ARROW] = "ARROW",           // =>
+    [TOKEN_THIN_ARROW] = "THIN_ARROW", // ->
+    [TOKEN_FAT_ARROW] = "FAT_ARROW",   // =>
     [TOKEN_DOTDOT] = "DOTDOT",
     [TOKEN_DOTDOTEQ] = "DOTDOTEQ", // ..  ..=
     [TOKEN_UNDER] = "UNDER",       // _
@@ -346,7 +347,7 @@ Token scanner_next_token(Scanner *s) {
 
   case '=':
     if (match_char(s, '>'))
-      return make_token(s, TOKEN_ARROW);
+      return make_token(s, TOKEN_FAT_ARROW);
     if (match_char(s, '='))
       return make_token(s, TOKEN_EQEQ);
     return make_token(s, TOKEN_EQ);
@@ -362,6 +363,8 @@ Token scanner_next_token(Scanner *s) {
   case '+':
     return make_token(s, match_char(s, '=') ? TOKEN_PLUSEQ : TOKEN_PLUS);
   case '-':
+    if (match_char(s, '>'))
+      return make_token(s, TOKEN_THIN_ARROW);
     return make_token(s, match_char(s, '=') ? TOKEN_MINUSEQ : TOKEN_MINUS);
   case '*':
     return make_token(s, match_char(s, '=') ? TOKEN_STAREQ : TOKEN_STAR);

@@ -142,25 +142,30 @@ static inline bool type_is_internable(Type *t) {
         return false;
       }
     }
+    break;
   case TY_ARRAY:
     if (!type_is_internable(t->as.array.elem_type)) {
       return false;
     }
+    break;
   case TY_STRUCT:
     for (int i = 0; i < t->as.struc.type_arg_count; i++) {
       if (!type_is_internable(t->as.struc.type_args[i])) {
         return false;
       }
     }
+    break;
   case TY_ENUM:
     for (int i = 0; i < t->as.enm.type_arg_count; i++) {
       if (!type_is_internable(t->as.enm.type_args[i])) {
         return false;
       }
     }
+    break;
   default:
-    return true;
+    break;
   }
+  return true;
 }
 
 static Type *type_intern(Type *t) {
@@ -1028,16 +1033,6 @@ void dump_expr(const Expr *e, int indent) {
     break;
   case EXPR_CLOSURE:
     fprintf(stdout, "Closure\n");
-    if (e->as.closure.type_param_count > 0) {
-      ind(indent + 1);
-      fprintf(stdout, "Type Parameters:\n");
-      for (int i = 0; i < e->as.closure.type_param_count; i++) {
-        ind(indent + 2);
-        fprintf(stdout, "TypeParam: " SV_FMT "\n",
-                SV_ARG(e->as.closure.type_params[i].name));
-        dump_bound(&e->as.closure.type_params[i].inline_bound, indent + 3);
-      }
-    }
     for (int i = 0; i < e->as.closure.param_count; i++) {
       ind(indent + 1);
       fprintf(stdout, "Param: " SV_FMT "\n",

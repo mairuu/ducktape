@@ -56,10 +56,11 @@ typedef enum {
   TOKEN_COLON,
   TOKEN_DOT,
   TOKEN_COLONCOLON, // ::
-  TOKEN_ARROW,      // =>
+  TOKEN_THIN_ARROW, // ->
+  TOKEN_FAT_ARROW,  // =>
   TOKEN_DOTDOT,
   TOKEN_DOTDOTEQ, // ..  ..=
-  TOKEN_UNDER,     // _
+  TOKEN_UNDER,    // _
 
   TOKEN_PLUS,
   TOKEN_MINUS,
