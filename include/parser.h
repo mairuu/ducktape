@@ -2,7 +2,7 @@
 
 #include "allocator.h"
 #include "ast.h"
-#include "error_reporter.h"
+#include "diagbag.h"
 #include "scanner.h"
 
 typedef struct {
@@ -11,13 +11,13 @@ typedef struct {
   int current;
 
   Allocator *al;
-  ErrorReporter *reporter;
+  DiagBag *diags;
 
   bool allow_struct_init;
   bool panic_mode;
 } Parser;
 
 void parser_init(Parser *p, Token *tokens, int count, Allocator *al,
-                 ErrorReporter *reporter);
+                 DiagBag *diags);
 
 Program *parser_parse(Parser *p);

@@ -2,7 +2,7 @@
 
 #include "allocator.h"
 #include "ast.h"
-#include "error_reporter.h"
+#include "diagbag.h"
 #include "scanner.h"
 #include "string_utils.h"
 
@@ -29,8 +29,7 @@ static void error_at(Parser *p, Span span, const char *msg) {
     return;
   }
   p->panic_mode = true;
-  reporter_error(p->reporter, span.line, span.line_end, span.col, span.col_end,
-                 msg, "");
+  diag_error(p->diags, span, "%s", msg);
 }
 
 // token navigation
@@ -2877,12 +2876,12 @@ static Decl *parse_decl(Parser *p) {
 // public API
 
 void parser_init(Parser *p, Token *tokens, int count, Allocator *al,
-                 ErrorReporter *reporter) {
+                 DiagBag *diags) {
   p->tokens = tokens;
   p->count = count;
   p->current = 0;
   p->al = al;
-  p->reporter = reporter;
+  p->diags = diags;
   p->panic_mode = false;
   p->allow_struct_init = true;
 }

@@ -3,6 +3,7 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 #include "scanner.h"
 #include "allocator.h"
+#include "diagbag.h"
 
 #include <ctype.h>
 #include <stdlib.h>
@@ -133,7 +134,13 @@ static Token make_token(const Scanner *s, TokenType type) {
 }
 
 static Token error_token(Scanner *s, const char *msg) {
-  reporter_error(s->reporter, s->line, s->line, s->col, s->col, "%s", msg);
+  Span span = {
+      .line = s->line,
+      .line_end = s->line,
+      .col = s->col,
+      .col_end = s->col,
+  };
+  diag_error(s->diags, span, "%s", msg);
   return (Token){
       .type = TOKEN_ERROR,
       .lexeme = (StringView){.chars = msg, .len = (int)strlen(msg)},
@@ -179,9 +186,15 @@ static Token scan_string(Scanner *s) {
       case '\\':
       case '{':
         break;
-      default:
-        reporter_error(s->reporter, s->line, s->line, s->col - 1, s->col - 1,
-                       "unknown escape", "");
+      default: {
+        Span span = {
+            .line = s->line,
+            .line_end = s->line,
+            .col = s->col - 1,
+            .col_end = s->col - 1,
+        };
+        diag_error(s->diags, span, "unknown escape");
+      }
       }
     } else if (peek(s) == '{') {
       advance(s); // Consume '{'
@@ -282,13 +295,13 @@ static Token scan_identifier(Scanner *s) {
   return make_token(s, TOKEN_IDENT);
 }
 
-void scanner_init(Scanner *s, const char *source, ErrorReporter *reporter) {
+void scanner_init(Scanner *s, const char *source, DiagBag *diags) {
   s->source = source;
   s->start = source;
   s->current = source;
   s->line = 1;
   s->col = 1;
-  s->reporter = reporter;
+  s->diags = diags;
 }
 
 Token scanner_next_token(Scanner *s) {

@@ -8,12 +8,7 @@
 #include "scanner.h"
 #include "string_utils.h"
 
-typedef struct {
-  int line;
-  int line_end;
-  int col;
-  int col_end;
-} Span;
+
 
 // ───────────────────────────────────────────────────────────────────────────────
 // Forward declarations

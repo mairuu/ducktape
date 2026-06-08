@@ -1,7 +1,7 @@
 #include "allocator.h"
 #include "arena.h"
 #include "ast.h"
-#include "error_reporter.h"
+#include "diagbag.h"
 #include "parser.h"
 #include "scanner.h"
 #include "string_utils.h"
@@ -10,8 +10,6 @@
 #include <stdlib.h>
 
 static String read_file(const char *path, Allocator *al);
-
-static ErrorReporter reporter;
 
 int main(int argc, char *argv[]) {
   Allocator heap_al = heap_allocator_create();
@@ -30,32 +28,35 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  reporter_init(&reporter, argv[1], source.chars);
+  DiagBag diags;
+  diag_init(&diags, &heap_al);
 
+  diag_clear(&diags);
   Scanner scanner;
-  scanner_init(&scanner, source.chars, &reporter);
+  scanner_init(&scanner, source.chars, &diags);
 
   Token *tokens = NULL;
   int token_count = scanner_tokenise_all(&scanner, &tokens, &arena_al);
 
-  // for (int i = 0; i < token_count; i++) {
-  //   Token *t = &tokens[i];
-  //   fprintf(stdout, "%03d:%-2d %s '%.*s'\n", t->line, t->col,
-  //           token_type_to_string(t->type), t->lexeme.len, t->lexeme.chars);
-  // }
+  if (diag_has_diags(&diags)) {
+    diag_report(&diags, argv[1], source.chars, stderr);
+  }
 
-  if (reporter.had_error) {
-    reporter_print_all(&reporter, stdout);
-    str_destroy(&source, &arena_al);
+  if (diag_has_errors(&diags)) {
     return 1;
   }
 
+  diag_clear(&diags);
   Parser parser;
-  parser_init(&parser, tokens, token_count, &heap_al, &reporter);
+  parser_init(&parser, tokens, token_count, &heap_al, &diags);
 
   Program *program = parser_parse(&parser);
-  if (reporter.had_error) {
-    reporter_print_all(&reporter, stdout);
+
+  if (diag_has_diags(&diags)) {
+    diag_report(&diags, argv[1], source.chars, stderr);
+  }
+
+  if (diag_has_errors(&diags)) {
     return 1;
   }
 

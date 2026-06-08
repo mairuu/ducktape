@@ -1,9 +1,8 @@
 #pragma once
 
 #include "allocator.h"
-#include "error_reporter.h"
+#include "diagbag.h"
 #include "string_utils.h"
-#include <stdbool.h>
 
 typedef enum {
   TOKEN_NONE = 0, // sentinel
@@ -103,10 +102,10 @@ typedef struct {
   int brace_depth;
   int interp_braces[8];
   int interp_depth;
-  ErrorReporter *reporter;
+  DiagBag *diags;
 } Scanner;
 
-void scanner_init(Scanner *s, const char *source, ErrorReporter *reporter);
+void scanner_init(Scanner *s, const char *source, DiagBag *diags);
 
 Token scanner_next_token(Scanner *s);
 
