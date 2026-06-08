@@ -35,7 +35,11 @@ struct TypeChecker {
 
 void tc_init(TypeChecker *tc, DiagBag *diags, Allocator *al);
 
+void tc_destroy(TypeChecker *tc);
+
 void tc_register_module(TypeChecker *tc, Module *m);
+
+bool tc_resolve_module(TypeChecker *tc, Module *m);
 
 typedef struct {
   StringView name;
@@ -55,6 +59,8 @@ struct ValueScope {
   int next_slot;       // next slot to assign (advanced by vscope_define)
   Allocator *al;
 };
+
+void vscope_init(ValueScope *scope, ValueScope *parent, Allocator *al);
 
 // push a new scope. next_slot is inherited from parent unless is_fn_boundary.
 ValueScope *vscope_push(ValueScope *parent, bool is_fn_boundary, bool is_loop,

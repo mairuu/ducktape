@@ -295,6 +295,7 @@ static Token scan_identifier(Scanner *s) {
 }
 
 void scanner_init(Scanner *s, const char *source, DiagBag *diags) {
+  memset(s, 0, sizeof(Scanner));
   s->source = source;
   s->start = source;
   s->current = source;

@@ -8,6 +8,18 @@
 #include <assert.h>
 #include <stdio.h>
 
+Module *mod_new(StringView file_path, Allocator *al) {
+  Module *m = al_alloc_zero_for(al, Module);
+  m->file_path = file_path;
+  vscope_init(&m->vscope, NULL, al);
+  return m;
+}
+
+void mod_free(Module **m, Allocator *al) {
+  assert(m != NULL);
+  al_free_for(al, *m);
+}
+
 static String read_file(const char *path, Allocator *al);
 
 bool mod_parse(Module *m, DiagBag *diags, Allocator *al) {
@@ -67,4 +79,34 @@ static String read_file(const char *path, Allocator *al) {
   buffer[bytes_read] = '\0';
   fclose(file);
   return str_create(buffer, (int)bytes_read, (int)file_size + 1);
+}
+
+void modreg_init(ModuleRegistry *reg, Allocator *al) {
+  reg->modules = NULL;
+  reg->module_count = 0;
+  reg->module_cap = 0;
+  reg->al = al;
+}
+
+void modreg_destroy(ModuleRegistry *reg) {
+  for (int i = 0; i < reg->module_count; i++) {
+    mod_free(&reg->modules[i], reg->al);
+  }
+  al_free(reg->al, reg->modules, sizeof(Module *) * reg->module_cap);
+}
+
+bool modreg_add(ModuleRegistry *reg, Module *m) {
+  // todo: check for duplicate paths
+
+  // grow the array if needed
+  if (reg->module_count >= reg->module_cap) {
+    int new_cap = reg->module_cap == 0 ? 8 : reg->module_cap * 2;
+    reg->modules =
+        al_realloc(reg->al, reg->modules, sizeof(Module *) * reg->module_cap,
+                   sizeof(Module *) * new_cap);
+    reg->module_cap = new_cap;
+  }
+
+  reg->modules[reg->module_count++] = m;
+  return true;
 }

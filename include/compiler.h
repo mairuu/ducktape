@@ -11,6 +11,7 @@ typedef struct {
   Allocator al;
 
   DiagBag diags;
+  ModuleRegistry mod_reg;
   TypeChecker tc;
 
   Module *root_module;
