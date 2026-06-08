@@ -6,8 +6,14 @@
 
 typedef struct Module Module;
 typedef struct TypeChecker TypeChecker;
-typedef struct TypeResolver TypeResolver;
 typedef struct ValueScope ValueScope;
+typedef struct TypeScope TypeScope;
+typedef struct TypeResolver TypeResolver;
+typedef struct ResolveCtx ResolveCtx;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TypeChecker
+// ═══════════════════════════════════════════════════════════════════════════════
 
 struct TypeChecker {
   // StructDef **structs;
@@ -25,8 +31,6 @@ struct TypeChecker {
   FunDef **funs;
   int fun_count, fun_cap;
 
-  Module *current_module;
-
   Type *t_int, *t_float, *t_bool, *t_string, *t_unit, *t_poison;
 
   DiagBag *diags;
@@ -40,6 +44,10 @@ void tc_destroy(TypeChecker *tc);
 void tc_register_module(TypeChecker *tc, Module *m);
 
 bool tc_resolve_module(TypeChecker *tc, Module *m);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ValueScope
+// ═══════════════════════════════════════════════════════════════════════════════
 
 typedef struct {
   StringView name;
@@ -78,3 +86,76 @@ VarEntry *vscope_lookup(ValueScope *scope, StringView name,
 // emits a diagnostic and returns -1 if the name already exists in this scope.
 int vscope_define(ValueScope *scope, StringView name, Type *type,
                   DiagBag *diags, Span span);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TypeScope
+// ═══════════════════════════════════════════════════════════════════════════════
+
+typedef struct {
+  StringView name;
+  Type *type;
+} TypeEntry;
+
+struct TypeScope {
+  TypeEntry *entries;
+  int count;
+  int cap;
+
+  TypeScope *parent;
+
+  Allocator *al;
+};
+
+TypeScope *tscope_push(TypeScope *parent, Allocator *al);
+
+TypeScope *tscope_pop(TypeScope *scope);
+
+// walk parent chain; return null if not found.
+TypeEntry *tscope_lookup(TypeScope *scope, StringView name);
+
+// define in the current (top) scope.
+// emits a diagnostic if the name is already defined in this exact scope.
+void tscope_define(TypeScope *scope, StringView name, Type *type,
+                   DiagBag *diags, Span span);
+
+// convenience: push a new scope, create a TY_GENERIC for every TypeParamNode,
+// and define them.  Bounds are left empty; call tyres_resolve_bounds()
+// afterwards to fill them in once the type resolver is available.
+// returns the new scope.
+TypeScope *tscope_open_params(TypeScope *parent, TypeParamNode *params,
+                              int count, Allocator *al);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TypeResolver
+// ═══════════════════════════════════════════════════════════════════════════════
+
+struct TypeResolver {
+  TypeChecker *tc;
+  TypeScope *tscope;
+
+  DiagBag *diags;
+  Allocator *al;
+};
+
+// Resolve `node`, write node->resolved, and return it.
+Type *tyres_resolve(TypeResolver *r, TypeNode *node);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ResolveCtx
+// ═══════════════════════════════════════════════════════════════════════════════
+
+struct ResolveCtx {
+  TypeChecker *tc;
+
+  TypeResolver tyres;
+
+  DiagBag *diags;
+  Allocator *al;
+};
+
+void rctx_init(ResolveCtx *rctx, TypeChecker *tc, DiagBag *diags,
+               Allocator *al);
+
+static inline Type *rctx_resolve(ResolveCtx *ctx, TypeNode *node) {
+  return tyres_resolve(&ctx->tyres, node);
+}

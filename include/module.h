@@ -7,6 +7,10 @@
 typedef struct Module Module;
 typedef struct ModuleRegistry ModuleRegistry;
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Module
+// ═══════════════════════════════════════════════════════════════════════════════
+
 struct Module {
   StringView file_path; // absolute filesystem path, null-terminated
   String source;
@@ -16,6 +20,7 @@ struct Module {
   int fun_count, fun_cap;
 
   ValueScope vscope; // module-level values: functions, global vars
+  TypeScope tscope;  // module-level types: structs, enums, traits
 };
 
 Module *mod_new(StringView file_path, Allocator *al);
@@ -23,6 +28,10 @@ Module *mod_new(StringView file_path, Allocator *al);
 void mod_free(Module **m, Allocator *al);
 
 bool mod_parse(Module *m, DiagBag *diags, Allocator *al);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ModuleRegistry
+// ═══════════════════════════════════════════════════════════════════════════════
 
 struct ModuleRegistry {
   Module **modules;

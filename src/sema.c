@@ -1,9 +1,15 @@
 #include "sema.h"
 #include "allocator.h"
 #include "ast.h"
+#include "diag.h"
 #include "module.h"
+#include "string_utils.h"
 
 #include <assert.h>
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TypeChecker
+// ═══════════════════════════════════════════════════════════════════════════════
 
 void tc_init(TypeChecker *tc, DiagBag *diags, Allocator *al) {
   memset(tc, 0, sizeof(*tc));
@@ -19,9 +25,7 @@ void tc_init(TypeChecker *tc, DiagBag *diags, Allocator *al) {
   tc->al = al;
 }
 
-void tc_destroy(TypeChecker *tc) {
-  (void)tc;
-}
+void tc_destroy(TypeChecker *tc) { (void)tc; }
 
 static void tc_register_fun(TypeChecker *tc, Module *m, Decl *decl) {
   assert(decl->kind == DECL_FUN && "expected fun decl");
@@ -34,8 +38,9 @@ static void tc_register_fun(TypeChecker *tc, Module *m, Decl *decl) {
 
   // register in module
   m->funs[m->fun_count++] = def;
-  // set backpointer for resolve phase
+  // set backpointers
   decl->as.fun_decl.def = def;
+  def->module = m;
   // define in global module scope
   vscope_define(&m->vscope, def->name, NULL, tc->diags, decl->span);
 }
@@ -71,23 +76,42 @@ void tc_register_module(TypeChecker *tc, Module *m) {
   assert(m->fun_count == m->fun_cap && "fun count mismatch after registration");
 }
 
-static void tc_resolve_fun(TypeChecker *tc, Module *m, Decl *decl) {
+static void resolve_fun_decl(ResolveCtx *rctx, Decl *decl) {
   assert(decl->kind == DECL_FUN && "expected fun decl");
+  DeclFun *fun_decl = &decl->as.fun_decl;
+  FunDef *def = fun_decl->def;
+
+  def->return_type = fun_decl->return_type
+                         ? rctx_resolve(rctx, fun_decl->return_type)
+                         : rctx->tc->t_unit;
+}
+
+static void resolve_decl(ResolveCtx *rctx, Decl *decl) {
+  switch (decl->kind) {
+  case DECL_FUN:
+    resolve_fun_decl(rctx, decl);
+    break;
+  default:
+    assert(false && "unhandled decl kind in resolve_decl");
+  }
 }
 
 bool tc_resolve_module(TypeChecker *tc, Module *m) {
+  ResolveCtx rctx;
+  rctx_init(&rctx, tc, tc->diags, tc->al);
+
   for (int i = 0; i < m->ast->decl_count; i++) {
     Decl *decl = m->ast->decls[i];
-    switch (decl->kind) {
-    case DECL_FUN:
-      tc_resolve_fun(tc, m, decl);
-      break;
-    default:
-      assert(false && "unhandled decl kind in tc_resolve_module");
-    }
+    rctx.tyres.tscope = &m->tscope;
+    resolve_decl(&rctx, decl);
   }
+
   return true;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ValueScope
+// ═══════════════════════════════════════════════════════════════════════════════
 
 void vscope_init(ValueScope *scope, ValueScope *parent, Allocator *al) {
   scope->entries = NULL;
@@ -125,4 +149,108 @@ int vscope_define(ValueScope *scope, StringView name, Type *type,
       .is_captured = false,
   };
   return slot;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TypeScope
+// ═══════════════════════════════════════════════════════════════════════════════
+
+TypeScope *tscope_push(TypeScope *parent, Allocator *al);
+TypeScope *tscope_pop(TypeScope *scope);
+
+// walk parent chain; return null if not found.
+TypeEntry *tscope_lookup(TypeScope *scope, StringView name) {
+  (void)scope;
+  (void)name;
+  return NULL;
+}
+
+// define in the current (top) scope.
+// emits a diagnostic if the name is already defined in this exact scope.
+void tscope_define(TypeScope *scope, StringView name, Type *type,
+                   DiagBag *diags, Span span);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TypeResolver
+// ═══════════════════════════════════════════════════════════════════════════════
+
+Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
+  if (node->resolved) {
+    return node->resolved;
+  }
+
+  Type *result = NULL;
+
+  switch (node->kind) {
+  case TYNODE_UNIT:
+    result = r->tc->t_unit;
+    break;
+  case TYNODE_NAMED: {
+    TypeNodeNamed *named = &node->as.named;
+
+    if (named->path.count == 1 && named->path.segments[0].type_arg_count == 0) {
+      StringView name = named->path.segments[0].name;
+
+      if (sv_equal_cstr(name, "Int")) {
+        result = r->tc->t_int;
+        break;
+      } else if (sv_equal_cstr(name, "Float")) {
+        result = r->tc->t_float;
+        break;
+      } else if (sv_equal_cstr(name, "Bool")) {
+        result = r->tc->t_bool;
+        break;
+      } else if (sv_equal_cstr(name, "String")) {
+        result = r->tc->t_string;
+        break;
+      } else if (sv_equal_cstr(name, "Unit")) {
+        result = r->tc->t_unit;
+        break;
+      } else if (sv_equal_cstr(name, "_")) {
+        assert(false && "todo");
+      }
+
+      TypeEntry *e = tscope_lookup(r->tscope, name);
+      if (e) {
+        result = e->type;
+        break;
+      }
+
+      diag_error(r->tc->diags, node->span, "unknown type: " SV_FMT,
+                 SV_ARG(name));
+      result = r->tc->t_poison;
+      break;
+    }
+
+    break;
+  }
+
+  default:
+    assert(false && "unhandled type node kind in tyres_resolve");
+    break;
+  }
+
+  assert(result != NULL && "tyres_resolve failed to resolve a type node");
+  node->resolved = result;
+  return result;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ResolveCtx
+// ═══════════════════════════════════════════════════════════════════════════════
+
+void rctx_init(ResolveCtx *rctx, TypeChecker *tc, DiagBag *diags,
+               Allocator *al) {
+  memset(rctx, 0, sizeof(*rctx));
+
+  rctx->tc = tc;
+  rctx->diags = diags;
+  rctx->al = al;
+
+  rctx->tyres = (TypeResolver){
+      .tc = tc,
+      .tscope = NULL,
+      .diags = diags,
+      .al = al,
+  };
 }

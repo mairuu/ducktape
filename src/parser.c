@@ -401,7 +401,7 @@ static TypeNode *parse_type(Parser *p) {
   }
 
   if (check_tok(p, TOKEN_IDENT)) {
-    Token start = *previous_tok(p);
+    Token start = *current_tok(p);
 
     Path path = {0};
     if (!parse_path(p, PATH_TYPE, &path)) {

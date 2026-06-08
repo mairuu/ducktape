@@ -22,6 +22,7 @@ typedef struct Pattern Pattern;
 typedef struct TypeNode TypeNode;
 typedef struct Path Path;
 
+typedef struct Module Module;
 typedef struct StructDef StructDef;
 typedef struct EnumDef EnumDef;
 typedef struct TraitDef TraitDef;
@@ -170,6 +171,9 @@ typedef struct {
 } MethodDef;
 
 struct StructDef {
+  Module *module;
+  bool is_pub;
+
   Type *self_type;
 
   StringView name;
@@ -193,6 +197,9 @@ typedef struct {
 } VariantDef;
 
 struct EnumDef {
+  Module *module;
+  bool is_pub;
+
   Type *self_type;
   StringView name;
 
@@ -220,6 +227,9 @@ typedef struct {
 } TraitAssocTypeDef;
 
 struct TraitDef {
+  Module *module;
+  bool is_pub;
+
   StringView name;
 
   Type *self_type;
@@ -261,6 +271,9 @@ typedef struct {
 } ParamDef;
 
 struct FunDef {
+  Module *module;
+  bool is_pub;
+
   StringView name;
   bool is_closure;
   Type *fun_type;
