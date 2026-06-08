@@ -2,7 +2,7 @@
 
 #include "allocator.h"
 #include "ast.h"
-#include "diagbag.h"
+#include "diag.h"
 #include "scanner.h"
 
 typedef struct {

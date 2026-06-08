@@ -89,7 +89,7 @@ void arena_init(Arena *arena, Allocator *inner) {
   arena->inner = inner;
 }
 
-void arena_free(Arena *arena) {
+void arena_destroy(Arena *arena) {
   ArenaBlock *b = arena->first;
   while (b) {
     ArenaBlock *next = b->next;

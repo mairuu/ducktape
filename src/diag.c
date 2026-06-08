@@ -1,4 +1,4 @@
-#include "diagbag.h"
+#include "diag.h"
 #include "allocator.h"
 #include "string_utils.h"
 

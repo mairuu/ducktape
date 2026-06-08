@@ -1,7 +1,7 @@
 #pragma once
 
 #include "allocator.h"
-#include "diagbag.h"
+#include "diag.h"
 #include "string_utils.h"
 
 typedef enum {

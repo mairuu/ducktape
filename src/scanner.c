@@ -3,7 +3,6 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 #include "scanner.h"
 #include "allocator.h"
-#include "diagbag.h"
 
 #include <ctype.h>
 #include <stdlib.h>

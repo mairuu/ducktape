@@ -20,7 +20,7 @@ typedef struct {
 
 void arena_init(Arena *arena, Allocator *inner);
 
-void arena_free(Arena *arena);
+void arena_destroy(Arena *arena);
 
 void arena_reset(Arena *arena);
 

@@ -2,7 +2,6 @@
 
 #include "allocator.h"
 #include "ast.h"
-#include "diagbag.h"
 #include "scanner.h"
 #include "string_utils.h"
 
