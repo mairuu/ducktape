@@ -466,20 +466,28 @@ static bool parse_path(Parser *p, PathParseMode mode, Path *out) {
           .type_args = NULL,
       };
 
-      if (segment_count == 1 && mode == PATH_TYPE && check_tok(p, TOKEN_LT)) {
-        segment->type_arg_count = parse_type_args(p, &segment->type_args);
-        if (segment->type_arg_count < 0) {
-          return false;
+      if (mode == PATH_EXPR) {
+        // expr requires '::' before type args
+        if (check_tok(p, TOKEN_COLONCOLON) &&
+            peek_ahead(p, 1)->type == TOKEN_LT) {
+          advance_tok(p); // consume '::'
+          segment->type_arg_count = parse_type_args(p, &segment->type_args);
+          if (segment->type_arg_count < 0) {
+            return false;
+          }
         }
-        continue;
-      }
+      } else {
+        // '::' is optional
+        if (check_tok(p, TOKEN_COLONCOLON) &&
+            peek_ahead(p, 1)->type == TOKEN_LT) {
+          advance_tok(p);
+        }
 
-      if (check_tok(p, TOKEN_COLONCOLON) &&
-          peek_ahead(p, 1)->type == TOKEN_LT) {
-        advance_tok(p); // consume '::'
-        segment->type_arg_count = parse_type_args(p, &segment->type_args);
-        if (segment->type_arg_count < 0) {
-          return false;
+        if (check_tok(p, TOKEN_LT)) {
+          segment->type_arg_count = parse_type_args(p, &segment->type_args);
+          if (segment->type_arg_count < 0) {
+            return false;
+          }
         }
       }
     } while (match_tok(p, TOKEN_COLONCOLON));
