@@ -11,7 +11,7 @@ struct Module {
   Program *ast;
 
   FunDef **funs;
-  int fun_count;
+  int fun_count, fun_cap;
 
   ValueScope *vscope; // module-level values: functions, global vars
 };

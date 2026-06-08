@@ -2,6 +2,7 @@
 #include "allocator.h"
 #include "arena.h"
 #include "diag.h"
+#include "sema.h"
 #include "string_utils.h"
 
 #include <assert.h>
@@ -11,6 +12,7 @@ void compiler_init(Compiler *c, Allocator *al) {
   c->al = arena_allocator_create(&c->arena);
 
   diag_init(&c->diags, &c->al);
+  tc_init(&c->tc, &c->diags, &c->al);
 }
 
 void compiler_destroy(Compiler *c, Allocator *al) {
@@ -34,4 +36,6 @@ void compiler_run(Compiler *c, const char *path) {
     diag_report(&c->diags, c->root_module->file_path.chars,
                 c->root_module->source.chars, stderr);
   }
+
+  tc_register_module(&c->tc, c->root_module);
 }

@@ -1,14 +1,41 @@
 #pragma once
 
+#include "allocator.h"
 #include "ast.h"
+#include "diag.h"
 
+typedef struct Module Module;
 typedef struct TypeChecker TypeChecker;
 typedef struct TypeResolver TypeResolver;
 typedef struct ValueScope ValueScope;
 
 struct TypeChecker {
+  // StructDef **structs;
+  // int struct_count, struct_cap;
+
+  // EnumDef **enums;
+  // int enum_count, enum_cap;
+
+  // TraitDef **traits;
+  // int trait_count, trait_cap;
+
+  // ImplDef **impls;
+  // int impl_count, impl_cap;
+
+  FunDef **funs;
+  int fun_count, fun_cap;
+
+  Module *current_module;
+
   Type *t_int, *t_float, *t_bool, *t_string, *t_unit, *t_poison;
+
+  DiagBag *diags;
+  Allocator *al;
 };
+
+void tc_init(TypeChecker *tc, DiagBag *diags, Allocator *al);
+
+void tc_register_module(TypeChecker *tc, Module *m);
 
 typedef struct {
   StringView name;
