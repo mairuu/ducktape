@@ -114,13 +114,22 @@ static bool compiler_phase_resolve(Compiler *c) {
 
 // phase 3: type-check all bodies, in topological order.
 static bool compiler_phase_check(Compiler *c) {
-  (void)c;
-  // todo:
-  return true;
+  bool had_errors = false;
+  for (int i = 0; i < c->mod_reg.module_count; i++) {
+    Module *m = modreg_topo(&c->mod_reg, i);
+    diag_clear(&c->diags);
+
+    tc_check_module(&c->tc, m);
+    if (diag_has_diags(&c->diags)) {
+      diag_report(&c->diags, m->file_path.chars, m->source.chars, stderr);
+    }
+    had_errors |= diag_has_errors(&c->diags);
+  }
+
+  return !had_errors;
 }
 
 // run the full compilation pipeline
-// only single file for now
 void compiler_run(Compiler *c, const char *path) {
   if (!compiler_phase_discover(c, path)) {
     fprintf(stderr, "compilation failed during discovery.\n");

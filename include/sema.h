@@ -10,6 +10,7 @@ typedef struct ValueScope ValueScope;
 typedef struct TypeScope TypeScope;
 typedef struct TypeResolver TypeResolver;
 typedef struct ResolveCtx ResolveCtx;
+typedef struct CheckCtx CheckCtx;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TypeChecker
@@ -44,6 +45,8 @@ void tc_destroy(TypeChecker *tc);
 void tc_register_module(TypeChecker *tc, Module *m);
 
 bool tc_resolve_module(TypeChecker *tc, Module *m);
+
+bool tc_check_module(TypeChecker *tc, Module *m);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ValueScope
@@ -159,3 +162,25 @@ void rctx_init(ResolveCtx *rctx, TypeChecker *tc, DiagBag *diags,
 static inline Type *rctx_resolve(ResolveCtx *ctx, TypeNode *node) {
   return tyres_resolve(&ctx->tyres, node);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ResolveCtx
+// ═══════════════════════════════════════════════════════════════════════════════
+
+struct CheckCtx {
+  TypeChecker *tc;
+
+  ValueScope *vscope;
+  TypeScope *tscope;
+
+  TypeResolver tyres;
+
+  DiagBag *diags;
+  Allocator *al;
+};
+
+void cctx_init(CheckCtx *cctx, TypeChecker *tc, DiagBag *diags, Allocator *al);
+
+void cctx_open_module(CheckCtx *cctx, Module *m);
+
+void cctx_open_fun(CheckCtx *ctx, ParamDef *params, int count);
