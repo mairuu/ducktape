@@ -109,6 +109,8 @@ struct TypeScope {
   Allocator *al;
 };
 
+void tscope_init(TypeScope *scope, TypeScope *parent, Allocator *al);
+
 TypeScope *tscope_push(TypeScope *parent, Allocator *al);
 
 TypeScope *tscope_pop(TypeScope *scope);
@@ -169,6 +171,10 @@ static inline Type *rctx_resolve(ResolveCtx *ctx, TypeNode *node) {
 
 struct CheckCtx {
   TypeChecker *tc;
+
+  // current function
+  FunDef *fun;
+  Type *return_type; // expected return
 
   ValueScope *vscope;
   TypeScope *tscope;

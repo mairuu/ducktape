@@ -3,6 +3,7 @@
 #include "diag.h"
 #include "parser.h"
 #include "scanner.h"
+#include "sema.h"
 #include "string_utils.h"
 
 #include <assert.h>
@@ -12,6 +13,7 @@ Module *mod_new(StringView file_path, Allocator *al) {
   Module *m = al_alloc_zero_for(al, Module);
   m->file_path = file_path;
   vscope_init(&m->vscope, NULL, al);
+  tscope_init(&m->tscope, NULL, al);
   return m;
 }
 

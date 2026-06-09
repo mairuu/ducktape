@@ -49,8 +49,6 @@ static void tc_register_fun(TypeChecker *tc, Module *m, Decl *decl) {
   // set backpointers
   decl->as.fun_decl.def = def;
   def->module = m;
-  // define in global module scope
-  vscope_define(&m->vscope, def->name, NULL, tc->diags, decl->span);
 }
 
 void tc_register_module(TypeChecker *tc, Module *m) {
@@ -124,6 +122,9 @@ static void resolve_fun_decl(ResolveCtx *rctx, Decl *decl) {
                         fun_def->return_type, rctx->al);
 
   fun_def->fun_type = fun_ty;
+
+  vscope_define(&fun_def->module->vscope, fun_def->name, fun_def->fun_type,
+                rctx->tc->diags, decl->span);
 }
 
 static void resolve_decl(ResolveCtx *rctx, Decl *decl) {
@@ -153,28 +154,34 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint);
 
 static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
   switch (stmt->kind) {
+  case STMT_EXPR: {
+    StmtExpr *stmt_expr = &stmt->as.expr_stmt;
+    resolve_expr(ctx, stmt_expr->expr, NULL);
+    break;
+  }
   case STMT_VAR: {
     StmtVar *var = &stmt->as.var_stmt;
     Type *annot_ty = var->type_annotation
                          ? tyres_resolve(&ctx->tyres, var->type_annotation)
-                         : ty_unknown(NULL, ctx->al);
+                         : NULL;
     Type *init_ty = resolve_expr(ctx, var->initializer, annot_ty);
-
-    Type *resolved_ty = init_ty;
-    if (type_is_poison(annot_ty) || type_is_poison(init_ty)) {
-      break;
+    if (!annot_ty) {
+      annot_ty = init_ty;
     }
 
-    if (!types_equal(annot_ty, init_ty)) {
-      char annot_buf[64], init_buf[64];
-      type_sprintf(annot_ty, annot_buf, sizeof(annot_buf));
-      type_sprintf(init_ty, init_buf, sizeof(init_buf));
-      diag_error(ctx->diags, stmt->span,
-                 "type annotation '%s' does not match initializer type '%s'",
-                 annot_buf, init_buf);
-      break;
-    } else {
-      resolved_ty = annot_ty;
+    Type *resolved_ty = init_ty;
+    if (!type_is_poison(annot_ty) && !type_is_poison(init_ty)) {
+      if (!types_equal(annot_ty, init_ty)) {
+        char annot_buf[64], init_buf[64];
+        type_sprintf(annot_ty, annot_buf, sizeof(annot_buf));
+        type_sprintf(init_ty, init_buf, sizeof(init_buf));
+        diag_error(ctx->diags, stmt->span,
+                   "type annotation '%s' does not match initializer type '%s'",
+                   annot_buf, init_buf);
+        resolved_ty = ctx->tc->t_poison;
+      } else {
+        resolved_ty = annot_ty;
+      }
     }
 
     switch (var->binding.kind) {
@@ -313,6 +320,61 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     }
     break;
   }
+  case EXPR_CALL: {
+    ExprCall *call = &expr->as.call;
+
+    Type *callee_ty = resolve_expr(ctx, call->callee, NULL);
+    if (type_is_poison(callee_ty)) {
+      result = ctx->tc->t_poison;
+      break;
+    }
+
+    if (callee_ty->kind != TY_FUNCTION) {
+      char callee_buf[64];
+      type_sprintf(callee_ty, callee_buf, sizeof(callee_buf));
+      diag_error(ctx->diags, call->callee->span,
+                 "attempted to call non-function type '%s'", callee_buf);
+      result = ctx->tc->t_poison;
+      break;
+    }
+
+    int expected_argc = callee_ty->as.fun.param_count;
+    int got_argc = call->arg_count;
+    if (got_argc != expected_argc) {
+      diag_error(ctx->diags, expr->span, "expected %d arguments but got %d",
+                 expected_argc, got_argc);
+      result = ctx->tc->t_poison;
+    }
+
+    bool had_arg_error = false;
+    for (int i = 0; i < call->arg_count; i++) {
+      Type *arg_ty =
+          resolve_expr(ctx, call->args[i], callee_ty->as.fun.param_types[i]);
+      Type *param_ty = callee_ty->as.fun.param_types[i];
+
+      if (type_is_poison(arg_ty) || type_is_poison(param_ty)) {
+        had_arg_error = true;
+        continue;
+      }
+
+      if (!types_equal(arg_ty, param_ty)) {
+        char arg_buf[64], param_buf[64];
+        type_sprintf(arg_ty, arg_buf, sizeof(arg_buf));
+        type_sprintf(param_ty, param_buf, sizeof(param_buf));
+        diag_error(ctx->diags, call->args[i]->span,
+                   "type mismatch for argument %d: expected '%s' but got '%s'",
+                   i + 1, param_buf, arg_buf);
+        had_arg_error = true;
+      }
+    }
+
+    if (had_arg_error) {
+      result = ctx->tc->t_poison;
+    } else {
+      result = callee_ty->as.fun.return_type;
+    }
+    break;
+  }
   case EXPR_VAR: {
     ExprVar *var = &expr->as.var;
     VarEntry *e = vscope_lookup(ctx->vscope, var->name, &var->is_upvalue);
@@ -355,20 +417,21 @@ static void tc_check_fun(CheckCtx *cctx, Decl *decl) {
   DeclFun *fun_decl = &decl->as.fun_decl;
   FunDef *fun_def = fun_decl->def;
 
+  cctx->fun = fun_def;
+  cctx->return_type = fun_def->return_type;
+
   cctx_open_fun(cctx, fun_def->params, fun_def->param_count);
-
   resolve_expr_coerced(cctx, fun_decl->body, fun_def->return_type);
-
   cctx->vscope = vscope_pop(cctx->vscope);
 }
 
 bool tc_check_module(TypeChecker *tc, Module *m) {
   CheckCtx cctx;
   cctx_init(&cctx, tc, tc->diags, tc->al);
+  cctx_open_module(&cctx, m);
 
   for (int i = 0; i < m->ast->decl_count; i++) {
     Decl *decl = m->ast->decls[i];
-    cctx_open_module(&cctx, m);
     switch (decl->kind) {
     case DECL_FUN:
       tc_check_fun(&cctx, decl);
@@ -418,15 +481,20 @@ ValueScope *vscope_pop(ValueScope *scope) {
 // returns null if not found.
 VarEntry *vscope_lookup(ValueScope *scope, StringView name,
                         bool *out_crossed_fn) {
+  bool crossed = false;
   for (ValueScope *s = scope; s; s = s->parent) {
-    if (out_crossed_fn && s->is_fn_boundary) {
-      *out_crossed_fn = true;
-    }
-
     for (int i = 0; i < s->count; i++) {
       if (sv_equal(s->entries[i].name, name)) {
+        if (out_crossed_fn) {
+          *out_crossed_fn = crossed;
+        }
         return &s->entries[i];
       }
+    }
+    // we exhausted this scope without a hit; if it was a fn boundary,
+    // anything found beyond here is an upvalue
+    if (s->is_fn_boundary) {
+      crossed = true;
     }
   }
   return NULL;
@@ -461,10 +529,18 @@ int vscope_define(ValueScope *scope, StringView name, Type *type,
 // TypeScope
 // ═══════════════════════════════════════════════════════════════════════════════
 
-TypeScope *tscope_push(TypeScope *parent, Allocator *al) {
-  TypeScope *scope = al_alloc_zero_for(al, TypeScope);
+void tscope_init(TypeScope *scope, TypeScope *parent, Allocator *al) {
+  scope->entries = NULL;
+  scope->count = 0;
+  scope->cap = 0;
+
   scope->parent = parent;
   scope->al = al;
+}
+
+TypeScope *tscope_push(TypeScope *parent, Allocator *al) {
+  TypeScope *scope = al_alloc_zero_for(al, TypeScope);
+  tscope_init(scope, parent, al);
   return scope;
 }
 
@@ -485,7 +561,20 @@ TypeEntry *tscope_lookup(TypeScope *scope, StringView name) {
 // define in the current (top) scope.
 // emits a diagnostic if the name is already defined in this exact scope.
 void tscope_define(TypeScope *scope, StringView name, Type *type,
-                   DiagBag *diags, Span span);
+                   DiagBag *diags, Span span) {
+  // optional: check for shadowing in current scope only
+  (void)diags;
+  (void)span;
+
+  if (scope->count >= scope->cap) {
+    int new_cap = scope->cap == 0 ? 4 : scope->cap * 2;
+    scope->entries =
+        al_realloc(scope->al, scope->entries, sizeof(TypeEntry) * scope->cap,
+                   sizeof(TypeEntry) * new_cap);
+    scope->cap = new_cap;
+  }
+  scope->entries[scope->count++] = (TypeEntry){.name = name, .type = type};
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TypeResolver
