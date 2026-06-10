@@ -345,12 +345,40 @@ static void tc_register_fun(TypeChecker *tc, Module *m, Decl *decl) {
   def->module = m;
 }
 
+static void tc_register_struct(TypeChecker *tc, Module *m, Decl *decl) {
+  assert(decl->kind == DECL_STRUCT && "expected struct decl");
+
+  DeclStruct *struct_decl = &decl->as.struct_decl;
+  assert(m->struct_cap > m->struct_count && "struct capacity exceeded");
+
+  StructDef *def = al_alloc_zero_for(tc->al, StructDef);
+  // stub
+  def->is_pub = decl->is_pub;
+  def->is_tuple = struct_decl->is_tuple;
+  def->name = struct_decl->name;
+  def->field_count = struct_decl->field_count;
+  def->fields =
+      al_alloc_zero(tc->al, sizeof(FieldDef) * struct_decl->field_count);
+  def->type_param_count = struct_decl->type_param_count;
+  def->type_params =
+      al_alloc_zero(tc->al, sizeof(StringView) * struct_decl->type_param_count);
+
+  // register in module
+  m->structs[m->struct_count++] = def;
+  // set backpointers
+  decl->as.struct_decl.def = def;
+  def->module = m;
+}
+
 void tc_register_module(TypeChecker *tc, Module *m) {
   // counts
   for (int i = 0; i < m->ast->decl_count; i++) {
     switch (m->ast->decls[i]->kind) {
     case DECL_FUN:
       m->fun_cap++;
+      break;
+    case DECL_STRUCT:
+      m->struct_cap++;
       break;
     default:
       assert(false && "unhandled decl kind in tc_register_module");
@@ -359,7 +387,7 @@ void tc_register_module(TypeChecker *tc, Module *m) {
 
   // allocate
   m->funs = al_alloc_zero(tc->al, sizeof(FunDef *) * m->fun_cap);
-  assert(m->funs && "out of memory");
+  m->structs = al_alloc_zero(tc->al, sizeof(StructDef *) * m->struct_cap);
 
   // populate
   for (int i = 0; i < m->ast->decl_count; i++) {
@@ -367,6 +395,9 @@ void tc_register_module(TypeChecker *tc, Module *m) {
     switch (decl->kind) {
     case DECL_FUN:
       tc_register_fun(tc, m, decl);
+      break;
+    case DECL_STRUCT:
+      tc_register_struct(tc, m, decl);
       break;
     default:
       assert(false && "unhandled decl kind in tc_register_module");
@@ -434,10 +465,61 @@ static void resolve_fun_decl(ResolveCtx *rctx, Decl *decl) {
   te->as.fun_def = fun_def;
 }
 
+static void resolve_struct_decl(ResolveCtx *rctx, Decl *decl) {
+  assert(decl->kind == DECL_STRUCT && "expected struct decl");
+  DeclStruct *struct_decl = &decl->as.struct_decl;
+  StructDef *struct_def = struct_decl->def;
+
+  for (int i = 0; i < struct_decl->type_param_count; i++) {
+    if (struct_decl->type_params[i].inline_bound.refs != NULL) {
+      diag_error(rctx->diags, struct_decl->type_params[i].span,
+                 "inline bounds on struct type parameters are not supported");
+    }
+    struct_def->type_params[i] =
+        ty_generic(struct_decl->type_params[i].name, NULL, 0, rctx->al);
+  }
+
+  // begin struct local type scope
+  rctx->tyres.tscope = tscope_push(rctx->tyres.tscope, rctx->al);
+
+  for (int i = 0; i < struct_def->type_param_count; i++) {
+    tscope_define(rctx->tyres.tscope, struct_decl->type_params[i].name,
+                  struct_def->type_params[i], rctx->diags,
+                  struct_decl->type_params[i].span, NULL);
+  }
+
+  TypeScratch field_types;
+  ts_init(&field_types, struct_decl->field_count, rctx->al);
+  for (int i = 0; i < struct_decl->field_count; i++) {
+    field_types.ptr[i] =
+        rctx_resolve(rctx, struct_decl->fields[i].type_annotation);
+    if (struct_def->is_tuple) {
+      struct_def->fields[i].ident.index = struct_decl->fields[i].ident.index;
+    } else {
+      struct_def->fields[i].ident.name = struct_decl->fields[i].ident.name;
+    }
+  }
+
+  // end struct local type scope
+  rctx->tyres.tscope = tscope_pop(rctx->tyres.tscope);
+
+  Type *struct_ty =
+      ty_struct(struct_def, field_types.ptr, field_types.count, rctx->al);
+  struct_def->self_type = struct_ty;
+
+  TypeEntry *te = NULL;
+  tscope_define(rctx->tyres.tscope, struct_def->name, struct_ty, rctx->diags,
+                decl->span, &te);
+  te->as.struct_def = struct_def;
+}
+
 static void resolve_decl(ResolveCtx *rctx, Decl *decl) {
   switch (decl->kind) {
   case DECL_FUN:
     resolve_fun_decl(rctx, decl);
+    break;
+  case DECL_STRUCT:
+    resolve_struct_decl(rctx, decl);
     break;
   default:
     assert(false && "unhandled decl kind in resolve_decl");
@@ -818,6 +900,10 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     result = r.type;
     break;
   }
+  case EXPR_STRUCT_INIT: {
+    assert(false && "unhandled expr kind in resolve_expr");
+    break;
+  }
   default:
     assert(false && "unhandled expr kind in resolve_expr");
   }
@@ -879,6 +965,8 @@ bool tc_check_module(TypeChecker *tc, Module *m) {
     switch (decl->kind) {
     case DECL_FUN:
       tc_check_fun(tc, decl);
+      break;
+    case DECL_STRUCT:
       break;
     default:
       assert(false && "unhandled decl kind in tc_check_module");
