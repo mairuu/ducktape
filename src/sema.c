@@ -104,7 +104,8 @@ Type *subst_apply(const Subst *s, Type *t, Allocator *al) {
   }
 }
 
-Subst infer_open_generics(InferCtx *ctx, Type **type_params, int count,
+Subst infer_open_generics(InferCtx *ctx, Type **type_params,
+                          Type **type_args /* nullable */, int count,
                           Allocator *al) {
   if (count == 0) {
     return subst_empty();
@@ -114,7 +115,10 @@ Subst infer_open_generics(InferCtx *ctx, Type **type_params, int count,
   for (int i = 0; i < count; i++) {
     assert(type_params[i]->kind == TY_GENERIC);
     names[i] = type_params[i]->as.generic.name;
-    args[i] = infer_fresh(ctx, NULL); // TODO: pass bound from generic.bounds
+    args[i] =
+        type_args
+            ? type_args[i]
+            : infer_fresh(ctx, NULL); // TODO: pass bound from generic.bounds
   }
   Subst s;
   subst_init(&s, names, args, count);
@@ -167,22 +171,23 @@ bool infer_unify(InferCtx *ctx, Type *a, Type *b, DiagBag *diags, Span span) {
   a = infer_find(ctx, a);
   b = infer_find(ctx, b);
 
-  if (a == b)
+  if (a == b) {
     return true;
+  }
 
   if (a->kind == TY_UNKNOWN) {
-    if (ctx->table[a->as.unknown.id] &&
-        report_type_mismatch(ctx->table[a->as.unknown.id], b, diags, span)) {
-      return false;
-    }
+    // if (ctx->table[a->as.unknown.id] &&
+    //     report_type_mismatch(ctx->table[a->as.unknown.id], b, diags, span)) {
+    //   return false;
+    // }
     ctx->table[a->as.unknown.id] = b;
     return true;
   }
   if (b->kind == TY_UNKNOWN) {
-    if (ctx->table[b->as.unknown.id] &&
-        report_type_mismatch(ctx->table[b->as.unknown.id], a, diags, span)) {
-      return false;
-    }
+    // if (ctx->table[b->as.unknown.id] &&
+    //     report_type_mismatch(ctx->table[b->as.unknown.id], a, diags, span)) {
+    //   return false;
+    // }
     ctx->table[b->as.unknown.id] = a;
     return true;
   }
@@ -391,7 +396,7 @@ static void resolve_fun_decl(ResolveCtx *rctx, Decl *decl) {
   for (int i = 0; i < fun_def->type_param_count; i++) {
     tscope_define(rctx->tyres.tscope, fun_decl->type_params[i].name,
                   fun_def->type_params[i], rctx->diags,
-                  fun_decl->type_params[i].span);
+                  fun_decl->type_params[i].span, NULL);
   }
 
   TypeScratch param_types;
@@ -417,11 +422,16 @@ static void resolve_fun_decl(ResolveCtx *rctx, Decl *decl) {
 
   fun_def->fun_type = fun_ty;
 
-  VarEntry *entry = NULL;
+  VarEntry *ve = NULL;
   vscope_define(&fun_def->module->vscope, fun_def->name, fun_def->fun_type,
-                rctx->tc->diags, decl->span, &entry);
-  assert(entry && "failed to define function in value scope");
-  entry->as.fun = fun_def;
+                rctx->tc->diags, decl->span, &ve);
+  assert(ve && "failed to define function in value scope");
+  ve->as.fun = fun_def;
+
+  TypeEntry *te = NULL;
+  tscope_define(rctx->tyres.tscope, fun_def->name, fun_ty, rctx->diags,
+                decl->span, &te);
+  te->as.fun_def = fun_def;
 }
 
 static void resolve_decl(ResolveCtx *rctx, Decl *decl) {
@@ -498,30 +508,50 @@ static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
 }
 
 static Type *resolve_callee(CheckCtx *ctx, Expr *callee, FunDef **out_def) {
-  if (callee->kind != EXPR_VAR) {
-    return resolve_expr(ctx, callee, NULL);
+  if (callee->kind == EXPR_VAR) {
+    ExprVar *var = &callee->as.var;
+    VarEntry *e = vscope_lookup(ctx->vscope, var->name, &var->is_upvalue);
+    if (!e) {
+      return resolve_expr(ctx, callee, NULL); // use EXPR_VAR as a probe
+    }
+
+    switch (e->type->kind) {
+    case TY_FUNCTION:
+      assert(out_def && "out_def is null");
+      *out_def = e->as.fun;
+      return e->type;
+    default: {
+      char ty_buf[64];
+      type_sprintf(e->type, ty_buf, sizeof(ty_buf));
+      diag_error(ctx->diags, callee->span,
+                 "cannot call '" SV_FMT "' of type '%s'", SV_ARG(var->name),
+                 ty_buf);
+      return ctx->tc->t_poison;
+    }
+    }
   }
 
-  ExprVar *var = &callee->as.var;
-  VarEntry *e = vscope_lookup(ctx->vscope, var->name, &var->is_upvalue);
-  if (!e) {
-    return resolve_expr(ctx, callee, NULL); // use EXPR_VAR as a probe
+  if (callee->kind == EXPR_PATH) {
+    PathRes r;
+    if (!cctx_resolve_path(ctx, &callee->as.path_expr.path, &r)) {
+      diag_error(ctx->diags, callee->span, "unresolved path");
+      return ctx->tc->t_poison;
+    }
+    switch (r.type->kind) {
+    case TY_FUNCTION:
+      *out_def = r.as.method.fun;
+      return r.type;
+    default: {
+      char ty_buf[64];
+      type_sprintf(r.type, ty_buf, sizeof(ty_buf));
+      diag_error(ctx->diags, callee->span, "cannot call path of type '%s'",
+                 ty_buf);
+      return ctx->tc->t_poison;
+    }
+    }
   }
 
-  switch (e->type->kind) {
-  case TY_FUNCTION:
-    assert(out_def && "out_def is null");
-    *out_def = e->as.fun;
-    return e->type;
-  default: {
-    char ty_buf[64];
-    type_sprintf(e->type, ty_buf, sizeof(ty_buf));
-    diag_error(ctx->diags, callee->span,
-               "cannot call '" SV_FMT "' of type '%s'", SV_ARG(var->name),
-               ty_buf);
-    return ctx->tc->t_poison;
-  }
-  }
+  return resolve_expr(ctx, callee, NULL);
 }
 
 static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
@@ -567,6 +597,11 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     Type *rhs = resolve_expr(ctx, binary->right, NULL);
 
     if (type_is_poison(lhs) || type_is_poison(rhs)) {
+      return ctx->tc->t_poison;
+    }
+
+    if (lhs->kind == TY_GENERIC && rhs->kind == TY_GENERIC) {
+      // todo:
       return ctx->tc->t_poison;
     }
 
@@ -647,8 +682,8 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   case EXPR_CALL: {
     ExprCall *call = &expr->as.call;
 
-    FunDef *callee_def = NULL;
-    Type *callee_ty = resolve_callee(ctx, call->callee, &callee_def);
+    FunDef *fun_def = NULL;
+    Type *callee_ty = resolve_callee(ctx, call->callee, &fun_def);
     if (type_is_poison(callee_ty)) {
       result = ctx->tc->t_poison;
       break;
@@ -663,41 +698,102 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       break;
     }
 
+    // check arity
     int expected_argc = callee_ty->as.fun.param_count;
     int got_argc = call->arg_count;
     if (got_argc != expected_argc) {
       diag_error(ctx->diags, expr->span, "expected %d arguments but got %d",
                  expected_argc, got_argc);
       result = ctx->tc->t_poison;
+      break;
     }
 
-    bool had_arg_error = false;
+    // check generic
+    bool is_generic = fun_def && fun_def->type_param_count > 0;
+    Subst subst;
+
+    if (is_generic) {
+      TypeScratch type_args;
+      ts_init(&type_args, fun_def->type_param_count, ctx->al);
+      bool had_explicit_args = false;
+
+      if (call->callee->kind == EXPR_PATH) {
+        Path *path = &call->callee->as.path_expr.path;
+        PathSegment *last_seg = &path->segments[path->count - 1];
+        had_explicit_args = true;
+
+        if (last_seg->type_arg_count != type_args.count) {
+          diag_error(ctx->diags, call->callee->span,
+                     "expected %d type arguments but got %d",
+                     fun_def->type_param_count, last_seg->type_arg_count);
+          result = ctx->tc->t_poison;
+          break;
+        }
+
+        bool type_arg_error = false;
+        for (int i = 0; i < type_args.count; i++) {
+          type_args.ptr[i] = tyres_resolve(&ctx->tyres, last_seg->type_args[i]);
+          if (type_is_poison(type_args.ptr[i])) {
+            type_arg_error = true;
+            break;
+          }
+        }
+        if (type_arg_error) {
+          result = ctx->tc->t_poison;
+          break;
+        }
+      }
+      subst = infer_open_generics(&ctx->infer, fun_def->type_params,
+                                  had_explicit_args ? type_args.ptr : NULL,
+                                  fun_def->type_param_count, ctx->al);
+    } else {
+      subst = subst_empty();
+    }
+
+    // check arguments
+    bool had_error = false;
     for (int i = 0; i < call->arg_count; i++) {
+      Type *param_ty = callee_ty->as.fun.param_types[i];
+      if (is_generic) {
+        param_ty = subst_apply(&subst, param_ty, ctx->al);
+      }
+
       Type *arg_ty =
           resolve_expr(ctx, call->args[i], callee_ty->as.fun.param_types[i]);
-      Type *param_ty = callee_ty->as.fun.param_types[i];
 
       if (type_is_poison(arg_ty) || type_is_poison(param_ty)) {
-        had_arg_error = true;
+        had_error = true;
         continue;
       }
 
-      if (!types_equal(arg_ty, param_ty)) {
-        char arg_buf[64], param_buf[64];
-        type_sprintf(arg_ty, arg_buf, sizeof(arg_buf));
-        type_sprintf(param_ty, param_buf, sizeof(param_buf));
-        diag_error(ctx->diags, call->args[i]->span,
-                   "type mismatch for argument %d: expected '%s' but got '%s'",
-                   i + 1, param_buf, arg_buf);
-        had_arg_error = true;
+      if (is_generic) {
+        had_error |= !infer_unify(&ctx->infer, arg_ty, param_ty, ctx->diags,
+                                  call->args[i]->span);
+      } else {
+        if (!types_equal(arg_ty, param_ty)) {
+          char ab[64], pb[64];
+          type_sprintf(arg_ty, ab, sizeof(ab));
+          type_sprintf(param_ty, pb, sizeof(pb));
+          diag_error(ctx->diags, call->args[i]->span,
+                     "argument %d: expected '%s' but got '%s'", i + 1, pb, ab);
+          had_error = true;
+        }
       }
     }
 
-    if (had_arg_error) {
+    if (had_error) {
       result = ctx->tc->t_poison;
-    } else {
-      result = callee_ty->as.fun.return_type;
+      break;
     }
+
+    Type *ret_ty = callee_ty->as.fun.return_type;
+    if (is_generic) {
+      ret_ty = subst_apply(&subst, ret_ty, ctx->al); // into unsolved unknowns
+      ret_ty =
+          infer_apply(&ctx->infer, ret_ty, ctx->al); // apply solved unknowns
+    }
+
+    result = ret_ty;
     break;
   }
   case EXPR_VAR: {
@@ -711,6 +807,15 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       result = e->type;
       var->resolved_slot = e->slot;
     }
+    break;
+  }
+  case EXPR_PATH: {
+    PathRes r;
+    if (!cctx_resolve_path(ctx, &expr->as.path_expr.path, &r)) {
+      diag_error(ctx->diags, expr->span, "unresolved path");
+      result = ctx->tc->t_poison;
+    }
+    result = r.type;
     break;
   }
   default:
@@ -749,7 +854,7 @@ static void tc_check_fun(TypeChecker *tc, Decl *decl) {
   for (int i = 0; i < fun_def->type_param_count; i++) {
     tscope_define(cctx.tyres.tscope, fun_decl->type_params[i].name,
                   fun_def->type_params[i], cctx.diags,
-                  fun_decl->type_params[i].span);
+                  fun_decl->type_params[i].span, NULL);
   }
 
   // begin var scope
@@ -903,7 +1008,7 @@ TypeEntry *tscope_lookup(TypeScope *scope, StringView name) {
 // define in the current (top) scope.
 // emits a diagnostic if the name is already defined in this exact scope.
 void tscope_define(TypeScope *scope, StringView name, Type *type,
-                   DiagBag *diags, Span span) {
+                   DiagBag *diags, Span span, TypeEntry **ref /*nullable*/) {
   // optional: check for shadowing in current scope only
   (void)diags;
   (void)span;
@@ -916,6 +1021,9 @@ void tscope_define(TypeScope *scope, StringView name, Type *type,
     scope->cap = new_cap;
   }
   scope->entries[scope->count++] = (TypeEntry){.name = name, .type = type};
+  if (ref) {
+    *ref = &scope->entries[scope->count - 1];
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1028,4 +1136,57 @@ void cctx_init(CheckCtx *cctx, TypeChecker *tc, Module *m, DiagBag *diags,
   cctx->tscope = &m->tscope;
 
   cctx->tyres.tscope = cctx->tscope;
+}
+
+typedef enum {
+  PATHRES_CTX_SCOPE,
+} PathResCtxKind;
+
+typedef struct {
+  PathResCtxKind kind;
+} PathResCtx;
+
+bool cctx_resolve_path(CheckCtx *ctx, Path *path, PathRes *out_res) {
+  assert(out_res && "out_res is null");
+  PathResCtx res_ctx = {.kind = PATHRES_CTX_SCOPE};
+  memset(out_res, 0, sizeof(*out_res));
+
+  for (int i = 0; i < path->count; i++) {
+    StringView segment = path->segments[i].name;
+    bool is_last = (i == path->count - 1);
+
+    switch (res_ctx.kind) {
+    case PATHRES_CTX_SCOPE: {
+      TypeEntry *te = tscope_lookup(ctx->tscope, segment);
+      if (!te) {
+        diag_error(ctx->diags, path->span, "unknown type '" SV_FMT "' in path",
+                   SV_ARG(segment));
+        return false;
+      }
+      switch (te->type->kind) {
+      case TY_FUNCTION: {
+        if (!is_last) {
+          diag_error(ctx->diags, path->span,
+                     "cannot access member '" SV_FMT "' of function type",
+                     SV_ARG(segment));
+          return false;
+        }
+        out_res->kind = PATH_RES_METHOD;
+        out_res->type = te->type;
+        out_res->as.method.fun = te->as.fun_def;
+        return true;
+      }
+      default:
+        assert(false &&
+               "unhandled type kind in cctx_resolve_path PATHRES_SCOPE");
+        return false;
+      }
+    }
+    default:
+      assert(false && "unhandled PathResKind in cctx_resolve_path");
+      return false;
+    }
+  }
+
+  return false;
 }

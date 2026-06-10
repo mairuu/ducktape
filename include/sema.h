@@ -33,7 +33,12 @@ void subst_init(Subst *s, StringView *params, Type **args, int count);
 // unmatched generics pass through unchanged.
 Type *subst_apply(const Subst *s, Type *t, Allocator *al);
 
-Subst infer_open_generics(InferCtx *ctx, Type **type_params, int param_count,
+// instantiate a generic item: for each TY_GENERIC in `type_params`, create
+// a fresh TY_UNKNOWN or use the provided type argument (in case of explicit
+// type arguments) and build a Subst. after unification, apply infer_apply to
+// the substituted return type to read out the inferred type arguments.
+Subst infer_open_generics(InferCtx *ctx, Type **type_params,
+                          Type **type_args /* nullable */, int param_count,
                           Allocator *al);
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -74,24 +79,6 @@ Type *infer_apply(InferCtx *ctx, Type *ty, Allocator *al);
 // After checking a function body: ensure every TY_UNKNOWN is solved.
 // emits "type annotation needed" for any that remain free.
 void infer_finalize(InferCtx *ctx, DiagBag *diags, Span scope_span);
-
-// Instantiate a generic item: for each TY_GENERIC in `type_params`, create
-// a fresh TY_UNKNOWN and build a Subst.  After unification, apply infer_apply
-// to the substituted return type to read out the inferred type arguments.
-//
-// Typical usage at a generic call site:
-//
-//   Subst s = infer_open_generics(&ctx->infer, fun->type_params,
-//                                 fun->type_param_count, ctx->al);
-//   for (int i = 0; i < arg_count; i++) {
-//       Type *expected = subst_apply(&s, fun->params[i].param_type, ctx->al);
-//       infer_unify(&ctx->infer, actual_arg_types[i], expected, …);
-//   }
-//   Type *ret = infer_apply(&ctx->infer,
-//                           subst_apply(&s, fun->return_type, ctx->al),
-//                           ctx->al);
-Subst infer_open_generics(InferCtx *ctx, Type **type_params, int param_count,
-                          Allocator *al);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TypeChecker
@@ -181,6 +168,12 @@ int vscope_define(ValueScope *scope, StringView name, Type *type,
 typedef struct {
   StringView name;
   Type *type;
+  union {
+    FunDef *fun_def;       // when type.kind == TY_FUN
+    StructDef *struct_def; // when type.kind == TY_STRUCT
+    EnumDef *enum_def;     // when type.kind == TY_ENUM
+    TraitDef *trait_def;   // when type.kind == TY_TRAIT
+  } as;                    // payload for certain kinds of entries
 } TypeEntry;
 
 struct TypeScope {
@@ -205,7 +198,7 @@ TypeEntry *tscope_lookup(TypeScope *scope, StringView name);
 // define in the current (top) scope.
 // emits a diagnostic if the name is already defined in this exact scope.
 void tscope_define(TypeScope *scope, StringView name, Type *type,
-                   DiagBag *diags, Span span);
+                   DiagBag *diags, Span span, TypeEntry **ref /*nullable*/);
 
 // convenience: push a new scope, create a TY_GENERIC for every TypeParamNode,
 // and define them.  Bounds are left empty; call tyres_resolve_bounds()
@@ -272,4 +265,21 @@ struct CheckCtx {
   Allocator *al;
 };
 
-void cctx_init(CheckCtx *cctx, TypeChecker *tc, Module *m, DiagBag *diags, Allocator *al);
+void cctx_init(CheckCtx *cctx, TypeChecker *tc, Module *m, DiagBag *diags,
+               Allocator *al);
+
+typedef enum {
+  PATH_RES_METHOD,
+} PathResKind;
+
+typedef struct {
+  PathResKind kind;
+  Type *type;
+  union {
+    struct {
+      FunDef *fun;
+    } method;
+  } as;
+} PathRes;
+
+bool cctx_resolve_path(CheckCtx *ctx, Path *path, PathRes *out_res);
