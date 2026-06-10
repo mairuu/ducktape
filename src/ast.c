@@ -239,13 +239,12 @@ Type *ty_poison(void) {
   return &poison;
 }
 
-Type *ty_unknown(Type *bound, Allocator *al) {
-  static uint32_t count = 0;
+Type *ty_unknown(uint32_t id, Type *bound, Allocator *al) {
   Type *t = al_alloc_zero_for(al, Type);
   t->kind = TY_UNKNOWN;
-  t->as.unknown.id = ++count;
+  t->as.unknown.id = id;
   t->as.unknown.bound = bound;
-  return t; // unkowns are not interned
+  return t;
 }
 
 Type *ty_fun(Type **params, int param_count, Type *ret, Allocator *al) {

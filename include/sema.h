@@ -5,12 +5,93 @@
 #include "diag.h"
 
 typedef struct Module Module;
+typedef struct Subst Subst;
+typedef struct InferCtx InferCtx;
 typedef struct TypeChecker TypeChecker;
 typedef struct ValueScope ValueScope;
 typedef struct TypeScope TypeScope;
 typedef struct TypeResolver TypeResolver;
 typedef struct ResolveCtx ResolveCtx;
 typedef struct CheckCtx CheckCtx;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Substitution
+// ═══════════════════════════════════════════════════════════════════════════════
+
+struct Subst {
+  StringView *params; // param names, e.g. ["T", "U", "V"]
+  Type **args;        // replacement types — parallel array, same length
+  int count;
+};
+
+static inline Subst subst_empty(void) { return (Subst){0}; }
+
+// build a substitution from two parallel arrays of equal length.
+void subst_init(Subst *s, StringView *params, Type **args, int count);
+
+// recursively replace TY_GENERIC nodes whose .name matches an entry.
+// unmatched generics pass through unchanged.
+Type *subst_apply(const Subst *s, Type *t, Allocator *al);
+
+Subst infer_open_generics(InferCtx *ctx, Type **type_params, int param_count,
+                          Allocator *al);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Inference
+// ═══════════════════════════════════════════════════════════════════════════════
+
+struct InferCtx {
+  Type **table;     // table[id] — dynamically grown
+  int cap;          // allocated slot count
+  uint32_t next_id; // next fresh id
+  Allocator *al;
+};
+
+void infer_init(InferCtx *ctx, Allocator *al);
+
+// allocate a fresh TY_UNKNOWN with an optional trait bound.
+Type *infer_fresh(InferCtx *ctx, Type *bound /*nullable*/);
+
+// walk redirects (with path compression) to the canonical root.
+Type *infer_find(InferCtx *ctx, Type *ty);
+
+// structurally unify two types.
+//   • If either side is a free TY_UNKNOWN, bind it to the other.
+//   • If both are concrete and compatible, recurse into children.
+//   • On mismatch, emit a diagnostic and return false.
+// callers should treat a false return as a signal to propagate ty_poison().
+bool infer_unify(InferCtx *ctx, Type *a, Type *b, DiagBag *diags, Span span);
+
+// convenience: unify a TY_UNKNOWN with a known expected type and return
+// the resolved type (or ty_poison() on failure).
+Type *infer_expect(InferCtx *ctx, Type *inferred, Type *expected,
+                   DiagBag *diags, Span span);
+
+// deeply apply all current solutions. free TY_UNKNOWNs stay as-is;
+// the caller can call infer_finalize afterwards to report them as errors.
+Type *infer_apply(InferCtx *ctx, Type *ty, Allocator *al);
+
+// After checking a function body: ensure every TY_UNKNOWN is solved.
+// emits "type annotation needed" for any that remain free.
+void infer_finalize(InferCtx *ctx, DiagBag *diags, Span scope_span);
+
+// Instantiate a generic item: for each TY_GENERIC in `type_params`, create
+// a fresh TY_UNKNOWN and build a Subst.  After unification, apply infer_apply
+// to the substituted return type to read out the inferred type arguments.
+//
+// Typical usage at a generic call site:
+//
+//   Subst s = infer_open_generics(&ctx->infer, fun->type_params,
+//                                 fun->type_param_count, ctx->al);
+//   for (int i = 0; i < arg_count; i++) {
+//       Type *expected = subst_apply(&s, fun->params[i].param_type, ctx->al);
+//       infer_unify(&ctx->infer, actual_arg_types[i], expected, …);
+//   }
+//   Type *ret = infer_apply(&ctx->infer,
+//                           subst_apply(&s, fun->return_type, ctx->al),
+//                           ctx->al);
+Subst infer_open_generics(InferCtx *ctx, Type **type_params, int param_count,
+                          Allocator *al);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TypeChecker
@@ -57,6 +138,9 @@ typedef struct {
   Type *type;
   int slot;         // local slot or global slot (< 0)
   bool is_captured; // set when a nested closure captures this binding
+  union {
+    FunDef *fun; // when type.kind == TY_FUN
+  } as;          // payload for certain kinds of entries
 } VarEntry;
 
 struct ValueScope {
@@ -88,7 +172,7 @@ VarEntry *vscope_lookup(ValueScope *scope, StringView name,
 // define a new binding; assigns the next slot.  returns the assigned slot.
 // emits a diagnostic and returns -1 if the name already exists in this scope.
 int vscope_define(ValueScope *scope, StringView name, Type *type,
-                  DiagBag *diags, Span span);
+                  DiagBag *diags, Span span, VarEntry **ref /*nullable*/);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TypeScope
@@ -176,6 +260,9 @@ struct CheckCtx {
   FunDef *fun;
   Type *return_type; // expected return
 
+  // type inference
+  InferCtx infer;
+
   ValueScope *vscope;
   TypeScope *tscope;
 
@@ -185,8 +272,4 @@ struct CheckCtx {
   Allocator *al;
 };
 
-void cctx_init(CheckCtx *cctx, TypeChecker *tc, DiagBag *diags, Allocator *al);
-
-void cctx_open_module(CheckCtx *cctx, Module *m);
-
-void cctx_open_fun(CheckCtx *ctx, ParamDef *params, int count);
+void cctx_init(CheckCtx *cctx, TypeChecker *tc, Module *m, DiagBag *diags, Allocator *al);

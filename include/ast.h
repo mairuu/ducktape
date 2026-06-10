@@ -129,7 +129,7 @@ Type *ty_string(void);
 Type *ty_unit(void);
 Type *ty_poison(void);
 
-Type *ty_unknown(Type *bound, Allocator *al);
+Type *ty_unknown(uint32_t id, Type *bound, Allocator *al);
 Type *ty_fun(Type **params, int param_count, Type *ret, Allocator *al);
 Type *ty_tuple(Type **elems, int elem_count, Allocator *al);
 Type *ty_array(Type *elem, Allocator *al);

@@ -8,6 +8,295 @@
 #include <assert.h>
 #include <stdio.h>
 
+#define TYPE_SCRATCH_CAP 8
+
+typedef struct {
+  Type *buf[TYPE_SCRATCH_CAP];
+  Type **ptr;
+  int count;
+} TypeScratch;
+
+static void ts_init(TypeScratch *ts, int count, Allocator *al) {
+  ts->count = count;
+  ts->ptr = count <= TYPE_SCRATCH_CAP ? ts->buf
+                                      : al_alloc(al, sizeof(Type *) * count);
+  memset(ts->ptr, 0, sizeof(Type *) * count);
+  assert(ts->ptr && "out of memory");
+}
+
+// check if two types are equal, emitting a diagnostic if not.
+// return true if a mismatch was reported, false if they were equal.
+static bool report_type_mismatch(Type *expected, const Type *actual,
+                                 DiagBag *diags, Span span) {
+  if (types_equal(expected, actual)) {
+    return false;
+  }
+
+  char eb[64], ab[64];
+  type_sprintf(expected, eb, sizeof(eb));
+  type_sprintf(actual, ab, sizeof(ab));
+  diag_error(diags, span, "type mismatch: expected '%s' but got '%s'", eb, ab);
+  return true;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Substitution
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// build a substitution from two parallel arrays of equal length.
+void subst_init(Subst *s, StringView *params, Type **args, int count) {
+  *s = (Subst){.params = params, .args = args, .count = count};
+}
+
+// recursively replace TY_GENERIC nodes whose .name matches an entry.
+// unmatched generics pass through unchanged.
+Type *subst_apply(const Subst *s, Type *t, Allocator *al) {
+  if (!s->count) {
+    return t;
+  }
+
+  switch (t->kind) {
+  case TY_GENERIC:
+    for (int i = 0; i < s->count; i++) {
+      if (sv_equal(s->params[i], t->as.generic.name)) {
+        return s->args[i];
+      }
+    }
+    return t; // unmatched — pass through
+
+  case TY_INT:
+  case TY_FLOAT:
+  case TY_BOOL:
+  case TY_STRING:
+  case TY_UNIT:
+  case TY_UNKNOWN:
+  case TY_POISON:
+    return t;
+
+  case TY_FUNCTION: {
+    TypeScratch ps;
+    ts_init(&ps, t->as.fun.param_count, al);
+    bool changed = false;
+    for (int i = 0; i < t->as.fun.param_count; i++) {
+      ps.ptr[i] = subst_apply(s, t->as.fun.param_types[i], al);
+      changed |= ps.ptr[i] != t->as.fun.param_types[i];
+    }
+    Type *ret = subst_apply(s, t->as.fun.return_type, al);
+    changed |= ret != t->as.fun.return_type;
+    return changed ? ty_fun(ps.ptr, ps.count, ret, al) : t;
+  }
+  case TY_STRUCT: {
+    if (!t->as.struc.type_arg_count) {
+      return t;
+    }
+    Type **args = al_alloc(al, sizeof(Type *) * t->as.struc.type_arg_count);
+    bool changed = false;
+    for (int i = 0; i < t->as.struc.type_arg_count; i++) {
+      args[i] = subst_apply(s, t->as.struc.type_args[i], al);
+      changed |= args[i] != t->as.struc.type_args[i];
+    }
+    return changed ? ty_struct(t->as.struc.def, args,
+                               t->as.struc.type_arg_count, al)
+                   : t;
+  }
+  default:
+    return t;
+  }
+}
+
+Subst infer_open_generics(InferCtx *ctx, Type **type_params, int count,
+                          Allocator *al) {
+  if (count == 0) {
+    return subst_empty();
+  }
+  StringView *names = al_alloc(al, sizeof(StringView) * count);
+  Type **args = al_alloc(al, sizeof(Type *) * count);
+  for (int i = 0; i < count; i++) {
+    assert(type_params[i]->kind == TY_GENERIC);
+    names[i] = type_params[i]->as.generic.name;
+    args[i] = infer_fresh(ctx, NULL); // TODO: pass bound from generic.bounds
+  }
+  Subst s;
+  subst_init(&s, names, args, count);
+  return s;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Inference
+// ═══════════════════════════════════════════════════════════════════════════════
+
+void infer_init(InferCtx *ctx, Allocator *al) {
+  ctx->table = NULL;
+  ctx->cap = 0;
+  ctx->next_id = 0;
+  ctx->al = al;
+}
+
+Type *infer_fresh(InferCtx *ctx, Type *bound) {
+  uint32_t id = ctx->next_id++;
+
+  if ((int)id >= ctx->cap) {
+    int new_cap = ctx->cap == 0 ? 8 : ctx->cap * 2;
+    ctx->table = al_realloc(ctx->al, ctx->table, sizeof(Type *) * ctx->cap,
+                            sizeof(Type *) * new_cap);
+    memset(ctx->table + ctx->cap, 0, sizeof(Type *) * (new_cap - ctx->cap));
+    ctx->cap = new_cap;
+  }
+  ctx->table[id] = NULL; // unsolved
+
+  return ty_unknown(id, bound, ctx->al);
+}
+
+// walk redirects with path compression.
+Type *infer_find(InferCtx *ctx, Type *ty) {
+  if (ty->kind != TY_UNKNOWN) {
+    return ty;
+  }
+
+  Type *slot = ctx->table[ty->as.unknown.id];
+  if (!slot) {
+    return ty; // free — still unknown
+  }
+
+  Type *root = infer_find(ctx, slot);
+  ctx->table[ty->as.unknown.id] = root; // path compress
+  return root;
+}
+
+bool infer_unify(InferCtx *ctx, Type *a, Type *b, DiagBag *diags, Span span) {
+  a = infer_find(ctx, a);
+  b = infer_find(ctx, b);
+
+  if (a == b)
+    return true;
+
+  if (a->kind == TY_UNKNOWN) {
+    if (ctx->table[a->as.unknown.id] &&
+        report_type_mismatch(ctx->table[a->as.unknown.id], b, diags, span)) {
+      return false;
+    }
+    ctx->table[a->as.unknown.id] = b;
+    return true;
+  }
+  if (b->kind == TY_UNKNOWN) {
+    if (ctx->table[b->as.unknown.id] &&
+        report_type_mismatch(ctx->table[b->as.unknown.id], a, diags, span)) {
+      return false;
+    }
+    ctx->table[b->as.unknown.id] = a;
+    return true;
+  }
+
+  if (a->kind != b->kind) {
+    char ab[64], bb[64];
+    type_sprintf(a, ab, sizeof(ab));
+    type_sprintf(b, bb, sizeof(bb));
+    diag_error(diags, span, "type mismatch: expected '%s' but got '%s'", bb,
+               ab);
+    return false;
+  }
+
+  switch (a->kind) {
+  case TY_INT:
+  case TY_FLOAT:
+  case TY_BOOL:
+  case TY_STRING:
+  case TY_UNIT:
+    return true; // same kind, same singleton -> equal
+
+  case TY_FUNCTION: {
+    TypeFun *af = &a->as.fun, *bf = &b->as.fun;
+    if (af->param_count != bf->param_count) {
+      diag_error(diags, span, "function arity mismatch");
+      return false;
+    }
+    bool ok = true;
+    for (int i = 0; i < af->param_count; i++)
+      ok &=
+          infer_unify(ctx, af->param_types[i], bf->param_types[i], diags, span);
+    return ok & infer_unify(ctx, af->return_type, bf->return_type, diags, span);
+  }
+  case TY_STRUCT: {
+    TypeStruct *as = &a->as.struc, *bs = &b->as.struc;
+    if (as->def != bs->def) {
+      char ab[64], bb[64];
+      type_sprintf(a, ab, sizeof(ab));
+      type_sprintf(b, bb, sizeof(bb));
+      diag_error(diags, span, "type mismatch: '%s' vs '%s'", ab, bb);
+      return false;
+    }
+    bool ok = true;
+    for (int i = 0; i < as->type_arg_count; i++)
+      ok &= infer_unify(ctx, as->type_args[i], bs->type_args[i], diags, span);
+    return ok;
+  }
+  default:
+    assert(false && "infer_unify: unhandled kind");
+    return false;
+  }
+}
+
+// deeply replace solved unknowns, leaving free ones intact.
+Type *infer_apply(InferCtx *ctx, Type *ty, Allocator *al) {
+  ty = infer_find(ctx, ty);
+
+  switch (ty->kind) {
+  case TY_INT:
+  case TY_FLOAT:
+  case TY_BOOL:
+  case TY_STRING:
+  case TY_UNIT:
+  case TY_UNKNOWN:
+  case TY_POISON:
+  case TY_GENERIC:
+    return ty;
+
+  case TY_FUNCTION: {
+    TypeFun *f = &ty->as.fun;
+    TypeScratch ps;
+    ts_init(&ps, f->param_count, al);
+    bool changed = false;
+
+    for (int i = 0; i < f->param_count; i++) {
+      ps.ptr[i] = infer_apply(ctx, f->param_types[i], al);
+      changed |= ps.ptr[i] != f->param_types[i];
+    }
+    Type *ret = infer_apply(ctx, f->return_type, al);
+    changed |= ret != f->return_type;
+    return changed ? ty_fun(ps.ptr, ps.count, ret, al) : ty;
+  }
+  case TY_STRUCT: {
+    TypeStruct *s = &ty->as.struc;
+    if (!s->type_arg_count) {
+      return ty;
+    }
+    TypeScratch args;
+    ts_init(&args, s->type_arg_count, al);
+    bool changed = false;
+
+    for (int i = 0; i < s->type_arg_count; i++) {
+      args.ptr[i] = infer_apply(ctx, s->type_args[i], al);
+      changed |= args.ptr[i] != s->type_args[i];
+    }
+    return changed ? ty_struct(s->def, args.ptr, args.count, al) : ty;
+  }
+  default:
+    return ty;
+  }
+}
+
+void infer_finalize(InferCtx *ctx, DiagBag *diags, Span span) {
+  for (uint32_t id = 0; id < ctx->next_id; id++) {
+    Type *sol = infer_find(
+        ctx, ctx->table[id] ? ctx->table[id] : /* reconstruct unknown */ NULL);
+    (void)sol;
+    // still free (table[id] == NULL after find means unsolved)
+    if (!ctx->table[id]) {
+      diag_error(diags, span, "cannot infer type — add a type annotation");
+    }
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // TypeChecker
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -82,26 +371,28 @@ void tc_register_module(TypeChecker *tc, Module *m) {
   assert(m->fun_count == m->fun_cap && "fun count mismatch after registration");
 }
 
-#define TYPE_SCRATCH_CAP 8
-
-typedef struct {
-  Type *buf[TYPE_SCRATCH_CAP];
-  Type **ptr;
-  int count;
-} TypeScratch;
-
-static void ts_init(TypeScratch *ts, int count, Allocator *al) {
-  ts->count = count;
-  ts->ptr = count <= TYPE_SCRATCH_CAP ? ts->buf
-                                      : al_alloc(al, sizeof(Type *) * count);
-  memset(ts->ptr, 0, sizeof(Type *) * count);
-  assert(ts->ptr && "out of memory");
-}
-
 static void resolve_fun_decl(ResolveCtx *rctx, Decl *decl) {
   assert(decl->kind == DECL_FUN && "expected fun decl");
   DeclFun *fun_decl = &decl->as.fun_decl;
   FunDef *fun_def = fun_decl->def;
+
+  for (int i = 0; i < fun_decl->type_param_count; i++) {
+    if (fun_decl->type_params[i].inline_bound.refs != NULL) {
+      diag_error(rctx->diags, fun_decl->type_params[i].span,
+                 "inline bounds on function type parameters are not supported");
+    }
+    fun_def->type_params[i] =
+        ty_generic(fun_decl->type_params[i].name, NULL, 0, rctx->al);
+  }
+
+  // begin fun local type scope
+  rctx->tyres.tscope = tscope_push(rctx->tyres.tscope, rctx->al);
+
+  for (int i = 0; i < fun_def->type_param_count; i++) {
+    tscope_define(rctx->tyres.tscope, fun_decl->type_params[i].name,
+                  fun_def->type_params[i], rctx->diags,
+                  fun_decl->type_params[i].span);
+  }
 
   TypeScratch param_types;
   ts_init(&param_types, fun_decl->param_count, rctx->al);
@@ -118,13 +409,19 @@ static void resolve_fun_decl(ResolveCtx *rctx, Decl *decl) {
                              ? rctx_resolve(rctx, fun_decl->return_type)
                              : rctx->tc->t_unit;
 
+  // end fun local type scope
+  rctx->tyres.tscope = tscope_pop(rctx->tyres.tscope);
+
   Type *fun_ty = ty_fun(param_types.ptr, param_types.count,
                         fun_def->return_type, rctx->al);
 
   fun_def->fun_type = fun_ty;
 
+  VarEntry *entry = NULL;
   vscope_define(&fun_def->module->vscope, fun_def->name, fun_def->fun_type,
-                rctx->tc->diags, decl->span);
+                rctx->tc->diags, decl->span, &entry);
+  assert(entry && "failed to define function in value scope");
+  entry->as.fun = fun_def;
 }
 
 static void resolve_decl(ResolveCtx *rctx, Decl *decl) {
@@ -187,7 +484,7 @@ static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
     switch (var->binding.kind) {
     case BIND_IDENT: {
       vscope_define(ctx->vscope, var->binding.as.ident, resolved_ty, ctx->diags,
-                    stmt->span);
+                    stmt->span, NULL);
       break;
     }
     default:
@@ -197,6 +494,33 @@ static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
   }
   default:
     assert(false && "unhandled stmt kind in resolve_stmt");
+  }
+}
+
+static Type *resolve_callee(CheckCtx *ctx, Expr *callee, FunDef **out_def) {
+  if (callee->kind != EXPR_VAR) {
+    return resolve_expr(ctx, callee, NULL);
+  }
+
+  ExprVar *var = &callee->as.var;
+  VarEntry *e = vscope_lookup(ctx->vscope, var->name, &var->is_upvalue);
+  if (!e) {
+    return resolve_expr(ctx, callee, NULL); // use EXPR_VAR as a probe
+  }
+
+  switch (e->type->kind) {
+  case TY_FUNCTION:
+    assert(out_def && "out_def is null");
+    *out_def = e->as.fun;
+    return e->type;
+  default: {
+    char ty_buf[64];
+    type_sprintf(e->type, ty_buf, sizeof(ty_buf));
+    diag_error(ctx->diags, callee->span,
+               "cannot call '" SV_FMT "' of type '%s'", SV_ARG(var->name),
+               ty_buf);
+    return ctx->tc->t_poison;
+  }
   }
 }
 
@@ -323,7 +647,8 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   case EXPR_CALL: {
     ExprCall *call = &expr->as.call;
 
-    Type *callee_ty = resolve_expr(ctx, call->callee, NULL);
+    FunDef *callee_def = NULL;
+    Type *callee_ty = resolve_callee(ctx, call->callee, &callee_def);
     if (type_is_poison(callee_ty)) {
       result = ctx->tc->t_poison;
       break;
@@ -401,40 +726,54 @@ static Type *resolve_expr_coerced(CheckCtx *ctx, Expr *expr, Type *expected) {
   if (type_is_poison(actual) || type_is_poison(expected)) {
     return ctx->tc->t_poison;
   }
-  if (!types_equal(actual, expected)) {
-    char actual_buf[64], expected_buf[64];
-    type_sprintf(actual, actual_buf, sizeof(actual_buf));
-    type_sprintf(expected, expected_buf, sizeof(expected_buf));
-    diag_error(ctx->diags, expr->span, "type mismatch: expected %s but got %s",
-               expected_buf, actual_buf);
+  if (report_type_mismatch(actual, expected, ctx->diags, expr->span)) {
     return ctx->tc->t_poison;
   }
   return actual;
 }
 
-static void tc_check_fun(CheckCtx *cctx, Decl *decl) {
+static void tc_check_fun(TypeChecker *tc, Decl *decl) {
   assert(decl->kind == DECL_FUN && "expected fun decl");
   DeclFun *fun_decl = &decl->as.fun_decl;
   FunDef *fun_def = fun_decl->def;
 
-  cctx->fun = fun_def;
-  cctx->return_type = fun_def->return_type;
+  CheckCtx cctx;
+  cctx_init(&cctx, tc, fun_def->module, tc->diags, tc->al);
 
-  cctx_open_fun(cctx, fun_def->params, fun_def->param_count);
-  resolve_expr_coerced(cctx, fun_decl->body, fun_def->return_type);
-  cctx->vscope = vscope_pop(cctx->vscope);
+  cctx.fun = fun_def;
+  cctx.return_type = fun_def->return_type;
+
+  // begin type scope
+  cctx.tyres.tscope = tscope_push(cctx.tyres.tscope, cctx.al);
+
+  for (int i = 0; i < fun_def->type_param_count; i++) {
+    tscope_define(cctx.tyres.tscope, fun_decl->type_params[i].name,
+                  fun_def->type_params[i], cctx.diags,
+                  fun_decl->type_params[i].span);
+  }
+
+  // begin var scope
+  cctx.vscope = vscope_push(cctx.vscope, true, false, cctx.al);
+  for (int i = 0; i < fun_def->param_count; i++) {
+    vscope_define(cctx.vscope, fun_def->params[i].name,
+                  fun_def->params[i].param_type, cctx.diags, (Span){0}, NULL);
+  }
+
+  resolve_expr_coerced(&cctx, fun_decl->body, fun_def->return_type);
+
+  // end var scope
+  cctx.vscope = vscope_pop(cctx.vscope);
+
+  // end type scope
+  cctx.tyres.tscope = tscope_pop(cctx.tyres.tscope);
 }
 
 bool tc_check_module(TypeChecker *tc, Module *m) {
-  CheckCtx cctx;
-  cctx_init(&cctx, tc, tc->diags, tc->al);
-  cctx_open_module(&cctx, m);
-
   for (int i = 0; i < m->ast->decl_count; i++) {
     Decl *decl = m->ast->decls[i];
     switch (decl->kind) {
     case DECL_FUN:
-      tc_check_fun(&cctx, decl);
+      tc_check_fun(tc, decl);
       break;
     default:
       assert(false && "unhandled decl kind in tc_check_module");
@@ -501,7 +840,7 @@ VarEntry *vscope_lookup(ValueScope *scope, StringView name,
 }
 
 int vscope_define(ValueScope *scope, StringView name, Type *type,
-                  DiagBag *diags, Span span) {
+                  DiagBag *diags, Span span, VarEntry **ref) {
   // todo: check for duplicates or shadowing and emit diags
   (void)diags;
   (void)span;
@@ -522,6 +861,9 @@ int vscope_define(ValueScope *scope, StringView name, Type *type,
       .slot = slot,
       .is_captured = false,
   };
+  if (ref) {
+    *ref = &scope->entries[scope->count - 1];
+  }
   return slot;
 }
 
@@ -665,7 +1007,8 @@ void rctx_init(ResolveCtx *rctx, TypeChecker *tc, DiagBag *diags,
 // CheckCtx
 // ═══════════════════════════════════════════════════════════════════════════════
 
-void cctx_init(CheckCtx *cctx, TypeChecker *tc, DiagBag *diags, Allocator *al) {
+void cctx_init(CheckCtx *cctx, TypeChecker *tc, Module *m, DiagBag *diags,
+               Allocator *al) {
   memset(cctx, 0, sizeof(*cctx));
 
   cctx->tc = tc;
@@ -678,20 +1021,11 @@ void cctx_init(CheckCtx *cctx, TypeChecker *tc, DiagBag *diags, Allocator *al) {
       .diags = diags,
       .al = al,
   };
-}
 
-void cctx_open_module(CheckCtx *cctx, Module *m) {
+  infer_init(&cctx->infer, al);
+
   cctx->vscope = &m->vscope;
   cctx->tscope = &m->tscope;
 
   cctx->tyres.tscope = cctx->tscope;
-}
-
-void cctx_open_fun(CheckCtx *ctx, ParamDef *params, int count) {
-  ctx->vscope = vscope_push(ctx->vscope, true, false, ctx->al);
-
-  for (int i = 0; i < count; i++) {
-    vscope_define(ctx->vscope, params[i].name, params[i].param_type, ctx->diags,
-                  (Span){0});
-  }
 }
