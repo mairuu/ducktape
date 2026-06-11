@@ -493,6 +493,7 @@ static void resolve_struct_decl(ResolveCtx *rctx, Decl *decl) {
   for (int i = 0; i < struct_decl->field_count; i++) {
     field_types.ptr[i] =
         rctx_resolve(rctx, struct_decl->fields[i].type_annotation);
+    struct_def->fields[i].type = field_types.ptr[i];
     if (struct_def->is_tuple) {
       struct_def->fields[i].ident.index = struct_decl->fields[i].ident.index;
     } else {
@@ -902,7 +903,89 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     break;
   }
   case EXPR_STRUCT_INIT: {
-    assert(false && "unhandled expr kind in resolve_expr");
+    ExprStructInit *init = &expr->as.struct_init;
+    PathRes r;
+    if (!cctx_resolve_path(ctx, &init->path, &r)) {
+      diag_error(ctx->diags, expr->span, "unresolved path");
+      result = ctx->tc->t_poison;
+      break;
+    }
+    if (r.type->kind != TY_STRUCT) {
+      char ty_buf[64];
+      type_sprintf(r.type, ty_buf, sizeof(ty_buf));
+      diag_error(ctx->diags, expr->span,
+                 "attempted to initialize non-struct type '%s'", ty_buf);
+      result = ctx->tc->t_poison;
+      break;
+    }
+    StructDef *def = r.type->as.struc.def;
+
+    // check arity
+    int expected_field_count = def->field_count;
+    int got_field_count = init->field_count;
+    if (got_field_count != expected_field_count) {
+      diag_error(ctx->diags, expr->span,
+                 "expected %d fields but got %d in struct initializer",
+                 expected_field_count, got_field_count);
+      result = ctx->tc->t_poison;
+      break;
+    }
+
+    // check fields
+    bool had_error = false;
+    for (int i = 0; i < init->field_count; i++) {
+      FieldInit *field_init = &init->fields[i];
+      FieldDef *field_def = NULL;
+
+      // find field definition
+      if (def->is_tuple) {
+        int idx = field_init->ident.tuple_index;
+        if (idx < 0 || idx >= def->field_count) {
+          diag_error(ctx->diags, expr->span,
+                     "tuple index %d out of bounds for struct with %d fields",
+                     idx, def->field_count);
+          had_error = true;
+          continue;
+        }
+        field_def = &def->fields[idx];
+      } else {
+        StringView name = field_init->ident.name;
+        for (int j = 0; j < def->field_count; j++) {
+          if (sv_equal(def->fields[j].ident.name, name)) {
+            field_def = &def->fields[j];
+            break;
+          }
+        }
+        if (!field_def) {
+          diag_error(ctx->diags, expr->span, "unknown field '%s'",
+                     SV_ARG(name));
+          had_error = true;
+          continue;
+        }
+      }
+
+      Type *field_ty = field_def->type;
+      Type *arg_ty = resolve_expr(ctx, field_init->value, field_ty);
+      if (type_is_poison(arg_ty) || type_is_poison(field_def->type)) {
+        had_error = true;
+        continue;
+      }
+
+      // todo: use infer_unify
+      if (!types_equal(arg_ty, field_ty)) {
+        char arg_buf[64], field_buf[64];
+        StringView field_name =
+            def->is_tuple ? (StringView){0} : field_def->ident.name;
+        type_sprintf(arg_ty, arg_buf, sizeof(arg_buf));
+        type_sprintf(field_ty, field_buf, sizeof(field_buf));
+        diag_error(ctx->diags, field_init->value->span,
+                   "type mismatch for field " SV_FMT
+                   ": expected '%s' but got '%s'",
+                   SV_ARG(field_name), field_buf, arg_buf);
+        had_error = true;
+      }
+    }
+    result = had_error ? ctx->tc->t_poison : r.type;
     break;
   }
   default:
@@ -1229,10 +1312,17 @@ void cctx_init(CheckCtx *cctx, TypeChecker *tc, Module *m, DiagBag *diags,
 
 typedef enum {
   PATHRES_CTX_SCOPE,
+  PATHRES_CTX_STRUCT,
 } PathResCtxKind;
 
 typedef struct {
   PathResCtxKind kind;
+  union {
+    struct {
+      StructDef *def;
+      Type *inst;
+    } struct_;
+  } scope;
 } PathResCtx;
 
 bool cctx_resolve_path(CheckCtx *ctx, Path *path, PathRes *out_res) {
@@ -1260,22 +1350,58 @@ bool cctx_resolve_path(CheckCtx *ctx, Path *path, PathRes *out_res) {
                      SV_ARG(segment));
           return false;
         }
-        out_res->kind = PATH_RES_METHOD;
+        out_res->kind = PATHRES_METHOD;
         out_res->type = te->type;
         out_res->as.method.fun = te->as.fun_def;
         return true;
       }
-      default:
-        assert(false &&
-               "unhandled type kind in cctx_resolve_path PATHRES_SCOPE");
-        return false;
+      case TY_STRUCT: {
+        StructDef *def = te->as.struct_def;
+
+        TypeScratch type_args;
+        if (!resolve_path_segment_args(ctx, &path->segments[i], &type_args)) {
+          return false;
+        }
+
+        if (type_args.count > 0 && type_args.count != def->type_param_count) {
+          diag_error(ctx->diags, path->span,
+                     "expected %d type arguments but got %d for struct '" SV_FMT
+                     "'",
+                     def->type_param_count, type_args.count, SV_ARG(def->name));
+          return false;
+        }
+
+        Type *struct_ty =
+            (type_args.count > 0)
+                ? ty_struct(def, type_args.ptr, type_args.count, ctx->al)
+                : def->self_type;
+        if (is_last) {
+          out_res->kind = PATHRES_TYPE;
+          out_res->type = struct_ty;
+          return true;
+        }
+
+        res_ctx = (PathResCtx){
+            .kind = PATHRES_CTX_STRUCT,
+            .scope.struct_ =
+                {
+                    .def = def,
+                    .inst = struct_ty,
+                },
+        };
+        break;
       }
+      default:
+        break;
+      }
+      assert(false && "unhandled type kind in cctx_resolve_path PATHRES_SCOPE");
+      return false;
     }
     default:
-      assert(false && "unhandled PathResKind in cctx_resolve_path");
-      return false;
+      break;
     }
   }
 
+  assert(false && "unhandled PathResKind in cctx_resolve_path");
   return false;
 }
