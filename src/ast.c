@@ -828,9 +828,9 @@ void dump_expr(const Expr *e, int indent) {
   case EXPR_SELF:
     fprintf(stdout, "Self\n");
     break;
-  case EXPR_VAR:
-    fprintf(stdout, "Var: " SV_FMT "\n", SV_ARG(e->as.var.name));
-    break;
+  // case EXPR_VAR:
+  //   fprintf(stdout, "Var: " SV_FMT "\n", SV_ARG(e->as.var.name));
+  //   break;
   case EXPR_PATH:
     fprintf(stdout, "Path:\n");
     dump_path(&e->as.path_expr.path, indent + 1);

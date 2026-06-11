@@ -590,51 +590,68 @@ static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
   }
 }
 
-static Type *resolve_callee(CheckCtx *ctx, Expr *callee, FunDef **out_def) {
-  if (callee->kind == EXPR_VAR) {
-    ExprVar *var = &callee->as.var;
-    VarEntry *e = vscope_lookup(ctx->vscope, var->name, &var->is_upvalue);
-    if (!e) {
-      return resolve_expr(ctx, callee, NULL); // use EXPR_VAR as a probe
-    }
+static Type *rewrite_tuple_struct_call(CheckCtx *ctx, Expr *expr,
+                                       StructDef *struct_def) {
+  assert(expr->kind == EXPR_CALL);
+  assert(expr->as.call.callee->kind == EXPR_PATH);
 
-    switch (e->type->kind) {
-    case TY_FUNCTION:
-      assert(out_def && "out_def is null");
-      *out_def = e->as.fun;
-      return e->type;
-    default: {
-      char ty_buf[64];
-      type_sprintf(e->type, ty_buf, sizeof(ty_buf));
-      diag_error(ctx->diags, callee->span,
-                 "cannot call '" SV_FMT "' of type '%s'", SV_ARG(var->name),
-                 ty_buf);
-      return ctx->tc->t_poison;
-    }
-    }
+  FieldInit *field_inits =
+      al_alloc_zero(ctx->al, sizeof(FieldInit) * struct_def->field_count);
+  for (int i = 0; i < struct_def->field_count; i++) {
+    field_inits[i].ident.tuple_index = i;
+    field_inits[i].value = expr->as.call.args[i];
   }
 
-  if (callee->kind == EXPR_PATH) {
-    PathRes r;
-    if (!cctx_resolve_path(ctx, &callee->as.path_expr.path, &r)) {
-      diag_error(ctx->diags, callee->span, "unresolved path");
-      return ctx->tc->t_poison;
-    }
-    switch (r.type->kind) {
-    case TY_FUNCTION:
-      *out_def = r.as.method.fun;
-      return r.type;
-    default: {
+  ExprStructInit init = {
+      .path = expr->as.call.callee->as.path_expr.path,
+      .field_count = struct_def->field_count,
+      .fields = field_inits,
+  };
+
+  *expr = (Expr){
+      .kind = EXPR_STRUCT_INIT,
+      .span = expr->span,
+      .as.struct_init = init,
+  };
+  return struct_def->self_type;
+}
+
+static Type *resolve_callee(CheckCtx *ctx, Expr *expr, FunDef **out_def) {
+  assert(expr->kind == EXPR_CALL);
+  Expr *callee = expr->as.call.callee;
+
+  if (callee->kind != EXPR_PATH) {
+    return resolve_expr(ctx, callee, NULL);
+  }
+
+  PathRes r;
+  if (!cctx_resolve_path(ctx, &callee->as.path_expr.path, &r)) {
+    diag_error(ctx->diags, callee->span, "unresolved path");
+    return ctx->tc->t_poison;
+  }
+
+  switch (r.type->kind) {
+  case TY_FUNCTION:
+    *out_def = r.as.method.fun;
+    return r.type;
+  case TY_STRUCT: {
+    if (!r.type->as.struc.def->is_tuple) {
       char ty_buf[64];
       type_sprintf(r.type, ty_buf, sizeof(ty_buf));
-      diag_error(ctx->diags, callee->span, "cannot call path of type '%s'",
-                 ty_buf);
+      diag_error(ctx->diags, callee->span,
+                 "attempted to call non-tuple struct type '%s'", ty_buf);
       return ctx->tc->t_poison;
     }
-    }
+    return rewrite_tuple_struct_call(ctx, expr, r.type->as.struc.def);
   }
-
-  return resolve_expr(ctx, callee, NULL);
+  default: {
+    char ty_buf[64];
+    type_sprintf(r.type, ty_buf, sizeof(ty_buf));
+    diag_error(ctx->diags, callee->span, "cannot call path of type '%s'",
+               ty_buf);
+    return ctx->tc->t_poison;
+  }
+  }
 }
 
 static bool resolve_path_segment_args(CheckCtx *ctx, PathSegment *seg,
@@ -649,13 +666,19 @@ static bool resolve_path_segment_args(CheckCtx *ctx, PathSegment *seg,
   return true;
 }
 
-static Type *resolve_call_expr(CheckCtx *ctx, Expr *expr) {
+static Type *resolve_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
+  // todo: handle hint
+
   ExprCall *call = &expr->as.call;
 
   FunDef *fun_def = NULL;
-  Type *callee_ty = resolve_callee(ctx, call->callee, &fun_def);
+  Type *callee_ty = resolve_callee(ctx, expr, &fun_def);
   if (type_is_poison(callee_ty)) {
     return ctx->tc->t_poison;
+  }
+
+  if (expr->kind != EXPR_CALL) {
+    return resolve_expr(ctx, expr, hint);
   }
 
   if (callee_ty->kind != TY_FUNCTION) {
@@ -877,29 +900,29 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     break;
   }
   case EXPR_CALL: {
-    result = resolve_call_expr(ctx, expr);
+    result = resolve_call_expr(ctx, expr, hint);
     break;
   }
-  case EXPR_VAR: {
-    ExprVar *var = &expr->as.var;
-    VarEntry *e = vscope_lookup(ctx->vscope, var->name, &var->is_upvalue);
-    if (!e) {
-      diag_error(ctx->diags, expr->span, "undefined variable '" SV_FMT "'",
-                 SV_ARG(var->name));
-      result = ctx->tc->t_poison;
-    } else {
-      result = e->type;
-      var->resolved_slot = e->slot;
-    }
-    break;
-  }
+  // case EXPR_VAR: {
+  //   ExprVar *var = &expr->as.var;
+  //   VarEntry *e = vscope_lookup(ctx->vscope, var->name, &var->is_upvalue);
+  //   if (!e) {
+  //     diag_error(ctx->diags, expr->span, "undefined variable '" SV_FMT "'",
+  //                SV_ARG(var->name));
+  //     result = ctx->tc->t_poison;
+  //   } else {
+  //     result = e->type;
+  //     var->resolved_slot = e->slot;
+  //   }
+  //   break;
+  // }
   case EXPR_PATH: {
     PathRes r;
     if (!cctx_resolve_path(ctx, &expr->as.path_expr.path, &r)) {
-      diag_error(ctx->diags, expr->span, "unresolved path");
       result = ctx->tc->t_poison;
+    } else {
+      result = r.type;
     }
-    result = r.type;
     break;
   }
   case EXPR_STRUCT_INIT: {
@@ -930,6 +953,9 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       result = ctx->tc->t_poison;
       break;
     }
+
+    // TypeScratch resolved_field_tys;
+    // ts_init(&resolved_field_tys, init->field_count, ctx->al);
 
     // check fields
     bool had_error = false;
@@ -971,17 +997,8 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
         continue;
       }
 
-      // todo: use infer_unify
-      if (!types_equal(arg_ty, field_ty)) {
-        char arg_buf[64], field_buf[64];
-        StringView field_name =
-            def->is_tuple ? (StringView){0} : field_def->ident.name;
-        type_sprintf(arg_ty, arg_buf, sizeof(arg_buf));
-        type_sprintf(field_ty, field_buf, sizeof(field_buf));
-        diag_error(ctx->diags, field_init->value->span,
-                   "type mismatch for field " SV_FMT
-                   ": expected '%s' but got '%s'",
-                   SV_ARG(field_name), field_buf, arg_buf);
+      if (!infer_unify(&ctx->infer, arg_ty, field_ty, ctx->diags,
+                       field_init->value->span)) {
         had_error = true;
       }
     }
@@ -1329,6 +1346,15 @@ bool cctx_resolve_path(CheckCtx *ctx, Path *path, PathRes *out_res) {
   assert(out_res && "out_res is null");
   PathResCtx res_ctx = {.kind = PATHRES_CTX_SCOPE};
   memset(out_res, 0, sizeof(*out_res));
+
+  if (path->count == 1) {
+    VarEntry *ve = vscope_lookup(ctx->vscope, path->segments[0].name, NULL);
+    if (ve) {
+      out_res->kind = PATHRES_VAR;
+      out_res->type = ve->type;
+      return true;
+    }
+  }
 
   for (int i = 0; i < path->count; i++) {
     StringView segment = path->segments[i].name;

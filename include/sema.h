@@ -271,6 +271,7 @@ void cctx_init(CheckCtx *cctx, TypeChecker *tc, Module *m, DiagBag *diags,
 typedef enum {
   PATHRES_METHOD,
   PATHRES_TYPE,
+  PATHRES_VAR,
 } PathResKind;
 
 typedef struct {

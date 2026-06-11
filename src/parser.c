@@ -1650,12 +1650,6 @@ static Expr *parse_primary(Parser *p) {
       return expr;
     }
 
-    if (path.count == 1 && path.segments[0].type_arg_count == 0) {
-      Expr *expr = ast_expr(EXPR_VAR, token_span(t), p->al);
-      expr->as.var.name = path.segments[0].name;
-      return expr;
-    }
-
     Expr *expr = ast_expr(
         EXPR_PATH, span_merge(token_span(t), previous_tok_span(p)), p->al);
     expr->as.path_expr.path = path;

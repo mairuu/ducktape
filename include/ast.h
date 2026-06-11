@@ -547,12 +547,12 @@ typedef struct {
   int seg_count;
 } ExprInterpolated;
 
-typedef struct {
-  StringView name;
-  int resolved_slot; // -1 until resolver runs
-  bool is_upvalue;
-  int upvalue_index;
-} ExprVar;
+// typedef struct {
+//   StringView name;
+//   int resolved_slot; // -1 until resolver runs
+//   bool is_upvalue;
+//   int upvalue_index;
+// } ExprVar;
 
 typedef struct {
   Path path;
@@ -704,7 +704,7 @@ struct Expr {
 
     ExprInterpolated interpolated;
 
-    ExprVar var;
+    // ExprVar var;
 
     ExprPath path_expr;
 
