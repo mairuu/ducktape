@@ -47,6 +47,8 @@ static bool report_type_mismatch(Type *expected, const Type *actual,
 // AST helper
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// find a struct field by name or index, depending on whether it's a tuple
+// struct. on failure, emits a diagnostic and returns NULL.
 FieldDef *find_struct_field(const StructDef *def, FieldIdent ident,
                             DiagBag *diags, Span span) {
   if (def->is_tuple) {
@@ -136,8 +138,11 @@ Type *subst_apply(const Subst *s, Type *t, Allocator *al) {
   }
 }
 
-Subst infer_open_generics(InferCtx *ctx, Type **type_params,
-                          Type **type_args /* nullable */, int count,
+// build a substitution mapping generic type parameters to either fresh unknowns
+// or concrete types if provided. the caller is responsible for unifying the
+// unknowns
+Subst infer_open_generics(InferCtx *ctx, Type **params,
+                          Type **concretes /* nullable */, int count,
                           Allocator *al) {
   if (count == 0) {
     return subst_empty();
@@ -145,11 +150,11 @@ Subst infer_open_generics(InferCtx *ctx, Type **type_params,
   StringView *names = al_alloc(al, sizeof(StringView) * count);
   Type **args = al_alloc(al, sizeof(Type *) * count);
   for (int i = 0; i < count; i++) {
-    assert(type_params[i]->kind == TY_GENERIC);
-    names[i] = type_params[i]->as.generic.name;
+    assert(params[i]->kind == TY_GENERIC);
+    names[i] = params[i]->as.generic.name;
     args[i] =
-        type_args
-            ? type_args[i]
+        concretes && concretes[i]
+            ? concretes[i]
             : infer_fresh(ctx, NULL); // TODO: pass bound from generic.bounds
   }
   Subst s;
@@ -208,18 +213,10 @@ bool infer_unify(InferCtx *ctx, Type *a, Type *b, DiagBag *diags, Span span) {
   }
 
   if (a->kind == TY_UNKNOWN) {
-    // if (ctx->table[a->as.unknown.id] &&
-    //     report_type_mismatch(ctx->table[a->as.unknown.id], b, diags, span)) {
-    //   return false;
-    // }
     ctx->table[a->as.unknown.id] = b;
     return true;
   }
   if (b->kind == TY_UNKNOWN) {
-    // if (ctx->table[b->as.unknown.id] &&
-    //     report_type_mismatch(ctx->table[b->as.unknown.id], a, diags, span)) {
-    //   return false;
-    // }
     ctx->table[b->as.unknown.id] = a;
     return true;
   }
@@ -686,11 +683,11 @@ static Type *resolve_callee(CheckCtx *ctx, Expr *expr, FunDef **out_def) {
   }
 }
 
-static bool resolve_path_segment_args(CheckCtx *ctx, PathSegment *seg,
+static bool resolve_path_segment_args(PathResCtx *ctx, PathSegment *seg,
                                       TypeScratch *out_args) {
   ts_init(out_args, seg->type_arg_count, ctx->al);
   for (int i = 0; i < seg->type_arg_count; i++) {
-    out_args->ptr[i] = tyres_resolve(&ctx->tyres, seg->type_args[i]);
+    out_args->ptr[i] = tyres_resolve(ctx->tyres, seg->type_args[i]);
     if (type_is_poison(out_args->ptr[i])) {
       return false;
     }
@@ -750,7 +747,12 @@ static Type *resolve_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
         return ctx->tc->t_poison;
       }
 
-      if (!resolve_path_segment_args(ctx, last_seg, &type_args)) {
+      // todo:
+      PathResCtx pres_ctx = {
+        .tyres = &ctx->tyres,
+        .al = ctx->al,
+      };
+      if (!resolve_path_segment_args(&pres_ctx, last_seg, &type_args)) {
         return ctx->tc->t_poison;
       }
     }
@@ -973,8 +975,16 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       break;
     }
 
-    // TypeScratch resolved_field_tys;
-    // ts_init(&resolved_field_tys, init->field_count, ctx->al);
+    Subst subst = subst_empty();
+    bool is_generic = def->type_param_count > 0;
+    bool had_explicit_args =
+        init->path.segments[init->path.count - 1].type_arg_count > 0;
+
+    if (is_generic) {
+      Type **args = had_explicit_args ? r.type->as.struc.type_args : NULL;
+      subst = infer_open_generics(&ctx->infer, def->type_params, args,
+                                  def->type_param_count, ctx->al);
+    }
 
     // check fields
     bool had_error = false;
@@ -989,6 +999,10 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       }
 
       Type *field_ty = field_def->type;
+      if (is_generic) {
+        field_ty = subst_apply(&subst, field_ty, ctx->al);
+      }
+
       Type *arg_ty = resolve_expr(ctx, field_init->value, field_ty);
       if (type_is_poison(arg_ty) || type_is_poison(field_def->type)) {
         had_error = true;
@@ -1000,7 +1014,20 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
         had_error = true;
       }
     }
-    result = had_error ? ctx->tc->t_poison : r.type;
+
+    if (had_error) {
+      result = ctx->tc->t_poison;
+      break;
+    }
+
+    if (!is_generic) {
+      result = def->self_type;
+      break;
+    }
+
+    result = subst_apply(&subst, def->self_type, ctx->al);
+    result = infer_apply(&ctx->infer, result, ctx->al);
+
     break;
   }
   case EXPR_FIELD: {
@@ -1302,6 +1329,22 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
       break;
     }
 
+    PathRes pr;
+    PathResCtx ctx = {
+        .path = &named->path,
+        .vscope = NULL,
+        .tscope = r->tscope,
+        .tyres = r,
+        .diags = r->diags,
+        .al = r->al,
+    };
+    if (!resolve_path(&ctx, &pr)) {
+      diag_error(r->tc->diags, node->span, "unresolved type");
+      result = r->tc->t_poison;
+    } else {
+      result = pr.type;
+    }
+
     break;
   }
 
@@ -1375,14 +1418,15 @@ typedef struct {
       Type *inst;
     } struct_;
   } scope;
-} PathResCtx;
+} PathResCtx_;
 
-bool cctx_resolve_path(CheckCtx *ctx, Path *path, PathRes *out_res) {
+bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
   assert(out_res && "out_res is null");
-  PathResCtx res_ctx = {.kind = PATHRES_CTX_SCOPE};
+  PathResCtx_ res_ctx = {.kind = PATHRES_CTX_SCOPE};
   memset(out_res, 0, sizeof(*out_res));
+  Path *path = ctx->path;
 
-  if (path->count == 1) {
+  if (path->count == 1 && ctx->vscope) {
     VarEntry *ve = vscope_lookup(ctx->vscope, path->segments[0].name, NULL);
     if (ve) {
       out_res->kind = PATHRES_VAR;
@@ -1436,13 +1480,14 @@ bool cctx_resolve_path(CheckCtx *ctx, Path *path, PathRes *out_res) {
             (type_args.count > 0)
                 ? ty_struct(def, type_args.ptr, type_args.count, ctx->al)
                 : def->self_type;
+
         if (is_last) {
           out_res->kind = PATHRES_TYPE;
           out_res->type = struct_ty;
           return true;
         }
 
-        res_ctx = (PathResCtx){
+        res_ctx = (PathResCtx_){
             .kind = PATHRES_CTX_STRUCT,
             .scope.struct_ =
                 {
@@ -1465,4 +1510,28 @@ bool cctx_resolve_path(CheckCtx *ctx, Path *path, PathRes *out_res) {
 
   assert(false && "unhandled PathResKind in cctx_resolve_path");
   return false;
+}
+
+bool rctx_resolve_path(ResolveCtx *ctx, Path *path, PathRes *out_res) {
+  PathResCtx path_ctx = {
+      .path = path,
+      .vscope = NULL,
+      .tscope = ctx->tyres.tscope,
+      .diags = ctx->diags,
+      .tyres = &ctx->tyres,
+      .al = ctx->al,
+  };
+  return resolve_path(&path_ctx, out_res);
+}
+
+bool cctx_resolve_path(CheckCtx *ctx, Path *path, PathRes *out_res) {
+  PathResCtx path_ctx = {
+      .path = path,
+      .vscope = ctx->vscope,
+      .tscope = ctx->tscope,
+      .diags = ctx->diags,
+      .tyres = &ctx->tyres,
+      .al = ctx->al,
+  };
+  return resolve_path(&path_ctx, out_res);
 }

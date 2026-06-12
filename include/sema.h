@@ -243,7 +243,7 @@ static inline Type *rctx_resolve(ResolveCtx *ctx, TypeNode *node) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ResolveCtx
+// CheckCtx
 // ═══════════════════════════════════════════════════════════════════════════════
 
 struct CheckCtx {
@@ -283,5 +283,18 @@ typedef struct {
     } method;
   } as;
 } PathRes;
+
+typedef struct {
+  Path *path;
+  TypeScope *tscope;
+  ValueScope *vscope;
+  TypeResolver *tyres;
+  DiagBag *diags;
+  Allocator *al;
+} PathResCtx;
+
+bool resolve_path(PathResCtx *ctx, PathRes *out_res);
+
+bool rctx_resolve_path(ResolveCtx *ctx, Path *path, PathRes *out_res);
 
 bool cctx_resolve_path(CheckCtx *ctx, Path *path, PathRes *out_res);
