@@ -8,6 +8,10 @@
 #include <assert.h>
 #include <stdio.h>
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Utilities
+// ═══════════════════════════════════════════════════════════════════════════════
+
 #define TYPE_SCRATCH_CAP 8
 
 typedef struct {
@@ -37,6 +41,34 @@ static bool report_type_mismatch(Type *expected, const Type *actual,
   type_sprintf(actual, ab, sizeof(ab));
   diag_error(diags, span, "type mismatch: expected '%s' but got '%s'", eb, ab);
   return true;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// AST helper
+// ═══════════════════════════════════════════════════════════════════════════════
+
+FieldDef *find_struct_field(const StructDef *def, FieldIdent ident,
+                            DiagBag *diags, Span span) {
+  if (def->is_tuple) {
+    int idx = ident.index;
+    if (idx < 0 || idx >= def->field_count) {
+      diag_error(diags, span,
+                 "tuple index %d out of bounds for struct with %d fields", idx,
+                 def->field_count);
+      return NULL;
+    }
+    return &def->fields[idx];
+  } else {
+    StringView name = ident.name;
+    for (int i = 0; i < def->field_count; i++) {
+      if (sv_equal(def->fields[i].ident.name, name)) {
+        return &def->fields[i];
+      }
+    }
+
+    diag_error(diags, span, "unknown field '%s'", SV_ARG(name));
+    return NULL;
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -598,7 +630,7 @@ static Type *rewrite_tuple_struct_call(CheckCtx *ctx, Expr *expr,
   FieldInit *field_inits =
       al_alloc_zero(ctx->al, sizeof(FieldInit) * struct_def->field_count);
   for (int i = 0; i < struct_def->field_count; i++) {
-    field_inits[i].ident.tuple_index = i;
+    field_inits[i].ident.index = i;
     field_inits[i].value = expr->as.call.args[i];
   }
 
@@ -903,19 +935,6 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     result = resolve_call_expr(ctx, expr, hint);
     break;
   }
-  // case EXPR_VAR: {
-  //   ExprVar *var = &expr->as.var;
-  //   VarEntry *e = vscope_lookup(ctx->vscope, var->name, &var->is_upvalue);
-  //   if (!e) {
-  //     diag_error(ctx->diags, expr->span, "undefined variable '" SV_FMT "'",
-  //                SV_ARG(var->name));
-  //     result = ctx->tc->t_poison;
-  //   } else {
-  //     result = e->type;
-  //     var->resolved_slot = e->slot;
-  //   }
-  //   break;
-  // }
   case EXPR_PATH: {
     PathRes r;
     if (!cctx_resolve_path(ctx, &expr->as.path_expr.path, &r)) {
@@ -961,33 +980,12 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     bool had_error = false;
     for (int i = 0; i < init->field_count; i++) {
       FieldInit *field_init = &init->fields[i];
-      FieldDef *field_def = NULL;
 
-      // find field definition
-      if (def->is_tuple) {
-        int idx = field_init->ident.tuple_index;
-        if (idx < 0 || idx >= def->field_count) {
-          diag_error(ctx->diags, expr->span,
-                     "tuple index %d out of bounds for struct with %d fields",
-                     idx, def->field_count);
-          had_error = true;
-          continue;
-        }
-        field_def = &def->fields[idx];
-      } else {
-        StringView name = field_init->ident.name;
-        for (int j = 0; j < def->field_count; j++) {
-          if (sv_equal(def->fields[j].ident.name, name)) {
-            field_def = &def->fields[j];
-            break;
-          }
-        }
-        if (!field_def) {
-          diag_error(ctx->diags, expr->span, "unknown field '%s'",
-                     SV_ARG(name));
-          had_error = true;
-          continue;
-        }
+      FieldDef *field_def =
+          find_struct_field(def, field_init->ident, ctx->diags, expr->span);
+      if (!field_def) {
+        had_error = true;
+        continue;
       }
 
       Type *field_ty = field_def->type;
@@ -1003,6 +1001,43 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       }
     }
     result = had_error ? ctx->tc->t_poison : r.type;
+    break;
+  }
+  case EXPR_FIELD: {
+    ExprField *field = &expr->as.field;
+    Type *base_ty = resolve_expr(ctx, field->object, NULL);
+
+    if (type_is_poison(base_ty)) {
+      result = ctx->tc->t_poison;
+      break;
+    }
+
+    if (base_ty->kind == TY_STRUCT) {
+      StructDef *def = base_ty->as.struc.def;
+
+      if (field->is_tuple != def->is_tuple) {
+        diag_error(ctx->diags, expr->span,
+                   "cannot access tuple field with '.' syntax or vice versa");
+        result = ctx->tc->t_poison;
+        break;
+      }
+
+      FieldDef *field_def =
+          find_struct_field(def, field->ident, ctx->diags, expr->span);
+      if (!field_def) {
+        result = ctx->tc->t_poison;
+      } else {
+        result = field_def->type;
+      }
+
+      break;
+    }
+
+    char base_buf[64];
+    type_sprintf(base_ty, base_buf, sizeof(base_buf));
+    diag_error(ctx->diags, expr->span,
+               "field access is not supported on type '%s'", base_buf);
+    result = ctx->tc->t_poison;
     break;
   }
   default:

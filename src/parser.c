@@ -741,7 +741,7 @@ static Expr *parse_postfix(Parser *p) {
           Expr *expr = ast_expr(
               EXPR_FIELD, span_merge(base->span, previous_tok_span(p)), p->al);
           expr->as.field.object = base;
-          expr->as.field.field_name = name.lexeme;
+          expr->as.field.ident.name = name.lexeme;
           expr->as.field.resolved_index = -1;
           base = expr;
         }
@@ -752,8 +752,8 @@ static Expr *parse_postfix(Parser *p) {
         Expr *expr = ast_expr(
             EXPR_FIELD, span_merge(base->span, previous_tok_span(p)), p->al);
         expr->as.field.object = base;
-        expr->as.field.is_tuple_field = true;
-        expr->as.field.tuple_index = idx;
+        expr->as.field.is_tuple = true;
+        expr->as.field.ident.index = idx;
         expr->as.field.resolved_index = -1;
         base = expr;
       } else {

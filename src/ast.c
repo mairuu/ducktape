@@ -911,11 +911,13 @@ void dump_expr(const Expr *e, int indent) {
       dump_expr(e->as.match.arms[i].body, indent + 3);
     }
     break;
-  case EXPR_FIELD:
-    fprintf(stdout, "Field Access: ." SV_FMT "\n",
-            SV_ARG(e->as.field.field_name));
+  case EXPR_FIELD: {
+    StringView field_name =
+        e->as.field.is_tuple ? (StringView){} : e->as.field.ident.name;
+    fprintf(stdout, "Field Access: ." SV_FMT "\n", SV_ARG(field_name));
     dump_expr(e->as.field.object, indent + 1);
     break;
+  }
   case EXPR_STRUCT_INIT:
     fprintf(stdout, "StructInit: ");
     dump_path(&e->as.struct_init.path, indent + 1);

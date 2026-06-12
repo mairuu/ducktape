@@ -8,8 +8,6 @@
 #include "scanner.h"
 #include "string_utils.h"
 
-
-
 // ───────────────────────────────────────────────────────────────────────────────
 // Forward declarations
 // ───────────────────────────────────────────────────────────────────────────────
@@ -157,11 +155,13 @@ int type_sprintf(const Type *t, char *buf,
 // DEFINITION TABLES
 // ═══════════════════════════════════════════════════════════════════════════════
 
+typedef union {
+  StringView name;
+  int index;
+} FieldIdent;
+
 typedef struct {
-  union {
-    StringView name; // for named fields
-    int index;       // for tuple fields, 0-based
-  } ident;
+  FieldIdent ident;
   Type *type; // resolved field type
 } FieldDef;
 
@@ -508,10 +508,7 @@ typedef struct {
 } MatchArm;
 
 typedef struct {
-  union {
-    StringView name; // for named fields
-    int tuple_index; // for tuple fields, 0-based index
-  } ident;
+  FieldIdent ident;
   Expr *value;
   Span span;
 } FieldInit;
@@ -596,9 +593,8 @@ typedef struct {
 
 typedef struct {
   Expr *object;
-  bool is_tuple_field;
-  int tuple_index;       // if is_tuple_field
-  StringView field_name; // if !is_tuple_field
+  FieldIdent ident;
+  bool is_tuple;
   int resolved_index;
 } ExprField;
 
