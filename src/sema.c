@@ -68,7 +68,7 @@ FieldDef *find_struct_field(const StructDef *def, FieldIdent ident,
       }
     }
 
-    diag_error(diags, span, "unknown field '%s'", SV_ARG(name));
+    diag_error(diags, span, "unknown field '" SV_FMT" '", SV_ARG(name));
     return NULL;
   }
 }
@@ -123,13 +123,14 @@ Type *subst_apply(const Subst *s, Type *t, Allocator *al) {
     if (!t->as.struc.type_arg_count) {
       return t;
     }
-    Type **args = al_alloc(al, sizeof(Type *) * t->as.struc.type_arg_count);
+    TypeScratch args;
+    ts_init(&args, t->as.struc.type_arg_count, al);
     bool changed = false;
     for (int i = 0; i < t->as.struc.type_arg_count; i++) {
-      args[i] = subst_apply(s, t->as.struc.type_args[i], al);
-      changed |= args[i] != t->as.struc.type_args[i];
+      args.ptr[i] = subst_apply(s, t->as.struc.type_args[i], al);
+      changed |= args.ptr[i] != t->as.struc.type_args[i];
     }
-    return changed ? ty_struct(t->as.struc.def, args,
+    return changed ? ty_struct(t->as.struc.def, args.ptr,
                                t->as.struc.type_arg_count, al)
                    : t;
   }
@@ -533,8 +534,8 @@ static void resolve_struct_decl(ResolveCtx *rctx, Decl *decl) {
   // end struct local type scope
   rctx->tyres.tscope = tscope_pop(rctx->tyres.tscope);
 
-  Type *struct_ty =
-      ty_struct(struct_def, field_types.ptr, field_types.count, rctx->al);
+  Type *struct_ty = ty_struct(struct_def, struct_def->type_params,
+                              struct_def->type_param_count, rctx->al);
   struct_def->self_type = struct_ty;
 
   TypeEntry *te = NULL;
@@ -683,11 +684,11 @@ static Type *resolve_callee(CheckCtx *ctx, Expr *expr, FunDef **out_def) {
   }
 }
 
-static bool resolve_path_segment_args(PathResCtx *ctx, PathSegment *seg,
-                                      TypeScratch *out_args) {
-  ts_init(out_args, seg->type_arg_count, ctx->al);
+static bool resolve_path_segment_args(PathSegment *seg, TypeResolver *tyres,
+                                      Allocator *al, TypeScratch *out_args) {
+  ts_init(out_args, seg->type_arg_count, al);
   for (int i = 0; i < seg->type_arg_count; i++) {
-    out_args->ptr[i] = tyres_resolve(ctx->tyres, seg->type_args[i]);
+    out_args->ptr[i] = tyres_resolve(tyres, seg->type_args[i]);
     if (type_is_poison(out_args->ptr[i])) {
       return false;
     }
@@ -729,39 +730,33 @@ static Type *resolve_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
 
   // check generic
   bool is_generic = fun_def && fun_def->type_param_count > 0;
-  Subst subst;
+  Subst subst = subst_empty();
 
   if (is_generic) {
     TypeScratch type_args;
     bool had_explicit_args = false;
 
-    if (call->callee->kind == EXPR_PATH) {
-      Path *path = &call->callee->as.path_expr.path;
-      PathSegment *last_seg = &path->segments[path->count - 1];
-      had_explicit_args = true;
+    assert(call->callee->kind == EXPR_PATH && "expected path callee for generic calls");
+    Path *path = &call->callee->as.path_expr.path;
+    PathSegment *last_seg = &path->segments[path->count - 1];
+    had_explicit_args = last_seg->type_arg_count > 0;
 
-      if (last_seg->type_arg_count != fun_def->type_param_count) {
-        diag_error(ctx->diags, call->callee->span,
-                   "expected %d type arguments but got %d",
-                   fun_def->type_param_count, last_seg->type_arg_count);
-        return ctx->tc->t_poison;
-      }
+    if (had_explicit_args &&
+        last_seg->type_arg_count != fun_def->type_param_count) {
+      diag_error(ctx->diags, call->callee->span,
+                 "expected %d type arguments but got %d",
+                 fun_def->type_param_count, last_seg->type_arg_count);
+      return ctx->tc->t_poison;
+    }
 
-      // todo:
-      PathResCtx pres_ctx = {
-        .tyres = &ctx->tyres,
-        .al = ctx->al,
-      };
-      if (!resolve_path_segment_args(&pres_ctx, last_seg, &type_args)) {
-        return ctx->tc->t_poison;
-      }
+    if (!resolve_path_segment_args(last_seg, &ctx->tyres, ctx->al,
+                                   &type_args)) {
+      return ctx->tc->t_poison;
     }
 
     subst = infer_open_generics(&ctx->infer, fun_def->type_params,
                                 had_explicit_args ? type_args.ptr : NULL,
                                 fun_def->type_param_count, ctx->al);
-  } else {
-    subst = subst_empty();
   }
 
   // check arguments
@@ -1431,6 +1426,9 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
     if (ve) {
       out_res->kind = PATHRES_VAR;
       out_res->type = ve->type;
+      if (ve->type->kind == TY_FUNCTION) {
+        out_res->as.method.fun = ve->as.fun;
+      }
       return true;
     }
   }
@@ -1455,16 +1453,19 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
                      SV_ARG(segment));
           return false;
         }
-        out_res->kind = PATHRES_METHOD;
-        out_res->type = te->type;
-        out_res->as.method.fun = te->as.fun_def;
+        *out_res = (PathRes){
+            .kind = PATHRES_METHOD,
+            .type = te->type,
+            .as.method.fun = te->as.fun_def,
+        };
         return true;
       }
       case TY_STRUCT: {
         StructDef *def = te->as.struct_def;
 
         TypeScratch type_args;
-        if (!resolve_path_segment_args(ctx, &path->segments[i], &type_args)) {
+        if (!resolve_path_segment_args(&path->segments[i], ctx->tyres, ctx->al,
+                                       &type_args)) {
           return false;
         }
 
@@ -1482,8 +1483,10 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
                 : def->self_type;
 
         if (is_last) {
-          out_res->kind = PATHRES_TYPE;
-          out_res->type = struct_ty;
+          *out_res = (PathRes){
+              .kind = PATHRES_TYPE,
+              .type = struct_ty,
+          };
           return true;
         }
 
