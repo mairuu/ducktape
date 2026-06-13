@@ -103,6 +103,8 @@ typedef struct {
 typedef struct {
   uint32_t id;
   Type *bound;
+  StringView param_name; // for diagnostics
+  Span intro_span;       // for diagnostics
 } TypeUnknown;
 
 struct Type {

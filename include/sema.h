@@ -46,7 +46,8 @@ Subst infer_open_generics(InferCtx *ctx, Type **type_params,
 // ═══════════════════════════════════════════════════════════════════════════════
 
 struct InferCtx {
-  Type **table;     // table[id] — dynamically grown
+  Type **solutions; // NULL=free, TY_UNKNOWN=redirect, else solved
+  Type **nodes;     // the original TY_UNKNOWN node (never changes)
   int cap;          // allocated slot count
   uint32_t next_id; // next fresh id
   Allocator *al;
@@ -55,7 +56,8 @@ struct InferCtx {
 void infer_init(InferCtx *ctx, Allocator *al);
 
 // allocate a fresh TY_UNKNOWN with an optional trait bound.
-Type *infer_fresh(InferCtx *ctx, Type *bound /*nullable*/);
+Type *infer_fresh(InferCtx *ctx, StringView param_name, Type *bound,
+                  Span intro_span);
 
 // walk redirects (with path compression) to the canonical root.
 Type *infer_find(InferCtx *ctx, Type *ty);
@@ -78,7 +80,7 @@ Type *infer_apply(InferCtx *ctx, Type *ty, Allocator *al);
 
 // After checking a function body: ensure every TY_UNKNOWN is solved.
 // emits "type annotation needed" for any that remain free.
-void infer_finalize(InferCtx *ctx, DiagBag *diags, Span scope_span);
+void infer_finalize(InferCtx *ctx, DiagBag *diags);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TypeChecker
@@ -214,7 +216,7 @@ TypeScope *tscope_open_params(TypeScope *parent, TypeParamNode *params,
 struct TypeResolver {
   TypeChecker *tc;
   TypeScope *tscope;
-
+  InferCtx *infer; // null during resolve, non-null during check
   DiagBag *diags;
   Allocator *al;
 };

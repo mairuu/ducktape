@@ -68,7 +68,7 @@ FieldDef *find_struct_field(const StructDef *def, FieldIdent ident,
       }
     }
 
-    diag_error(diags, span, "unknown field '" SV_FMT" '", SV_ARG(name));
+    diag_error(diags, span, "unknown field '" SV_FMT " '", SV_ARG(name));
     return NULL;
   }
 }
@@ -156,7 +156,8 @@ Subst infer_open_generics(InferCtx *ctx, Type **params,
     args[i] =
         concretes && concretes[i]
             ? concretes[i]
-            : infer_fresh(ctx, NULL); // TODO: pass bound from generic.bounds
+            : infer_fresh(ctx, params[i]->as.generic.name, NULL,
+                          (Span){0}); // TODO: pass bound from generic.bounds
   }
   Subst s;
   subst_init(&s, names, args, count);
@@ -168,25 +169,39 @@ Subst infer_open_generics(InferCtx *ctx, Type **params,
 // ═══════════════════════════════════════════════════════════════════════════════
 
 void infer_init(InferCtx *ctx, Allocator *al) {
-  ctx->table = NULL;
+  ctx->solutions = NULL;
+  ctx->nodes = NULL;
   ctx->cap = 0;
   ctx->next_id = 0;
   ctx->al = al;
 }
 
-Type *infer_fresh(InferCtx *ctx, Type *bound) {
+Type *infer_fresh(InferCtx *ctx, StringView param_name, Type *bound,
+                  Span intro_span) {
   uint32_t id = ctx->next_id++;
 
   if ((int)id >= ctx->cap) {
-    int new_cap = ctx->cap == 0 ? 8 : ctx->cap * 2;
-    ctx->table = al_realloc(ctx->al, ctx->table, sizeof(Type *) * ctx->cap,
+    int new_cap = ctx->cap == 0 ? 4 : ctx->cap * 2;
+    ctx->solutions =
+        al_realloc(ctx->al, ctx->solutions, sizeof(Type *) * ctx->cap,
+                   sizeof(Type *) * new_cap);
+    ctx->nodes = al_realloc(ctx->al, ctx->nodes, sizeof(Type *) * ctx->cap,
                             sizeof(Type *) * new_cap);
-    memset(ctx->table + ctx->cap, 0, sizeof(Type *) * (new_cap - ctx->cap));
+    memset(ctx->solutions + ctx->cap, 0, sizeof(Type *) * (new_cap - ctx->cap));
     ctx->cap = new_cap;
   }
-  ctx->table[id] = NULL; // unsolved
 
-  return ty_unknown(id, bound, ctx->al);
+  Type *t = al_alloc_zero_for(ctx->al, Type);
+  t->kind = TY_UNKNOWN;
+  t->as.unknown.id = id;
+  t->as.unknown.bound = bound;
+  t->as.unknown.param_name = param_name;
+  t->as.unknown.intro_span = intro_span;
+
+  ctx->solutions[id] = NULL; // free
+  ctx->nodes[id] = t;        // keep the node for error reporting
+
+  return t;
 }
 
 // walk redirects with path compression.
@@ -195,13 +210,13 @@ Type *infer_find(InferCtx *ctx, Type *ty) {
     return ty;
   }
 
-  Type *slot = ctx->table[ty->as.unknown.id];
+  Type *slot = ctx->solutions[ty->as.unknown.id];
   if (!slot) {
     return ty; // free — still unknown
   }
 
   Type *root = infer_find(ctx, slot);
-  ctx->table[ty->as.unknown.id] = root; // path compress
+  ctx->solutions[ty->as.unknown.id] = root; // path compress
   return root;
 }
 
@@ -209,16 +224,16 @@ bool infer_unify(InferCtx *ctx, Type *a, Type *b, DiagBag *diags, Span span) {
   a = infer_find(ctx, a);
   b = infer_find(ctx, b);
 
-  if (a == b) {
+  if (types_equal(a, b)) {
     return true;
   }
 
   if (a->kind == TY_UNKNOWN) {
-    ctx->table[a->as.unknown.id] = b;
+    ctx->solutions[a->as.unknown.id] = b;
     return true;
   }
   if (b->kind == TY_UNKNOWN) {
-    ctx->table[b->as.unknown.id] = a;
+    ctx->solutions[b->as.unknown.id] = a;
     return true;
   }
 
@@ -320,15 +335,25 @@ Type *infer_apply(InferCtx *ctx, Type *ty, Allocator *al) {
   }
 }
 
-void infer_finalize(InferCtx *ctx, DiagBag *diags, Span span) {
+void infer_finalize(InferCtx *ctx, DiagBag *diags) {
   for (uint32_t id = 0; id < ctx->next_id; id++) {
-    Type *sol = infer_find(
-        ctx, ctx->table[id] ? ctx->table[id] : /* reconstruct unknown */ NULL);
-    (void)sol;
-    // still free (table[id] == NULL after find means unsolved)
-    if (!ctx->table[id]) {
+    // Walk to the root solution for this id.
+    Type *sol = ctx->solutions[id] ? infer_find(ctx, ctx->solutions[id]) : NULL;
+
+    bool is_free = !sol || sol->kind == TY_UNKNOWN;
+    if (!is_free)
+      continue;
+
+    Type *node = ctx->nodes[id];
+    StringView name = node->as.unknown.param_name;
+    Span span = node->as.unknown.intro_span;
+
+    if (name.len > 0)
+      diag_error(diags, span,
+                 "cannot infer type for '" SV_FMT "' — add a type annotation",
+                 SV_ARG(name));
+    else
       diag_error(diags, span, "cannot infer type — add a type annotation");
-    }
   }
 }
 
@@ -584,29 +609,21 @@ static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
     Type *annot_ty = var->type_annotation
                          ? tyres_resolve(&ctx->tyres, var->type_annotation)
                          : NULL;
-    Type *init_ty = resolve_expr(ctx, var->initializer, annot_ty);
-    if (!annot_ty) {
-      annot_ty = init_ty;
-    }
 
-    Type *resolved_ty = init_ty;
-    if (!type_is_poison(annot_ty) && !type_is_poison(init_ty)) {
-      if (!types_equal(annot_ty, init_ty)) {
-        char annot_buf[64], init_buf[64];
-        type_sprintf(annot_ty, annot_buf, sizeof(annot_buf));
-        type_sprintf(init_ty, init_buf, sizeof(init_buf));
-        diag_error(ctx->diags, stmt->span,
-                   "type annotation '%s' does not match initializer type '%s'",
-                   annot_buf, init_buf);
-        resolved_ty = ctx->tc->t_poison;
-      } else {
-        resolved_ty = annot_ty;
-      }
+    Type *init_ty = resolve_expr(ctx, var->initializer, annot_ty);
+
+    if (type_is_poison(init_ty) || (annot_ty && type_is_poison(annot_ty))) {
+      init_ty = ctx->tc->t_poison;
+    } else if (annot_ty) {
+      init_ty =
+          infer_unify(&ctx->infer, annot_ty, init_ty, ctx->diags, stmt->span)
+              ? annot_ty // prefer annotation on success
+              : ctx->tc->t_poison;
     }
 
     switch (var->binding.kind) {
     case BIND_IDENT: {
-      vscope_define(ctx->vscope, var->binding.as.ident, resolved_ty, ctx->diags,
+      vscope_define(ctx->vscope, var->binding.as.ident, init_ty, ctx->diags,
                     stmt->span, NULL);
       break;
     }
@@ -656,7 +673,6 @@ static Type *resolve_callee(CheckCtx *ctx, Expr *expr, FunDef **out_def) {
 
   PathRes r;
   if (!cctx_resolve_path(ctx, &callee->as.path_expr.path, &r)) {
-    diag_error(ctx->diags, callee->span, "unresolved path");
     return ctx->tc->t_poison;
   }
 
@@ -736,7 +752,8 @@ static Type *resolve_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     TypeScratch type_args;
     bool had_explicit_args = false;
 
-    assert(call->callee->kind == EXPR_PATH && "expected path callee for generic calls");
+    assert(call->callee->kind == EXPR_PATH &&
+           "expected path callee for generic calls");
     Path *path = &call->callee->as.path_expr.path;
     PathSegment *last_seg = &path->segments[path->count - 1];
     had_explicit_args = last_seg->type_arg_count > 0;
@@ -945,7 +962,6 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     ExprStructInit *init = &expr->as.struct_init;
     PathRes r;
     if (!cctx_resolve_path(ctx, &init->path, &r)) {
-      diag_error(ctx->diags, expr->span, "unresolved path");
       result = ctx->tc->t_poison;
       break;
     }
@@ -1115,6 +1131,8 @@ static void tc_check_fun(TypeChecker *tc, Decl *decl) {
 
   // end type scope
   cctx.tyres.tscope = tscope_pop(cctx.tyres.tscope);
+
+  infer_finalize(&cctx.infer, cctx.diags);
 }
 
 bool tc_check_module(TypeChecker *tc, Module *m) {
@@ -1309,7 +1327,14 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
         result = r->tc->t_unit;
         break;
       } else if (sv_equal_cstr(name, "_")) {
-        assert(false && "todo");
+        if (!r->infer) {
+          diag_error(r->diags, node->span,
+                     "'_' is not allowed in this context");
+          result = r->tc->t_poison;
+          break;
+        }
+        result = infer_fresh(r->infer, (StringView){0}, NULL, node->span);
+        break;
       }
 
       TypeEntry *e = tscope_lookup(r->tscope, name);
@@ -1380,6 +1405,7 @@ void rctx_init(ResolveCtx *rctx, TypeChecker *tc, DiagBag *diags,
 void cctx_init(CheckCtx *cctx, TypeChecker *tc, Module *m, DiagBag *diags,
                Allocator *al) {
   memset(cctx, 0, sizeof(*cctx));
+  infer_init(&cctx->infer, al);
 
   cctx->tc = tc;
   cctx->diags = diags;
@@ -1389,10 +1415,9 @@ void cctx_init(CheckCtx *cctx, TypeChecker *tc, Module *m, DiagBag *diags,
       .tc = tc,
       .tscope = NULL,
       .diags = diags,
+      .infer = &cctx->infer,
       .al = al,
   };
-
-  infer_init(&cctx->infer, al);
 
   cctx->vscope = &m->vscope;
   cctx->tscope = &m->tscope;
