@@ -190,11 +190,11 @@ struct StructDef {
   int slot;
 };
 
-// only supports tuple variants
 typedef struct {
   StringView name;
-  Type **payload_types;
-  int payload_count; // for tuple variants, else 0
+  FieldDef *fields;
+  int field_count;
+  bool is_tuple;
   uint8_t tag;
 } VariantDef;
 
@@ -675,8 +675,8 @@ typedef struct {
 
 typedef struct {
   Path path;
-  Expr **payloads;
-  int payload_count;
+  FieldInit *fields;
+  int field_count;
   VariantDef *resolved_variant; // NULL until resolver runs
   EnumDef *resolved_enum;       // NULL until resolver runs
 } ExprVariant;

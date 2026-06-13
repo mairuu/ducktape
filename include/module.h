@@ -22,6 +22,9 @@ struct Module {
   StructDef **structs;
   int struct_count, struct_cap;
 
+  EnumDef **enums;
+  int enum_count, enum_cap;
+
   ValueScope vscope; // module-level values: functions, global vars
   TypeScope tscope;  // module-level types: structs, enums, traits
 };

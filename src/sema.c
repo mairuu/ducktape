@@ -73,6 +73,19 @@ FieldDef *find_struct_field(const StructDef *def, FieldIdent ident,
   }
 }
 
+VariantDef *find_enum_variant(const EnumDef *def, StringView name,
+                              DiagBag *diags, Span span) {
+  for (int i = 0; i < def->variant_count; i++) {
+    if (sv_equal(def->variants[i].name, name)) {
+      return &def->variants[i];
+    }
+  }
+
+  diag_error(diags, span, "unknown variant '" SV_FMT "' in enum '" SV_FMT "'",
+             SV_ARG(name), SV_ARG(def->name));
+  return NULL;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Substitution
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -348,12 +361,13 @@ void infer_finalize(InferCtx *ctx, DiagBag *diags) {
     StringView name = node->as.unknown.param_name;
     Span span = node->as.unknown.intro_span;
 
-    if (name.len > 0)
+    if (name.len > 0) {
       diag_error(diags, span,
                  "cannot infer type for '" SV_FMT "' — add a type annotation",
                  SV_ARG(name));
-    else
+    } else {
       diag_error(diags, span, "cannot infer type — add a type annotation");
+    }
   }
 }
 
@@ -425,6 +439,30 @@ static void tc_register_struct(TypeChecker *tc, Module *m, Decl *decl) {
   def->module = m;
 }
 
+static void tc_register_enum(TypeChecker *tc, Module *m, Decl *decl) {
+  assert(decl->kind == DECL_ENUM && "expected enum decl");
+
+  DeclEnum *enum_decl = &decl->as.enum_decl;
+  assert(m->enum_cap > m->enum_count && "enum capacity exceeded");
+
+  EnumDef *def = al_alloc_zero_for(tc->al, EnumDef);
+  // stub
+  def->is_pub = decl->is_pub;
+  def->name = enum_decl->name;
+  def->variant_count = enum_decl->variant_count;
+  def->variants =
+      al_alloc_zero(tc->al, sizeof(VariantDef) * enum_decl->variant_count);
+  def->type_param_count = enum_decl->type_param_count;
+  def->type_params =
+      al_alloc_zero(tc->al, sizeof(StringView) * enum_decl->type_param_count);
+
+  // register in module
+  m->enums[m->enum_count++] = def;
+  // set backpointers
+  decl->as.enum_decl.def = def;
+  def->module = m;
+}
+
 void tc_register_module(TypeChecker *tc, Module *m) {
   // counts
   for (int i = 0; i < m->ast->decl_count; i++) {
@@ -435,6 +473,9 @@ void tc_register_module(TypeChecker *tc, Module *m) {
     case DECL_STRUCT:
       m->struct_cap++;
       break;
+    case DECL_ENUM:
+      m->enum_cap++;
+      break;
     default:
       assert(false && "unhandled decl kind in tc_register_module");
     }
@@ -443,6 +484,7 @@ void tc_register_module(TypeChecker *tc, Module *m) {
   // allocate
   m->funs = al_alloc_zero(tc->al, sizeof(FunDef *) * m->fun_cap);
   m->structs = al_alloc_zero(tc->al, sizeof(StructDef *) * m->struct_cap);
+  m->enums = al_alloc_zero(tc->al, sizeof(EnumDef *) * m->enum_cap);
 
   // populate
   for (int i = 0; i < m->ast->decl_count; i++) {
@@ -453,6 +495,9 @@ void tc_register_module(TypeChecker *tc, Module *m) {
       break;
     case DECL_STRUCT:
       tc_register_struct(tc, m, decl);
+      break;
+    case DECL_ENUM:
+      tc_register_enum(tc, m, decl);
       break;
     default:
       assert(false && "unhandled decl kind in tc_register_module");
@@ -569,6 +614,65 @@ static void resolve_struct_decl(ResolveCtx *rctx, Decl *decl) {
   te->as.struct_def = struct_def;
 }
 
+static void resolve_enum_decl(ResolveCtx *rctx, Decl *decl) {
+  assert(decl->kind == DECL_ENUM && "expected enum decl");
+  DeclEnum *enum_decl = &decl->as.enum_decl;
+  EnumDef *enum_def = enum_decl->def;
+
+  for (int i = 0; i < enum_decl->type_param_count; i++) {
+    if (enum_decl->type_params[i].inline_bound.refs != NULL) {
+      diag_error(rctx->diags, enum_decl->type_params[i].span,
+                 "inline bounds on enum type parameters are not supported");
+    }
+    enum_def->type_params[i] =
+        ty_generic(enum_decl->type_params[i].name, NULL, 0, rctx->al);
+  }
+
+  // begin type scope
+  rctx->tyres.tscope = tscope_push(rctx->tyres.tscope, rctx->al);
+
+  for (int i = 0; i < enum_def->type_param_count; i++) {
+    tscope_define(rctx->tyres.tscope, enum_decl->type_params[i].name,
+                  enum_def->type_params[i], rctx->diags,
+                  enum_decl->type_params[i].span, NULL);
+  }
+
+  // resolve variants
+  for (int i = 0; i < enum_decl->variant_count; i++) {
+    VariantDeclNode *variant_decl = &enum_decl->variants[i];
+    VariantDef *variant_def = &enum_def->variants[i];
+
+    variant_def->name = variant_decl->name;
+    variant_def->is_tuple = variant_decl->is_tuple;
+    variant_def->field_count = variant_decl->field_count;
+    variant_def->fields =
+        al_alloc_zero(rctx->al, sizeof(FieldDef) * variant_decl->field_count);
+
+    for (int j = 0; j < variant_decl->field_count; j++) {
+      variant_def->fields[j].type =
+          rctx_resolve(rctx, variant_decl->fields[j].type_annotation);
+      if (variant_def->is_tuple) {
+        variant_def->fields[j].ident.index =
+            variant_decl->fields[j].ident.index;
+      } else {
+        variant_def->fields[j].ident.name = variant_decl->fields[j].ident.name;
+      }
+    }
+  }
+
+  // end type scope
+  rctx->tyres.tscope = tscope_pop(rctx->tyres.tscope);
+
+  Type *enum_ty = ty_enum(enum_def, enum_def->type_params,
+                          enum_def->type_param_count, rctx->al);
+  enum_def->self_type = enum_ty;
+
+  TypeEntry *te = NULL;
+  tscope_define(rctx->tyres.tscope, enum_def->name, enum_ty, rctx->diags,
+                decl->span, &te);
+  te->as.enum_def = enum_def;
+}
+
 static void resolve_decl(ResolveCtx *rctx, Decl *decl) {
   switch (decl->kind) {
   case DECL_FUN:
@@ -576,6 +680,9 @@ static void resolve_decl(ResolveCtx *rctx, Decl *decl) {
     break;
   case DECL_STRUCT:
     resolve_struct_decl(rctx, decl);
+    break;
+  case DECL_ENUM:
+    resolve_enum_decl(rctx, decl);
     break;
   default:
     assert(false && "unhandled decl kind in resolve_decl");
@@ -637,8 +744,8 @@ static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
   }
 }
 
-static Type *rewrite_tuple_struct_call(CheckCtx *ctx, Expr *expr,
-                                       StructDef *struct_def) {
+static void rewrite_tuple_struct_call(CheckCtx *ctx, Expr *expr,
+                                      StructDef *struct_def) {
   assert(expr->kind == EXPR_CALL);
   assert(expr->as.call.callee->kind == EXPR_PATH);
 
@@ -660,7 +767,71 @@ static Type *rewrite_tuple_struct_call(CheckCtx *ctx, Expr *expr,
       .span = expr->span,
       .as.struct_init = init,
   };
-  return struct_def->self_type;
+}
+
+static void rewrite_tuple_variant_call(CheckCtx *ctx, Expr *expr,
+                                       EnumDef *enum_def,
+                                       VariantDef *variant_def) {
+  if (expr->kind == EXPR_PATH) {
+    // unit struct/variant constructor with no args
+    ExprVariant init = {
+        .path = expr->as.path_expr.path,
+        .field_count = 0,
+        .fields = NULL,
+        .resolved_variant = variant_def,
+        .resolved_enum = enum_def,
+    };
+    *expr = (Expr){
+        .kind = EXPR_VARIANT,
+        .span = expr->span,
+        .as.variant = init,
+    };
+    return;
+  }
+
+  if (expr->kind == EXPR_CALL) {
+    assert(expr->as.call.callee->kind == EXPR_PATH);
+
+    FieldInit *field_inits =
+        al_alloc_zero(ctx->al, sizeof(FieldInit) * variant_def->field_count);
+    for (int i = 0; i < variant_def->field_count; i++) {
+      field_inits[i].ident.index = i;
+      field_inits[i].value = expr->as.call.args[i];
+    }
+
+    ExprVariant init = {
+        .path = expr->as.call.callee->as.path_expr.path,
+        .field_count = variant_def->field_count,
+        .fields = field_inits,
+        .resolved_variant = variant_def,
+        .resolved_enum = enum_def,
+    };
+
+    *expr = (Expr){
+        .kind = EXPR_VARIANT,
+        .span = expr->span,
+        .as.variant = init,
+    };
+    return;
+  }
+
+  if (expr->kind == EXPR_STRUCT_INIT) {
+    ExprVariant init = {
+        .path = expr->as.struct_init.path,
+        .field_count = expr->as.struct_init.field_count,
+        .fields = expr->as.struct_init.fields,
+        .resolved_variant = variant_def,
+        .resolved_enum = enum_def,
+    };
+    *expr = (Expr){
+        .kind = EXPR_VARIANT,
+        .span = expr->span,
+        .as.variant = init,
+    };
+    return;
+  }
+
+  assert(false && "unexpected callee kind in rewrite_tuple_variant_call");
 }
 
 static Type *resolve_callee(CheckCtx *ctx, Expr *expr, FunDef **out_def) {
@@ -676,6 +847,19 @@ static Type *resolve_callee(CheckCtx *ctx, Expr *expr, FunDef **out_def) {
     return ctx->tc->t_poison;
   }
 
+  if (r.kind == PATHRES_VARIANT) {
+    if (!r.as.variant.def->is_tuple) {
+      char ty_buf[64];
+      type_sprintf(r.type, ty_buf, sizeof(ty_buf));
+      diag_error(ctx->diags, callee->span,
+                 "attempted to call non-tuple enum variant '%s'", ty_buf);
+      return ctx->tc->t_poison;
+    }
+    rewrite_tuple_variant_call(ctx, expr, r.as.variant.enum_def,
+                               r.as.variant.def);
+    return r.type;
+  }
+
   switch (r.type->kind) {
   case TY_FUNCTION:
     *out_def = r.as.method.fun;
@@ -688,7 +872,16 @@ static Type *resolve_callee(CheckCtx *ctx, Expr *expr, FunDef **out_def) {
                  "attempted to call non-tuple struct type '%s'", ty_buf);
       return ctx->tc->t_poison;
     }
-    return rewrite_tuple_struct_call(ctx, expr, r.type->as.struc.def);
+    rewrite_tuple_struct_call(ctx, expr, r.type->as.struc.def);
+    return r.type;
+  }
+  case TY_ENUM: {
+    char ty_buf[64];
+    type_sprintf(r.type, ty_buf, sizeof(ty_buf));
+    diag_error(ctx->diags, callee->span,
+               "attempted to call enum type '%s' without specifying a variant",
+               ty_buf);
+    return ctx->tc->t_poison;
   }
   default: {
     char ty_buf[64];
@@ -953,9 +1146,16 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     PathRes r;
     if (!cctx_resolve_path(ctx, &expr->as.path_expr.path, &r)) {
       result = ctx->tc->t_poison;
-    } else {
-      result = r.type;
+      break;
     }
+
+    if (r.kind == PATHRES_VARIANT) {
+      rewrite_tuple_variant_call(ctx, expr, r.as.variant.enum_def,
+                                 r.as.variant.def);
+      return resolve_expr(ctx, expr, hint); // re-resolve as variant initializer
+    }
+
+    result = r.type;
     break;
   }
   case EXPR_STRUCT_INIT: {
@@ -965,6 +1165,13 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       result = ctx->tc->t_poison;
       break;
     }
+
+    if (r.kind == PATHRES_VARIANT) {
+      rewrite_tuple_variant_call(ctx, expr, r.as.variant.enum_def,
+                                 r.as.variant.def);
+      return resolve_expr(ctx, expr, hint); // re-resolve as variant initializer
+    }
+
     if (r.type->kind != TY_STRUCT) {
       char ty_buf[64];
       type_sprintf(r.type, ty_buf, sizeof(ty_buf));
@@ -1041,6 +1248,70 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
 
     break;
   }
+  case EXPR_VARIANT: {
+    ExprVariant *init = &expr->as.variant;
+    EnumDef *enum_def = init->resolved_enum;
+    VariantDef *variant_def = init->resolved_variant;
+
+    // check arity
+    int expected_field_count = variant_def->field_count;
+    int got_field_count = init->field_count;
+    if (got_field_count != expected_field_count) {
+      diag_error(ctx->diags, expr->span,
+                 "expected %d fields but got %d in enum variant initializer",
+                 expected_field_count, got_field_count);
+      result = ctx->tc->t_poison;
+      break;
+    }
+
+    Subst subst = subst_empty();
+    bool is_generic = enum_def->type_param_count > 0;
+    bool had_explicit_args =
+        init->path.segments[init->path.count - 1].type_arg_count > 0;
+
+    if (is_generic) {
+      Type **args = had_explicit_args ? init->resolved_enum->type_params : NULL;
+      subst = infer_open_generics(&ctx->infer, enum_def->type_params, args,
+                                  enum_def->type_param_count, ctx->al);
+    }
+
+    // check fields
+    bool had_error = false;
+    for (int i = 0; i < init->field_count; i++) {
+      FieldInit *field_init = &init->fields[i];
+
+      FieldDef *field_def = &variant_def->fields[i];
+      Type *field_ty = field_def->type;
+      if (is_generic) {
+        field_ty = subst_apply(&subst, field_ty, ctx->al);
+      }
+
+      Type *arg_ty = resolve_expr(ctx, field_init->value, field_ty);
+      if (type_is_poison(arg_ty) || type_is_poison(field_def->type)) {
+        had_error = true;
+        continue;
+      }
+
+      if (!infer_unify(&ctx->infer, arg_ty, field_ty, ctx->diags,
+                       field_init->value->span)) {
+        had_error = true;
+      }
+    }
+
+    if (had_error) {
+      result = ctx->tc->t_poison;
+      break;
+    }
+
+    if (!is_generic) {
+      result = enum_def->self_type;
+      break;
+    }
+
+    result = subst_apply(&subst, enum_def->self_type, ctx->al);
+    result = infer_apply(&ctx->infer, result, ctx->al);
+    break;
+  }
   case EXPR_FIELD: {
     ExprField *field = &expr->as.field;
     Type *base_ty = resolve_expr(ctx, field->object, NULL);
@@ -1076,6 +1347,21 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     diag_error(ctx->diags, expr->span,
                "field access is not supported on type '%s'", base_buf);
     result = ctx->tc->t_poison;
+    break;
+  }
+  case EXPR_ASSIGN: {
+    ExprAssign *assign = &expr->as.assign;
+    Type *lhs_ty = resolve_expr(ctx, assign->target, NULL);
+    Type *rhs_ty = resolve_expr(ctx, assign->value, lhs_ty);
+
+    if (type_is_poison(lhs_ty) || type_is_poison(rhs_ty)) {
+      result = ctx->tc->t_poison;
+    } else if (!infer_unify(&ctx->infer, lhs_ty, rhs_ty, ctx->diags,
+                            expr->span)) {
+      result = ctx->tc->t_poison;
+    } else {
+      result = lhs_ty;
+    }
     break;
   }
   default:
@@ -1143,6 +1429,7 @@ bool tc_check_module(TypeChecker *tc, Module *m) {
       tc_check_fun(tc, decl);
       break;
     case DECL_STRUCT:
+    case DECL_ENUM:
       break;
     default:
       assert(false && "unhandled decl kind in tc_check_module");
@@ -1428,6 +1715,7 @@ void cctx_init(CheckCtx *cctx, TypeChecker *tc, Module *m, DiagBag *diags,
 typedef enum {
   PATHRES_CTX_SCOPE,
   PATHRES_CTX_STRUCT,
+  PATHRES_CTX_ENUM,
 } PathResCtxKind;
 
 typedef struct {
@@ -1437,6 +1725,10 @@ typedef struct {
       StructDef *def;
       Type *inst;
     } struct_;
+    struct {
+      EnumDef *def;
+      Type *inst;
+    } enum_;
   } scope;
 } PathResCtx_;
 
@@ -1525,11 +1817,77 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
         };
         break;
       }
-      default:
+      case TY_ENUM: {
+        EnumDef *def = te->as.enum_def;
+
+        TypeScratch type_args;
+        if (!resolve_path_segment_args(&path->segments[i], ctx->tyres, ctx->al,
+                                       &type_args)) {
+          return false;
+        }
+
+        if (type_args.count > 0 && type_args.count != def->type_param_count) {
+          diag_error(ctx->diags, path->span,
+                     "expected %d type arguments but got %d for enum '" SV_FMT
+                     "'",
+                     def->type_param_count, type_args.count, SV_ARG(def->name));
+          return false;
+        }
+
+        Type *enum_ty =
+            (type_args.count > 0)
+                ? ty_enum(def, type_args.ptr, type_args.count, ctx->al)
+                : def->self_type;
+
+        if (is_last) {
+          *out_res = (PathRes){
+              .kind = PATHRES_TYPE,
+              .type = enum_ty,
+          };
+          return true;
+        }
+
+        res_ctx = (PathResCtx_){
+            .kind = PATHRES_CTX_ENUM,
+            .scope.enum_ =
+                {
+                    .def = def,
+                    .inst = enum_ty,
+                },
+        };
         break;
       }
-      assert(false && "unhandled type kind in cctx_resolve_path PATHRES_SCOPE");
-      return false;
+      default:
+        assert(false &&
+               "unhandled type kind in cctx_resolve_path PATHRES_SCOPE");
+        return false;
+      }
+      break;
+    }
+    case PATHRES_CTX_ENUM: {
+      EnumDef *def = res_ctx.scope.enum_.def;
+      Type *enum_ty = res_ctx.scope.enum_.inst;
+
+      VariantDef *variant =
+          find_enum_variant(def, segment, ctx->diags, path->span);
+      if (!variant) {
+        return false;
+      }
+
+      if (!is_last) {
+        diag_error(ctx->diags, path->span,
+                   "cannot access member '" SV_FMT "' of enum variant",
+                   SV_ARG(segment));
+        return false;
+      }
+
+      *out_res = (PathRes){
+          .kind = PATHRES_VARIANT,
+          .type = enum_ty,
+          .as.variant.enum_def = def,
+          .as.variant.def = variant,
+      };
+      return true;
     }
     default:
       break;

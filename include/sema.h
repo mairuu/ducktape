@@ -274,6 +274,7 @@ typedef enum {
   PATHRES_METHOD,
   PATHRES_TYPE,
   PATHRES_VAR,
+  PATHRES_VARIANT,
 } PathResKind;
 
 typedef struct {
@@ -283,6 +284,10 @@ typedef struct {
     struct {
       FunDef *fun;
     } method;
+    struct {
+      EnumDef *enum_def;
+      VariantDef *def;
+    } variant;
   } as;
 } PathRes;
 

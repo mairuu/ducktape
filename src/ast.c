@@ -692,6 +692,13 @@ static void dump_typenode(const TypeNode *tn, int indent) {
             SV_ARG(tn->as.assoc.assoc_name));
     break;
   }
+  if (tn->resolved) {
+    ind(indent + 1);
+    fprintf(stdout, "Resolved Type:\n");
+    ind(indent + 2);
+    dump_type(tn->resolved);
+    fprintf(stdout, "\n");
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -919,9 +926,8 @@ void dump_expr(const Expr *e, int indent) {
     break;
   }
   case EXPR_STRUCT_INIT:
-    fprintf(stdout, "StructInit: ");
+    fprintf(stdout, "StructInit:\n");
     dump_path(&e->as.struct_init.path, indent + 1);
-    fprintf(stdout, "\n");
     for (int i = 0; i < e->as.struct_init.field_count; i++) {
       ind(indent + 1);
       fprintf(stdout, "Field: " SV_FMT "\n",
@@ -1007,9 +1013,9 @@ void dump_expr(const Expr *e, int indent) {
     fprintf(stdout, "Variant: ");
     dump_path(&e->as.variant.path, indent + 1);
     fprintf(stdout, "\n");
-    for (int i = 0; i < e->as.variant.payload_count; i++) {
-      dump_expr(e->as.variant.payloads[i], indent + 1);
-    }
+    // for (int i = 0; i < e->as.variant.payload_count; i++) {
+    //   dump_expr(e->as.variant.payloads[i], indent + 1);
+    // }
     break;
   case EXPR_CLOSURE:
     fprintf(stdout, "Closure\n");
