@@ -39,7 +39,7 @@ Type *subst_apply(const Subst *s, Type *t, Allocator *al);
 // the substituted return type to read out the inferred type arguments.
 Subst infer_open_generics(InferCtx *ctx, Type **type_params,
                           Type **type_args /* nullable */, int param_count,
-                          Allocator *al);
+                          Span span, Allocator *al);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Inference

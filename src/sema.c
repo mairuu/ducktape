@@ -28,21 +28,6 @@ static void ts_init(TypeScratch *ts, int count, Allocator *al) {
   assert(ts->ptr && "out of memory");
 }
 
-// check if two types are equal, emitting a diagnostic if not.
-// return true if a mismatch was reported, false if they were equal.
-static bool report_type_mismatch(Type *expected, const Type *actual,
-                                 DiagBag *diags, Span span) {
-  if (types_equal(expected, actual)) {
-    return false;
-  }
-
-  char eb[64], ab[64];
-  type_sprintf(expected, eb, sizeof(eb));
-  type_sprintf(actual, ab, sizeof(ab));
-  diag_error(diags, span, "type mismatch: expected '%s' but got '%s'", eb, ab);
-  return true;
-}
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // AST helper
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -132,6 +117,7 @@ Type *subst_apply(const Subst *s, Type *t, Allocator *al) {
     changed |= ret != t->as.fun.return_type;
     return changed ? ty_fun(ps.ptr, ps.count, ret, al) : t;
   }
+
   case TY_STRUCT: {
     if (!t->as.struc.type_arg_count) {
       return t;
@@ -147,6 +133,23 @@ Type *subst_apply(const Subst *s, Type *t, Allocator *al) {
                                t->as.struc.type_arg_count, al)
                    : t;
   }
+
+  case TY_ENUM: {
+    if (!t->as.enm.type_arg_count) {
+      return t;
+    }
+
+    TypeScratch args;
+    ts_init(&args, t->as.enm.type_arg_count, al);
+    bool changed = false;
+    for (int i = 0; i < t->as.enm.type_arg_count; i++) {
+      args.ptr[i] = subst_apply(s, t->as.enm.type_args[i], al);
+      changed |= args.ptr[i] != t->as.enm.type_args[i];
+    }
+    return changed
+               ? ty_enum(t->as.enm.def, args.ptr, t->as.enm.type_arg_count, al)
+               : t;
+  }
   default:
     return t;
   }
@@ -156,7 +159,7 @@ Type *subst_apply(const Subst *s, Type *t, Allocator *al) {
 // or concrete types if provided. the caller is responsible for unifying the
 // unknowns
 Subst infer_open_generics(InferCtx *ctx, Type **params,
-                          Type **concretes /* nullable */, int count,
+                          Type **concretes /* nullable */, int count, Span span,
                           Allocator *al) {
   if (count == 0) {
     return subst_empty();
@@ -166,11 +169,10 @@ Subst infer_open_generics(InferCtx *ctx, Type **params,
   for (int i = 0; i < count; i++) {
     assert(params[i]->kind == TY_GENERIC);
     names[i] = params[i]->as.generic.name;
-    args[i] =
-        concretes && concretes[i]
-            ? concretes[i]
-            : infer_fresh(ctx, params[i]->as.generic.name, NULL,
-                          (Span){0}); // TODO: pass bound from generic.bounds
+    args[i] = concretes && concretes[i]
+                  ? concretes[i]
+                  : infer_fresh(ctx, params[i]->as.generic.name, NULL,
+                                span); // TODO: pass bound from generic.bounds
   }
   Subst s;
   subst_init(&s, names, args, count);
@@ -267,6 +269,13 @@ bool infer_unify(InferCtx *ctx, Type *a, Type *b, DiagBag *diags, Span span) {
   case TY_UNIT:
     return true; // same kind, same singleton -> equal
 
+  case TY_GENERIC:
+    // generics only unify if they're the same node, i.e. the same parameter on
+    // the same generic definition. this is a bit stricter than necessary but
+    // simplifies inference since we don't have to worry about accidentally
+    // unifying two different generic parameters with the same name.
+    return false;
+
   case TY_FUNCTION: {
     TypeFun *af = &a->as.fun, *bf = &b->as.fun;
     if (af->param_count != bf->param_count) {
@@ -291,6 +300,20 @@ bool infer_unify(InferCtx *ctx, Type *a, Type *b, DiagBag *diags, Span span) {
     bool ok = true;
     for (int i = 0; i < as->type_arg_count; i++)
       ok &= infer_unify(ctx, as->type_args[i], bs->type_args[i], diags, span);
+    return ok;
+  }
+  case TY_ENUM: {
+    TypeEnum *ae = &a->as.enm, *be = &b->as.enm;
+    if (ae->def != be->def) {
+      char ab[64], bb[64];
+      type_sprintf(a, ab, sizeof(ab));
+      type_sprintf(b, bb, sizeof(bb));
+      diag_error(diags, span, "type mismatch: '%s' vs '%s'", ab, bb);
+      return false;
+    }
+    bool ok = true;
+    for (int i = 0; i < ae->type_arg_count; i++)
+      ok &= infer_unify(ctx, ae->type_args[i], be->type_args[i], diags, span);
     return ok;
   }
   default:
@@ -328,6 +351,7 @@ Type *infer_apply(InferCtx *ctx, Type *ty, Allocator *al) {
     changed |= ret != f->return_type;
     return changed ? ty_fun(ps.ptr, ps.count, ret, al) : ty;
   }
+
   case TY_STRUCT: {
     TypeStruct *s = &ty->as.struc;
     if (!s->type_arg_count) {
@@ -343,6 +367,23 @@ Type *infer_apply(InferCtx *ctx, Type *ty, Allocator *al) {
     }
     return changed ? ty_struct(s->def, args.ptr, args.count, al) : ty;
   }
+
+  case TY_ENUM: {
+    TypeEnum *e = &ty->as.enm;
+    if (!e->type_arg_count) {
+      return ty;
+    }
+    TypeScratch args;
+    ts_init(&args, e->type_arg_count, al);
+    bool changed = false;
+
+    for (int i = 0; i < e->type_arg_count; i++) {
+      args.ptr[i] = infer_apply(ctx, e->type_args[i], al);
+      changed |= args.ptr[i] != e->type_args[i];
+    }
+    return changed ? ty_enum(e->def, args.ptr, args.count, al) : ty;
+  }
+
   default:
     return ty;
   }
@@ -966,7 +1007,7 @@ static Type *resolve_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
 
     subst = infer_open_generics(&ctx->infer, fun_def->type_params,
                                 had_explicit_args ? type_args.ptr : NULL,
-                                fun_def->type_param_count, ctx->al);
+                                fun_def->type_param_count, expr->span, ctx->al);
   }
 
   // check arguments
@@ -1063,7 +1104,10 @@ static bool check_pattern(CheckCtx *ctx, Pattern *pattern, Type *expected_ty) {
       break;
     }
 
-    if (r.as.variant.enum_def != expected_ty->as.enm.def) {
+    EnumDef *enum_def = r.as.variant.enum_def;
+    VariantDef *variant_def = r.as.variant.def;
+
+    if (expected_ty->kind != TY_ENUM || expected_ty->as.enm.def != enum_def) {
       char et[64], pt[64];
       type_sprintf(expected_ty, et, sizeof(et));
       type_sprintf(r.type, pt, sizeof(pt));
@@ -1078,7 +1122,7 @@ static bool check_pattern(CheckCtx *ctx, Pattern *pattern, Type *expected_ty) {
       break;
     }
 
-    int expected_argc = r.as.variant.def->field_count;
+    int expected_argc = variant_def->field_count;
     int got_argc = pattern->as.variant.payload_count;
     if (got_argc > 0 && got_argc != expected_argc) {
       char et[64];
@@ -1092,8 +1136,21 @@ static bool check_pattern(CheckCtx *ctx, Pattern *pattern, Type *expected_ty) {
     bool sub_pattern_error = false;
     int check_n = expected_argc < got_argc ? expected_argc : got_argc;
 
+    Subst subst = subst_empty();
+    bool is_generic = enum_def->type_param_count > 0;
+
+    if (enum_def->type_param_count > 0) {
+      subst = infer_open_generics(
+          &ctx->infer, enum_def->type_params, expected_ty->as.enm.type_args,
+          enum_def->type_param_count, pattern->span, ctx->al);
+    }
+
     for (int i = 0; i < check_n; i++) {
-      Type *field_ty = r.as.variant.def->fields[i].type;
+      Type *field_ty = variant_def->fields[i].type;
+      if (is_generic) {
+        field_ty = subst_apply(&subst, field_ty, ctx->al);
+        field_ty = infer_apply(&ctx->infer, field_ty, ctx->al);
+      }
       Pattern *field_pat = pattern->as.variant.payloads[i];
       sub_pattern_error |= check_pattern(ctx, field_pat, field_ty);
     }
@@ -1353,7 +1410,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     if (is_generic) {
       Type **args = had_explicit_args ? r.type->as.struc.type_args : NULL;
       subst = infer_open_generics(&ctx->infer, def->type_params, args,
-                                  def->type_param_count, ctx->al);
+                                  def->type_param_count, expr->span, ctx->al);
     }
 
     // check fields
@@ -1423,8 +1480,9 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
 
     if (is_generic) {
       Type **args = had_explicit_args ? init->resolved_enum->type_params : NULL;
-      subst = infer_open_generics(&ctx->infer, enum_def->type_params, args,
-                                  enum_def->type_param_count, ctx->al);
+      subst =
+          infer_open_generics(&ctx->infer, enum_def->type_params, args,
+                              enum_def->type_param_count, expr->span, ctx->al);
     }
 
     // check fields
@@ -1532,7 +1590,7 @@ static Type *resolve_expr_coerced(CheckCtx *ctx, Expr *expr, Type *expected) {
   if (type_is_poison(actual) || type_is_poison(expected)) {
     return ctx->tc->t_poison;
   }
-  if (report_type_mismatch(actual, expected, ctx->diags, expr->span)) {
+  if (!infer_unify(&ctx->infer, actual, expected, ctx->diags, expr->span)) {
     return ctx->tc->t_poison;
   }
   return actual;
