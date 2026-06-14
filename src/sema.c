@@ -1163,16 +1163,114 @@ static bool check_pattern(CheckCtx *ctx, Pattern *pattern, Type *expected_ty) {
     if (sub_pattern_error) {
       return false;
     }
-
     break;
   }
-  case PAT_STRUCT:
-  case PAT_TUPLE:
-    assert(false && "unhandled pattern kind in check_pattern");
+  case PAT_STRUCT: {
+    if (type_is_poison(expected_ty)) {
+      break;
+    }
+
+    if (expected_ty->kind != TY_STRUCT) {
+      char et[64];
+      type_sprintf(expected_ty, et, sizeof(et));
+      diag_error(ctx->diags, pattern->span,
+                 "expected struct type in struct pattern, got '%s'", et);
+      break;
+    }
+
+    PathRes r;
+    if (!cctx_resolve_path(ctx, &pattern->as.struc.path, &r)) {
+      break;
+    }
+    if (r.kind != PATHRES_TYPE || r.type->kind != TY_STRUCT) {
+      char et[64];
+      type_sprintf(r.type, et, sizeof(et));
+      diag_error(ctx->diags, pattern->span,
+                 "expected struct type in pattern path, got '%s'", et);
+      break;
+    }
+
+    StructDef *struct_def = r.type->as.struc.def;
+    bool is_generic = struct_def->type_param_count > 0;
+
+    Subst subst = subst_empty();
+    if (is_generic) {
+      subst = infer_open_generics(
+          &ctx->infer, struct_def->type_params, expected_ty->as.struc.type_args,
+          struct_def->type_param_count, pattern->span, ctx->al);
+    }
+
+    bool sub_pattern_error = false;
+    for (int i = 0; i < pattern->as.struc.field_count; i++) {
+      FieldPat *fp = &pattern->as.struc.fields[i];
+      FieldDef *fd =
+          find_struct_field(struct_def, (FieldIdent){.name = fp->field_name},
+                            ctx->diags, fp->span);
+      Type *field_ty = NULL;
+      if (fd == NULL) {
+        sub_pattern_error = true;
+        field_ty = ctx->tc->t_poison;
+      } else {
+        field_ty = fd->type;
+      }
+
+      if (is_generic) {
+        field_ty = subst_apply(&subst, field_ty, ctx->al);
+        field_ty = infer_apply(&ctx->infer, field_ty, ctx->al);
+      }
+
+      if (fp->sub_pattern != NULL) {
+        sub_pattern_error |= check_pattern(ctx, fp->sub_pattern, field_ty);
+      } else {
+        vscope_define(ctx->vscope, fp->field_name, field_ty, ctx->diags,
+                      fp->span, NULL);
+      }
+    }
+
+    if (sub_pattern_error) {
+      return false;
+    }
     break;
   }
+  case PAT_TUPLE: {
+    if (type_is_poison(expected_ty)) {
+      break;
+    }
 
-  // todo
+    if (expected_ty->kind != TY_TUPLE) {
+      char et[64];
+      type_sprintf(expected_ty, et, sizeof(et));
+      diag_error(ctx->diags, pattern->span,
+                 "expected tuple type in tuple pattern, got '%s'", et);
+      break;
+    }
+
+    int expected_n = expected_ty->as.tuple.elem_count;
+    int got_n = pattern->as.tuple.count;
+
+    if (expected_n != got_n) {
+      char et[64];
+      type_sprintf(expected_ty, et, sizeof(et));
+      diag_error(ctx->diags, pattern->span,
+                 "expected tuple of size %d in tuple pattern, got %d", expected_n, got_n);
+      break;
+    }
+
+    int check_n = expected_n < got_n ? expected_n : got_n;
+    bool sub_pattern_error = false;
+    for (int i = 0; i < check_n; i++) {
+      Type *elem_ty = expected_ty->as.tuple.elem_types[i];
+      Pattern *elem_pat = pattern->as.tuple.elems[i];
+      sub_pattern_error |= check_pattern(ctx, elem_pat, elem_ty);
+    }
+
+    if (sub_pattern_error) {
+      return false;
+    }
+    break;
+  }
+  }
+
   return true;
 }
 
@@ -1577,6 +1675,26 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   case EXPR_MATCH:
     result = resolve_match_expr(ctx, expr, hint);
     break;
+  case EXPR_TUPLE: {
+    ExprTuple *tuple = &expr->as.tuple;
+
+    TypeScratch elem_types;
+    ts_init(&elem_types, tuple->count, ctx->al);
+
+    bool had_error = false;
+    for (int i = 0; i < tuple->count; i++) {
+      elem_types.ptr[i] = resolve_expr(ctx, tuple->elems[i], NULL);
+      if (type_is_poison(elem_types.ptr[i])) {
+        had_error = true;
+      }
+    }
+    if (had_error) {
+      result = ctx->tc->t_poison;
+    } else {
+      result = ty_tuple(elem_types.ptr, tuple->count, ctx->al);
+    }
+    break;
+  }
   default:
     assert(false && "unhandled expr kind in resolve_expr");
   }
@@ -1867,7 +1985,16 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
 
     break;
   }
-
+  case TYNODE_TUPLE: {
+    TypeNodeTuple *tuple = &node->as.tuple;
+    TypeScratch elem_types;
+    ts_init(&elem_types, tuple->count, r->al);
+    for (int i = 0; i < tuple->count; i++) {
+      elem_types.ptr[i] = tyres_resolve(r, tuple->elems[i]);
+    }
+    result = ty_tuple(elem_types.ptr, tuple->count, r->al);
+    break;
+  }
   default:
     assert(false && "unhandled type node kind in tyres_resolve");
     break;
