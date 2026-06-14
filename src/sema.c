@@ -1013,6 +1013,158 @@ static Type *resolve_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   return ret_ty;
 }
 
+static bool check_pattern(CheckCtx *ctx, Pattern *pattern, Type *expected_ty) {
+  (void)ctx;
+  (void)pattern;
+  (void)expected_ty;
+
+  pattern->resolved_type = expected_ty;
+
+  switch (pattern->kind) {
+  case PAT_WILDCARD:
+    break;
+  case PAT_LITERAL: {
+    Type *lit_ty = resolve_expr(ctx, pattern->as.literal_expr, NULL);
+    if (!type_is_poison(lit_ty) && !type_is_poison(expected_ty)) {
+      if (!infer_unify(&ctx->infer, lit_ty, expected_ty, ctx->diags,
+                       pattern->span)) {
+        return false;
+      }
+    }
+    break;
+  }
+  case PAT_BIND: {
+    vscope_define(ctx->vscope, pattern->as.bind.name, expected_ty, ctx->diags,
+                  pattern->span, NULL);
+    break;
+  }
+  case PAT_VARIANT: {
+    if (type_is_poison(expected_ty)) {
+      break;
+    }
+
+    if (expected_ty->kind != TY_ENUM) {
+      char et[64];
+      type_sprintf(expected_ty, et, sizeof(et));
+      diag_error(ctx->diags, pattern->span,
+                 "expected enum type in variant pattern, got '%s'", et);
+      break;
+    }
+
+    PathRes r;
+    if (!cctx_resolve_path(ctx, &pattern->as.variant.path, &r)) {
+      break;
+    }
+    if (r.kind != PATHRES_VARIANT) {
+      char et[64];
+      type_sprintf(r.type, et, sizeof(et));
+      diag_error(ctx->diags, pattern->span,
+                 "expected enum variant in pattern, got '%s'", et);
+      break;
+    }
+
+    if (r.as.variant.enum_def != expected_ty->as.enm.def) {
+      char et[64], pt[64];
+      type_sprintf(expected_ty, et, sizeof(et));
+      type_sprintf(r.type, pt, sizeof(pt));
+      StringView name =
+          pattern->as.variant.path.segments[pattern->as.variant.path.count - 1]
+              .name;
+      memcpy(pt, name.chars, name.len);
+      pt[name.len] = '\0';
+      diag_error(ctx->diags, pattern->span,
+                 "variant '%s' does not belong to expected enum type '%s'", pt,
+                 et);
+      break;
+    }
+
+    int expected_argc = r.as.variant.def->field_count;
+    int got_argc = pattern->as.variant.payload_count;
+    if (got_argc > 0 && got_argc != expected_argc) {
+      char et[64];
+      type_sprintf(expected_ty, et, sizeof(et));
+      diag_error(ctx->diags, pattern->span,
+                 "expected %d arguments for variant '%s' but got %d",
+                 expected_argc, et, got_argc);
+      break;
+    }
+
+    bool sub_pattern_error = false;
+    int check_n = expected_argc < got_argc ? expected_argc : got_argc;
+
+    for (int i = 0; i < check_n; i++) {
+      Type *field_ty = r.as.variant.def->fields[i].type;
+      Pattern *field_pat = pattern->as.variant.payloads[i];
+      sub_pattern_error |= check_pattern(ctx, field_pat, field_ty);
+    }
+
+    for (int i = check_n; i < got_argc; i++) {
+      sub_pattern_error |= check_pattern(ctx, pattern->as.variant.payloads[i],
+                                         ctx->tc->t_poison);
+    }
+
+    if (sub_pattern_error) {
+      return false;
+    }
+
+    break;
+  }
+  case PAT_STRUCT:
+  case PAT_TUPLE:
+    assert(false && "unhandled pattern kind in check_pattern");
+    break;
+  }
+
+  // todo
+  return true;
+}
+
+static Type *resolve_match_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
+  Type *subject_ty = resolve_expr(ctx, expr->as.match.subject, NULL);
+  Type *result_ty = hint;
+
+  bool had_error = false;
+  for (int i = 0; i < expr->as.match.arm_count; i++) {
+    MatchArm *arm = &expr->as.match.arms[i];
+
+    ctx->vscope = vscope_push(ctx->vscope, false, false, ctx->al);
+
+    had_error |= !check_pattern(ctx, arm->pattern, subject_ty);
+
+    if (arm->guard != NULL) {
+      Type *guard_ty = resolve_expr(ctx, arm->guard, NULL);
+      if (!type_is_poison(guard_ty) && guard_ty->kind != TY_BOOL) {
+        char gt[64];
+        type_sprintf(guard_ty, gt, sizeof(gt));
+        diag_error(ctx->diags, arm->guard->span,
+                   "match guard must be of type Bool, got '%s'", gt);
+        had_error = true;
+      }
+    }
+
+    Type *arm_ty = resolve_expr(ctx, arm->body, NULL);
+
+    if (result_ty == NULL) {
+      result_ty = arm_ty;
+    } else if (!type_is_poison(result_ty) && !type_is_poison(arm_ty)) {
+      if (!infer_unify(&ctx->infer, result_ty, arm_ty, ctx->diags,
+                       arm->body->span)) {
+        had_error = true;
+      }
+    } else if (type_is_poison(result_ty)) {
+      result_ty = arm_ty; // recover
+    }
+
+    ctx->vscope = vscope_pop(ctx->vscope);
+  }
+
+  if (had_error) {
+    return ctx->tc->t_poison;
+  }
+
+  return result_ty ? result_ty : ctx->tc->t_unit;
+}
+
 static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   (void)hint;
   (void)ctx;
@@ -1364,6 +1516,9 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     }
     break;
   }
+  case EXPR_MATCH:
+    result = resolve_match_expr(ctx, expr, hint);
+    break;
   default:
     assert(false && "unhandled expr kind in resolve_expr");
   }

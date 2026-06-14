@@ -1336,9 +1336,12 @@ static Pattern *parse_pattern(Parser *p) {
       pattern.span = path.span;
       pattern.as.bind.name = path.segments[0].name;
     } else {
-      // path without tuple or struct syntax is not a valid pattern
-      error_at(p, path.span, "unexpected path in pattern");
-      return NULL;
+
+      pattern.kind = PAT_VARIANT;
+      pattern.span = path.span;
+      pattern.as.variant.path = path;
+      pattern.as.variant.payloads = NULL;
+      pattern.as.variant.payload_count = 0;
     }
   } else if (match_tok(p, TOKEN_LPAREN)) {
     Pattern *subpats[16];
@@ -1421,7 +1424,7 @@ static Expr *parse_match(Parser *p) {
     had_error = true;
   }
 
-  MatchArm tmp_arms[64];
+  MatchArm tmp_arms[16];
   int arm_count = 0;
 
   do {
@@ -1430,7 +1433,7 @@ static Expr *parse_match(Parser *p) {
       break;
     }
 
-    if (arm_count >= 64) {
+    if (arm_count >= 16) {
       error_at(p, current_tok_span(p), "too many match arms");
       had_error = true;
       sync_to_next_arm(p);
