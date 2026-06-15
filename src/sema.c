@@ -902,7 +902,19 @@ static void rewrite_tuple_variant_call(CheckCtx *ctx, Expr *expr,
   assert(false && "unexpected callee kind in rewrite_tuple_variant_call");
 }
 
-static Type *resolve_callee(CheckCtx *ctx, Expr *expr, FunDef **out_def) {
+static bool resolve_path_segment_args(PathSegment *seg, TypeResolver *tyres,
+                                      Allocator *al, TypeScratch *out_args) {
+  ts_init(out_args, seg->type_arg_count, al);
+  for (int i = 0; i < seg->type_arg_count; i++) {
+    out_args->ptr[i] = tyres_resolve(tyres, seg->type_args[i]);
+    if (type_is_poison(out_args->ptr[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static Type *resolve_callee(CheckCtx *ctx, Expr *expr, Subst *subst) {
   assert(expr->kind == EXPR_CALL);
   Expr *callee = expr->as.call.callee;
 
@@ -929,9 +941,29 @@ static Type *resolve_callee(CheckCtx *ctx, Expr *expr, FunDef **out_def) {
   }
 
   switch (r.type->kind) {
-  case TY_FUNCTION:
-    *out_def = r.as.method.fun;
-    return r.type;
+  case TY_FUNCTION: {
+    FunDef *def = r.as.method.fun;
+
+    TypeScratch type_args;
+    if (!resolve_path_segment_args(
+            &callee->as.path_expr.path
+                 .segments[callee->as.path_expr.path.count - 1],
+            &ctx->tyres, ctx->al, &type_args)) {
+      return ctx->tc->t_poison;
+    }
+
+    if (type_args.count > 0 && type_args.count != def->type_param_count) {
+      diag_error(ctx->diags, callee->span,
+                 "expected %d type arguments but got %d", def->type_param_count,
+                 type_args.count);
+      return ctx->tc->t_poison;
+    }
+
+    *subst = infer_open_generics(&ctx->infer, def->type_params, type_args.ptr,
+                                 def->type_param_count, callee->span, ctx->al);
+
+    return subst_apply(subst, r.type, ctx->al);
+  }
   case TY_STRUCT: {
     if (!r.type->as.struc.def->is_tuple) {
       char ty_buf[64];
@@ -961,25 +993,13 @@ static Type *resolve_callee(CheckCtx *ctx, Expr *expr, FunDef **out_def) {
   }
 }
 
-static bool resolve_path_segment_args(PathSegment *seg, TypeResolver *tyres,
-                                      Allocator *al, TypeScratch *out_args) {
-  ts_init(out_args, seg->type_arg_count, al);
-  for (int i = 0; i < seg->type_arg_count; i++) {
-    out_args->ptr[i] = tyres_resolve(tyres, seg->type_args[i]);
-    if (type_is_poison(out_args->ptr[i])) {
-      return false;
-    }
-  }
-  return true;
-}
-
 static Type *resolve_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   // todo: handle hint
 
   ExprCall *call = &expr->as.call;
 
-  FunDef *fun_def = NULL;
-  Type *callee_ty = resolve_callee(ctx, expr, &fun_def);
+  Subst subst = subst_empty();
+  Type *callee_ty = resolve_callee(ctx, expr, &subst);
   if (type_is_poison(callee_ty)) {
     return ctx->tc->t_poison;
   }
@@ -1005,46 +1025,12 @@ static Type *resolve_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     return ctx->tc->t_poison;
   }
 
-  // check generic
-  bool is_generic = fun_def && fun_def->type_param_count > 0;
-  Subst subst = subst_empty();
-
-  if (is_generic) {
-    TypeScratch type_args;
-    bool had_explicit_args = false;
-
-    assert(call->callee->kind == EXPR_PATH &&
-           "expected path callee for generic calls");
-    Path *path = &call->callee->as.path_expr.path;
-    PathSegment *last_seg = &path->segments[path->count - 1];
-    had_explicit_args = last_seg->type_arg_count > 0;
-
-    if (had_explicit_args &&
-        last_seg->type_arg_count != fun_def->type_param_count) {
-      diag_error(ctx->diags, call->callee->span,
-                 "expected %d type arguments but got %d",
-                 fun_def->type_param_count, last_seg->type_arg_count);
-      return ctx->tc->t_poison;
-    }
-
-    if (!resolve_path_segment_args(last_seg, &ctx->tyres, ctx->al,
-                                   &type_args)) {
-      return ctx->tc->t_poison;
-    }
-
-    subst = infer_open_generics(&ctx->infer, fun_def->type_params,
-                                had_explicit_args ? type_args.ptr : NULL,
-                                fun_def->type_param_count, expr->span, ctx->al);
-  }
+  bool is_generic = subst.count > 0;
 
   // check arguments
   bool had_error = false;
   for (int i = 0; i < call->arg_count; i++) {
     Type *param_ty = callee_ty->as.fun.param_types[i];
-    if (is_generic) {
-      param_ty = subst_apply(&subst, param_ty, ctx->al);
-    }
-
     Type *arg_ty =
         resolve_expr(ctx, call->args[i], callee_ty->as.fun.param_types[i]);
 
