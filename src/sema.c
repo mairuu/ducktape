@@ -944,6 +944,10 @@ static Type *resolve_callee(CheckCtx *ctx, Expr *expr, Subst *subst) {
   case TY_FUNCTION: {
     FunDef *def = r.as.method.fun;
 
+    if (def->type_param_count == 0) {
+      return r.type;
+    }
+
     TypeScratch type_args;
     if (!resolve_path_segment_args(
             &callee->as.path_expr.path
@@ -2084,6 +2088,17 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
       elem_types.ptr[i] = tyres_resolve(r, tuple->elems[i]);
     }
     result = ty_tuple(elem_types.ptr, tuple->count, r->al);
+    break;
+  }
+  case TYNODE_FUN: {
+    TypeScratch param_types;
+    ts_init(&param_types, node->as.fun.param_count, r->al);
+    for (int i = 0; i < node->as.fun.param_count; i++) {
+      param_types.ptr[i] = tyres_resolve(r, node->as.fun.param_types[i]);
+    }
+    Type *return_type = tyres_resolve(r, node->as.fun.return_type);
+    result =
+        ty_fun(param_types.ptr, node->as.fun.param_count, return_type, r->al);
     break;
   }
   default:
