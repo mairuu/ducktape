@@ -369,7 +369,7 @@ typedef enum {
 } PatternKind;
 
 typedef struct {
-  StringView field_name;
+  FieldIdent ident;
   Pattern *sub_pattern; // NULL means shorthand, bind same name as field
   Span span;
 } FieldPat;
@@ -381,9 +381,8 @@ typedef struct {
 
 typedef struct {
   Path path;
-  Pattern **payloads;
-  int payload_count;
-  VariantDef *resolved_variant;
+  FieldPat *fields;
+  int field_count;
 } PatternVariant;
 
 typedef struct {

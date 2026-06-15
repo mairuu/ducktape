@@ -71,6 +71,32 @@ VariantDef *find_enum_variant(const EnumDef *def, StringView name,
   return NULL;
 }
 
+FieldDef *find_variant_field(const VariantDef *def, FieldIdent ident,
+                             DiagBag *diags, Span span) {
+  if (def->is_tuple) {
+    int idx = ident.index;
+    if (idx < 0 || idx >= def->field_count) {
+      diag_error(diags, span,
+                 "tuple index %d out of bounds for variant with %d fields", idx,
+                 def->field_count);
+      return NULL;
+    }
+    return &def->fields[idx];
+  } else {
+    StringView name = ident.name;
+    for (int i = 0; i < def->field_count; i++) {
+      if (sv_equal(def->fields[i].ident.name, name)) {
+        return &def->fields[i];
+      }
+    }
+
+    diag_error(diags, span,
+               "unknown field '" SV_FMT " ' in variant '" SV_FMT "'",
+               SV_ARG(name), SV_ARG(def->name));
+    return NULL;
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Substitution
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1054,11 +1080,185 @@ static Type *resolve_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   return ret_ty;
 }
 
-static bool check_pattern(CheckCtx *ctx, Pattern *pattern, Type *expected_ty) {
-  (void)ctx;
-  (void)pattern;
-  (void)expected_ty;
+static bool check_pattern(CheckCtx *ctx, Pattern *pattern, Type *expected_ty);
 
+static bool check_struct_pattern(CheckCtx *ctx, Pattern *pattern,
+                                 Type *expected_ty, StructDef *struct_def) {
+  if (type_is_poison(expected_ty)) {
+    return true;
+  }
+
+  if (expected_ty->kind != TY_STRUCT) {
+    char et[64];
+    type_sprintf(expected_ty, et, sizeof(et));
+    diag_error(ctx->diags, pattern->span,
+               "expected struct type in struct pattern, got '%s'", et);
+    return false;
+  }
+
+  if (pattern->as.struc.field_count > 0) {
+    if (struct_def->is_tuple &&
+        pattern->as.struc.fields[0].ident.name.len > 0) {
+      diag_error(
+          ctx->diags, pattern->span,
+          "matching tuple struct with struct pattern syntax is not allowed");
+      return false;
+    }
+
+    if (!struct_def->is_tuple &&
+        pattern->as.struc.fields[0].ident.name.len == 0) {
+      diag_error(ctx->diags, pattern->span,
+                 "matching struct with tuple pattern syntax is not allowed");
+      return false;
+    }
+  }
+
+  bool is_generic = struct_def->type_param_count > 0;
+
+  Subst subst = subst_empty();
+  if (is_generic) {
+    subst = infer_open_generics(
+        &ctx->infer, struct_def->type_params, expected_ty->as.struc.type_args,
+        struct_def->type_param_count, pattern->span, ctx->al);
+  }
+
+  bool sub_pattern_error = false;
+  for (int i = 0; i < pattern->as.struc.field_count; i++) {
+    FieldPat *fp = &pattern->as.struc.fields[i];
+    FieldDef *fd =
+        find_struct_field(struct_def, fp->ident, ctx->diags, fp->span);
+
+    Type *field_ty = NULL;
+    if (fd == NULL) {
+      sub_pattern_error = true;
+      field_ty = ctx->tc->t_poison;
+    } else {
+      field_ty = fd->type;
+    }
+
+    if (is_generic) {
+      field_ty = subst_apply(&subst, field_ty, ctx->al);
+      field_ty = infer_apply(&ctx->infer, field_ty, ctx->al);
+    }
+
+    if (fp->sub_pattern != NULL) {
+      sub_pattern_error |= check_pattern(ctx, fp->sub_pattern, field_ty);
+    } else {
+      assert(!struct_def->is_tuple &&
+             "tuple struct patterns must have sub-patterns");
+      vscope_define(ctx->vscope, fp->ident.name, field_ty, ctx->diags, fp->span,
+                    NULL);
+    }
+  }
+  return !sub_pattern_error;
+}
+
+static bool check_variant_pattern(CheckCtx *ctx, Pattern *pattern,
+                                  Type *expected_ty, EnumDef *enum_def,
+                                  VariantDef *variant_def) {
+  if (type_is_poison(expected_ty)) {
+    return true;
+  }
+
+  if (expected_ty->kind != TY_ENUM) {
+    char et[64];
+    type_sprintf(expected_ty, et, sizeof(et));
+    diag_error(ctx->diags, pattern->span,
+               "expected enum type in variant pattern, got '%s'", et);
+    return false;
+  }
+
+  if (expected_ty->kind != TY_ENUM || expected_ty->as.enm.def != enum_def) {
+    char et[64], pt[64];
+    type_sprintf(expected_ty, et, sizeof(et));
+    StringView name =
+        pattern->as.variant.path.segments[pattern->as.variant.path.count - 1]
+            .name;
+    memcpy(pt, name.chars, name.len);
+    pt[name.len] = '\0';
+    diag_error(ctx->diags, pattern->span,
+               "variant '%s' does not belong to expected enum type '%s'", pt,
+               et);
+    return false;
+  }
+
+  if (pattern->as.variant.field_count > 0) {
+    if (variant_def->is_tuple && pattern->as.variant.fields[0].sub_pattern) {
+      diag_error(
+          ctx->diags, pattern->span,
+          "matching tuple variant with struct pattern syntax is not allowed");
+      return false;
+    }
+
+    if (!variant_def->is_tuple &&
+        pattern->as.variant.fields[0].ident.name.len == 0) {
+      diag_error(
+          ctx->diags, pattern->span,
+          "matching struct variant with tuple pattern syntax is not allowed");
+      return false;
+    }
+  }
+
+  int expected_argc = variant_def->field_count;
+  int got_argc = pattern->as.variant.field_count;
+  if (got_argc > 0 && got_argc != expected_argc) {
+    char et[64];
+    type_sprintf(expected_ty, et, sizeof(et));
+    diag_error(ctx->diags, pattern->span,
+               "expected %d arguments for variant '%s' but got %d",
+               expected_argc, et, got_argc);
+    return false;
+  }
+
+  bool sub_pattern_error = false;
+  int check_n = expected_argc < got_argc ? expected_argc : got_argc;
+
+  Subst subst = subst_empty();
+  bool is_generic = enum_def->type_param_count > 0;
+
+  if (enum_def->type_param_count > 0) {
+    subst = infer_open_generics(
+        &ctx->infer, enum_def->type_params, expected_ty->as.enm.type_args,
+        enum_def->type_param_count, pattern->span, ctx->al);
+  }
+
+  for (int i = 0; i < check_n; i++) {
+    FieldPat *fp = &pattern->as.variant.fields[i];
+    FieldDef *fd =
+        find_variant_field(variant_def, fp->ident, ctx->diags, fp->span);
+
+    Type *field_ty = NULL;
+    if (fd == NULL) {
+      sub_pattern_error = true;
+      field_ty = ctx->tc->t_poison;
+    } else {
+      field_ty = fd->type;
+    }
+
+    if (is_generic) {
+      field_ty = subst_apply(&subst, field_ty, ctx->al);
+      field_ty = infer_apply(&ctx->infer, field_ty, ctx->al);
+    }
+
+    if (fp->sub_pattern != NULL) {
+      sub_pattern_error |= check_pattern(ctx, fp->sub_pattern, field_ty);
+    } else {
+      assert(!variant_def->is_tuple &&
+             "tuple variant patterns must have sub-patterns");
+      vscope_define(ctx->vscope, fp->ident.name, field_ty, ctx->diags, fp->span,
+                    NULL);
+    }
+  }
+
+  for (int i = check_n; i < got_argc; i++) {
+    sub_pattern_error |= check_pattern(
+        ctx, pattern->as.variant.fields[i].sub_pattern, ctx->tc->t_poison);
+  }
+
+  return !sub_pattern_error;
+}
+
+static bool check_pattern(CheckCtx *ctx, Pattern *pattern, Type *expected_ty) {
   pattern->resolved_type = expected_ty;
 
   switch (pattern->kind) {
@@ -1080,157 +1280,54 @@ static bool check_pattern(CheckCtx *ctx, Pattern *pattern, Type *expected_ty) {
     break;
   }
   case PAT_VARIANT: {
-    if (type_is_poison(expected_ty)) {
-      break;
-    }
-
-    if (expected_ty->kind != TY_ENUM) {
-      char et[64];
-      type_sprintf(expected_ty, et, sizeof(et));
-      diag_error(ctx->diags, pattern->span,
-                 "expected enum type in variant pattern, got '%s'", et);
-      break;
-    }
-
     PathRes r;
     if (!cctx_resolve_path(ctx, &pattern->as.variant.path, &r)) {
-      break;
-    }
-    if (r.kind != PATHRES_VARIANT) {
-      char et[64];
-      type_sprintf(r.type, et, sizeof(et));
-      diag_error(ctx->diags, pattern->span,
-                 "expected enum variant in pattern, got '%s'", et);
-      break;
-    }
-
-    EnumDef *enum_def = r.as.variant.enum_def;
-    VariantDef *variant_def = r.as.variant.def;
-
-    if (expected_ty->kind != TY_ENUM || expected_ty->as.enm.def != enum_def) {
-      char et[64], pt[64];
-      type_sprintf(expected_ty, et, sizeof(et));
-      type_sprintf(r.type, pt, sizeof(pt));
-      StringView name =
-          pattern->as.variant.path.segments[pattern->as.variant.path.count - 1]
-              .name;
-      memcpy(pt, name.chars, name.len);
-      pt[name.len] = '\0';
-      diag_error(ctx->diags, pattern->span,
-                 "variant '%s' does not belong to expected enum type '%s'", pt,
-                 et);
-      break;
-    }
-
-    int expected_argc = variant_def->field_count;
-    int got_argc = pattern->as.variant.payload_count;
-    if (got_argc > 0 && got_argc != expected_argc) {
-      char et[64];
-      type_sprintf(expected_ty, et, sizeof(et));
-      diag_error(ctx->diags, pattern->span,
-                 "expected %d arguments for variant '%s' but got %d",
-                 expected_argc, et, got_argc);
-      break;
-    }
-
-    bool sub_pattern_error = false;
-    int check_n = expected_argc < got_argc ? expected_argc : got_argc;
-
-    Subst subst = subst_empty();
-    bool is_generic = enum_def->type_param_count > 0;
-
-    if (enum_def->type_param_count > 0) {
-      subst = infer_open_generics(
-          &ctx->infer, enum_def->type_params, expected_ty->as.enm.type_args,
-          enum_def->type_param_count, pattern->span, ctx->al);
-    }
-
-    for (int i = 0; i < check_n; i++) {
-      Type *field_ty = variant_def->fields[i].type;
-      if (is_generic) {
-        field_ty = subst_apply(&subst, field_ty, ctx->al);
-        field_ty = infer_apply(&ctx->infer, field_ty, ctx->al);
-      }
-      Pattern *field_pat = pattern->as.variant.payloads[i];
-      sub_pattern_error |= check_pattern(ctx, field_pat, field_ty);
-    }
-
-    for (int i = check_n; i < got_argc; i++) {
-      sub_pattern_error |= check_pattern(ctx, pattern->as.variant.payloads[i],
-                                         ctx->tc->t_poison);
-    }
-
-    if (sub_pattern_error) {
       return false;
     }
-    break;
+
+    if (r.kind == PATHRES_TYPE && r.type->kind == TY_STRUCT) {
+      Pattern new = {
+          .kind = PAT_STRUCT,
+          .span = pattern->span,
+          .as.struc =
+              {
+                  .path = pattern->as.variant.path,
+                  .field_count = pattern->as.variant.field_count,
+                  .fields = pattern->as.variant.fields,
+              },
+      };
+      *pattern = new;
+      return check_struct_pattern(ctx, pattern, expected_ty,
+                                  r.type->as.struc.def);
+    }
+
+    return check_variant_pattern(ctx, pattern, expected_ty,
+                                 r.as.variant.enum_def, r.as.variant.def);
   }
   case PAT_STRUCT: {
-    if (type_is_poison(expected_ty)) {
-      break;
-    }
-
-    if (expected_ty->kind != TY_STRUCT) {
-      char et[64];
-      type_sprintf(expected_ty, et, sizeof(et));
-      diag_error(ctx->diags, pattern->span,
-                 "expected struct type in struct pattern, got '%s'", et);
-      break;
-    }
-
     PathRes r;
     if (!cctx_resolve_path(ctx, &pattern->as.struc.path, &r)) {
-      break;
-    }
-    if (r.kind != PATHRES_TYPE || r.type->kind != TY_STRUCT) {
-      char et[64];
-      type_sprintf(r.type, et, sizeof(et));
-      diag_error(ctx->diags, pattern->span,
-                 "expected struct type in pattern path, got '%s'", et);
-      break;
-    }
-
-    StructDef *struct_def = r.type->as.struc.def;
-    bool is_generic = struct_def->type_param_count > 0;
-
-    Subst subst = subst_empty();
-    if (is_generic) {
-      subst = infer_open_generics(
-          &ctx->infer, struct_def->type_params, expected_ty->as.struc.type_args,
-          struct_def->type_param_count, pattern->span, ctx->al);
-    }
-
-    bool sub_pattern_error = false;
-    for (int i = 0; i < pattern->as.struc.field_count; i++) {
-      FieldPat *fp = &pattern->as.struc.fields[i];
-      FieldDef *fd =
-          find_struct_field(struct_def, (FieldIdent){.name = fp->field_name},
-                            ctx->diags, fp->span);
-      Type *field_ty = NULL;
-      if (fd == NULL) {
-        sub_pattern_error = true;
-        field_ty = ctx->tc->t_poison;
-      } else {
-        field_ty = fd->type;
-      }
-
-      if (is_generic) {
-        field_ty = subst_apply(&subst, field_ty, ctx->al);
-        field_ty = infer_apply(&ctx->infer, field_ty, ctx->al);
-      }
-
-      if (fp->sub_pattern != NULL) {
-        sub_pattern_error |= check_pattern(ctx, fp->sub_pattern, field_ty);
-      } else {
-        vscope_define(ctx->vscope, fp->field_name, field_ty, ctx->diags,
-                      fp->span, NULL);
-      }
-    }
-
-    if (sub_pattern_error) {
       return false;
     }
-    break;
+
+    if (r.kind == PATHRES_VARIANT) {
+      Pattern new = {
+          .kind = PAT_VARIANT,
+          .span = pattern->span,
+          .as.variant =
+              {
+                  .path = pattern->as.struc.path,
+                  .field_count = pattern->as.struc.field_count,
+                  .fields = pattern->as.struc.fields,
+              },
+      };
+      *pattern = new;
+      return check_variant_pattern(ctx, pattern, expected_ty,
+                                   r.as.variant.enum_def, r.as.variant.def);
+    }
+
+    return check_struct_pattern(ctx, pattern, expected_ty,
+                                r.type->as.struc.def);
   }
   case PAT_TUPLE: {
     if (type_is_poison(expected_ty)) {
@@ -1252,7 +1349,8 @@ static bool check_pattern(CheckCtx *ctx, Pattern *pattern, Type *expected_ty) {
       char et[64];
       type_sprintf(expected_ty, et, sizeof(et));
       diag_error(ctx->diags, pattern->span,
-                 "expected tuple of size %d in tuple pattern, got %d", expected_n, got_n);
+                 "expected tuple of size %d in tuple pattern, got %d",
+                 expected_n, got_n);
       break;
     }
 

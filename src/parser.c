@@ -1266,11 +1266,13 @@ static Pattern *parse_pattern(Parser *p) {
         pattern.kind = PAT_VARIANT;
         pattern.span = span_merge(start_span, previous_tok_span(p));
         pattern.as.variant.path = path;
-        pattern.as.variant.payloads =
-            al_alloc(p->al, sizeof(Pattern *) * subpat_count);
-        memcpy(pattern.as.variant.payloads, subpats,
-               sizeof(Pattern *) * subpat_count);
-        pattern.as.variant.payload_count = subpat_count;
+        pattern.as.variant.fields =
+            al_alloc_zero(p->al, sizeof(FieldPat) * subpat_count);
+        for (int i = 0; i < subpat_count; i++) {
+          pattern.as.variant.fields[i].sub_pattern = subpats[i];
+          pattern.as.variant.fields[i].ident.index = i;
+        }
+        pattern.as.variant.field_count = subpat_count;
       } else {
         return NULL;
       }
@@ -1303,12 +1305,12 @@ static Pattern *parse_pattern(Parser *p) {
             had_error = true;
             break;
           }
-          fields[field_count].field_name = field_name;
+          fields[field_count].ident.name = field_name;
           fields[field_count].sub_pattern = field_pat;
           fields[field_count].span = field_span;
           field_count++;
         } else {
-          fields[field_count].field_name = field_name;
+          fields[field_count].ident.name = field_name;
           fields[field_count].sub_pattern = NULL;
           fields[field_count].span = field_span;
           field_count++;
@@ -1336,12 +1338,9 @@ static Pattern *parse_pattern(Parser *p) {
       pattern.span = path.span;
       pattern.as.bind.name = path.segments[0].name;
     } else {
-
       pattern.kind = PAT_VARIANT;
       pattern.span = path.span;
       pattern.as.variant.path = path;
-      pattern.as.variant.payloads = NULL;
-      pattern.as.variant.payload_count = 0;
     }
   } else if (match_tok(p, TOKEN_LPAREN)) {
     Pattern *subpats[16];

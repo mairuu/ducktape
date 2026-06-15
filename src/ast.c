@@ -723,8 +723,14 @@ void dump_pattern(const Pattern *p, int indent) {
   case PAT_VARIANT:
     fprintf(stdout, "Pattern: Variant\n");
     dump_path(&p->as.variant.path, indent + 1);
-    for (int i = 0; i < p->as.variant.payload_count; i++) {
-      dump_pattern(p->as.variant.payloads[i], indent + 1);
+    fprintf(stdout, ")\n");
+    for (int i = 0; i < p->as.variant.field_count; i++) {
+      ind(indent + 1);
+      // fprintf(stdout, "Field: " SV_FMT "\n",
+      //         SV_ARG(p->as.variant.fields[i].ident.name));
+      if (p->as.variant.fields[i].sub_pattern) {
+        dump_pattern(p->as.variant.fields[i].sub_pattern, indent + 2);
+      }
     }
     break;
   case PAT_STRUCT:
@@ -733,8 +739,8 @@ void dump_pattern(const Pattern *p, int indent) {
     fprintf(stdout, ")\n");
     for (int i = 0; i < p->as.struc.field_count; i++) {
       ind(indent + 1);
-      fprintf(stdout, "Field: " SV_FMT "\n",
-              SV_ARG(p->as.struc.fields[i].field_name));
+      // fprintf(stdout, "Field: " SV_FMT "\n",
+      //         SV_ARG(p->as.struc.fields[i].ident.name));
       if (p->as.struc.fields[i].sub_pattern) {
         dump_pattern(p->as.struc.fields[i].sub_pattern, indent + 2);
       }
