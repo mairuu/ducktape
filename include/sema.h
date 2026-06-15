@@ -294,7 +294,7 @@ typedef struct {
 typedef struct {
   Path *path;
   TypeScope *tscope;
-  ValueScope *vscope;
+  // ValueScope *vscope;
   TypeResolver *tyres;
   DiagBag *diags;
   Allocator *al;

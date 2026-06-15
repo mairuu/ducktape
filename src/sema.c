@@ -813,19 +813,20 @@ static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
 
 static void rewrite_tuple_struct_call(CheckCtx *ctx, Expr *expr,
                                       StructDef *struct_def) {
+  (void)struct_def;
   assert(expr->kind == EXPR_CALL);
   assert(expr->as.call.callee->kind == EXPR_PATH);
 
   FieldInit *field_inits =
-      al_alloc_zero(ctx->al, sizeof(FieldInit) * struct_def->field_count);
-  for (int i = 0; i < struct_def->field_count; i++) {
+      al_alloc_zero(ctx->al, sizeof(FieldInit) * expr->as.call.arg_count);
+  for (int i = 0; i < expr->as.call.arg_count; i++) {
     field_inits[i].ident.index = i;
     field_inits[i].value = expr->as.call.args[i];
   }
 
   ExprStructInit init = {
       .path = expr->as.call.callee->as.path_expr.path,
-      .field_count = struct_def->field_count,
+      .field_count = expr->as.call.arg_count,
       .fields = field_inits,
   };
 
@@ -1538,7 +1539,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
         diag_error(ctx->diags, expr->span,
                    "unsupported operator for types '%s' and '%s'", lhs_buf,
                    rhs_buf);
-        result = ty_poison();
+        result = ctx->tc->t_poison;
       }
     }
     break;
@@ -1548,19 +1549,25 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     break;
   }
   case EXPR_PATH: {
-    PathRes r;
-    if (!cctx_resolve_path(ctx, &expr->as.path_expr.path, &r)) {
+    if (expr->as.path_expr.path.count != 1) {
+      diag_error(ctx->diags, expr->span,
+                 "unexpected multi-segment path expression without a call");
       result = ctx->tc->t_poison;
       break;
     }
 
-    if (r.kind == PATHRES_VARIANT) {
-      rewrite_tuple_variant_call(ctx, expr, r.as.variant.enum_def,
-                                 r.as.variant.def);
-      return resolve_expr(ctx, expr, hint); // re-resolve as variant initializer
-    }
+    StringView name =
+        expr->as.path_expr.path.segments[expr->as.path_expr.path.count - 1]
+            .name;
 
-    result = r.type;
+    VarEntry *ve = vscope_lookup(ctx->vscope, name, NULL);
+    if (!ve) {
+      diag_error(ctx->diags, expr->span, "undefined variable '%.*s'", name.len,
+                 name.chars);
+      result = ctx->tc->t_poison;
+      break;
+    }
+    result = ve->type;
     break;
   }
   case EXPR_STRUCT_INIT: {
@@ -2068,7 +2075,7 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
     PathRes pr;
     PathResCtx ctx = {
         .path = &named->path,
-        .vscope = NULL,
+        // .vscope = NULL,
         .tscope = r->tscope,
         .tyres = r,
         .diags = r->diags,
@@ -2175,18 +2182,6 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
   PathResCtx_ res_ctx = {.kind = PATHRES_CTX_SCOPE};
   memset(out_res, 0, sizeof(*out_res));
   Path *path = ctx->path;
-
-  if (path->count == 1 && ctx->vscope) {
-    VarEntry *ve = vscope_lookup(ctx->vscope, path->segments[0].name, NULL);
-    if (ve) {
-      out_res->kind = PATHRES_VAR;
-      out_res->type = ve->type;
-      if (ve->type->kind == TY_FUNCTION) {
-        out_res->as.method.fun = ve->as.fun;
-      }
-      return true;
-    }
-  }
 
   for (int i = 0; i < path->count; i++) {
     StringView segment = path->segments[i].name;
@@ -2339,7 +2334,7 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
 bool rctx_resolve_path(ResolveCtx *ctx, Path *path, PathRes *out_res) {
   PathResCtx path_ctx = {
       .path = path,
-      .vscope = NULL,
+      // .vscope = NULL,
       .tscope = ctx->tyres.tscope,
       .diags = ctx->diags,
       .tyres = &ctx->tyres,
@@ -2351,7 +2346,7 @@ bool rctx_resolve_path(ResolveCtx *ctx, Path *path, PathRes *out_res) {
 bool cctx_resolve_path(CheckCtx *ctx, Path *path, PathRes *out_res) {
   PathResCtx path_ctx = {
       .path = path,
-      .vscope = ctx->vscope,
+      // .vscope = ctx->vscope,
       .tscope = ctx->tscope,
       .diags = ctx->diags,
       .tyres = &ctx->tyres,

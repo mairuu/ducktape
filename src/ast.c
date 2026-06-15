@@ -472,7 +472,6 @@ int type_sprintf(const Type *t, char *buf, size_t buf_size) {
       n += type_sprintf(t->as.fun.param_types[i], buf + n, buf_size - n);
     }
     n += snprintf(buf + n, buf_size - n, "): ");
-    n += type_sprintf(t->as.fun.return_type, buf + n, buf_size - n);
     return n;
   }
   case TY_TUPLE: {
