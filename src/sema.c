@@ -864,6 +864,64 @@ static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
       }
       break;
     }
+    case BIND_STRUCT: {
+      BindingPatStruct *pat = &var->binding.as.struc;
+
+      if (type_is_poison(init_ty)) {
+        for (int i = 0; i < pat->field_count; i++) {
+          vscope_define(ctx->vscope, pat->field_names[i], ctx->tc->t_poison,
+                        ctx->diags, stmt->span, NULL);
+        }
+        break;
+      }
+
+      if (init_ty->kind != TY_STRUCT) {
+        char ty_buf[64];
+        type_sprintf(init_ty, ty_buf, sizeof(ty_buf));
+        diag_error(ctx->diags, stmt->span,
+                   "cannot destructure type '%s' as a struct", ty_buf);
+        break;
+      }
+
+      PathRes r;
+      if (!cctx_resolve_path(ctx, &pat->path, &r)) {
+        break;
+      }
+
+      if (r.kind != PATHRES_TYPE || r.type->kind != TY_STRUCT) {
+        char ty_buf[64];
+        type_sprintf(r.type, ty_buf, sizeof(ty_buf));
+        diag_error(ctx->diags, stmt->span,
+                   "cannot destructure type '%s' as a struct", ty_buf);
+        break;
+      }
+
+      if (r.type->as.struc.def != init_ty->as.struc.def) {
+        char expected_buf[64], actual_buf[64];
+        type_sprintf(r.type, expected_buf, sizeof(expected_buf));
+        type_sprintf(init_ty, actual_buf, sizeof(actual_buf));
+        diag_error(ctx->diags, stmt->span,
+                   "struct destructuring type mismatch: expected '%s' but got '%s'",
+                   expected_buf, actual_buf);
+        break;
+      }
+
+      StructDef *def = init_ty->as.struc.def;
+      assert(!def->is_tuple && "todo: handle tuple structs in struct patterns");
+
+      for (int i = 0; i < pat->field_count; i++) {
+        StringView name = pat->field_names[i];
+        FieldIdent ident = {.name = name};
+        FieldDef *field_def =
+            find_struct_field(def, ident, ctx->diags, stmt->span);
+        if (!field_def) {
+          continue;
+        }
+        vscope_define(ctx->vscope, name, field_def->type, ctx->diags,
+                      stmt->span, NULL);
+      }
+      break;
+    }
     default:
       assert(false && "unhandled var binding kind in resolve_stmt");
     }

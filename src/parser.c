@@ -183,9 +183,22 @@ static void sync_to_decl(Parser *p) {
 
 // parsing
 
+typedef enum {
+  PATH_EXPR, // type args require turbo-fish
+  PATH_TYPE, // type args can be written with or without '::'
+  PATH_USE,  // stop before '{' for struct patterns
+} PathParseMode;
+
+static bool parse_path(Parser *p, PathParseMode mode, Path *out);
+
 static BindingPat parse_binding(Parser *p) {
-  if (match_tok(p, TOKEN_IDENT)) {
-    Token name_tok = *previous_tok(p);
+  if (check_tok(p, TOKEN_IDENT)) {
+    Span start = current_tok_span(p);
+
+    Path path;
+    if (!parse_path(p, PATH_USE, &path)) {
+      return (BindingPat){.kind = BIND_POISON, .span = current_tok_span(p)};
+    }
 
     if (match_tok(p, TOKEN_LBRACE)) {
       StringView field_names[16];
@@ -218,8 +231,8 @@ static BindingPat parse_binding(Parser *p) {
 
       BindingPat b = (BindingPat){
           .kind = BIND_STRUCT,
-          .span = span_merge(token_span(&name_tok), previous_tok_span(p)),
-          .as.struc.struct_name = name_tok.lexeme,
+          .span = span_merge(start, previous_tok_span(p)),
+          .as.struc.path = path,
           .as.struc.field_names =
               al_alloc(p->al, sizeof(StringView) * field_count),
           .as.struc.field_count = field_count,
@@ -229,10 +242,15 @@ static BindingPat parse_binding(Parser *p) {
       return b;
     }
 
+    if (path.count > 1) {
+      error_at(p, start, "unexpected path in binding pattern");
+      return (BindingPat){.kind = BIND_POISON, .span = current_tok_span(p)};
+    }
+
     return (BindingPat){
         .kind = BIND_IDENT,
-        .span = token_span(&name_tok),
-        .as.ident = name_tok.lexeme,
+        .span = path.span,
+        .as.ident = path.segments[0].name,
     };
   }
 
@@ -278,14 +296,6 @@ static BindingPat parse_binding(Parser *p) {
   error_at(p, current_tok_span(p), "expected identifier in binding pattern");
   return (BindingPat){.kind = BIND_POISON, .span = current_tok_span(p)};
 }
-
-typedef enum {
-  PATH_EXPR,
-  PATH_TYPE,
-  PATH_USE,
-} PathParseMode;
-
-static bool parse_path(Parser *p, PathParseMode mode, Path *out);
 
 static TypeNode *parse_type(Parser *p) {
   TypeNode *base = NULL;

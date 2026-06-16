@@ -774,7 +774,7 @@ typedef struct {
 } BindingPatTuple;
 
 typedef struct {
-  StringView struct_name;
+  Path path;
   StringView *field_names;
   int field_count;
 } BindingPatStruct;

@@ -770,8 +770,9 @@ static void dump_binding_pat(const BindingPat *bp, int indent) {
     fprintf(stdout, ")\n");
     break;
   case BIND_STRUCT:
-    fprintf(stdout, "BindStruct: " SV_FMT "\n",
-            SV_ARG(bp->as.struc.struct_name));
+    fprintf(stdout, "BindStruct: ");
+    dump_path(&bp->as.struc.path, indent + 1);
+    fprintf(stdout, "\n");
     break;
   case BIND_POISON:
     fprintf(stdout, "Bind: <POISON>\n");
