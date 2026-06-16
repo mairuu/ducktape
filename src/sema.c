@@ -22,10 +22,10 @@ typedef struct {
 
 static void ts_init(TypeScratch *ts, int count, Allocator *al) {
   ts->count = count;
-  ts->ptr = count <= TYPE_SCRATCH_CAP ? ts->buf
+  ts->ptr = count <= TYPE_SCRATCH_CAP ? count == 0 ? NULL : ts->buf
                                       : al_alloc(al, sizeof(Type *) * count);
   memset(ts->ptr, 0, sizeof(Type *) * count);
-  assert(ts->ptr && "out of memory");
+  assert((count == 0 || ts->ptr) && "out of memory");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -120,6 +120,7 @@ Type *subst_apply(const Subst *s, Type *t, Allocator *al) {
         return s->args[i];
       }
     }
+    assert(false && "subst_apply: generic type not found in substitution");
     return t; // unmatched — pass through
 
   case TY_INT:
@@ -282,8 +283,8 @@ bool infer_unify(InferCtx *ctx, Type *a, Type *b, DiagBag *diags, Span span) {
     char ab[64], bb[64];
     type_sprintf(a, ab, sizeof(ab));
     type_sprintf(b, bb, sizeof(bb));
-    diag_error(diags, span, "type mismatch: expected '%s' but got '%s'", bb,
-               ab);
+    diag_error(diags, span, "type mismatch: expected '%s' but got '%s'", ab,
+               bb);
     return false;
   }
 
@@ -801,6 +802,35 @@ static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
                     stmt->span, NULL);
       break;
     }
+    case BIND_TUPLE: {
+      switch (init_ty->kind) {
+      case TY_TUPLE: {
+        if (!type_is_poison(init_ty) &&
+            init_ty->as.tuple.elem_count != var->binding.as.tuple.count) {
+          diag_error(
+              ctx->diags, stmt->span,
+              "tuple destructuring count mismatch: expected %d but got %d",
+              var->binding.as.tuple.count, init_ty->as.tuple.elem_count);
+          break;
+        }
+
+        for (int i = 0; i < var->binding.as.tuple.count; i++) {
+          Type *ty = init_ty->as.tuple.elem_types[i];
+          vscope_define(ctx->vscope, var->binding.as.tuple.names[i], ty,
+                        ctx->diags, stmt->span, NULL);
+        }
+        break;
+      }
+      default: {
+        char ty_buf[64];
+        type_sprintf(init_ty, ty_buf, sizeof(ty_buf));
+        diag_error(ctx->diags, stmt->span,
+                   "cannot destructure type '%s' as a tuple", ty_buf);
+        break;
+      }
+      }
+      break;
+    }
     default:
       assert(false && "unhandled var binding kind in resolve_stmt");
     }
@@ -812,8 +842,7 @@ static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
 }
 
 static void rewrite_tuple_struct_call(CheckCtx *ctx, Expr *expr,
-                                      StructDef *struct_def) {
-  (void)struct_def;
+                                      Type *resolved_struct) {
   assert(expr->kind == EXPR_CALL);
   assert(expr->as.call.callee->kind == EXPR_PATH);
 
@@ -828,6 +857,7 @@ static void rewrite_tuple_struct_call(CheckCtx *ctx, Expr *expr,
       .path = expr->as.call.callee->as.path_expr.path,
       .field_count = expr->as.call.arg_count,
       .fields = field_inits,
+      .resolved_struct = resolved_struct,
   };
 
   *expr = (Expr){
@@ -838,8 +868,9 @@ static void rewrite_tuple_struct_call(CheckCtx *ctx, Expr *expr,
 }
 
 static void rewrite_tuple_variant_call(CheckCtx *ctx, Expr *expr,
-                                       EnumDef *enum_def,
+                                       Type *resolved_enum, EnumDef *enum_def,
                                        VariantDef *variant_def) {
+  (void)enum_def;
   if (expr->kind == EXPR_PATH) {
     // unit struct/variant constructor with no args
     ExprVariant init = {
@@ -847,7 +878,7 @@ static void rewrite_tuple_variant_call(CheckCtx *ctx, Expr *expr,
         .field_count = 0,
         .fields = NULL,
         .resolved_variant = variant_def,
-        .resolved_enum = enum_def,
+        .resolved_enum = resolved_enum,
     };
     *expr = (Expr){
         .kind = EXPR_VARIANT,
@@ -872,7 +903,7 @@ static void rewrite_tuple_variant_call(CheckCtx *ctx, Expr *expr,
         .field_count = variant_def->field_count,
         .fields = field_inits,
         .resolved_variant = variant_def,
-        .resolved_enum = enum_def,
+        .resolved_enum = resolved_enum,
     };
 
     *expr = (Expr){
@@ -889,7 +920,7 @@ static void rewrite_tuple_variant_call(CheckCtx *ctx, Expr *expr,
         .field_count = expr->as.struct_init.field_count,
         .fields = expr->as.struct_init.fields,
         .resolved_variant = variant_def,
-        .resolved_enum = enum_def,
+        .resolved_enum = resolved_enum,
     };
     *expr = (Expr){
         .kind = EXPR_VARIANT,
@@ -935,7 +966,7 @@ static Type *resolve_callee(CheckCtx *ctx, Expr *expr, Subst *subst) {
                  "attempted to call non-tuple enum variant '%s'", ty_buf);
       return ctx->tc->t_poison;
     }
-    rewrite_tuple_variant_call(ctx, expr, r.as.variant.enum_def,
+    rewrite_tuple_variant_call(ctx, expr, r.type, r.as.variant.enum_def,
                                r.as.variant.def);
     return r.type;
   }
@@ -976,7 +1007,7 @@ static Type *resolve_callee(CheckCtx *ctx, Expr *expr, Subst *subst) {
                  "attempted to call non-tuple struct type '%s'", ty_buf);
       return ctx->tc->t_poison;
     }
-    rewrite_tuple_struct_call(ctx, expr, r.type->as.struc.def);
+    rewrite_tuple_struct_call(ctx, expr, r.type);
     return r.type;
   }
   case TY_ENUM: {
@@ -1174,7 +1205,8 @@ static bool check_variant_pattern(CheckCtx *ctx, Pattern *pattern,
   }
 
   if (pattern->as.variant.field_count > 0) {
-    if (variant_def->is_tuple && pattern->as.variant.fields[0].sub_pattern) {
+    if (variant_def->is_tuple &&
+        pattern->as.variant.fields[0].ident.name.len != 0) {
       diag_error(
           ctx->diags, pattern->span,
           "matching tuple variant with struct pattern syntax is not allowed");
@@ -1557,32 +1589,76 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       result = ctx->tc->t_poison;
       break;
     }
+
+    Type *ty = ve->type;
+
+    if (ty->kind == TY_FUNCTION) {
+      FunDef *def = ve->as.fun;
+
+      if (def == NULL || def->type_param_count == 0) {
+        return ty;
+      }
+
+      TypeScratch type_args;
+      if (!resolve_path_segment_args(
+              &expr->as.path_expr.path
+                   .segments[expr->as.path_expr.path.count - 1],
+              &ctx->tyres, ctx->al, &type_args)) {
+        return ctx->tc->t_poison;
+      }
+
+      if (type_args.count > 0 && type_args.count != def->type_param_count) {
+        diag_error(ctx->diags, expr->span,
+                   "expected %d type arguments but got %d",
+                   def->type_param_count, type_args.count);
+        return ctx->tc->t_poison;
+      }
+
+      Subst subst =
+          infer_open_generics(&ctx->infer, def->type_params, type_args.ptr,
+                              def->type_param_count, expr->span, ctx->al);
+
+      ty = subst_apply(&subst, ty, ctx->al);
+      ty = infer_apply(&ctx->infer, ty, ctx->al);
+
+      result = ty;
+      break;
+    }
+
     result = ve->type;
     break;
   }
   case EXPR_STRUCT_INIT: {
     ExprStructInit *init = &expr->as.struct_init;
-    PathRes r;
-    if (!cctx_resolve_path(ctx, &init->path, &r)) {
-      result = ctx->tc->t_poison;
-      break;
+
+    if (!init->resolved_struct) {
+      PathRes r;
+      if (!cctx_resolve_path(ctx, &init->path, &r)) {
+        result = ctx->tc->t_poison;
+        break;
+      }
+
+      if (r.kind == PATHRES_VARIANT) {
+        rewrite_tuple_variant_call(ctx, expr, r.type, r.as.variant.enum_def,
+                                   r.as.variant.def);
+        return resolve_expr(ctx, expr,
+                            hint); // re-resolve as variant initializer
+      }
+
+      if (r.type->kind != TY_STRUCT) {
+        char ty_buf[64];
+        type_sprintf(r.type, ty_buf, sizeof(ty_buf));
+        diag_error(ctx->diags, expr->span,
+                   "attempted to initialize non-struct type '%s'", ty_buf);
+        result = ctx->tc->t_poison;
+        break;
+      }
+
+      init->resolved_struct = r.type;
     }
 
-    if (r.kind == PATHRES_VARIANT) {
-      rewrite_tuple_variant_call(ctx, expr, r.as.variant.enum_def,
-                                 r.as.variant.def);
-      return resolve_expr(ctx, expr, hint); // re-resolve as variant initializer
-    }
-
-    if (r.type->kind != TY_STRUCT) {
-      char ty_buf[64];
-      type_sprintf(r.type, ty_buf, sizeof(ty_buf));
-      diag_error(ctx->diags, expr->span,
-                 "attempted to initialize non-struct type '%s'", ty_buf);
-      result = ctx->tc->t_poison;
-      break;
-    }
-    StructDef *def = r.type->as.struc.def;
+    Type *struct_ty = init->resolved_struct;
+    StructDef *def = struct_ty->as.struc.def;
 
     // check arity
     int expected_field_count = def->field_count;
@@ -1597,11 +1673,10 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
 
     Subst subst = subst_empty();
     bool is_generic = def->type_param_count > 0;
-    bool had_explicit_args =
-        init->path.segments[init->path.count - 1].type_arg_count > 0;
 
     if (is_generic) {
-      Type **args = had_explicit_args ? r.type->as.struc.type_args : NULL;
+      bool had_explicit_args = struct_ty != def->self_type;
+      Type **args = had_explicit_args ? struct_ty->as.struc.type_args : NULL;
       subst = infer_open_generics(&ctx->infer, def->type_params, args,
                                   def->type_param_count, expr->span, ctx->al);
     }
@@ -1652,7 +1727,8 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   }
   case EXPR_VARIANT: {
     ExprVariant *init = &expr->as.variant;
-    EnumDef *enum_def = init->resolved_enum;
+    Type *resolved_enum_ty = init->resolved_enum;
+    EnumDef *enum_def = resolved_enum_ty->as.enm.def;
     VariantDef *variant_def = init->resolved_variant;
 
     // check arity
@@ -1668,11 +1744,11 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
 
     Subst subst = subst_empty();
     bool is_generic = enum_def->type_param_count > 0;
-    bool had_explicit_args =
-        init->path.segments[init->path.count - 1].type_arg_count > 0;
 
     if (is_generic) {
-      Type **args = had_explicit_args ? init->resolved_enum->type_params : NULL;
+      bool had_explicit_args = resolved_enum_ty != enum_def->self_type;
+      Type **args =
+          had_explicit_args ? resolved_enum_ty->as.enm.type_args : NULL;
       subst =
           infer_open_generics(&ctx->infer, enum_def->type_params, args,
                               enum_def->type_param_count, expr->span, ctx->al);
@@ -1734,12 +1810,25 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
         break;
       }
 
+      Subst subst = subst_empty();
+      bool is_generic = def->type_param_count > 0;
+      if (is_generic) {
+        subst = infer_open_generics(&ctx->infer, def->type_params,
+                                    base_ty->as.struc.type_args,
+                                    def->type_param_count, expr->span, ctx->al);
+      }
+
       FieldDef *field_def =
           find_struct_field(def, field->ident, ctx->diags, expr->span);
       if (!field_def) {
         result = ctx->tc->t_poison;
       } else {
         result = field_def->type;
+      }
+
+      if (is_generic) {
+        result = subst_apply(&subst, result, ctx->al);
+        // result = infer_apply(&ctx->infer, result, ctx->al);
       }
 
       break;
@@ -2312,6 +2401,15 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
         diag_error(ctx->diags, path->span,
                    "cannot access member '" SV_FMT "' of enum variant",
                    SV_ARG(segment));
+        return false;
+      }
+
+      if (path->segments[i].type_arg_count > 0) {
+        diag_error(ctx->diags, path->span,
+                   "cannot apply type arguments to enum variant '" SV_FMT
+                   "'. did you mean to apply them to the enum '" SV_FMT
+                   "' instead?",
+                   SV_ARG(segment), SV_ARG(def->name));
         return false;
       }
 

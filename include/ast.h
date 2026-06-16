@@ -669,7 +669,7 @@ typedef struct {
   Path path;
   FieldInit *fields;
   int field_count;
-  StructDef *resolved_def; // NULL until resolver runs
+  Type *resolved_struct; // NULL until resolver runs
 } ExprStructInit;
 
 typedef struct {
@@ -677,7 +677,7 @@ typedef struct {
   FieldInit *fields;
   int field_count;
   VariantDef *resolved_variant; // NULL until resolver runs
-  EnumDef *resolved_enum;       // NULL until resolver runs
+  Type *resolved_enum;          // NULL until resolver runs
 } ExprVariant;
 
 typedef struct {
