@@ -803,21 +803,54 @@ static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
       break;
     }
     case BIND_TUPLE: {
+      BindingPatTuple *pat = &var->binding.as.tuple;
+
+      if (type_is_poison(init_ty)) {
+        for (int i = 0; i < pat->count; i++) {
+          vscope_define(ctx->vscope, pat->names[i], ctx->tc->t_poison,
+                        ctx->diags, stmt->span, NULL);
+        }
+        break;
+      }
+
       switch (init_ty->kind) {
       case TY_TUPLE: {
-        if (!type_is_poison(init_ty) &&
-            init_ty->as.tuple.elem_count != var->binding.as.tuple.count) {
+        if (init_ty->as.tuple.elem_count != pat->count) {
           diag_error(
               ctx->diags, stmt->span,
               "tuple destructuring count mismatch: expected %d but got %d",
-              var->binding.as.tuple.count, init_ty->as.tuple.elem_count);
+              pat->count, init_ty->as.tuple.elem_count);
           break;
         }
 
-        for (int i = 0; i < var->binding.as.tuple.count; i++) {
+        for (int i = 0; i < pat->count; i++) {
           Type *ty = init_ty->as.tuple.elem_types[i];
-          vscope_define(ctx->vscope, var->binding.as.tuple.names[i], ty,
-                        ctx->diags, stmt->span, NULL);
+          vscope_define(ctx->vscope, pat->names[i], ty, ctx->diags, stmt->span,
+                        NULL);
+        }
+        break;
+      }
+      case TY_STRUCT: {
+        StructDef *def = init_ty->as.struc.def;
+        if (!def->is_tuple) {
+          char ty_buf[64];
+          type_sprintf(init_ty, ty_buf, sizeof(ty_buf));
+          diag_error(ctx->diags, stmt->span,
+                     "cannot destructure type '%s' as a tuple", ty_buf);
+          break;
+        }
+        if (def->field_count != pat->count) {
+          diag_error(
+              ctx->diags, stmt->span,
+              "tuple destructuring count mismatch: expected %d but got %d",
+              pat->count, def->field_count);
+          break;
+        }
+
+        for (int i = 0; i < pat->count; i++) {
+          Type *ty = def->fields[i].type;
+          vscope_define(ctx->vscope, pat->names[i], ty, ctx->diags, stmt->span,
+                        NULL);
         }
         break;
       }
