@@ -154,6 +154,7 @@ static void sync_to_stmt(Parser *p) {
     case TOKEN_PUB:
     case TOKEN_USE:
     case TOKEN_RBRACE: // end of the enclosing block
+    case TOKEN_WHILE:
       return;
     default:
       advance_tok(p);
@@ -808,7 +809,9 @@ static Stmt *parse_stmt(Parser *p);
 
 static bool is_pure_stmt(Parser *p) {
   return check_tok(p, TOKEN_VAR) || check_tok(p, TOKEN_RETURN) ||
-         check_tok(p, TOKEN_BREAK) || check_tok(p, TOKEN_CONTINUE);
+         check_tok(p, TOKEN_BREAK) || check_tok(p, TOKEN_CONTINUE) ||
+         check_tok(p, TOKEN_IF) || check_tok(p, TOKEN_FOR) ||
+         check_tok(p, TOKEN_MATCH) || check_tok(p, TOKEN_WHILE);
 }
 
 static Expr *parse_block(Parser *p) {
@@ -1784,52 +1787,22 @@ static Expr *parse_primary(Parser *p) {
 
   // for
   if (match_tok(p, TOKEN_FOR)) {
-    if (peek_ahead(p, 1)->type == TOKEN_IN) {
-      if (!consume_tok(p, TOKEN_IDENT, "expected loop variable name")) {
-        return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
-      }
-      Token *var_tok = previous_tok(p);
+    if (!consume_tok(p, TOKEN_IDENT, "expected loop variable name")) {
+      return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
+    }
+    Token *var_tok = previous_tok(p);
 
-      if (!consume_tok(p, TOKEN_IN, "expected 'in' after loop variable")) {
-        return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
-      }
-
-      bool old_allow_struct_init = p->allow_struct_init;
-      p->allow_struct_init = false;
-      Expr *iterable = parse_expr(p);
-      if (iterable->kind == EXPR_POISON) {
-        return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
-      }
-      p->allow_struct_init = old_allow_struct_init;
-
-      Expr *block = parse_block(p);
-      if (block->kind == EXPR_POISON) {
-        return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
-      }
-
-      Expr *expr = ast_expr(
-          EXPR_FOR,
-          span_merge(token_span(previous_tok(p)), previous_tok_span(p)), p->al);
-      expr->as.for_expr.var_name = var_tok->lexeme;
-      expr->as.for_expr.iterable = iterable;
-      expr->as.for_expr.body = block;
-      expr->as.for_expr.is_while = false;
-      return expr;
+    if (!consume_tok(p, TOKEN_IN, "expected 'in' after loop variable")) {
+      return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
     }
 
-    Expr *cond = NULL;
-    if (!check_tok(p, TOKEN_LBRACE)) {
-      bool old_allow_struct_init = p->allow_struct_init;
-      p->allow_struct_init = false;
-      cond = parse_expr(p);
-      p->allow_struct_init = old_allow_struct_init;
-      if (cond->kind == EXPR_POISON) {
-        return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
-      }
-    } else {
-      cond = ast_expr(EXPR_BOOL, token_span(peek_tok(p)), p->al);
-      cond->as.bool_val = true;
+    bool old_allow_struct_init = p->allow_struct_init;
+    p->allow_struct_init = false;
+    Expr *iterable = parse_expr(p);
+    if (iterable->kind == EXPR_POISON) {
+      return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
     }
+    p->allow_struct_init = old_allow_struct_init;
 
     Expr *block = parse_block(p);
     if (block->kind == EXPR_POISON) {
@@ -1839,9 +1812,35 @@ static Expr *parse_primary(Parser *p) {
     Expr *expr = ast_expr(
         EXPR_FOR, span_merge(token_span(previous_tok(p)), previous_tok_span(p)),
         p->al);
-    expr->as.for_expr.condition = cond;
-    expr->as.for_expr.body = block;
-    expr->as.for_expr.is_while = true;
+    expr->as.for_expr = (ExprFor){
+        .var_name = var_tok->lexeme,
+        .var_span = token_span(var_tok),
+        .iterable = iterable,
+        .body = block,
+    };
+    return expr;
+  }
+
+  // while
+  if (match_tok(p, TOKEN_WHILE)) {
+    bool old_allow_struct_init = p->allow_struct_init;
+    p->allow_struct_init = false;
+    Expr *cond = parse_expr(p);
+    p->allow_struct_init = old_allow_struct_init;
+
+    if (cond->kind == EXPR_POISON) {
+      return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
+    }
+
+    Expr *block = parse_block(p);
+    if (block->kind == EXPR_POISON) {
+      return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
+    }
+
+    Expr *expr = ast_expr(
+        EXPR_WHILE, span_merge(token_span(t), previous_tok_span(p)), p->al);
+    expr->as.while_expr.condition = cond;
+    expr->as.while_expr.body = block;
     return expr;
   }
 
@@ -2000,13 +1999,25 @@ Stmt *parse_stmt(Parser *p) {
     return stmt;
   }
 
-  // desugar to unit expression statement
   // if (match_tok(p, TOKEN_SEMICOLON)) {
-  //   Stmt *stmt= ast_stmt(STMT_EXPR, token_span(previous_tok(p)), p->al);
-  //   stmt->as.expr_stmt.expr = ast_expr(EXPR_UNIT,
-  //   token_span(previous_tok(p)), p->al); return stmt;
+  //   Stmt *stmt = ast_stmt(STMT_EXPR, token_span(previous_tok(p)), p->al);
+  //   stmt->as.expr_stmt.expr = ast_expr(EXPR_UNIT, stmt->span, p->al);
+  //   return stmt;
   // }
 
+  if (check_tok(p, TOKEN_MATCH) || check_tok(p, TOKEN_IF) ||
+      check_tok(p, TOKEN_FOR) || check_tok(p, TOKEN_WHILE)) {
+    Expr *expr = parse_primary(p);
+    if (expr->kind == EXPR_POISON) {
+      return ast_stmt(STMT_POISON, span_merge(start_span, expr->span), p->al);
+    }
+    Stmt *stmt = ast_stmt(STMT_EXPR, span_merge(start_span, expr->span), p->al);
+    stmt->as.expr_stmt.expr = expr;
+    return stmt;
+  }
+
+  assert(false && "unrecognized statement");
+  advance_tok(p);
   return ast_stmt(STMT_POISON, start_span, p->al);
 }
 

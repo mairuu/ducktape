@@ -260,8 +260,13 @@ static const Keyword kw4[] = { //
     {"true", TOKEN_TRUE},      {NULL, 0}};
 
 static const Keyword kw5[] = { //
-    {"break", TOKEN_BREAK}, {"match", TOKEN_MATCH}, {"trait", TOKEN_TRAIT},
-    {"false", TOKEN_FALSE}, {"where", TOKEN_WHERE}, {NULL, 0}};
+    {"break", TOKEN_BREAK},
+    {"match", TOKEN_MATCH},
+    {"trait", TOKEN_TRAIT},
+    {"false", TOKEN_FALSE},
+    {"where", TOKEN_WHERE},
+    {"while", TOKEN_WHILE},
+    {NULL, 0}};
 
 static const Keyword kw6[] = { //
     {"return", TOKEN_RETURN},

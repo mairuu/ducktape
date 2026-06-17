@@ -252,6 +252,7 @@ struct CheckCtx {
   TypeChecker *tc;
 
   // current function
+  int loop_depth; // 0 when not in a loop, > 0 inside for/while bodies
   FunDef *fun;
   Type *return_type; // expected return
 

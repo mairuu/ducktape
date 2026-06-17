@@ -949,21 +949,24 @@ void dump_expr(const Expr *e, int indent) {
     break;
   case EXPR_FOR: {
     fprintf(stdout, "For\n");
-    if (e->as.for_expr.is_while) {
-      ind(indent + 1);
-      fprintf(stdout, "Condition:\n");
-      dump_expr(e->as.for_expr.condition, indent + 2);
-    } else {
-      ind(indent + 1);
-      fprintf(stdout, "Variable: " SV_FMT "\n",
-              SV_ARG(e->as.for_expr.var_name));
-      ind(indent + 1);
-      fprintf(stdout, "Iterable:\n");
-      dump_expr(e->as.for_expr.iterable, indent + 2);
-    }
+    ind(indent + 1);
+    fprintf(stdout, "Variable: " SV_FMT "\n", SV_ARG(e->as.for_expr.var_name));
+    ind(indent + 1);
+    fprintf(stdout, "Iterable:\n");
+    dump_expr(e->as.for_expr.iterable, indent + 2);
     ind(indent + 1);
     fprintf(stdout, "Body:\n");
     dump_expr(e->as.for_expr.body, indent + 2);
+    break;
+  }
+  case EXPR_WHILE: {
+    fprintf(stdout, "While\n");
+    ind(indent + 1);
+    fprintf(stdout, "Condition:\n");
+    dump_expr(e->as.while_expr.condition, indent + 2);
+    ind(indent + 1);
+    fprintf(stdout, "Body:\n");
+    dump_expr(e->as.while_expr.body, indent + 2);
     break;
   }
   case EXPR_RANGE:

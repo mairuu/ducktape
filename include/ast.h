@@ -482,6 +482,7 @@ typedef enum {
   // ── Structural (pass 2+) ──────────────────────────────
   EXPR_BLOCK, // { stmts... expr? }
   EXPR_IF,    // if cond { } else { }
+  EXPR_WHILE, // while cond { }
   EXPR_FOR,   // for x in iter { }
   EXPR_MATCH, // match expr { arms }
   // EXPR_RETURN, // return expr? (also appears as Stmt; duplicated for
@@ -642,11 +643,15 @@ typedef struct {
 
 typedef struct {
   StringView var_name;
+  Span var_span;
   Expr *iterable;
+  Expr *body;
+} ExprFor;
+
+typedef struct {
   Expr *condition;
   Expr *body;
-  bool is_while; // true if this is a while loop desugared into for
-} ExprFor;
+} ExprWhile;
 
 typedef struct {
   Expr *subject;
@@ -732,6 +737,8 @@ struct Expr {
     ExprIf if_expr;
 
     ExprFor for_expr;
+
+    ExprWhile while_expr;
 
     ExprMatch match;
 

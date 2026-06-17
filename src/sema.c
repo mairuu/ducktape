@@ -927,6 +927,18 @@ static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
     }
     break;
   }
+  case STMT_BREAK: {
+      if (!ctx->loop_depth) {
+        diag_error(ctx->diags, stmt->span, "break statement not within a loop");
+      }
+      break;
+  }
+  case STMT_CONTINUE: {
+      if (!ctx->loop_depth) {
+        diag_error(ctx->diags, stmt->span, "continue statement not within a loop");
+      }
+      break;
+  }
   default:
     assert(false && "unhandled stmt kind in resolve_stmt");
   }
@@ -1968,6 +1980,102 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     } else {
       result = ty_tuple(elem_types.ptr, tuple->count, ctx->al);
     }
+    break;
+  }
+  case EXPR_WHILE: {
+    ExprWhile *wh = &expr->as.while_expr;
+
+    Type *cond_ty = resolve_expr(ctx, wh->condition, NULL);
+    if (type_is_poison(cond_ty)) {
+      result = ctx->tc->t_poison;
+      break;
+    }
+
+    if (cond_ty->kind != TY_BOOL) {
+      char ct[64];
+      type_sprintf(cond_ty, ct, sizeof(ct));
+      diag_error(ctx->diags, wh->condition->span,
+                 "while loop condition must be Bool, got '%s'", ct);
+      result = ctx->tc->t_poison;
+      break;
+    }
+
+    ctx->vscope = vscope_push(ctx->vscope, false, true, ctx->al);
+    ctx->loop_depth++;
+    resolve_expr(ctx, wh->body, NULL);
+    ctx->vscope = vscope_pop(ctx->vscope);
+    ctx->loop_depth--;
+
+    result = ctx->tc->t_unit;
+    break;
+  }
+  case EXPR_FOR: {
+    ExprFor *for_ = &expr->as.for_expr;
+
+    Type *iter_ty = resolve_expr(ctx, for_->iterable, NULL);
+    if (type_is_poison(iter_ty)) {
+      result = ctx->tc->t_poison;
+      break;
+    }
+
+    Type *item_ty = NULL;
+    if (iter_ty->kind == TY_ARRAY) {
+      item_ty = iter_ty->as.array.elem_type;
+    } else {
+      char it[64];
+      type_sprintf(iter_ty, it, sizeof(it));
+      diag_error(ctx->diags, for_->iterable->span,
+                 "cannot iterate over type '%s' in for loop", it);
+      result = ctx->tc->t_poison;
+      break;
+    }
+
+    ctx->vscope = vscope_push(ctx->vscope, false, true, ctx->al);
+    vscope_define(ctx->vscope, for_->var_name, item_ty, ctx->diags,
+                  for_->var_span, NULL);
+    ctx->loop_depth++;
+    resolve_expr(ctx, for_->body, NULL);
+    ctx->vscope = vscope_pop(ctx->vscope);
+    ctx->loop_depth--;
+
+    result = ctx->tc->t_unit;
+    break;
+  }
+  case EXPR_IF: {
+    ExprIf *if_ = &expr->as.if_expr;
+
+    Type *cond_ty = resolve_expr(ctx, if_->condition, NULL);
+    if (type_is_poison(cond_ty)) {
+      result = ctx->tc->t_poison;
+      break;
+    }
+
+    if (cond_ty->kind != TY_BOOL) {
+      char ct[64];
+      type_sprintf(cond_ty, ct, sizeof(ct));
+      diag_error(ctx->diags, if_->condition->span,
+                 "if condition must be Bool, got '%s'", ct);
+      result = ctx->tc->t_poison;
+      break;
+    }
+
+    Type *then_ty = resolve_expr(ctx, if_->then_block, NULL);
+    Type *else_ty = NULL;
+    if (if_->else_branch != NULL) {
+      else_ty = resolve_expr(ctx, if_->else_branch, NULL);
+    } else {
+      else_ty = ctx->tc->t_unit;
+    }
+
+    if (!type_is_poison(then_ty) && !type_is_poison(else_ty)) {
+      if (!infer_unify(&ctx->infer, then_ty, else_ty, ctx->diags,
+                       if_->else_branch->span)) {
+        result = ctx->tc->t_poison;
+        break;
+      }
+    }
+
+    result = then_ty; // or else_ty; they are unified
     break;
   }
   default:

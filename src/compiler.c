@@ -1,6 +1,7 @@
 #include "compiler.h"
 #include "allocator.h"
 #include "arena.h"
+#include "ast.h"
 #include "diag.h"
 #include "module.h"
 #include "sema.h"
