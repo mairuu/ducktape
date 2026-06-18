@@ -226,7 +226,7 @@ typedef struct {
 typedef struct {
   StringView name;
   Type *type;
-} TraitAssocTypeDef;
+} AssocTypeDef;
 
 struct TraitDef {
   Module *module;
@@ -242,13 +242,15 @@ struct TraitDef {
   TraitMethodDef *methods;
   int method_count;
 
-  TraitAssocTypeDef *assoc_types;
+  AssocTypeDef *assoc_types;
   int assoc_type_count;
 
   int slot;
 };
 
 struct ImplDef {
+  Module *module;
+
   Type *trait_type; // NULL => inherent impl
   Type *self_type;
 
@@ -259,7 +261,7 @@ struct ImplDef {
   int method_count;
   int method_cap;
 
-  TraitAssocTypeDef *assoc_types;
+  AssocTypeDef *assoc_types;
   int assoc_type_count;
   int assoc_type_cap;
 

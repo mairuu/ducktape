@@ -531,6 +531,41 @@ static void tc_register_enum(TypeChecker *tc, Module *m, Decl *decl) {
   def->module = m;
 }
 
+static void tc_register_impl(TypeChecker *tc, Module *m, Decl *decl) {
+  assert(decl->kind == DECL_IMPL && "expected impl decl");
+
+  DeclImpl *impl_decl = &decl->as.impl_decl;
+  assert(m->impl_cap > m->impl_count && "impl capacity exceeded");
+
+  ImplDef *def = al_alloc_zero_for(tc->al, ImplDef);
+  // stub
+  def->type_param_count = impl_decl->type_param_count;
+  def->type_params =
+      al_alloc_zero(tc->al, sizeof(StringView) * impl_decl->type_param_count);
+
+  for (int i = 0; i < impl_decl->item_count; i++) {
+    ImplItemNode *item = &impl_decl->items[i];
+    if (item->kind == IMPL_ITEM_METHOD) {
+      def->method_count++;
+    } else if (item->kind == IMPL_ITEM_ASSOC_TYPE) {
+      def->assoc_type_count++;
+      assert(false && "todo:");
+    } else {
+      assert(false && "unhandled impl item kind");
+    }
+  }
+
+  def->assoc_types =
+      al_alloc_zero(tc->al, sizeof(AssocTypeDef) * def->assoc_type_count);
+  def->methods = al_alloc_zero(tc->al, sizeof(MethodDef) * def->method_count);
+
+  // register in module
+  m->impls[m->impl_count++] = def;
+  // set backpointers
+  decl->as.impl_decl.def = def;
+  def->module = m;
+}
+
 void tc_register_module(TypeChecker *tc, Module *m) {
   // counts
   for (int i = 0; i < m->ast->decl_count; i++) {
@@ -544,6 +579,9 @@ void tc_register_module(TypeChecker *tc, Module *m) {
     case DECL_ENUM:
       m->enum_cap++;
       break;
+    case DECL_IMPL:
+      m->impl_cap++;
+      break;
     default:
       assert(false && "unhandled decl kind in tc_register_module");
     }
@@ -553,6 +591,7 @@ void tc_register_module(TypeChecker *tc, Module *m) {
   m->funs = al_alloc_zero(tc->al, sizeof(FunDef *) * m->fun_cap);
   m->structs = al_alloc_zero(tc->al, sizeof(StructDef *) * m->struct_cap);
   m->enums = al_alloc_zero(tc->al, sizeof(EnumDef *) * m->enum_cap);
+  m->impls = al_alloc_zero(tc->al, sizeof(ImplDef *) * m->impl_cap);
 
   // populate
   for (int i = 0; i < m->ast->decl_count; i++) {
@@ -566,6 +605,9 @@ void tc_register_module(TypeChecker *tc, Module *m) {
       break;
     case DECL_ENUM:
       tc_register_enum(tc, m, decl);
+      break;
+    case DECL_IMPL:
+      tc_register_impl(tc, m, decl);
       break;
     default:
       assert(false && "unhandled decl kind in tc_register_module");
@@ -741,6 +783,125 @@ static void resolve_enum_decl(ResolveCtx *rctx, Decl *decl) {
   te->as.enum_def = enum_def;
 }
 
+static void resolve_impl_decl(ResolveCtx *rctx, Decl *decl) {
+  assert(decl->kind == DECL_IMPL && "expected impl decl");
+  DeclImpl *impl_decl = &decl->as.impl_decl;
+  ImplDef *impl_def = impl_decl->def;
+
+  for (int i = 0; i < impl_decl->type_param_count; i++) {
+    if (impl_decl->type_params[i].inline_bound.refs != NULL) {
+      diag_error(rctx->diags, impl_decl->type_params[i].span,
+                 "inline bounds on impl type parameters are not supported");
+    }
+    impl_def->type_params[i] =
+        ty_generic(impl_decl->type_params[i].name, NULL, 0, rctx->al);
+  }
+
+  // begin; impl level type scope
+  rctx->tyres.tscope = tscope_push(rctx->tyres.tscope, rctx->al);
+
+  for (int i = 0; i < impl_def->type_param_count; i++) {
+    tscope_define(rctx->tyres.tscope, impl_decl->type_params[i].name,
+                  impl_def->type_params[i], rctx->diags,
+                  impl_decl->type_params[i].span, NULL);
+  }
+
+  // resolve self
+  Type *self_ty = rctx_resolve(rctx, impl_decl->self_type);
+  impl_def->self_type = self_ty;
+
+  // resolve trait
+  if (impl_decl->trait_type) {
+    Type *trait_ty = rctx_resolve(rctx, impl_decl->trait_type);
+    impl_def->trait_type = trait_ty;
+
+    if (!type_is_poison(trait_ty) && trait_ty->kind != TY_TRAIT) {
+      char buf[64];
+      type_sprintf(trait_ty, buf, sizeof(buf));
+      diag_error(rctx->diags, impl_decl->trait_type->span,
+                 "impl trait type must be a trait, but got '%s'", buf);
+    }
+  }
+
+  // resolve items
+  for (int i = 0, method_idx = 0, assoc_idx = 0; i < impl_decl->item_count;
+       i++) {
+    ImplItemNode *item = &impl_decl->items[i];
+
+    if (item->kind == IMPL_ITEM_METHOD) {
+      MethodDef *method_def = &impl_def->methods[method_idx++];
+
+      DeclFun *fun_decl = &item->fun_decl->as.fun_decl;
+      FunDef *fun_def = al_alloc_zero_for(rctx->al, FunDef);
+      method_def->fun = fun_def;
+
+      fun_def->name = fun_decl->name;
+      fun_def->module = impl_def->module;
+
+      // resolve method type parameters
+      fun_def->type_param_count = fun_decl->type_param_count;
+      fun_def->type_params = al_alloc_zero(
+          rctx->al, sizeof(StringView) * fun_decl->type_param_count);
+      for (int j = 0; j < fun_def->type_param_count; j++) {
+        if (fun_decl->type_params[j].inline_bound.refs != NULL) {
+          diag_error(
+              rctx->diags, fun_decl->type_params[j].span,
+              "inline bounds on method type parameters are not supported");
+        }
+        fun_def->type_params[j] =
+            ty_generic(fun_decl->type_params[j].name, NULL, 0, rctx->al);
+      }
+
+      // begin; method level type scope
+      rctx->tyres.tscope = tscope_push(rctx->tyres.tscope, rctx->al);
+
+      for (int i = 0; i < fun_def->type_param_count; i++) {
+        tscope_define(rctx->tyres.tscope, fun_decl->type_params[i].name,
+                      fun_def->type_params[i], rctx->diags,
+                      fun_decl->type_params[i].span, NULL);
+      }
+
+      // resolve parameters and return type
+      TypeScratch param_types;
+      ts_init(&param_types, fun_decl->param_count, rctx->al);
+
+      fun_def->param_count = fun_decl->param_count;
+      fun_def->params =
+          al_alloc_zero(rctx->al, sizeof(ParamDef) * fun_decl->param_count);
+
+      for (int j = 0; j < fun_decl->param_count; j++) {
+        param_types.ptr[j] =
+            fun_decl->params[j].is_self
+                ? self_ty
+                : rctx_resolve(rctx, fun_decl->params[j].type_annotation);
+
+        fun_def->params[j].name = fun_decl->params[j].name;
+        fun_def->params[j].is_self = fun_decl->params[j].is_self;
+        fun_def->params[j].param_type = param_types.ptr[j];
+      }
+
+      fun_def->return_type = fun_decl->return_type
+                                 ? rctx_resolve(rctx, fun_decl->return_type)
+                                 : rctx->tc->t_unit;
+
+      // end; method level type scope
+      rctx->tyres.tscope = tscope_pop(rctx->tyres.tscope);
+
+      fun_def->fun_type = ty_fun(param_types.ptr, param_types.count,
+                                 fun_def->return_type, rctx->al);
+    } else if (item->kind == IMPL_ITEM_ASSOC_TYPE) {
+      AssocTypeDef *assoc_def = &impl_def->assoc_types[assoc_idx++];
+      (void)assoc_def;
+      assert(false && "todo: resolve assoc type");
+    } else {
+      assert(false && "unhandled impl item kind");
+    }
+  }
+
+  // end; impl level type scope
+  rctx->tyres.tscope = tscope_pop(rctx->tyres.tscope);
+}
+
 static void resolve_decl(ResolveCtx *rctx, Decl *decl) {
   switch (decl->kind) {
   case DECL_FUN:
@@ -751,6 +912,9 @@ static void resolve_decl(ResolveCtx *rctx, Decl *decl) {
     break;
   case DECL_ENUM:
     resolve_enum_decl(rctx, decl);
+    break;
+  case DECL_IMPL:
+    resolve_impl_decl(rctx, decl);
     break;
   default:
     assert(false && "unhandled decl kind in resolve_decl");
@@ -900,9 +1064,10 @@ static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
         char expected_buf[64], actual_buf[64];
         type_sprintf(r.type, expected_buf, sizeof(expected_buf));
         type_sprintf(init_ty, actual_buf, sizeof(actual_buf));
-        diag_error(ctx->diags, stmt->span,
-                   "struct destructuring type mismatch: expected '%s' but got '%s'",
-                   expected_buf, actual_buf);
+        diag_error(
+            ctx->diags, stmt->span,
+            "struct destructuring type mismatch: expected '%s' but got '%s'",
+            expected_buf, actual_buf);
         break;
       }
 
@@ -928,16 +1093,17 @@ static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
     break;
   }
   case STMT_BREAK: {
-      if (!ctx->loop_depth) {
-        diag_error(ctx->diags, stmt->span, "break statement not within a loop");
-      }
-      break;
+    if (!ctx->loop_depth) {
+      diag_error(ctx->diags, stmt->span, "break statement not within a loop");
+    }
+    break;
   }
   case STMT_CONTINUE: {
-      if (!ctx->loop_depth) {
-        diag_error(ctx->diags, stmt->span, "continue statement not within a loop");
-      }
-      break;
+    if (!ctx->loop_depth) {
+      diag_error(ctx->diags, stmt->span,
+                 "continue statement not within a loop");
+    }
+    break;
   }
   default:
     assert(false && "unhandled stmt kind in resolve_stmt");
@@ -2135,6 +2301,71 @@ static void tc_check_fun(TypeChecker *tc, Decl *decl) {
   infer_finalize(&cctx.infer, cctx.diags);
 }
 
+static void tc_check_impl(TypeChecker *tc, Decl *decl) {
+  assert(decl->kind == DECL_IMPL && "expected impl decl");
+  DeclImpl *impl_decl = &decl->as.impl_decl;
+  ImplDef *impl_def = impl_decl->def;
+
+  CheckCtx cctx;
+  cctx_init(&cctx, tc, impl_def->module, tc->diags, tc->al);
+
+  // begin type scope
+  cctx.tyres.tscope = tscope_push(cctx.tyres.tscope, cctx.al);
+
+  for (int i = 0; i < impl_def->type_param_count; i++) {
+    tscope_define(cctx.tyres.tscope, impl_decl->type_params[i].name,
+                  impl_def->type_params[i], cctx.diags,
+                  impl_decl->type_params[i].span, NULL);
+  }
+
+  for (int i = 0, method_idx = 0, assoc_idx = 0; i < impl_decl->item_count;
+       i++) {
+    ImplItemNode *item = &impl_decl->items[i];
+
+    if (item->kind == IMPL_ITEM_METHOD) {
+      MethodDef *method_def = &impl_def->methods[method_idx++];
+      FunDef *fun_def = method_def->fun;
+      DeclFun *fun_decl = &item->fun_decl->as.fun_decl;
+
+      // begin method type scope
+      cctx.tyres.tscope = tscope_push(cctx.tyres.tscope, cctx.al);
+
+      for (int j = 0; j < fun_def->type_param_count; j++) {
+        tscope_define(cctx.tyres.tscope, fun_decl->type_params[j].name,
+                      fun_def->type_params[j], cctx.diags,
+                      fun_decl->type_params[j].span, NULL);
+      }
+
+      // begin method var scope
+      cctx.vscope = vscope_push(cctx.vscope, true, false, cctx.al);
+      for (int j = 0; j < fun_def->param_count; j++) {
+        ParamDef *param_def = &fun_def->params[j];
+        StringView param_name =
+            param_def->is_self ? sv_from_cstr("self") : param_def->name;
+
+        vscope_define(cctx.vscope, param_name, param_def->param_type,
+                      cctx.diags, (Span){0}, NULL);
+      }
+
+      resolve_expr_coerced(&cctx, fun_decl->body, fun_def->return_type);
+
+      // end method var scope
+      cctx.vscope = vscope_pop(cctx.vscope);
+
+      // end method type scope
+      cctx.tyres.tscope = tscope_pop(cctx.tyres.tscope);
+    } else if (item->kind == IMPL_ITEM_ASSOC_TYPE) {
+      AssocTypeDef *assoc_def = &impl_def->assoc_types[assoc_idx++];
+      (void)assoc_def;
+    } else {
+      assert(false && "unhandled impl item kind in tc_check_impl");
+    }
+  }
+
+  // end type scope
+  cctx.tyres.tscope = tscope_pop(cctx.tyres.tscope);
+}
+
 bool tc_check_module(TypeChecker *tc, Module *m) {
   for (int i = 0; i < m->ast->decl_count; i++) {
     Decl *decl = m->ast->decls[i];
@@ -2144,6 +2375,9 @@ bool tc_check_module(TypeChecker *tc, Module *m) {
       break;
     case DECL_STRUCT:
     case DECL_ENUM:
+      break;
+    case DECL_IMPL:
+      tc_check_impl(tc, decl);
       break;
     default:
       assert(false && "unhandled decl kind in tc_check_module");
