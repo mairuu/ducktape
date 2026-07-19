@@ -177,6 +177,10 @@ Type *subst_apply(const Subst *s, Type *t, Allocator *al) {
                ? ty_enum(t->as.enm.def, args.ptr, t->as.enm.type_arg_count, al)
                : t;
   }
+  case TY_ARRAY: {
+    Type *elem = subst_apply(s, t->as.array.elem_type, al);
+    return elem != t->as.array.elem_type ? ty_array(elem, al) : t;
+  }
   default:
     return t;
   }
@@ -314,6 +318,11 @@ bool infer_unify(InferCtx *ctx, Type *a, Type *b, DiagBag *diags, Span span) {
     return true;
   }
 
+  // `!` (never) coerces to any type: the code producing it diverges.
+  if (a->kind == TY_NEVER || b->kind == TY_NEVER) {
+    return true;
+  }
+
   if (a->kind != b->kind) {
     char ab[64], bb[64];
     type_sprintf(a, ab, sizeof(ab));
@@ -378,6 +387,9 @@ bool infer_unify(InferCtx *ctx, Type *a, Type *b, DiagBag *diags, Span span) {
       ok &= infer_unify(ctx, ae->type_args[i], be->type_args[i], diags, span);
     return ok;
   }
+  case TY_ARRAY:
+    return infer_unify(ctx, a->as.array.elem_type, b->as.array.elem_type, diags,
+                       span);
   default:
     assert(false && "infer_unify: unhandled kind");
     return false;
@@ -446,6 +458,11 @@ Type *infer_apply(InferCtx *ctx, Type *ty, Allocator *al) {
     return changed ? ty_enum(e->def, args.ptr, args.count, al) : ty;
   }
 
+  case TY_ARRAY: {
+    Type *elem = infer_apply(ctx, ty->as.array.elem_type, al);
+    return elem != ty->as.array.elem_type ? ty_array(elem, al) : ty;
+  }
+
   default:
     return ty;
   }
@@ -486,6 +503,7 @@ void tc_init(TypeChecker *tc, DiagBag *diags, Allocator *al) {
   tc->t_bool = ty_bool();
   tc->t_string = ty_string();
   tc->t_unit = ty_unit();
+  tc->t_never = ty_never();
   tc->t_poison = ty_poison();
 
   tc->diags = diags;
@@ -586,7 +604,6 @@ static void tc_register_impl(TypeChecker *tc, Module *m, Decl *decl) {
       def->method_count++;
     } else if (item->kind == IMPL_ITEM_ASSOC_TYPE) {
       def->assoc_type_count++;
-      assert(false && "todo:");
     } else {
       assert(false && "unhandled impl item kind");
     }
@@ -600,6 +617,21 @@ static void tc_register_impl(TypeChecker *tc, Module *m, Decl *decl) {
   m->impls[m->impl_count++] = def;
   // set backpointers
   decl->as.impl_decl.def = def;
+  def->module = m;
+}
+
+static void tc_register_trait(TypeChecker *tc, Module *m, Decl *decl) {
+  assert(decl->kind == DECL_TRAIT && "expected trait decl");
+
+  DeclTrait *trait_decl = &decl->as.trait_decl;
+
+  // minimal registration: the trait can be named (e.g. as an impl's trait
+  // head); trait items are not resolved or checked yet.
+  TraitDef *def = al_alloc_zero_for(tc->al, TraitDef);
+  def->is_pub = decl->is_pub;
+  def->name = trait_decl->name;
+
+  trait_decl->def = def;
   def->module = m;
 }
 
@@ -618,6 +650,9 @@ void tc_register_module(TypeChecker *tc, Module *m) {
       break;
     case DECL_IMPL:
       m->impl_cap++;
+      break;
+    case DECL_TRAIT:
+    case DECL_USE:
       break;
     default:
       assert(false && "unhandled decl kind in tc_register_module");
@@ -645,6 +680,12 @@ void tc_register_module(TypeChecker *tc, Module *m) {
       break;
     case DECL_IMPL:
       tc_register_impl(tc, m, decl);
+      break;
+    case DECL_TRAIT:
+      tc_register_trait(tc, m, decl);
+      break;
+    case DECL_USE:
+      // todo: import linking (see compiler_phase_register)
       break;
     default:
       assert(false && "unhandled decl kind in tc_register_module");
@@ -869,9 +910,24 @@ static void resolve_impl_decl(ResolveCtx *rctx, Decl *decl) {
     }
   }
 
+  // register in the impl index before resolving items so `Self.Assoc` inside
+  // this impl's own methods can be looked up
+  impl_index_add(&rctx->tc->impl_index, impl_def);
+
+  // resolve associated types before methods so a method signature can
+  // reference `Self.Assoc`
+  for (int i = 0, assoc_idx = 0; i < impl_decl->item_count; i++) {
+    ImplItemNode *item = &impl_decl->items[i];
+    if (item->kind != IMPL_ITEM_ASSOC_TYPE) {
+      continue;
+    }
+    AssocTypeDef *assoc_def = &impl_def->assoc_types[assoc_idx++];
+    assoc_def->name = item->name;
+    assoc_def->type = rctx_resolve(rctx, item->assoc_type);
+  }
+
   // resolve items
-  for (int i = 0, method_idx = 0, assoc_idx = 0; i < impl_decl->item_count;
-       i++) {
+  for (int i = 0, method_idx = 0; i < impl_decl->item_count; i++) {
     ImplItemNode *item = &impl_decl->items[i];
 
     if (item->kind == IMPL_ITEM_METHOD) {
@@ -937,9 +993,7 @@ static void resolve_impl_decl(ResolveCtx *rctx, Decl *decl) {
       fun_def->fun_type = ty_fun(param_types.ptr, param_types.count,
                                  fun_def->return_type, rctx->al);
     } else if (item->kind == IMPL_ITEM_ASSOC_TYPE) {
-      AssocTypeDef *assoc_def = &impl_def->assoc_types[assoc_idx++];
-      (void)assoc_def;
-      assert(false && "todo: resolve assoc type");
+      // resolved in the pre-pass above
     } else {
       assert(false && "unhandled impl item kind");
     }
@@ -947,8 +1001,20 @@ static void resolve_impl_decl(ResolveCtx *rctx, Decl *decl) {
 
   // end; impl level type scope
   rctx->tyres.tscope = tscope_pop(rctx->tyres.tscope);
+}
 
-  impl_index_add(&rctx->tc->impl_index, impl_def);
+static void resolve_trait_decl(ResolveCtx *rctx, Decl *decl) {
+  assert(decl->kind == DECL_TRAIT && "expected trait decl");
+  DeclTrait *trait_decl = &decl->as.trait_decl;
+  TraitDef *trait_def = trait_decl->def;
+
+  Type *trait_ty = ty_trait(trait_def, rctx->al);
+  trait_def->self_type = trait_ty;
+
+  TypeEntry *te = NULL;
+  tscope_define(rctx->tyres.tscope, trait_def->name, trait_ty, rctx->diags,
+                decl->span, &te);
+  te->as.trait_def = trait_def;
 }
 
 static void resolve_decl(ResolveCtx *rctx, Decl *decl) {
@@ -964,6 +1030,11 @@ static void resolve_decl(ResolveCtx *rctx, Decl *decl) {
     break;
   case DECL_IMPL:
     resolve_impl_decl(rctx, decl);
+    break;
+  case DECL_TRAIT:
+    resolve_trait_decl(rctx, decl);
+    break;
+  case DECL_USE:
     break;
   default:
     assert(false && "unhandled decl kind in resolve_decl");
@@ -1121,7 +1192,18 @@ static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
       }
 
       StructDef *def = init_ty->as.struc.def;
-      assert(!def->is_tuple && "todo: handle tuple structs in struct patterns");
+      if (def->is_tuple) {
+        diag_error(ctx->diags, stmt->span,
+                   "cannot destructure tuple struct '" SV_FMT
+                   "' with a struct pattern; use tuple destructuring: "
+                   "var (a, b) = ...",
+                   SV_ARG(def->name));
+        for (int i = 0; i < pat->field_count; i++) {
+          vscope_define(ctx->vscope, pat->field_names[i], ctx->tc->t_poison,
+                        ctx->diags, stmt->span, NULL);
+        }
+        break;
+      }
 
       for (int i = 0; i < pat->field_count; i++) {
         StringView name = pat->field_names[i];
@@ -1151,6 +1233,24 @@ static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
     if (!ctx->loop_depth) {
       diag_error(ctx->diags, stmt->span,
                  "continue statement not within a loop");
+    }
+    break;
+  }
+  case STMT_RETURN: {
+    StmtReturn *ret = &stmt->as.return_stmt;
+    Type *val_ty = ret->value != NULL
+                       ? resolve_expr(ctx, ret->value, ctx->return_type)
+                       : ctx->tc->t_unit;
+
+    if (ctx->return_type == NULL) {
+      diag_error(ctx->diags, stmt->span,
+                 "return statement not within a function");
+      break;
+    }
+
+    if (!type_is_poison(val_ty) && !type_is_poison(ctx->return_type)) {
+      infer_unify(&ctx->infer, ctx->return_type, val_ty, ctx->diags,
+                  stmt->span);
     }
     break;
   }
@@ -1269,6 +1369,20 @@ static Type *resolve_callee(CheckCtx *ctx, Expr *expr, Subst *subst) {
 
   if (callee->kind != EXPR_PATH) {
     return resolve_expr(ctx, callee, NULL);
+  }
+
+  // a single-segment path naming a value binding (local var, param, closure)
+  // is a call through a first-class function value. generic functions still
+  // go through path resolution below so their type params are instantiated
+  // into `subst`.
+  Path *callee_path = &callee->as.path_expr.path;
+  if (callee_path->count == 1 && callee_path->segments[0].type_arg_count == 0) {
+    VarEntry *ve =
+        vscope_lookup(ctx->vscope, callee_path->segments[0].name, NULL);
+    if (ve != NULL && (ve->type->kind != TY_FUNCTION || ve->as.fun == NULL ||
+                       ve->as.fun->type_param_count == 0)) {
+      return resolve_expr(ctx, callee, NULL);
+    }
   }
 
   PathRes r;
@@ -1425,6 +1539,16 @@ static bool check_pattern(CheckCtx *ctx, Pattern *pattern, Type *expected_ty);
 static bool check_struct_pattern(CheckCtx *ctx, Pattern *pattern,
                                  Type *expected_ty, StructDef *struct_def) {
   if (type_is_poison(expected_ty)) {
+    // still bind pattern names (as poison) so later uses don't cascade
+    for (int i = 0; i < pattern->as.struc.field_count; i++) {
+      FieldPat *fp = &pattern->as.struc.fields[i];
+      if (fp->sub_pattern != NULL) {
+        check_pattern(ctx, fp->sub_pattern, ctx->tc->t_poison);
+      } else {
+        vscope_define(ctx->vscope, fp->ident.name, ctx->tc->t_poison,
+                      ctx->diags, fp->span, NULL);
+      }
+    }
     return true;
   }
 
@@ -1497,6 +1621,16 @@ static bool check_variant_pattern(CheckCtx *ctx, Pattern *pattern,
                                   Type *expected_ty, EnumDef *enum_def,
                                   VariantDef *variant_def) {
   if (type_is_poison(expected_ty)) {
+    // still bind pattern names (as poison) so later uses don't cascade
+    for (int i = 0; i < pattern->as.variant.field_count; i++) {
+      FieldPat *fp = &pattern->as.variant.fields[i];
+      if (fp->sub_pattern != NULL) {
+        check_pattern(ctx, fp->sub_pattern, ctx->tc->t_poison);
+      } else {
+        vscope_define(ctx->vscope, fp->ident.name, ctx->tc->t_poison,
+                      ctx->diags, fp->span, NULL);
+      }
+    }
     return true;
   }
 
@@ -1897,6 +2031,189 @@ static Type *resolve_method_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   return ret_ty;
 }
 
+// a "Result-like" enum has exactly two single-field tuple variants named
+// `Ok` and `Err`. `?` is defined structurally against this shape until a
+// proper Try trait exists.
+static bool enum_is_resultish(EnumDef *def, VariantDef **out_ok,
+                              VariantDef **out_err) {
+  if (def->variant_count != 2) {
+    return false;
+  }
+
+  VariantDef *ok = NULL, *err = NULL;
+  for (int i = 0; i < def->variant_count; i++) {
+    VariantDef *v = &def->variants[i];
+    if (sv_equal_cstr(v->name, "Ok")) {
+      ok = v;
+    } else if (sv_equal_cstr(v->name, "Err")) {
+      err = v;
+    }
+  }
+
+  if (!ok || !err || !ok->is_tuple || ok->field_count != 1 || !err->is_tuple ||
+      err->field_count != 1) {
+    return false;
+  }
+
+  *out_ok = ok;
+  *out_err = err;
+  return true;
+}
+
+static Type *resolve_propagate_expr(CheckCtx *ctx, Expr *expr) {
+  ExprPropagate *prop = &expr->as.propagate;
+
+  Type *op_ty = resolve_expr(ctx, prop->operand, ctx->return_type);
+  op_ty = infer_apply(&ctx->infer, op_ty, ctx->al);
+
+  if (type_is_poison(op_ty)) {
+    return ctx->tc->t_poison;
+  }
+
+  VariantDef *op_ok = NULL, *op_err = NULL;
+  if (op_ty->kind != TY_ENUM ||
+      !enum_is_resultish(op_ty->as.enm.def, &op_ok, &op_err)) {
+    char buf[64];
+    type_sprintf(op_ty, buf, sizeof(buf));
+    diag_error(ctx->diags, prop->operand->span,
+               "the '?' operator requires a Result-like enum (variants "
+               "'Ok(T)' and 'Err(E)'), got '%s'",
+               buf);
+    return ctx->tc->t_poison;
+  }
+
+  EnumDef *def = op_ty->as.enm.def;
+
+  Type *ret_ty = ctx->return_type != NULL
+                     ? infer_apply(&ctx->infer, ctx->return_type, ctx->al)
+                     : ctx->tc->t_unit;
+  if (type_is_poison(ret_ty)) {
+    return ctx->tc->t_poison;
+  }
+
+  if (ret_ty->kind != TY_ENUM || ret_ty->as.enm.def != def) {
+    char ob[64], rb[64];
+    type_sprintf(op_ty, ob, sizeof(ob));
+    type_sprintf(ret_ty, rb, sizeof(rb));
+    diag_error(ctx->diags, expr->span,
+               "'?' propagates '%s', so the enclosing function must return "
+               "the same enum, but it returns '%s'",
+               ob, rb);
+    return ctx->tc->t_poison;
+  }
+
+  Type *ok_payload = op_ok->fields[0].type;
+  Type *op_err_payload = op_err->fields[0].type;
+  Type *ret_err_payload = op_err->fields[0].type;
+
+  if (def->type_param_count > 0) {
+    Subst op_subst = infer_open_generics(
+        &ctx->infer, def->type_params, op_ty->as.enm.type_args,
+        def->type_param_count, expr->span, ctx->al);
+    ok_payload = infer_apply(
+        &ctx->infer, subst_apply(&op_subst, ok_payload, ctx->al), ctx->al);
+    op_err_payload = infer_apply(
+        &ctx->infer, subst_apply(&op_subst, op_err_payload, ctx->al), ctx->al);
+
+    Subst ret_subst = infer_open_generics(
+        &ctx->infer, def->type_params, ret_ty->as.enm.type_args,
+        def->type_param_count, expr->span, ctx->al);
+    ret_err_payload =
+        infer_apply(&ctx->infer, subst_apply(&ret_subst, ret_err_payload, ctx->al),
+                    ctx->al);
+  }
+
+  if (!infer_unify(&ctx->infer, ret_err_payload, op_err_payload, ctx->diags,
+                   expr->span)) {
+    return ctx->tc->t_poison;
+  }
+
+  return ok_payload;
+}
+
+static Type *resolve_closure_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
+  ExprClosure *closure = &expr->as.closure;
+
+  // a function-typed hint with matching arity lets unannotated params and the
+  // return type flow in from the expected type
+  Type *fun_hint = NULL;
+  if (hint != NULL) {
+    Type *h = infer_find(&ctx->infer, hint);
+    if (h->kind == TY_FUNCTION &&
+        h->as.fun.param_count == closure->param_count) {
+      fun_hint = h;
+    }
+  }
+
+  FunDef *def = al_alloc_zero_for(ctx->al, FunDef);
+  def->is_closure = true;
+  def->module = ctx->fun != NULL ? ctx->fun->module : NULL;
+  def->param_count = closure->param_count;
+  def->params =
+      al_alloc_zero(ctx->al, sizeof(ParamDef) * closure->param_count);
+  closure->def = def;
+
+  TypeScratch param_types;
+  ts_init(&param_types, closure->param_count, ctx->al);
+
+  for (int i = 0; i < closure->param_count; i++) {
+    ClosureParam *cp = &closure->params[i];
+
+    Type *pty = NULL;
+    if (cp->type_annotation != NULL) {
+      pty = tyres_resolve(&ctx->tyres, cp->type_annotation);
+    } else if (fun_hint != NULL) {
+      pty = infer_find(&ctx->infer, fun_hint->as.fun.param_types[i]);
+    } else {
+      pty = infer_fresh(&ctx->infer, cp->name, NULL, cp->span);
+    }
+
+    param_types.ptr[i] = pty;
+    def->params[i].name = cp->name;
+    def->params[i].is_self = cp->is_self;
+    def->params[i].param_type = pty;
+  }
+
+  Type *ret_ty = NULL;
+  if (closure->return_type_annotation != NULL) {
+    ret_ty = tyres_resolve(&ctx->tyres, closure->return_type_annotation);
+  } else if (fun_hint != NULL) {
+    ret_ty = infer_find(&ctx->infer, fun_hint->as.fun.return_type);
+  } else {
+    ret_ty = infer_fresh(&ctx->infer, (StringView){0}, NULL, expr->span);
+  }
+  def->return_type = ret_ty;
+
+  // check the body in the closure's own function context
+  FunDef *saved_fun = ctx->fun;
+  Type *saved_ret = ctx->return_type;
+  int saved_loop_depth = ctx->loop_depth;
+  ctx->fun = def;
+  ctx->return_type = ret_ty;
+  ctx->loop_depth = 0; // break/continue can't escape the closure body
+
+  ctx->vscope = vscope_push(ctx->vscope, true, false, ctx->al);
+  for (int i = 0; i < closure->param_count; i++) {
+    vscope_define(ctx->vscope, closure->params[i].name, param_types.ptr[i],
+                  ctx->diags, closure->params[i].span, NULL);
+  }
+
+  Type *body_ty = resolve_expr(ctx, closure->body, ret_ty);
+  if (!type_is_poison(body_ty) && !type_is_poison(ret_ty)) {
+    infer_unify(&ctx->infer, ret_ty, body_ty, ctx->diags, closure->body->span);
+  }
+
+  ctx->vscope = vscope_pop(ctx->vscope);
+  ctx->fun = saved_fun;
+  ctx->return_type = saved_ret;
+  ctx->loop_depth = saved_loop_depth;
+
+  Type *fun_ty =
+      ty_fun(param_types.ptr, closure->param_count, ret_ty, ctx->al);
+  def->fun_type = fun_ty;
+  return fun_ty;
+}
+
 static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   (void)hint;
   (void)ctx;
@@ -1926,7 +2243,11 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     }
 
     if (block->tail_expr != NULL) {
-      result = resolve_expr(ctx, block->tail_expr, NULL);
+      result = resolve_expr(ctx, block->tail_expr, hint);
+    } else if (block->stmt_count > 0 &&
+               block->stmts[block->stmt_count - 1]->kind == STMT_RETURN) {
+      // a block ending in `return` never falls through
+      result = ctx->tc->t_never;
     } else {
       result = ctx->tc->t_unit;
     }
@@ -2038,12 +2359,17 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
         expr->as.path_expr.path.segments[expr->as.path_expr.path.count - 1]
             .name;
 
-    VarEntry *ve = vscope_lookup(ctx->vscope, name, NULL);
+    bool crossed_fn = false;
+    VarEntry *ve = vscope_lookup(ctx->vscope, name, &crossed_fn);
     if (!ve) {
       diag_error(ctx->diags, expr->span, "undefined variable '%.*s'", name.len,
                  name.chars);
       result = ctx->tc->t_poison;
       break;
+    }
+
+    if (crossed_fn) {
+      ve->is_captured = true; // referenced from inside a nested closure
     }
 
     Type *ty = ve->type;
@@ -2384,6 +2710,8 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     Type *item_ty = NULL;
     if (iter_ty->kind == TY_ARRAY) {
       item_ty = iter_ty->as.array.elem_type;
+    } else if (iter_ty->kind == TY_RANGE) {
+      item_ty = ctx->tc->t_int;
     } else {
       char it[64];
       type_sprintf(iter_ty, it, sizeof(it));
@@ -2431,19 +2759,212 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     }
 
     if (!type_is_poison(then_ty) && !type_is_poison(else_ty)) {
+      Span mismatch_span =
+          if_->else_branch != NULL ? if_->else_branch->span : expr->span;
       if (!infer_unify(&ctx->infer, then_ty, else_ty, ctx->diags,
-                       if_->else_branch->span)) {
+                       mismatch_span)) {
         result = ctx->tc->t_poison;
         break;
       }
     }
 
-    result = then_ty; // or else_ty; they are unified
+    // they are unified; prefer the branch that doesn't diverge
+    result = then_ty->kind == TY_NEVER ? else_ty : then_ty;
     break;
   }
   case EXPR_METHOD_CALL:
     result = resolve_method_call_expr(ctx, expr, hint);
     break;
+  case EXPR_UNIT:
+    result = ctx->tc->t_unit;
+    break;
+  case EXPR_POISON:
+    result = ctx->tc->t_poison;
+    break;
+  case EXPR_UNARY: {
+    ExprUnary *unary = &expr->as.unary;
+    bool is_not = unary->op == TOKEN_NOT;
+
+    Type *op_ty =
+        resolve_expr(ctx, unary->operand, is_not ? ctx->tc->t_bool : hint);
+    op_ty = infer_find(&ctx->infer, op_ty);
+
+    if (type_is_poison(op_ty)) {
+      result = ctx->tc->t_poison;
+      break;
+    }
+
+    if (is_not) {
+      if (op_ty->kind != TY_BOOL) {
+        char buf[64];
+        type_sprintf(op_ty, buf, sizeof(buf));
+        diag_error(ctx->diags, unary->operand->span,
+                   "'not' requires a Bool operand, got '%s'", buf);
+        result = ctx->tc->t_poison;
+      } else {
+        result = ctx->tc->t_bool;
+      }
+    } else {
+      if (!type_is_numeric(op_ty)) {
+        char buf[64];
+        type_sprintf(op_ty, buf, sizeof(buf));
+        diag_error(ctx->diags, unary->operand->span,
+                   "unary '-' requires a numeric type, got '%s'", buf);
+        result = ctx->tc->t_poison;
+      } else {
+        result = op_ty;
+      }
+    }
+    break;
+  }
+  case EXPR_RANGE: {
+    ExprRange *range = &expr->as.range;
+    Type *start_ty = resolve_expr(ctx, range->start, ctx->tc->t_int);
+    Type *end_ty = resolve_expr(ctx, range->end, ctx->tc->t_int);
+
+    bool ok = !type_is_poison(start_ty) && !type_is_poison(end_ty);
+    if (ok) {
+      ok &= infer_unify(&ctx->infer, ctx->tc->t_int, start_ty, ctx->diags,
+                        range->start->span);
+      ok &= infer_unify(&ctx->infer, ctx->tc->t_int, end_ty, ctx->diags,
+                        range->end->span);
+    }
+
+    result = ok ? ty_range() : ctx->tc->t_poison;
+    break;
+  }
+  case EXPR_CAST: {
+    ExprCast *cast = &expr->as.cast;
+    Type *target = tyres_resolve(&ctx->tyres, cast->target_type);
+    Type *op_ty = resolve_expr(ctx, cast->operand, NULL);
+    op_ty = infer_find(&ctx->infer, op_ty);
+
+    if (type_is_poison(op_ty) || type_is_poison(target)) {
+      result = ctx->tc->t_poison;
+      break;
+    }
+
+    bool numeric_cast = (op_ty->kind == TY_INT && target->kind == TY_FLOAT) ||
+                        (op_ty->kind == TY_FLOAT && target->kind == TY_INT);
+    // todo: trait coercion via `as` once trait objects exist
+    if (numeric_cast || types_equal(op_ty, target)) {
+      result = target;
+    } else {
+      char ob[64], tb[64];
+      type_sprintf(op_ty, ob, sizeof(ob));
+      type_sprintf(target, tb, sizeof(tb));
+      diag_error(ctx->diags, expr->span, "invalid cast from '%s' to '%s'", ob,
+                 tb);
+      result = ctx->tc->t_poison;
+    }
+    break;
+  }
+  case EXPR_CLOSURE:
+    result = resolve_closure_expr(ctx, expr, hint);
+    break;
+  case EXPR_PROPAGATE:
+    result = resolve_propagate_expr(ctx, expr);
+    break;
+  case EXPR_ARRAY: {
+    ExprArray *array = &expr->as.array;
+
+    Type *hint_ty = hint ? infer_find(&ctx->infer, hint) : NULL;
+    Type *elem_hint = hint_ty && hint_ty->kind == TY_ARRAY
+                          ? hint_ty->as.array.elem_type
+                          : NULL;
+
+    if (array->count == 0) {
+      Type *elem_ty =
+          elem_hint != NULL
+              ? elem_hint
+              : infer_fresh(&ctx->infer, (StringView){0}, NULL, expr->span);
+      result = ty_array(elem_ty, ctx->al);
+      break;
+    }
+
+    Type *elem_ty = resolve_expr(ctx, array->elems[0], elem_hint);
+    bool ok = !type_is_poison(elem_ty);
+
+    for (int i = 1; i < array->count; i++) {
+      Type *ty = resolve_expr(ctx, array->elems[i], elem_ty);
+      if (type_is_poison(ty)) {
+        ok = false;
+        continue;
+      }
+      if (ok) {
+        ok &= infer_unify(&ctx->infer, elem_ty, ty, ctx->diags,
+                          array->elems[i]->span);
+      }
+    }
+
+    result = ok ? ty_array(infer_apply(&ctx->infer, elem_ty, ctx->al), ctx->al)
+                : ctx->tc->t_poison;
+    break;
+  }
+  case EXPR_INDEX: {
+    ExprIndex *index = &expr->as.index;
+
+    Type *obj_ty = resolve_expr(ctx, index->object, NULL);
+    obj_ty = infer_apply(&ctx->infer, obj_ty, ctx->al);
+
+    Type *idx_ty = resolve_expr(ctx, index->index, ctx->tc->t_int);
+
+    if (type_is_poison(obj_ty) || type_is_poison(idx_ty)) {
+      result = ctx->tc->t_poison;
+      break;
+    }
+
+    if (obj_ty->kind != TY_ARRAY) {
+      char buf[64];
+      type_sprintf(obj_ty, buf, sizeof(buf));
+      diag_error(ctx->diags, index->object->span,
+                 "cannot index a value of type '%s'", buf);
+      result = ctx->tc->t_poison;
+      break;
+    }
+
+    if (!infer_unify(&ctx->infer, ctx->tc->t_int, idx_ty, ctx->diags,
+                     index->index->span)) {
+      result = ctx->tc->t_poison;
+      break;
+    }
+
+    result = obj_ty->as.array.elem_type;
+    break;
+  }
+  case EXPR_INTERPOLATED: {
+    ExprInterpolated *interp = &expr->as.interpolated;
+    for (int i = 0; i < interp->seg_count; i++) {
+      InterpolSeg *seg = &interp->segs[i];
+      if (seg->kind != ISEG_EXPR) {
+        continue;
+      }
+
+      Type *seg_ty = resolve_expr(ctx, seg->expr, NULL);
+      seg_ty = infer_find(&ctx->infer, seg_ty);
+      if (type_is_poison(seg_ty)) {
+        continue; // error already reported
+      }
+
+      switch (seg_ty->kind) {
+      case TY_INT:
+      case TY_FLOAT:
+      case TY_BOOL:
+      case TY_STRING:
+        break;
+      default: {
+        char buf[64];
+        type_sprintf(seg_ty, buf, sizeof(buf));
+        diag_error(ctx->diags, seg->expr->span,
+                   "cannot interpolate a value of type '%s' (user-defined "
+                   "formatting is not yet supported)",
+                   buf);
+      }
+      }
+    }
+    result = ctx->tc->t_string;
+    break;
+  }
   default:
     assert(false && "unhandled expr kind in resolve_expr");
   }
@@ -2536,6 +3057,9 @@ static void tc_check_impl(TypeChecker *tc, Decl *decl) {
       FunDef *fun_def = method_def->fun;
       DeclFun *fun_decl = &item->fun_decl->as.fun_decl;
 
+      cctx.fun = fun_def;
+      cctx.return_type = fun_def->return_type;
+
       // begin method type scope
       cctx.tyres.tscope = tscope_push(cctx.tyres.tscope, cctx.al);
 
@@ -2584,6 +3108,8 @@ bool tc_check_module(TypeChecker *tc, Module *m) {
       break;
     case DECL_STRUCT:
     case DECL_ENUM:
+    case DECL_TRAIT: // trait items (default methods) are not checked yet
+    case DECL_USE:
       break;
     case DECL_IMPL:
       tc_check_impl(tc, decl);
@@ -2738,6 +3264,9 @@ void tscope_define(TypeScope *scope, StringView name, Type *type,
 // TypeResolver
 // ═══════════════════════════════════════════════════════════════════════════════
 
+static Type *impl_index_assoc_type(ImplIndex *idx, Type *self_type,
+                                   StringView name, Allocator *al);
+
 Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
   if (node->resolved) {
     return node->resolved;
@@ -2840,6 +3369,40 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
     Type *return_type = tyres_resolve(r, node->as.fun.return_type);
     result =
         ty_fun(param_types.ptr, node->as.fun.param_count, return_type, r->al);
+    break;
+  }
+  case TYNODE_ARRAY: {
+    Type *elem = tyres_resolve(r, node->as.array.elem);
+    result = type_is_poison(elem) ? r->tc->t_poison : ty_array(elem, r->al);
+    break;
+  }
+  case TYNODE_ASSOC: {
+    TypeNodeAssoc *assoc = &node->as.assoc;
+    Type *base = tyres_resolve(r, assoc->base);
+
+    if (type_is_poison(base)) {
+      result = base;
+      break;
+    }
+
+    if (base->kind == TY_GENERIC) {
+      diag_error(
+          r->diags, node->span,
+          "associated types on generic type parameters are not yet supported");
+      result = r->tc->t_poison;
+      break;
+    }
+
+    result = impl_index_assoc_type(&r->tc->impl_index, base, assoc->assoc_name,
+                                   r->al);
+    if (result == NULL) {
+      char buf[64];
+      type_sprintf(base, buf, sizeof(buf));
+      diag_error(r->diags, node->span,
+                 "type '%s' has no associated type '" SV_FMT "'", buf,
+                 SV_ARG(assoc->assoc_name));
+      result = r->tc->t_poison;
+    }
     break;
   }
   default:
@@ -2947,6 +3510,64 @@ static bool impl_type_match(Type *pattern, Type *concrete,
   default:
     return types_equal(pattern, concrete);
   }
+}
+
+// find the associated type `self_type.name` among registered impls. returns
+// the resolved type with the matched impl's type params substituted, or NULL
+// if no impl defines it.
+static Type *impl_index_assoc_type(ImplIndex *idx, Type *self_type,
+                                   StringView name, Allocator *al) {
+  if (type_is_poison(self_type)) {
+    return NULL;
+  }
+
+  for (int i = 0; i < idx->count; i++) {
+    ImplDef *impl = idx->all[i];
+    if (impl->assoc_type_count == 0 || impl->self_type == NULL ||
+        type_is_poison(impl->self_type)) {
+      continue;
+    }
+
+    Subst subst = subst_empty();
+    bool matched;
+
+    if (impl->type_param_count == 0) {
+      matched = types_equal(impl->self_type, self_type);
+    } else {
+      int n = impl->type_param_count;
+      StringView *names = al_alloc(al, sizeof(StringView) * n);
+      Type **args = al_alloc(al, sizeof(Type *) * n);
+      bool *bound = al_alloc_zero(al, sizeof(bool) * n);
+      for (int j = 0; j < n; j++) {
+        names[j] = impl->type_params[j]->as.generic.name;
+      }
+
+      matched =
+          impl_type_match(impl->self_type, self_type, names, n, args, bound);
+      for (int j = 0; matched && j < n; j++) {
+        matched = bound[j];
+      }
+      if (matched) {
+        subst_init(&subst, names, args, n);
+      }
+    }
+
+    if (!matched) {
+      continue;
+    }
+
+    for (int j = 0; j < impl->assoc_type_count; j++) {
+      if (sv_equal(impl->assoc_types[j].name, name)) {
+        Type *t = impl->assoc_types[j].type;
+        if (t == NULL) {
+          return NULL; // not resolved yet (self-referential pre-pass)
+        }
+        return subst.count > 0 ? subst_apply(&subst, t, al) : t;
+      }
+    }
+  }
+
+  return NULL;
 }
 
 MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, StringView name,

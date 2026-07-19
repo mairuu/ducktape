@@ -38,6 +38,7 @@ typedef enum {
   TY_BOOL,
   TY_STRING,
   TY_UNIT,     // ()   — functions that return nothing, empty blocks
+  TY_NEVER,    // !    — diverging code (return/break); coerces to any type
   TY_FUNCTION, // fun(A, B): R
 
   TY_UNKNOWN,
@@ -47,6 +48,7 @@ typedef enum {
   TY_ENUM,    // back-pointer to EnumDef
   TY_TRAIT,   // trait object / bound
   TY_ARRAY,   // Array<T>
+  TY_RANGE,   // a..b / a..=b — Int-only for now
   TY_GENERIC, // unresolved type parameter, e.g. T
   TY_ASSOC,   // T.Item   —  associated-type access before resolution
   TY_POISON,  // sentinel: error already reported, suppress downstream errors
@@ -127,6 +129,8 @@ Type *ty_float(void);
 Type *ty_bool(void);
 Type *ty_string(void);
 Type *ty_unit(void);
+Type *ty_never(void);
+Type *ty_range(void);
 Type *ty_poison(void);
 
 Type *ty_unknown(uint32_t id, Type *bound, Allocator *al);
@@ -317,6 +321,7 @@ typedef enum {
   TYNODE_UNIT,  // ()
   TYNODE_NAMED, // Int, MyStruct, Option<T>
   TYNODE_TUPLE, // (A, B)
+  TYNODE_ARRAY, // [T]
   TYNODE_FUN,   // fun(A, B): R
   TYNODE_SELF,  // Self
   TYNODE_ASSOC, // T.Item
@@ -344,6 +349,10 @@ typedef struct {
   StringView assoc_name;
 } TypeNodeAssoc;
 
+typedef struct {
+  TypeNode *elem;
+} TypeNodeArray;
+
 struct TypeNode {
   TypeNodeKind kind;
   Span span;
@@ -354,6 +363,7 @@ struct TypeNode {
     TypeNodeTuple tuple;
     TypeNodeFun fun;
     TypeNodeAssoc assoc;
+    TypeNodeArray array;
   } as;
 };
 

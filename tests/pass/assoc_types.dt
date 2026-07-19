@@ -1,0 +1,26 @@
+# associated types in impls, resolved via Self.Name and Type.Name
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+trait Drawable {
+    type Color;
+    fun draw(self);
+}
+
+impl Drawable for Point {
+    type Color = String;
+
+    fun draw(self) {}
+
+    fun color_of(self) -> Self.Color {
+        "red"
+    }
+}
+
+fun main() {
+    var p = Point { x: 1, y: 2 };
+    p.draw();
+    var c: Point.Color = p.color_of();
+}

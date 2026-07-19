@@ -81,6 +81,7 @@ static const char *token_type_string[] = {
     [TOKEN_GT] = "GT",
     [TOKEN_GTEQ] = "GTEQ",
     [TOKEN_QUESTION] = "QUESTION", // ?
+    [TOKEN_PIPE] = "PIPE",         // |
 
     // control
     [TOKEN_EOF] = "EOF",
@@ -353,6 +354,8 @@ Token scanner_next_token(Scanner *s) {
     return make_token(s, TOKEN_SEMICOLON);
   case '?':
     return make_token(s, TOKEN_QUESTION);
+  case '|':
+    return make_token(s, TOKEN_PIPE);
   case '%':
     return make_token(s, TOKEN_PERCENT);
 

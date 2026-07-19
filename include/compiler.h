@@ -21,6 +21,7 @@ void compiler_init(Compiler *c, Allocator *al);
 
 void compiler_destroy(Compiler *c, Allocator *al);
 
-// run the full compilation pipelineo
+// run the full compilation pipeline
 // only single file for now
-void compiler_run(Compiler *c, const char *path);
+// returns false if any phase failed
+bool compiler_run(Compiler *c, const char *path);

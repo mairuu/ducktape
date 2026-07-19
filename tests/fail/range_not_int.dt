@@ -1,0 +1,4 @@
+#! expect: type mismatch
+fun main() {
+    var r = 1..true;
+}

@@ -80,6 +80,10 @@ $(CCJSON): $(SRCS) Makefile
 run: all
 	./$(BUILDDIR)/$(TARGET)
 
+.PHONY: test
+test: all
+	@sh scripts/run_tests.sh $(BUILDDIR)/$(TARGET)
+
 .PHONY: clean
 clean:
 	$(RM) -r $(BUILDDIR) $(CCJSON)

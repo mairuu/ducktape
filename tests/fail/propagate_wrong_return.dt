@@ -1,0 +1,18 @@
+#! expect: the enclosing function must return the same enum
+enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
+
+fun get() -> Result<Int, String> {
+    Result::Ok(1)
+}
+
+fun bad() -> Int {
+    var n = get()?;
+    n
+}
+
+fun main() {
+    var x = bad();
+}

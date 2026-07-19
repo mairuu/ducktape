@@ -1,0 +1,8 @@
+#! expect: type mismatch
+fun f() -> Int {
+    return true;
+}
+
+fun main() {
+    var x = f();
+}

@@ -1,0 +1,37 @@
+# struct/trait/impl + method calls + return statements + unit
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+impl Point {
+    fun new() -> Self {
+        Point { x: 0, y: 0 }
+    }
+}
+
+trait Done {
+    fun do();
+}
+
+impl Done for Point {
+    fun do(self) {}
+}
+
+fun early(n: Int) -> Int {
+    if n > 0 {
+        return n;
+    }
+    0
+}
+
+fun tail_return(n: Int) -> Int {
+    return n * 2;
+}
+
+fun main() {
+    var p = Point::new();
+    p.do();
+    var u: () = ();
+    var x = early(3) + tail_return(2);
+}

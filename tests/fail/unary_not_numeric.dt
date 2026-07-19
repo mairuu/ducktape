@@ -1,0 +1,4 @@
+#! expect: unary '-' requires a numeric type
+fun main() {
+    var x = -"hello";
+}

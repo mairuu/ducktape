@@ -1,0 +1,18 @@
+# array literals, indexing, [T] type annotations, iteration
+fun sum(xs: [Int]) -> Int {
+    var total = 0;
+    for x in xs {
+        total = total + x;
+    }
+    total
+}
+
+fun main() {
+    var xs = [1, 2, 3];
+    var first = xs[0] + 1;
+    var s = sum(xs);
+    var annotated: [Int] = [4, 5, 6];
+    var nested = [[1], [2, 3]];
+    var inner = nested[1][0];
+    var strs = ["a", "b"];
+}

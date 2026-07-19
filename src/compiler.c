@@ -131,35 +131,37 @@ static bool compiler_phase_check(Compiler *c) {
 }
 
 // run the full compilation pipeline
-void compiler_run(Compiler *c, const char *path) {
+bool compiler_run(Compiler *c, const char *path) {
   if (!compiler_phase_discover(c, path)) {
     fprintf(stderr, "compilation failed during discovery.\n");
-    return;
+    return false;
   }
 
   if (!compiler_phase_parse(c)) {
     fprintf(stderr, "compilation failed during parsing.\n");
-    return;
+    return false;
   }
 
   if (!compiler_phase_dep_graph(c)) {
     fprintf(stderr,
             "compilation failed during dependency graph construction.\n");
-    return;
+    return false;
   }
 
   if (!compiler_phase_register(c)) {
     fprintf(stderr, "compilation failed during registration.\n");
-    return;
+    return false;
   }
 
   if (!compiler_phase_resolve(c)) {
     fprintf(stderr, "compilation failed during resolution.\n");
-    return;
+    return false;
   }
 
   if (!compiler_phase_check(c)) {
     fprintf(stderr, "compilation failed during type checking.\n");
-    return;
+    return false;
   }
+
+  return true;
 }

@@ -1,0 +1,120 @@
+# the full-language showcase from .vscode/ref/in.dt, adapted to current syntax:
+#   fun(x) => ...   ->  |x| => ...      (pipe closures)
+#   fun f(): T      ->  fun f() -> T
+#   for w < 10      ->  while w < 10
+#   inline trait bounds (T: Display) dropped — not supported yet
+use std::io::print;
+
+enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
+
+enum Status {
+    Active,
+    Inactive,
+}
+
+pub struct Point<T> {
+    x: T,
+    y: T,
+}
+
+struct Wrapper<T>(T, Int)
+
+trait Drawable {
+    type Color;
+
+    fun draw(self) -> Self.Color;
+
+    fun is_visible(self) -> Bool {
+        return true;
+    }
+}
+
+impl<T> Drawable for Point<T> {
+    type Color = String;
+
+    fun draw(self) -> Self.Color {
+        "Blue"
+    }
+}
+
+impl Point<Int> {
+    fun new(x: Int, y: Int) -> Self {
+        return Point { x: x, y: y };
+    }
+}
+
+pub fun process_data<T>(data: T) -> Result<Int, String> {
+    var p = Point::<Int>::new(10, 20);
+    var (a, b) = (1, 2.5);
+    var unit_val: () = ();
+
+    var count = 0;
+    count += 1;
+    count -= 1;
+    count *= 2;
+    count /= 1;
+
+    var logic = true and false or not false;
+    var cmp = (5 >= 4) == (3 != 2) and (1 < 2) and (3 <= 3);
+    var math = -5 + 10 - 2 * 3 / 1 % 2;
+
+    var r1 = 1..10;
+    var r2 = 0..=100;
+
+    var inline_adder: fun(Int, Int) -> Int = |x, y| => x + y;
+    var closure_res = inline_adder(1, 2);
+
+    var drawn = p.draw();
+    var casted = 10 as Float;
+
+    var if_val = if logic {
+        1
+    } else {
+        var fallback = 0;
+        fallback
+    };
+
+    var w = 0;
+    while w < 10 {
+        w += 1;
+        if w == 5 { continue; }
+        if w == 9 { break; }
+    }
+
+    for i in 1..=5 {
+        var s = "Iter: {i}";
+    }
+
+    var xs = [1, 2, 3];
+    var first = xs[0];
+
+    var match_res = match p {
+        Point { x: 10, y: val } if val > 0 => true,
+        _ => false,
+    };
+
+    var tuple_match = match (a, b) {
+        (1, 2.5) => "exact",
+        (val_a, val_b) => "bound",
+    };
+
+    var seed: Result<Int, String> = Result::Ok(5);
+    var enum_match = match seed {
+        Result::Ok(v) => v,
+        Result::Err(_) => 0,
+    };
+
+    var helper = || -> Result<Int, String> {
+        var val = process_data(10)?;
+        return Result::Ok(val);
+    };
+
+    Result::Ok(count)
+}
+
+fun main() {
+    var r = process_data(1);
+}

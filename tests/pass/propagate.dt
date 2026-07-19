@@ -1,0 +1,22 @@
+# ? propagation over a user-defined Result enum
+enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
+
+fun parse_num(s: String) -> Result<Int, String> {
+    Result::Ok(42)
+}
+
+fun double_num(s: String) -> Result<Int, String> {
+    var n = parse_num(s)?;
+    Result::Ok(n * 2)
+}
+
+fun main() {
+    var r = double_num("21");
+    var doubled = match r {
+        Result::Ok(n) => n,
+        Result::Err(e) => 0,
+    };
+}

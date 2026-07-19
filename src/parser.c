@@ -407,6 +407,24 @@ static TypeNode *parse_type(Parser *p) {
     base->as.fun.return_type = return_type;
   }
 
+  if (match_tok(p, TOKEN_LBRACKET)) {
+    Token start = *previous_tok(p);
+
+    TypeNode *elem = parse_type(p);
+    if (elem->kind == TYNODE_POISON) {
+      return ast_type_node(TYNODE_POISON, current_tok_span(p), p->al);
+    }
+
+    if (!consume_tok(p, TOKEN_RBRACKET, "expected ']' after array type")) {
+      return ast_type_node(TYNODE_POISON, current_tok_span(p), p->al);
+    }
+
+    base = ast_type_node(TYNODE_ARRAY,
+                         span_merge(token_span(&start), previous_tok_span(p)),
+                         p->al);
+    base->as.array.elem = elem;
+  }
+
   if (match_tok(p, TOKEN_SELF_TYPE)) {
     base = ast_type_node(TYNODE_SELF, token_span(previous_tok(p)), p->al);
   }
@@ -1150,11 +1168,11 @@ static bool parse_closure_param_list(Parser *p, ClosureParam *out, int *count,
   *count = 0;
   bool had_error = false;
 
-  if (check_tok(p, TOKEN_RPAREN))
+  if (check_tok(p, TOKEN_PIPE))
     return true;
 
   do {
-    if (check_tok(p, TOKEN_RPAREN))
+    if (check_tok(p, TOKEN_PIPE))
       break;
 
     if (*count >= max) {
@@ -1175,6 +1193,7 @@ static bool parse_closure_param_list(Parser *p, ClosureParam *out, int *count,
   return !had_error;
 }
 
+// closure: | params | ( -> type )? ( => expr | { block } )
 static Expr *parse_closure(Parser *p) {
   Token start = *previous_tok(p);
   bool had_error = false;
@@ -1182,14 +1201,14 @@ static Expr *parse_closure(Parser *p) {
   ClosureParam params[16];
   int param_count = 0;
 
-  if (!check_tok(p, TOKEN_RPAREN)) {
+  if (!check_tok(p, TOKEN_PIPE)) {
     if (!parse_closure_param_list(p, params, &param_count, 16)) {
       had_error = true;
       sync_to_fun_body(p);
     }
   }
 
-  if (!consume_tok(p, TOKEN_RBRACKET, "expected ']'")) {
+  if (!consume_tok(p, TOKEN_PIPE, "expected '|' after closure parameters")) {
     had_error = true;
     sync_to_fun_body(p);
   }
@@ -1203,12 +1222,17 @@ static Expr *parse_closure(Parser *p) {
     }
   }
 
-  if (!consume_tok(p, TOKEN_FAT_ARROW, "expected '=>' before closure body")) {
+  Expr *body = NULL;
+  if (check_tok(p, TOKEN_LBRACE)) {
+    body = parse_block(p);
+  } else if (consume_tok(p, TOKEN_FAT_ARROW,
+                         "expected '=>' or '{' before closure body")) {
+    body = parse_expr(p);
+  } else {
     had_error = true;
-    // sync_to_fun_body(p);
+    body = ast_expr(EXPR_POISON, current_tok_span(p), p->al);
   }
 
-  Expr *body = parse_expr(p);
   assert(body && "function body should not be NULL");
   if (body->kind == EXPR_POISON) {
     had_error = true;
@@ -1735,8 +1759,56 @@ static Expr *parse_primary(Parser *p) {
   }
 
   // closure
-  if (match_tok(p, TOKEN_LBRACKET)) {
+  if (match_tok(p, TOKEN_PIPE)) {
     return parse_closure(p);
+  }
+
+  // array literal
+  if (match_tok(p, TOKEN_LBRACKET)) {
+    Span start_span = previous_tok_span(p);
+
+    Expr *elem_exprs[16];
+    int elem_count = 0;
+    bool had_error = false;
+    bool old_allow_struct_init = p->allow_struct_init;
+    p->allow_struct_init = true;
+
+    if (!check_tok(p, TOKEN_RBRACKET)) {
+      do {
+        if (check_tok(p, TOKEN_RBRACKET)) {
+          break; // trailing comma
+        }
+        if (elem_count >= 16) {
+          error_at(p, current_tok_span(p), "too many elements in array");
+          had_error = true;
+          break;
+        }
+        Expr *e = parse_expr(p);
+        if (e->kind == EXPR_POISON) {
+          had_error = true;
+          break;
+        }
+        elem_exprs[elem_count++] = e;
+      } while (match_tok(p, TOKEN_COMMA));
+    }
+
+    if (!consume_tok(p, TOKEN_RBRACKET, "expected ']' after array literal")) {
+      had_error = true;
+    }
+
+    p->allow_struct_init = old_allow_struct_init;
+
+    if (had_error) {
+      return ast_expr(EXPR_POISON, span_merge(start_span, current_tok_span(p)),
+                      p->al);
+    }
+
+    Expr *expr = ast_expr(EXPR_ARRAY,
+                          span_merge(start_span, previous_tok_span(p)), p->al);
+    expr->as.array.elems = al_alloc(p->al, sizeof(Expr *) * elem_count);
+    memcpy(expr->as.array.elems, elem_exprs, sizeof(Expr *) * elem_count);
+    expr->as.array.count = elem_count;
+    return expr;
   }
 
   // match
@@ -2657,7 +2729,7 @@ static Decl *parse_trait_decl(Parser *p, bool is_pub) {
         }
 
         TypeNode *return_type = NULL;
-        if (match_tok(p, TOKEN_COLON)) {
+        if (match_tok(p, TOKEN_THIN_ARROW)) {
           return_type = parse_type(p);
           assert(return_type && "return type should not be NULL");
           if (return_type->kind == TYNODE_POISON) {

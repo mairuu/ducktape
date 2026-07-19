@@ -1,0 +1,17 @@
+# minimal program exercising already-working checker features
+fun add(a: Int, b: Int) -> Int {
+    a + b
+}
+
+fun main() {
+    var x = add(1, 2);
+    var y = if x > 2 { x } else { 0 };
+    var flag = y == 3 and not_used(y);
+    while flag {
+        break;
+    }
+}
+
+fun not_used(n: Int) -> Bool {
+    n > 0
+}

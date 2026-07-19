@@ -134,7 +134,7 @@ struct TypeChecker {
 
   ImplIndex impl_index;
 
-  Type *t_int, *t_float, *t_bool, *t_string, *t_unit, *t_poison;
+  Type *t_int, *t_float, *t_bool, *t_string, *t_unit, *t_never, *t_poison;
 
   DiagBag *diags;
   Allocator *al;

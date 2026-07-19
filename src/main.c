@@ -16,8 +16,8 @@ int main(int argc, char *argv[]) {
   Allocator heap_al = heap_allocator_create();
 
   compiler_init(&compiler, &heap_al);
-  compiler_run(&compiler, root_path);
+  bool ok = compiler_run(&compiler, root_path);
   compiler_destroy(&compiler, &heap_al);
 
-  return 0;
+  return ok ? 0 : 1;
 }

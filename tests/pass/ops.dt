@@ -1,0 +1,21 @@
+# unary ops, ranges, casts, string interpolation
+fun main() {
+    var a = 10;
+    var b = -a;
+    var c = not (a > b);
+
+    var f = a as Float;
+    var back = f as Int;
+    var same = a as Int;
+
+    var r = 1..10;
+    var total = 0;
+    for i in 1..=5 {
+        total = total + i;
+    }
+    for i in r {
+        total = total + i;
+    }
+
+    var s = "a={a} f={f} c={c} msg={"str"}";
+}

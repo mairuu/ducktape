@@ -1,0 +1,7 @@
+#! expect: cannot destructure tuple struct
+struct Pair(Int, Int)
+
+fun main() {
+    var p = Pair(1, 2);
+    var Pair { a, b } = p;
+}

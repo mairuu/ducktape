@@ -1,0 +1,4 @@
+#! expect: the '?' operator requires a Result-like enum
+fun main() {
+    var x = 1?;
+}

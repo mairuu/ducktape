@@ -234,6 +234,16 @@ Type *ty_unit(void) {
   return &unit_type;
 }
 
+Type *ty_never(void) {
+  static Type never = {.kind = TY_NEVER};
+  return &never;
+}
+
+Type *ty_range(void) {
+  static Type range = {.kind = TY_RANGE};
+  return &range;
+}
+
 Type *ty_poison(void) {
   static Type poison = {.kind = TY_POISON};
   return &poison;
@@ -290,8 +300,20 @@ Type *ty_tuple(Type **elems, int elem_count, Allocator *al) {
   return type_intern(t);
 }
 
-// todo:
-Type *ty_array(Type *elem, Allocator *al);
+Type *ty_array(Type *elem, Allocator *al) {
+  Type probe = {.kind = TY_ARRAY,
+                .as.array = {
+                    .elem_type = elem,
+                }};
+  Type *interned = type_intern_lookup(&probe);
+  if (interned) {
+    return interned;
+  }
+  Type *t = al_alloc_for(al, Type);
+  t->kind = TY_ARRAY;
+  t->as.array.elem_type = elem;
+  return type_intern(t);
+}
 
 Type *ty_generic(StringView name, TraitDef **bounds, int bound_count,
                  Allocator *al) {
@@ -405,6 +427,8 @@ int type_name_sprintf(const Type *t, char *buf, size_t buf_size) {
     return snprintf(buf, buf_size, "String");
   case TY_UNIT:
     return snprintf(buf, buf_size, "()");
+  case TY_NEVER:
+    return snprintf(buf, buf_size, "!");
   case TY_UNKNOWN:
     if (t->as.unknown.bound) {
       return type_name_sprintf(t->as.unknown.bound, buf, buf_size);
@@ -429,6 +453,8 @@ int type_name_sprintf(const Type *t, char *buf, size_t buf_size) {
                     SV_ARG(t->as.trait.def->name));
   case TY_ARRAY:
     return snprintf(buf, buf_size, "Array<...>");
+  case TY_RANGE:
+    return snprintf(buf, buf_size, "Range");
   case TY_ASSOC:
     return snprintf(buf, buf_size, SV_FMT "." SV_FMT,
                     SV_ARG(t->as.assoc.base->as.generic.name),
@@ -453,6 +479,8 @@ int type_sprintf(const Type *t, char *buf, size_t buf_size) {
     return snprintf(buf, buf_size, "String");
   case TY_UNIT:
     return snprintf(buf, buf_size, "()");
+  case TY_NEVER:
+    return snprintf(buf, buf_size, "!");
   case TY_UNKNOWN:
     if (t->as.unknown.bound) {
       return type_sprintf(t->as.unknown.bound, buf, buf_size);
@@ -519,6 +547,8 @@ int type_sprintf(const Type *t, char *buf, size_t buf_size) {
                     SV_ARG(t->as.trait.def->name)); // todo: include type args
   case TY_ARRAY:
     return snprintf(buf, buf_size, "[...]"); // todo: include elem type
+  case TY_RANGE:
+    return snprintf(buf, buf_size, "Range");
   case TY_ASSOC:
     return snprintf(
         buf, buf_size, SV_FMT "." SV_FMT,
@@ -599,6 +629,9 @@ void dump_type(const Type *t) {
   case TY_UNIT:
     fprintf(stdout, "()");
     break;
+  case TY_NEVER:
+    fprintf(stdout, "!");
+    break;
   case TY_UNKNOWN:
     fprintf(stdout, "<UNKNOWN>");
     break;
@@ -616,6 +649,9 @@ void dump_type(const Type *t) {
     fprintf(stdout, "Array<");
     dump_type(t->as.array.elem_type);
     fprintf(stdout, ">");
+    break;
+  case TY_RANGE:
+    fprintf(stdout, "Range");
     break;
   case TY_TUPLE:
     fprintf(stdout, "(");
@@ -689,6 +725,10 @@ static void dump_typenode(const TypeNode *tn, int indent) {
   case TYNODE_ASSOC:
     fprintf(stdout, "TypeNode: Assoc(" SV_FMT ")\n",
             SV_ARG(tn->as.assoc.assoc_name));
+    break;
+  case TYNODE_ARRAY:
+    fprintf(stdout, "TypeNode: Array\n");
+    dump_typenode(tn->as.array.elem, indent + 1);
     break;
   }
   if (tn->resolved) {

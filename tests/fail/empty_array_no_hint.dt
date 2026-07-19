@@ -1,0 +1,4 @@
+#! expect: cannot infer type
+fun main() {
+    var e = [];
+}
