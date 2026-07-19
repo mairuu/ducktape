@@ -456,7 +456,7 @@ static bool parse_path(Parser *p, PathParseMode mode, Path *out) {
   int segment_count = 0;
   Token *start_tok = current_tok(p);
 
-  if (check_tok(p, TOKEN_IDENT)) {
+  if (check_tok(p, TOKEN_IDENT) || check_tok(p, TOKEN_SELF_TYPE)) {
     do {
       if (segment_count >= 8) {
         error_at(p, current_tok_span(p), "too many segments in path");
@@ -465,7 +465,10 @@ static bool parse_path(Parser *p, PathParseMode mode, Path *out) {
       if (mode == PATH_USE && check_tok(p, TOKEN_LBRACE)) {
         break;
       }
-      if (!consume_tok(p, TOKEN_IDENT, "expected identifier in path")) {
+      // 'Self' may only lead a path; later segments must be plain idents.
+      if (segment_count == 0 && check_tok(p, TOKEN_SELF_TYPE)) {
+        advance_tok(p);
+      } else if (!consume_tok(p, TOKEN_IDENT, "expected identifier in path")) {
         return false;
       }
       PathSegment *segment = &segments[segment_count++];
@@ -1603,7 +1606,7 @@ static Expr *parse_primary(Parser *p) {
   }
 
   // path / struct-init / variant
-  if (check_tok(p, TOKEN_IDENT) || match_tok(p, TOKEN_SELF_TYPE)) {
+  if (check_tok(p, TOKEN_IDENT) || check_tok(p, TOKEN_SELF_TYPE)) {
     Path path = {0};
     if (!parse_path(p, PATH_EXPR, &path)) {
       return ast_expr(EXPR_POISON, current_tok_span(p), p->al);

@@ -10,6 +10,7 @@ typedef struct InferCtx InferCtx;
 typedef struct TypeChecker TypeChecker;
 typedef struct ValueScope ValueScope;
 typedef struct TypeScope TypeScope;
+typedef struct ImplIndex ImplIndex;
 typedef struct TypeResolver TypeResolver;
 typedef struct ResolveCtx ResolveCtx;
 typedef struct CheckCtx CheckCtx;
@@ -40,6 +41,35 @@ Type *subst_apply(const Subst *s, Type *t, Allocator *al);
 Subst infer_open_generics(InferCtx *ctx, Type **type_params,
                           Type **type_args /* nullable */, int param_count,
                           Span span, Allocator *al);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ImplIndex
+// ═══════════════════════════════════════════════════════════════════════════════
+
+typedef struct {
+  ImplDef *impl;
+  Subst subst;
+} ImplMatch;
+
+struct ImplIndex {
+  ImplDef **all; // flat list; linear search for now
+  int count;
+  int cap;
+  Allocator *al;
+};
+
+void impl_index_init(ImplIndex *idx, Allocator *al);
+
+// register an impl in the index. call once the impl's self_type and methods
+// are fully resolved.
+void impl_index_add(ImplIndex *idx, ImplDef *impl);
+
+// find a method named `name` applicable to `self_type`, trying every
+// registered impl. on a match, *out_match is filled with the impl and the
+// substitution mapping the impl's type params to the concrete type args
+// inferred from `self_type` (empty subst if the impl isn't generic).
+MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, StringView name,
+                             ImplMatch *out_match, Allocator *al);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Inference
@@ -101,6 +131,8 @@ struct TypeChecker {
 
   FunDef **funs;
   int fun_count, fun_cap;
+
+  ImplIndex impl_index;
 
   Type *t_int, *t_float, *t_bool, *t_string, *t_unit, *t_poison;
 

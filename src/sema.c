@@ -206,6 +206,41 @@ Subst infer_open_generics(InferCtx *ctx, Type **params,
   return s;
 }
 
+// drop entries from `outer` whose name matches one of `shadow` (e.g. a
+// function's own type params shadowing its enclosing impl's). subst_apply
+// matches TY_GENERIC nodes by name only, not by which scope introduced them,
+// so once an inner declaration reuses an outer name, every occurrence of
+// that name in the inner scope can only mean the inner generic — keeping the
+// outer binding around would make subst_apply silently substitute the wrong
+// value wherever the names collide.
+static Subst subst_exclude_shadowed(Subst outer, Type **shadow,
+                                    int shadow_count, Allocator *al) {
+  if (outer.count == 0 || shadow_count == 0) {
+    return outer;
+  }
+  StringView *names = al_alloc(al, sizeof(StringView) * outer.count);
+  Type **args = al_alloc(al, sizeof(Type *) * outer.count);
+  int n = 0;
+  for (int i = 0; i < outer.count; i++) {
+    bool shadowed = false;
+    for (int j = 0; j < shadow_count; j++) {
+      assert(shadow[j]->kind == TY_GENERIC);
+      if (sv_equal(outer.params[i], shadow[j]->as.generic.name)) {
+        shadowed = true;
+        break;
+      }
+    }
+    if (!shadowed) {
+      names[n] = outer.params[i];
+      args[n] = outer.args[i];
+      n++;
+    }
+  }
+  Subst s;
+  subst_init(&s, names, args, n);
+  return s;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Inference
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -455,6 +490,8 @@ void tc_init(TypeChecker *tc, DiagBag *diags, Allocator *al) {
 
   tc->diags = diags;
   tc->al = al;
+
+  impl_index_init(&tc->impl_index, al);
 }
 
 void tc_destroy(TypeChecker *tc) { (void)tc; }
@@ -810,6 +847,15 @@ static void resolve_impl_decl(ResolveCtx *rctx, Decl *decl) {
   Type *self_ty = rctx_resolve(rctx, impl_decl->self_type);
   impl_def->self_type = self_ty;
 
+  TypeEntry *self_te = NULL;
+  tscope_define(rctx->tyres.tscope, sv_from_cstr("Self"), self_ty, rctx->diags,
+                decl->span, &self_te);
+  if (self_ty->kind == TY_STRUCT) {
+    self_te->as.struct_def = self_ty->as.struc.def;
+  } else if (self_ty->kind == TY_ENUM) {
+    self_te->as.enum_def = self_ty->as.enm.def;
+  }
+
   // resolve trait
   if (impl_decl->trait_type) {
     Type *trait_ty = rctx_resolve(rctx, impl_decl->trait_type);
@@ -834,6 +880,7 @@ static void resolve_impl_decl(ResolveCtx *rctx, Decl *decl) {
       DeclFun *fun_decl = &item->fun_decl->as.fun_decl;
       FunDef *fun_def = al_alloc_zero_for(rctx->al, FunDef);
       method_def->fun = fun_def;
+      method_def->name = fun_decl->name;
 
       fun_def->name = fun_decl->name;
       fun_def->module = impl_def->module;
@@ -900,6 +947,8 @@ static void resolve_impl_decl(ResolveCtx *rctx, Decl *decl) {
 
   // end; impl level type scope
   rctx->tyres.tscope = tscope_pop(rctx->tyres.tscope);
+
+  impl_index_add(&rctx->tc->impl_index, impl_def);
 }
 
 static void resolve_decl(ResolveCtx *rctx, Decl *decl) {
@@ -1710,6 +1759,144 @@ static Type *resolve_match_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   return result_ty ? result_ty : ctx->tc->t_unit;
 }
 
+static Type *resolve_method_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
+  (void)hint;
+  ExprMethodCall *mc = &expr->as.method_call;
+
+  Type *self_ty = resolve_expr(ctx, mc->object, NULL);
+  if (type_is_poison(self_ty)) {
+    return ctx->tc->t_poison;
+  }
+
+  ImplMatch match;
+  MethodDef *method = impl_index_method(&ctx->tc->impl_index, self_ty,
+                                        mc->method_name, &match, ctx->al);
+  if (!method) {
+    char self_buf[64];
+    type_sprintf(self_ty, self_buf, sizeof(self_buf));
+    diag_error(ctx->diags, expr->span,
+               "no method named '" SV_FMT "' found for type '%s'",
+               SV_ARG(mc->method_name), self_buf);
+    return ctx->tc->t_poison;
+  }
+
+  mc->resolved_method = method;
+  mc->resolved_impl = match.impl;
+
+  FunDef *fun = method->fun;
+
+  int self_idx = -1;
+  for (int i = 0; i < fun->param_count; i++) {
+    if (fun->params[i].is_self) {
+      self_idx = i;
+      break;
+    }
+  }
+  if (self_idx < 0) {
+    diag_error(ctx->diags, expr->span,
+               "'" SV_FMT "' is an associated function, not a method — it has "
+               "no 'self' parameter",
+               SV_ARG(mc->method_name));
+    return ctx->tc->t_poison;
+  }
+
+  if (mc->type_arg_count > 0 && mc->type_arg_count != fun->type_param_count) {
+    diag_error(ctx->diags, expr->span,
+               "expected %d type arguments but got %d", fun->type_param_count,
+               mc->type_arg_count);
+    return ctx->tc->t_poison;
+  }
+
+  TypeScratch explicit_type_args;
+  ts_init(&explicit_type_args, mc->type_arg_count, ctx->al);
+  for (int i = 0; i < mc->type_arg_count; i++) {
+    explicit_type_args.ptr[i] = tyres_resolve(&ctx->tyres, mc->type_args[i]);
+    if (type_is_poison(explicit_type_args.ptr[i])) {
+      return ctx->tc->t_poison;
+    }
+  }
+
+  // combine the impl-level substitution (already concrete, from matching
+  // self_ty) with the method's own generics (fresh unknowns / explicit type
+  // args) into a single subst, so subst_apply sees every generic that can
+  // appear in fun->fun_type in one pass. see subst_exclude_shadowed for why
+  // impl-level entries shadowed by the method's own type params are dropped.
+  Subst method_subst = infer_open_generics(
+      &ctx->infer, fun->type_params, explicit_type_args.ptr,
+      fun->type_param_count, expr->span, ctx->al);
+  bool is_generic = method_subst.count > 0;
+
+  Subst impl_subst = subst_exclude_shadowed(match.subst, fun->type_params,
+                                            fun->type_param_count, ctx->al);
+
+  int n_impl = impl_subst.count;
+  int n_total = n_impl + method_subst.count;
+
+  Subst subst = subst_empty();
+  if (n_total > 0) {
+    StringView *names = al_alloc(ctx->al, sizeof(StringView) * n_total);
+    Type **args = al_alloc(ctx->al, sizeof(Type *) * n_total);
+    if (n_impl > 0) {
+      memcpy(names, impl_subst.params, sizeof(StringView) * n_impl);
+      memcpy(args, impl_subst.args, sizeof(Type *) * n_impl);
+    }
+    if (method_subst.count > 0) {
+      memcpy(names + n_impl, method_subst.params,
+             sizeof(StringView) * method_subst.count);
+      memcpy(args + n_impl, method_subst.args,
+             sizeof(Type *) * method_subst.count);
+    }
+    subst_init(&subst, names, args, n_total);
+  }
+
+  Type *fun_ty = subst_apply(&subst, fun->fun_type, ctx->al);
+
+  int expected_argc = fun->param_count - 1;
+  if (mc->arg_count != expected_argc) {
+    diag_error(ctx->diags, expr->span, "expected %d arguments but got %d",
+               expected_argc, mc->arg_count);
+    return ctx->tc->t_poison;
+  }
+
+  bool had_error = false;
+  for (int i = 0, k = 0; i < fun->param_count; i++) {
+    if (i == self_idx) {
+      continue;
+    }
+    Type *param_ty = fun_ty->as.fun.param_types[i];
+    Expr *arg = mc->args[k++];
+    Type *arg_ty = resolve_expr(ctx, arg, param_ty);
+
+    if (type_is_poison(arg_ty) || type_is_poison(param_ty)) {
+      had_error = true;
+      continue;
+    }
+
+    if (is_generic) {
+      had_error |=
+          !infer_unify(&ctx->infer, arg_ty, param_ty, ctx->diags, arg->span);
+    } else if (!types_equal(arg_ty, param_ty)) {
+      char ab[64], pb[64];
+      type_sprintf(arg_ty, ab, sizeof(ab));
+      type_sprintf(param_ty, pb, sizeof(pb));
+      diag_error(ctx->diags, arg->span,
+                 "argument %d: expected '%s' but got '%s'", k, pb, ab);
+      had_error = true;
+    }
+  }
+
+  if (had_error) {
+    return ctx->tc->t_poison;
+  }
+
+  Type *ret_ty = fun_ty->as.fun.return_type;
+  if (is_generic) {
+    ret_ty = infer_apply(&ctx->infer, ret_ty, ctx->al);
+  }
+
+  return ret_ty;
+}
+
 static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   (void)hint;
   (void)ctx;
@@ -1894,6 +2081,16 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       break;
     }
 
+    result = ve->type;
+    break;
+  }
+  case EXPR_SELF: {
+    VarEntry *ve = vscope_lookup(ctx->vscope, sv_from_cstr("self"), NULL);
+    if (!ve) {
+      diag_error(ctx->diags, expr->span, "'self' is not available here");
+      result = ctx->tc->t_poison;
+      break;
+    }
     result = ve->type;
     break;
   }
@@ -2244,6 +2441,9 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     result = then_ty; // or else_ty; they are unified
     break;
   }
+  case EXPR_METHOD_CALL:
+    result = resolve_method_call_expr(ctx, expr, hint);
+    break;
   default:
     assert(false && "unhandled expr kind in resolve_expr");
   }
@@ -2316,6 +2516,15 @@ static void tc_check_impl(TypeChecker *tc, Decl *decl) {
     tscope_define(cctx.tyres.tscope, impl_decl->type_params[i].name,
                   impl_def->type_params[i], cctx.diags,
                   impl_decl->type_params[i].span, NULL);
+  }
+
+  TypeEntry *self_te = NULL;
+  tscope_define(cctx.tyres.tscope, sv_from_cstr("Self"), impl_def->self_type,
+                cctx.diags, decl->span, &self_te);
+  if (impl_def->self_type->kind == TY_STRUCT) {
+    self_te->as.struct_def = impl_def->self_type->as.struc.def;
+  } else if (impl_def->self_type->kind == TY_ENUM) {
+    self_te->as.enum_def = impl_def->self_type->as.enm.def;
   }
 
   for (int i = 0, method_idx = 0, assoc_idx = 0; i < impl_decl->item_count;
@@ -2540,6 +2749,16 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
   case TYNODE_UNIT:
     result = r->tc->t_unit;
     break;
+  case TYNODE_SELF: {
+    TypeEntry *e = tscope_lookup(r->tscope, sv_from_cstr("Self"));
+    if (!e) {
+      diag_error(r->diags, node->span, "'Self' is not valid outside an impl");
+      result = r->tc->t_poison;
+      break;
+    }
+    result = e->type;
+    break;
+  }
   case TYNODE_NAMED: {
     TypeNodeNamed *named = &node->as.named;
 
@@ -2631,6 +2850,157 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
   assert(result != NULL && "tyres_resolve failed to resolve a type node");
   node->resolved = result;
   return result;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ImplIndex
+// ═══════════════════════════════════════════════════════════════════════════════
+
+void impl_index_init(ImplIndex *idx, Allocator *al) {
+  idx->all = NULL;
+  idx->count = 0;
+  idx->cap = 0;
+  idx->al = al;
+}
+
+void impl_index_add(ImplIndex *idx, ImplDef *impl) {
+  if (idx->count >= idx->cap) {
+    int new_cap = idx->cap == 0 ? 4 : idx->cap * 2;
+    idx->all = al_realloc(idx->al, idx->all, sizeof(ImplDef *) * idx->cap,
+                          sizeof(ImplDef *) * new_cap);
+    assert(idx->all && "out of memory");
+    idx->cap = new_cap;
+  }
+  idx->all[idx->count++] = impl;
+}
+
+// structurally match `pattern` (an impl's self_type, possibly containing
+// TY_GENERIC leaves bound to `param_names`) against a concrete `concrete`
+// type, recording bindings into `out_args`/`bound`. returns false on a
+// structural mismatch or a binding conflict.
+static bool impl_type_match(Type *pattern, Type *concrete,
+                            StringView *param_names, int param_count,
+                            Type **out_args, bool *bound) {
+  if (pattern->kind == TY_GENERIC) {
+    for (int i = 0; i < param_count; i++) {
+      if (!sv_equal(param_names[i], pattern->as.generic.name)) {
+        continue;
+      }
+      if (bound[i]) {
+        return types_equal(out_args[i], concrete);
+      }
+      bound[i] = true;
+      out_args[i] = concrete;
+      return true;
+    }
+    return false; // generic not owned by this impl
+  }
+
+  if (pattern->kind != concrete->kind) {
+    return false;
+  }
+
+  switch (pattern->kind) {
+  case TY_STRUCT: {
+    TypeStruct *ps = &pattern->as.struc, *cs = &concrete->as.struc;
+    if (ps->def != cs->def || ps->type_arg_count != cs->type_arg_count) {
+      return false;
+    }
+    for (int i = 0; i < ps->type_arg_count; i++) {
+      if (!impl_type_match(ps->type_args[i], cs->type_args[i], param_names,
+                           param_count, out_args, bound)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  case TY_ENUM: {
+    TypeEnum *pe = &pattern->as.enm, *ce = &concrete->as.enm;
+    if (pe->def != ce->def || pe->type_arg_count != ce->type_arg_count) {
+      return false;
+    }
+    for (int i = 0; i < pe->type_arg_count; i++) {
+      if (!impl_type_match(pe->type_args[i], ce->type_args[i], param_names,
+                           param_count, out_args, bound)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  case TY_ARRAY:
+    return impl_type_match(pattern->as.array.elem_type,
+                           concrete->as.array.elem_type, param_names,
+                           param_count, out_args, bound);
+  case TY_TUPLE: {
+    TypeTuple *pt = &pattern->as.tuple, *ct = &concrete->as.tuple;
+    if (pt->elem_count != ct->elem_count) {
+      return false;
+    }
+    for (int i = 0; i < pt->elem_count; i++) {
+      if (!impl_type_match(pt->elem_types[i], ct->elem_types[i], param_names,
+                           param_count, out_args, bound)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  default:
+    return types_equal(pattern, concrete);
+  }
+}
+
+MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, StringView name,
+                             ImplMatch *out_match, Allocator *al) {
+  if (type_is_poison(self_type)) {
+    return NULL;
+  }
+
+  for (int i = 0; i < idx->count; i++) {
+    ImplDef *impl = idx->all[i];
+    if (type_is_poison(impl->self_type)) {
+      continue;
+    }
+
+    Subst subst = subst_empty();
+    bool matched;
+
+    if (impl->type_param_count == 0) {
+      matched = types_equal(impl->self_type, self_type);
+    } else {
+      int n = impl->type_param_count;
+      StringView *names = al_alloc(al, sizeof(StringView) * n);
+      Type **args = al_alloc(al, sizeof(Type *) * n);
+      bool *bound = al_alloc_zero(al, sizeof(bool) * n);
+      for (int j = 0; j < n; j++) {
+        names[j] = impl->type_params[j]->as.generic.name;
+      }
+
+      matched = impl_type_match(impl->self_type, self_type, names, n, args,
+                                bound);
+      for (int j = 0; matched && j < n; j++) {
+        matched = bound[j]; // every impl type param must appear in self_type
+      }
+      if (matched) {
+        subst_init(&subst, names, args, n);
+      }
+    }
+
+    if (!matched) {
+      continue;
+    }
+
+    for (int j = 0; j < impl->method_count; j++) {
+      if (sv_equal(impl->methods[j].name, name)) {
+        if (out_match) {
+          out_match->impl = impl;
+          out_match->subst = subst;
+        }
+        return &impl->methods[j];
+      }
+    }
+  }
+
+  return NULL;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2854,6 +3224,48 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
       };
       return true;
     }
+    case PATHRES_CTX_STRUCT: {
+      Type *struct_ty = res_ctx.scope.struct_.inst;
+
+      if (!is_last) {
+        diag_error(ctx->diags, path->span,
+                   "cannot access member '" SV_FMT "' of associated item",
+                   SV_ARG(segment));
+        return false;
+      }
+
+      if (path->segments[i].type_arg_count > 0) {
+        diag_error(ctx->diags, path->span,
+                   "cannot apply type arguments to associated function '" SV_FMT
+                   "'",
+                   SV_ARG(segment));
+        return false;
+      }
+
+      ImplMatch match;
+      MethodDef *method = impl_index_method(&ctx->tyres->tc->impl_index,
+                                            struct_ty, segment, &match, ctx->al);
+      if (!method) {
+        char ty_buf[64];
+        type_sprintf(struct_ty, ty_buf, sizeof(ty_buf));
+        diag_error(ctx->diags, path->span,
+                   "no associated item named '" SV_FMT "' found for type '%s'",
+                   SV_ARG(segment), ty_buf);
+        return false;
+      }
+
+      FunDef *fun = method->fun;
+      Subst subst = subst_exclude_shadowed(match.subst, fun->type_params,
+                                           fun->type_param_count, ctx->al);
+      Type *fun_ty = subst_apply(&subst, fun->fun_type, ctx->al);
+
+      *out_res = (PathRes){
+          .kind = PATHRES_METHOD,
+          .type = fun_ty,
+          .as.method.fun = fun,
+      };
+      return true;
+    }
     default:
       break;
     }
@@ -2879,7 +3291,7 @@ bool cctx_resolve_path(CheckCtx *ctx, Path *path, PathRes *out_res) {
   PathResCtx path_ctx = {
       .path = path,
       // .vscope = ctx->vscope,
-      .tscope = ctx->tscope,
+      .tscope = ctx->tyres.tscope,
       .diags = ctx->diags,
       .tyres = &ctx->tyres,
       .al = ctx->al,

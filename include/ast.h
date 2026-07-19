@@ -610,6 +610,7 @@ typedef struct {
   TypeNode **type_args;
   int type_arg_count;
   MethodDef *resolved_method;
+  ImplDef *resolved_impl;
 } ExprMethodCall;
 
 typedef struct {
