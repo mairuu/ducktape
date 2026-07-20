@@ -1,0 +1,150 @@
+(* ducktape grammar — matches src/parser.c as implemented.
+   Notation: | alternation, ? optional, * zero-or-more, "" literals.
+   Comments run from `#` to end of line. The test harness reads two comment
+   prefixes (`#! expect:`, `#>`) but the language treats them as comments. *)
+
+program        = decl* ;
+
+(* ── declarations ─────────────────────────────────────────────────────── *)
+
+decl           = useDecl
+               | "pub"? ( varDecl | funDecl | structDecl | enumDecl
+                        | traitDecl | implDecl ) ;
+
+useDecl        = "use" usePath ";" ;
+usePath        = path ( "::" "{" useItem ( "," useItem )* ","? "}" )? ;
+useItem        = IDENT ( "as" IDENT )? ;
+                 (* parsed; imports are not linked yet *)
+
+varDecl        = "var" binding ( ":" type )? "=" expr ";" ;
+                 (* file-scope var parses but is rejected later — known gap *)
+
+funDecl        = "fun" IDENT typeParams? "(" paramList? ")"
+                 ( "->" type )? whereClause?
+                 ( "=>" expr | block ) ;
+paramList      = param ( "," param )* ;
+param          = "self" | IDENT ":" type ;   (* self only in impl methods *)
+
+structDecl     = "struct" IDENT typeParams?
+                 ( "{" fieldDecl ( "," fieldDecl )* ","? "}"   (* named  *)
+                 | "(" type ( "," type )* ")"                  (* tuple  *)
+                 | ";" ) ;                                     (* unit   *)
+fieldDecl      = IDENT ":" type ;
+
+enumDecl       = "enum" IDENT typeParams?
+                 "{" variantDecl ( "," variantDecl )* ","? "}" ;
+variantDecl    = IDENT ( "(" type ( "," type )* ")"
+                       | "{" fieldDecl ( "," fieldDecl )* ","? "}" )? ;
+
+traitDecl      = "trait" IDENT typeParams? "{" traitItem* "}" ;
+traitItem      = "type" IDENT ";"
+               | "fun" IDENT typeParams? "(" paramList? ")"
+                 ( "->" type )? whereClause?
+                 ( ";" | "=>" expr ";" | block ) ;
+
+implDecl       = "impl" typeParams? type ( "for" type )? whereClause?
+                 "{" implItem* "}" ;
+                 (* with "for": first type is the trait, second is self *)
+implItem       = "type" IDENT "=" type ";"
+               | funDecl ;    (* method; no "pub" inside impls *)
+
+typeParams     = "<" typeParam ( "," typeParam )* ">" ;
+typeParam      = IDENT ( ":" traitBound )? ;
+                 (* inline bounds parse; the checker rejects them for now *)
+whereClause    = "where" wherePred ( "," wherePred )* ;
+wherePred      = type ":" traitBound ;
+traitBound     = path ( "+" path )* ;
+
+(* ── types ────────────────────────────────────────────────────────────── *)
+
+type           = "(" ")"                          (* unit *)
+               | "(" type ( "," type )* ")"       (* tuple; single = group *)
+               | "fun" "(" ( type ( "," type )* )? ")" "->" type
+               | "[" type "]"                     (* array *)
+               | "Self" assocSuffix?
+               | typePath assocSuffix? ;
+typePath       = pathSeg ( "::" pathSeg )* ;
+pathSeg        = IDENT ( "::"? "<" type ( "," type )* ">" )? ;
+                 (* in type position "::" before "<" is optional *)
+assocSuffix    = ( "." IDENT )+ ;                 (* associated types *)
+
+(* ── statements and blocks ────────────────────────────────────────────── *)
+
+block          = "{" stmt* expr? "}" ;
+                 (* the trailing expr (no ";") is the block's value; a
+                    trailing block-form if/match also counts as the tail *)
+
+stmt           = varDecl
+               | "return" expr? ";"
+               | "break" ";"
+               | "continue" ";"
+               | expr ";"
+               | ifExpr | matchExpr | whileExpr | forExpr ;
+                 (* block-form expressions need no ";" as statements *)
+
+binding        = IDENT
+               | "(" IDENT ( "," IDENT )* ")"            (* tuple  *)
+               | path "{" IDENT ( "," IDENT )* ","? "}" ; (* struct *)
+
+(* ── expressions (lowest to highest precedence) ───────────────────────── *)
+
+expr           = assign ;
+assign         = range ( ( "=" | "+=" | "-=" | "*=" | "/=" ) assign )? ;
+range          = or ( ( ".." | "..=" ) or )? ;         (* Int-only ranges *)
+or             = and ( "or" and )* ;
+and            = equality ( "and" equality )* ;
+equality       = comparison ( ( "==" | "!=" ) comparison )* ;
+comparison     = addition ( ( "<" | "<=" | ">" | ">=" ) addition )* ;
+addition       = multiply ( ( "+" | "-" ) multiply )* ;
+multiply       = unary ( ( "*" | "/" | "%" ) unary )* ;
+unary          = ( "not" | "-" ) unary | postfix ;
+postfix        = primary postfixOp* ;
+postfixOp      = "(" ( expr ( "," expr )* )? ")"        (* call *)
+               | "." IDENT ( "<" type ( "," type )* ">" )?
+                 ( "(" ( expr ( "," expr )* )? ")" )?   (* method / field *)
+               | "." INT                                (* tuple access *)
+               | "[" expr "]"                           (* index *)
+               | "as" type                              (* cast *)
+               | "?" ;                                  (* propagate *)
+
+primary        = INT | FLOAT | STRING | interpString | "true" | "false"
+               | "(" ")"                                (* unit *)
+               | "(" expr ( "," expr )* ","? ")"        (* tuple / group *)
+               | "[" ( expr ( "," expr )* ","? )? "]"   (* array literal *)
+               | closure
+               | ifExpr | matchExpr | whileExpr | forExpr
+               | block
+               | exprPath structInit? ;
+
+closure        = "|" ( closureParam ( "," closureParam )* )? "|"
+                 ( "->" type )? ( "=>" expr | block ) ;
+closureParam   = IDENT ( ":" type )? ;
+
+exprPath       = pathSegE ( "::" pathSegE )* ;
+pathSegE       = IDENT ( "::" "<" type ( "," type )* ">" )? ;
+                 (* expression position requires turbofish: Point::<Int>:: *)
+structInit     = "{" fieldInit ( "," fieldInit )* ","? "}" ;
+fieldInit      = IDENT ":" expr | IDENT ;
+                 (* disallowed directly in if/match/while headers *)
+
+ifExpr         = "if" expr block ( "else" ( ifExpr | block ) )? ;
+whileExpr      = "while" expr block ;
+forExpr        = "for" IDENT "in" expr block ;
+matchExpr      = "match" expr "{" ( matchArm ","? )* "}" ;
+matchArm       = pattern ( "if" expr )? "=>" expr ;
+
+pattern        = "_"
+               | INT | FLOAT | STRING | "true" | "false"
+               | "(" pattern ( "," pattern )* ")"
+               | path ( "(" pattern ( "," pattern )* ")"
+                      | "{" fieldPat ( "," fieldPat )* ","? "}" )?
+               | IDENT ;                                (* binding *)
+fieldPat       = IDENT ( ":" pattern )? ;
+
+path           = IDENT ( "::" IDENT )* ;
+
+(* ── strings ──────────────────────────────────────────────────────────── *)
+
+interpString   = '"' ( TEXT | "{" expr "}" )* '"' ;
+                 (* segments must be Int/Float/Bool/String; escapes:
+                    \n \t \r \" \\ \{ *)
