@@ -1,0 +1,28 @@
+# calls, recursion, early return, first-class functions
+#> 3
+#> 55
+#> 120
+#> 42
+fun add(a: Int, b: Int) -> Int {
+    a + b
+}
+
+fun fib(n: Int) -> Int {
+    if n < 2 {
+        return n;
+    }
+    fib(n - 1) + fib(n - 2)
+}
+
+fun fact(n: Int) -> Int {
+    if n <= 1 { 1 } else { n * fact(n - 1) }
+}
+
+fun main() {
+    print(add(1, 2));
+    print(fib(10));
+    print(fact(5));
+
+    var f = add;
+    print(f(40, 2));
+}

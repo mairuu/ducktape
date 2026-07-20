@@ -6,7 +6,7 @@ CSTD    := -std=c23
 CFLAGS  := $(CSTD) -Wall -Wextra -Wpedantic $(DEFS)
 IFLAGS  := -Iinclude
 LDFLAGS :=
-LIBS    :=
+LIBS    := -lm
 
 # build type: make build=release  (default: debug)
 BUILD    ?= debug

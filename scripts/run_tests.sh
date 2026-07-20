@@ -3,6 +3,8 @@
 #   tests/pass/*.dt  must exit 0 with empty stderr
 #   tests/fail/*.dt  must exit non-zero; if the first line is
 #                    `#! expect: <substring>` stderr must contain it
+#   tests/run/*.dt   executed with --run; must exit 0 with empty stderr and
+#                    stdout equal to the `#> ` comment lines in the file
 set -u
 
 BIN=${1:-build/ducktape}
@@ -51,6 +53,36 @@ done
 for f in "$ROOT"/tests/fail/*.dt; do
     [ -e "$f" ] || continue
     check_fail "$f"
+done
+
+check_run() {
+    f=$1
+    out_tmp=$(mktemp)
+    err=$("$BIN" --run "$f" 2>&1 >"$out_tmp")
+    code=$?
+    expected=$(sed -n 's/^#> \{0,1\}//p' "$f")
+    actual=$(cat "$out_tmp")
+    rm -f "$out_tmp"
+
+    if [ "$code" -ne 0 ] || [ -n "$err" ]; then
+        fail=$((fail + 1))
+        echo "FAIL (expected clean run): $f (exit $code)"
+        [ -n "$err" ] && printf '%s\n' "$err" | sed 's/^/    /'
+        return
+    fi
+    if [ "$actual" != "$expected" ]; then
+        fail=$((fail + 1))
+        echo "FAIL (wrong output): $f"
+        echo "    expected: $(printf '%s' "$expected" | tr '\n' '|')"
+        echo "    actual:   $(printf '%s' "$actual" | tr '\n' '|')"
+        return
+    fi
+    pass=$((pass + 1))
+}
+
+for f in "$ROOT"/tests/run/*.dt; do
+    [ -e "$f" ] || continue
+    check_run "$f"
 done
 
 echo "$pass passed, $fail failed"

@@ -620,6 +620,37 @@ static void tc_register_impl(TypeChecker *tc, Module *m, Decl *decl) {
   def->module = m;
 }
 
+// builtins available in every module. for now just `print`:
+//   fun print<T>(value: T) -> ()
+// codegen lowers calls to it to OP_PRINT.
+static void tc_register_builtins(TypeChecker *tc, Module *m) {
+  FunDef *def = al_alloc_zero_for(tc->al, FunDef);
+  def->name = sv_from_cstr("print");
+  def->module = m;
+
+  def->type_param_count = 1;
+  def->type_params = al_alloc_zero(tc->al, sizeof(Type *));
+  def->type_params[0] = ty_generic(sv_from_cstr("T"), NULL, 0, tc->al);
+
+  def->param_count = 1;
+  def->params = al_alloc_zero(tc->al, sizeof(ParamDef));
+  def->params[0].name = sv_from_cstr("value");
+  def->params[0].param_type = def->type_params[0];
+
+  def->return_type = tc->t_unit;
+  def->fun_type = ty_fun(&def->type_params[0], 1, tc->t_unit, tc->al);
+
+  VarEntry *ve = NULL;
+  vscope_define(&m->vscope, def->name, def->fun_type, tc->diags, (Span){0},
+                &ve);
+  ve->as.fun = def;
+
+  TypeEntry *te = NULL;
+  tscope_define(&m->tscope, def->name, def->fun_type, tc->diags, (Span){0},
+                &te);
+  te->as.fun_def = def;
+}
+
 static void tc_register_trait(TypeChecker *tc, Module *m, Decl *decl) {
   assert(decl->kind == DECL_TRAIT && "expected trait decl");
 
@@ -693,6 +724,8 @@ void tc_register_module(TypeChecker *tc, Module *m) {
   }
 
   assert(m->fun_count == m->fun_cap && "fun count mismatch after registration");
+
+  tc_register_builtins(tc, m);
 }
 
 static void resolve_fun_decl(ResolveCtx *rctx, Decl *decl) {
@@ -1408,6 +1441,10 @@ static Type *resolve_callee(CheckCtx *ctx, Expr *expr, Subst *subst) {
     FunDef *def = r.as.method.fun;
 
     if (def->type_param_count == 0) {
+      // the impl-level subst may map its generics to fresh unknowns (bare
+      // generic self like `Point::new`); pass it up so arguments are unified
+      // rather than compared strictly. it was already applied into r.type.
+      *subst = r.as.method.subst;
       return r.type;
     }
 
@@ -1904,7 +1941,8 @@ static Type *resolve_method_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
 
   ImplMatch match;
   MethodDef *method = impl_index_method(&ctx->tc->impl_index, self_ty,
-                                        mc->method_name, &match, ctx->al);
+                                        mc->method_name, &match, &ctx->infer,
+                                        expr->span, ctx->al);
   if (!method) {
     char self_buf[64];
     type_sprintf(self_ty, self_buf, sizeof(self_buf));
@@ -2970,6 +3008,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   }
 
   assert(result && "result is null");
+  expr->resolved_type = result;
   return result;
 }
 
@@ -3570,9 +3609,69 @@ static Type *impl_index_assoc_type(ImplIndex *idx, Type *self_type,
   return NULL;
 }
 
+// true when `t` is a generic type's canonical self — the uninstantiated
+// `Point<T>` a bare path like `Point::new` resolves to. no concrete impl
+// self type can ever equal it, so method lookup must select by name instead.
+static bool type_is_bare_generic_self(Type *t) {
+  if (t->kind == TY_STRUCT) {
+    return t->as.struc.def->type_param_count > 0 &&
+           t == t->as.struc.def->self_type;
+  }
+  if (t->kind == TY_ENUM) {
+    return t->as.enm.def->type_param_count > 0 && t == t->as.enm.def->self_type;
+  }
+  return false;
+}
+
+static bool type_same_nominal_def(Type *a, Type *b) {
+  if (a->kind != b->kind) {
+    return false;
+  }
+  if (a->kind == TY_STRUCT) {
+    return a->as.struc.def == b->as.struc.def;
+  }
+  if (a->kind == TY_ENUM) {
+    return a->as.enm.def == b->as.enm.def;
+  }
+  return false;
+}
+
 MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, StringView name,
-                             ImplMatch *out_match, Allocator *al) {
+                             ImplMatch *out_match, InferCtx *infer, Span span,
+                             Allocator *al) {
   if (type_is_poison(self_type)) {
+    return NULL;
+  }
+
+  // bare generic self: select the impl by method name and open its type
+  // params as fresh unknowns — argument unification at the call site pins
+  // down the type arguments (e.g. `Point::new(10, 20)` selecting
+  // `impl Point<Int>`). first name match wins.
+  if (infer != NULL && type_is_bare_generic_self(self_type)) {
+    for (int i = 0; i < idx->count; i++) {
+      ImplDef *impl = idx->all[i];
+      if (impl->self_type == NULL || type_is_poison(impl->self_type) ||
+          !type_same_nominal_def(impl->self_type, self_type)) {
+        continue;
+      }
+
+      for (int j = 0; j < impl->method_count; j++) {
+        if (!sv_equal(impl->methods[j].name, name)) {
+          continue;
+        }
+
+        Subst subst = subst_empty();
+        if (impl->type_param_count > 0) {
+          subst = infer_open_generics(infer, impl->type_params, NULL,
+                                      impl->type_param_count, span, al);
+        }
+        if (out_match) {
+          out_match->impl = impl;
+          out_match->subst = subst;
+        }
+        return &impl->methods[j];
+      }
+    }
     return NULL;
   }
 
@@ -3865,7 +3964,9 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
 
       ImplMatch match;
       MethodDef *method = impl_index_method(&ctx->tyres->tc->impl_index,
-                                            struct_ty, segment, &match, ctx->al);
+                                            struct_ty, segment, &match,
+                                            ctx->tyres->infer, path->span,
+                                            ctx->al);
       if (!method) {
         char ty_buf[64];
         type_sprintf(struct_ty, ty_buf, sizeof(ty_buf));
@@ -3884,6 +3985,7 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
           .kind = PATHRES_METHOD,
           .type = fun_ty,
           .as.method.fun = fun,
+          .as.method.subst = subst,
       };
       return true;
     }

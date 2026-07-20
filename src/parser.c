@@ -857,6 +857,11 @@ static Expr *parse_block(Parser *p) {
       Stmt *stmt = parse_stmt(p);
       if (stmt->kind == STMT_POISON) {
         block_had_error = true;
+      } else if (stmt->kind == STMT_EXPR && check_tok(p, TOKEN_RBRACE) &&
+                 (stmt->as.expr_stmt.expr->kind == EXPR_IF ||
+                  stmt->as.expr_stmt.expr->kind == EXPR_MATCH)) {
+        // a value-bearing block expression just before `}` is the tail
+        tail = stmt->as.expr_stmt.expr;
       } else {
         assert(stmt_count < 256 && "too many statements in block");
         tmp_stmts[stmt_count++] = stmt;

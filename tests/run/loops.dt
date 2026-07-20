@@ -1,0 +1,37 @@
+# while, for-in-range, break/continue, compound assignment
+#> 10
+#> 15
+#> 12
+#> 6
+fun main() {
+    var w = 0;
+    while w < 10 {
+        w += 1;
+    }
+    print(w);
+
+    var total = 0;
+    for i in 1..=5 {
+        total += i;
+    }
+    print(total);
+
+    var r = 0..10;
+    var evens = 0;
+    for i in r {
+        if i % 2 == 1 { continue; }
+        if i > 6 { break; }
+        evens += i;
+    }
+    print(evens);
+
+    var nested = 0;
+    for i in 0..2 {
+        for j in 0..2 {
+            nested += 1;
+            if j == 1 { break; }
+        }
+        nested += 1;
+    }
+    print(nested);
+}

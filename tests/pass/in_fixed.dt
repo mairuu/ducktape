@@ -47,7 +47,7 @@ impl Point<Int> {
 }
 
 pub fun process_data<T>(data: T) -> Result<Int, String> {
-    var p = Point::<Int>::new(10, 20);
+    var p = Point::new(10, 20);
     var (a, b) = (1, 2.5);
     var unit_val: () = ();
 

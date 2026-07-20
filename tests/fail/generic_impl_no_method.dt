@@ -1,0 +1,15 @@
+#! expect: no associated item named 'missing'
+struct Point<T> {
+    x: T,
+    y: T,
+}
+
+impl Point<Int> {
+    fun new(x: Int, y: Int) -> Self {
+        Point { x: x, y: y }
+    }
+}
+
+fun main() {
+    var p = Point::missing();
+}

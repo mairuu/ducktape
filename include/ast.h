@@ -293,7 +293,7 @@ struct FunDef {
   int param_count;
   Type *return_type;
 
-  // struct Chunk *chunk;
+  struct Chunk *chunk; // filled by codegen; NULL until then
   int slot;
 };
 

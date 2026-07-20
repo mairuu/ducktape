@@ -25,3 +25,7 @@ void compiler_destroy(Compiler *c, Allocator *al);
 // only single file for now
 // returns false if any phase failed
 bool compiler_run(Compiler *c, const char *path);
+
+// compile the checked root module to bytecode and run its `main`.
+// call only after a successful compiler_run.
+bool compiler_execute(Compiler *c);

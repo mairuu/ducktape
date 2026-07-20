@@ -1,0 +1,41 @@
+# bare generic-type paths select the impl by method name;
+# call-site unification pins down the type arguments
+struct Point<T> {
+    x: T,
+    y: T,
+}
+
+impl Point<Int> {
+    fun new(x: Int, y: Int) -> Self {
+        Point { x: x, y: y }
+    }
+
+    fun sum(self) -> Int {
+        self.x + self.y
+    }
+}
+
+struct Box<T> {
+    value: T,
+}
+
+impl<T> Box<T> {
+    fun make(v: T) -> Self {
+        Box { value: v }
+    }
+
+    fun get(self) -> T {
+        self.value
+    }
+}
+
+fun main() {
+    var p = Point::new(10, 20);
+    var s = p.sum();
+
+    var b = Box::make(5);
+    var v = b.get() + 1;
+
+    var sb = Box::make("hi");
+    var msg = sb.get();
+}

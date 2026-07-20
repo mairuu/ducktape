@@ -2,10 +2,12 @@
 #include "allocator.h"
 #include "arena.h"
 #include "ast.h"
+#include "codegen.h"
 #include "diag.h"
 #include "module.h"
 #include "sema.h"
 #include "string_utils.h"
+#include "vm.h"
 
 #include <assert.h>
 
@@ -164,4 +166,34 @@ bool compiler_run(Compiler *c, const char *path) {
   }
 
   return true;
+}
+
+// compile the checked root module to bytecode and run its `main`.
+// requires a successful compiler_run first.
+bool compiler_execute(Compiler *c) {
+  Module *m = c->root_module;
+
+  diag_clear(&c->diags);
+  bool ok = codegen_module(m, &c->diags, &c->al);
+  if (diag_has_diags(&c->diags)) {
+    diag_report(&c->diags, m->file_path.chars, m->source.chars, stderr);
+  }
+  if (!ok) {
+    fprintf(stderr, "compilation failed during code generation.\n");
+    return false;
+  }
+
+  FunDef *main_fn = NULL;
+  for (int i = 0; i < m->fun_count; i++) {
+    if (sv_equal_cstr(m->funs[i]->name, "main")) {
+      main_fn = m->funs[i];
+      break;
+    }
+  }
+  if (main_fn == NULL) {
+    fprintf(stderr, "error: no 'main' function to run\n");
+    return false;
+  }
+
+  return vm_run(m, main_fn);
 }

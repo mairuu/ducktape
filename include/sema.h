@@ -68,8 +68,13 @@ void impl_index_add(ImplIndex *idx, ImplDef *impl);
 // registered impl. on a match, *out_match is filled with the impl and the
 // substitution mapping the impl's type params to the concrete type args
 // inferred from `self_type` (empty subst if the impl isn't generic).
+// find a method for `self_type`. when `self_type` is a generic type's
+// canonical self (a bare path like `Point::new` with no type args) and
+// `infer` is non-NULL, the impl is selected by method name instead and its
+// type params are opened as fresh unknowns for the call site to solve.
 MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, StringView name,
-                             ImplMatch *out_match, Allocator *al);
+                             ImplMatch *out_match, InferCtx *infer, Span span,
+                             Allocator *al);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Inference
@@ -316,6 +321,7 @@ typedef struct {
   union {
     struct {
       FunDef *fun;
+      Subst subst; // impl-level substitution (may map to fresh unknowns)
     } method;
     struct {
       EnumDef *enum_def;
