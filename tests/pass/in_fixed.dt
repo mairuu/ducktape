@@ -67,6 +67,11 @@ pub fun process_data<T>(data: T) -> Result<Int, String> {
     var inline_adder: fun(Int, Int) -> Int = |x, y| => x + y;
     var closure_res = inline_adder(1, 2);
 
+    # closure capturing an enclosing local (upvalue)
+    var captured_base = 10;
+    var add_base: fun(Int) -> Int = |x| => x + captured_base;
+    var captured_res = add_base(closure_res);
+
     var drawn = p.draw();
     var casted = 10 as Float;
 

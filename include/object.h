@@ -22,6 +22,8 @@ typedef enum {
   OBJ_TUPLE,
   OBJ_STRUCT,
   OBJ_ENUM,
+  OBJ_CLOSURE,
+  OBJ_UPVALUE,
 } ObjKind;
 
 // intrusive header shared by every heap object; `next` threads the heap's
@@ -73,8 +75,37 @@ typedef struct {
   Value *fields;
 } ObjEnum;
 
+// a captured variable. while the closure's defining frame is still live the
+// upvalue is "open" — `location` points at the variable's stack slot, shared
+// so writes are seen through both the slot and the upvalue. when that slot
+// dies (scope/function exit) the upvalue is "closed": the value is copied into
+// `closed` and `location` is repointed at it, so the closure keeps working
+// after the frame is gone. `next` threads the VM's open-upvalue list.
+typedef struct ObjUpvalue {
+  Obj obj;
+  Value *location;
+  Value closed;
+  struct ObjUpvalue *next;
+} ObjUpvalue;
+
+// a function value that closes over variables: the compiled `fun` plus the
+// concrete upvalue cells captured at the point the closure expression ran.
+// non-capturing functions (top-level, methods) stay plain `VAL_FUN` values.
+typedef struct {
+  Obj obj;
+  FunDef *fun;
+  ObjUpvalue **upvalues;
+  int upvalue_count;
+} ObjClosure;
+
 static inline bool val_is_string(Value v) {
   return v.kind == VAL_OBJ && v.as.obj->kind == OBJ_STRING;
+}
+static inline bool val_is_closure(Value v) {
+  return v.kind == VAL_OBJ && v.as.obj->kind == OBJ_CLOSURE;
+}
+static inline ObjClosure *val_as_closure(Value v) {
+  return (ObjClosure *)v.as.obj;
 }
 static inline ObjString *val_as_string(Value v) {
   return (ObjString *)v.as.obj;
@@ -124,6 +155,8 @@ ObjArray *heap_array(Heap *h, int count); // items start as unit
 ObjTuple *heap_tuple(Heap *h, int count); // items start as unit
 ObjStruct *heap_struct(Heap *h, StructDef *def);
 ObjEnum *heap_enum(Heap *h, VariantDef *variant);
+ObjClosure *heap_closure(Heap *h, FunDef *fun, int upvalue_count);
+ObjUpvalue *heap_upvalue(Heap *h, Value *slot);
 
 void gc_mark_value(Value v);
 void heap_collect(Heap *h);

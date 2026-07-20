@@ -15,6 +15,7 @@
 
 typedef struct {
   FunDef *fun;
+  ObjClosure *closure; // NULL for a plain VAL_FUN call (no upvalues)
   uint8_t *ip;
   Value *base; // first argument / local slot
 } Frame;
@@ -28,7 +29,43 @@ typedef struct {
 
   Frame frames[FRAMES_MAX];
   int frame_count;
+
+  ObjUpvalue *open_upvalues; // live upvalues over stack slots, highest first
 } Vm;
+
+// find or create the upvalue capturing `slot`. open upvalues are kept in one
+// list ordered by descending stack address so a captured slot is shared: two
+// closures capturing the same variable get the same ObjUpvalue.
+static ObjUpvalue *capture_upvalue(Vm *vm, Value *slot) {
+  ObjUpvalue *prev = NULL;
+  ObjUpvalue *uv = vm->open_upvalues;
+  while (uv != NULL && uv->location > slot) {
+    prev = uv;
+    uv = uv->next;
+  }
+  if (uv != NULL && uv->location == slot) {
+    return uv;
+  }
+  ObjUpvalue *created = heap_upvalue(vm->heap, slot);
+  created->next = uv;
+  if (prev == NULL) {
+    vm->open_upvalues = created;
+  } else {
+    prev->next = created;
+  }
+  return created;
+}
+
+// close (copy the value into the heap cell) every open upvalue at or above
+// `last`, since those stack slots are about to die.
+static void close_upvalues(Vm *vm, Value *last) {
+  while (vm->open_upvalues != NULL && vm->open_upvalues->location >= last) {
+    ObjUpvalue *uv = vm->open_upvalues;
+    uv->closed = *uv->location;
+    uv->location = &uv->closed;
+    vm->open_upvalues = uv->next;
+  }
+}
 
 static bool runtime_error(Vm *vm, const char *fmt, ...) {
   va_list args;
@@ -57,6 +94,11 @@ static void vm_mark_roots(void *ctx) {
   Vm *vm = ctx;
   for (Value *v = vm->stack; v < vm->sp; v++) {
     gc_mark_value(*v);
+  }
+  // open upvalues may be mid-capture (allocated before their closure's array
+  // is filled), so root them directly rather than only through their closures.
+  for (ObjUpvalue *uv = vm->open_upvalues; uv != NULL; uv = uv->next) {
+    gc_mark_value(val_obj((Obj *)uv));
   }
 }
 
@@ -94,7 +136,8 @@ bool vm_run(Module *m, Heap *heap, FunDef *entry) {
     return false;
   }
 
-  Vm vm = {.m = m, .heap = heap, .sp = NULL, .frame_count = 0};
+  Vm vm = {.m = m, .heap = heap, .sp = NULL, .frame_count = 0,
+           .open_upvalues = NULL};
   vm.sp = vm.stack;
   heap->mark_roots = vm_mark_roots;
   heap->mark_roots_ctx = &vm;
@@ -102,6 +145,7 @@ bool vm_run(Module *m, Heap *heap, FunDef *entry) {
   push(&vm, val_fun(entry));
   vm.frames[vm.frame_count++] = (Frame){
       .fun = entry,
+      .closure = NULL,
       .ip = entry->chunk->code,
       .base = vm.sp,
   };
@@ -163,6 +207,36 @@ bool vm_run(Module *m, Heap *heap, FunDef *entry) {
       push(&vm, val_fun(fun));
       break;
     }
+
+    case OP_CLOSURE: {
+      uint8_t const_idx = READ_BYTE();
+      uint8_t upvalue_count = READ_BYTE();
+      FunDef *fun = frame->fun->chunk->consts[const_idx].as.fun;
+      ObjClosure *closure = heap_closure(vm.heap, fun, upvalue_count);
+      // keep it reachable while capturing upvalues (each capture may allocate)
+      push(&vm, val_obj((Obj *)closure));
+      for (int i = 0; i < upvalue_count; i++) {
+        uint8_t is_local = READ_BYTE();
+        uint8_t index = READ_BYTE();
+        closure->upvalues[i] = is_local
+                                   ? capture_upvalue(&vm, frame->base + index)
+                                   : frame->closure->upvalues[index];
+      }
+      break;
+    }
+    case OP_GET_UPVALUE: {
+      uint8_t idx = READ_BYTE();
+      push(&vm, *frame->closure->upvalues[idx]->location);
+      break;
+    }
+    case OP_SET_UPVALUE: {
+      uint8_t idx = READ_BYTE();
+      *frame->closure->upvalues[idx]->location = peek(&vm, 0);
+      break;
+    }
+    case OP_CLOSE_UPVALUE:
+      close_upvalues(&vm, frame->base + READ_BYTE());
+      break;
 
     case OP_ADD:
     case OP_SUB:
@@ -350,10 +424,16 @@ bool vm_run(Module *m, Heap *heap, FunDef *entry) {
     case OP_CALL: {
       uint8_t argc = READ_BYTE();
       Value callee = peek(&vm, argc);
-      if (callee.kind != VAL_FUN) {
+      FunDef *fun;
+      ObjClosure *closure = NULL;
+      if (callee.kind == VAL_FUN) {
+        fun = callee.as.fun;
+      } else if (val_is_closure(callee)) {
+        closure = val_as_closure(callee);
+        fun = closure->fun;
+      } else {
         VM_RETURN(runtime_error(&vm, "can only call functions"));
       }
-      FunDef *fun = callee.as.fun;
       assert(fun->param_count == argc && "arity got past the checker");
       if (fun->chunk == NULL) {
         VM_RETURN(runtime_error(&vm, "call to uncompiled function '" SV_FMT "'",
@@ -367,6 +447,7 @@ bool vm_run(Module *m, Heap *heap, FunDef *entry) {
       }
       vm.frames[vm.frame_count++] = (Frame){
           .fun = fun,
+          .closure = closure,
           .ip = fun->chunk->code,
           .base = vm.sp - argc,
       };
@@ -383,6 +464,9 @@ bool vm_run(Module *m, Heap *heap, FunDef *entry) {
 
     case OP_RETURN: {
       Value result = pop(&vm);
+      // this frame's locals/args are dying; close any upvalues over them so
+      // escaping closures keep their own copies.
+      close_upvalues(&vm, frame->base);
       vm.sp = frame->base - 1; // also drops the callee value
       vm.frame_count--;
       if (vm.frame_count == 0) {

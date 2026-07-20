@@ -79,23 +79,36 @@
   it. Unreachable before methods had chunks of their own to hold constants.
   Fixed by having `heap_collect` also mark `module->methods[]`' constants.
 
+- **Aggregate runtime, closures + upvalues (milestone 5c-iii)** — closure
+  expressions (`|x| => body`) compile to their own chunk against a child
+  `Cg` chained to the enclosing function, so name resolution turns captures
+  into an upvalue list (`cg_resolve_upvalue`, de-duped by `cg_add_upvalue`,
+  threaded through every intervening closure for multi-level capture). A
+  capturing closure is a heap `ObjClosure { fun, upvalues[] }`; each captured
+  cell is an `ObjUpvalue` that starts *open* (pointing at the live stack slot,
+  so the variable and its closures share one value, mutation included) and is
+  *closed* onto the heap (`close_upvalues`) when the slot dies — at
+  `OP_RETURN` (function scope) and via `OP_CLOSE_UPVALUE` emitted by
+  `cg_close_scope` at block/loop/match/`break`/`continue` pop points. Non-
+  capturing functions stay plain `VAL_FUN`; `OP_CALL` handles both. GC roots
+  the open-upvalue list and each closure `FunDef`'s constant pool (nested
+  closures are collected into `module->closures`). Design: `runtime.md`
+  "Closures & upvalues". A captured `for` variable is one shared cell (reads
+  its final value) — a deliberate simplification, documented there.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
 milestone (~900 lines).
 
-1. **5c-iii — closures + upvalues** (~0.5–0.75×): closures with upvalues
-   (`is_captured` groundwork exists) — captured variables need boxing since
-   a closure can outlive the stack frame that created it. Structs, enums,
-   tuples, match, methods, and `?` are done — see "Done" above.
-2. **Trait completion** (~0.75×): resolve trait-item signatures, impl
+1. **Trait completion** (~0.75×): resolve trait-item signatures, impl
    conformance checking, default methods, calls through bounds
    (`T: Drawable` → `t.draw()`); then inline bounds `<T: Display>` and
    `where` enforcement (~0.5×). Unlocks `Try`-trait `?` and `as` coercions.
-3. **Module system** (~0.5×): real file discovery, `mod_link_imports`
+2. **Module system** (~0.5×): real file discovery, `mod_link_imports`
    (stubbed at `src/compiler.c` phase_register), cross-module visibility,
    cycle detection.
-4. **Bytecode serialization + REPL** — after modules; format sketch in
+3. **Bytecode serialization + REPL** — after modules; format sketch in
    `runtime.md`.
 
 ## Known warts to clean up opportunistically

@@ -25,6 +25,12 @@ struct Module {
   FunDef **methods;
   int method_count;
 
+  // nested closure functions, collected by codegen. not addressable by
+  // OP_GET_GLOBAL (they're built at runtime via OP_CLOSURE), but their chunks'
+  // constant pools still need to be GC roots like every other compiled chunk.
+  FunDef **closures;
+  int closure_count, closure_cap;
+
   StructDef **structs;
   int struct_count, struct_cap;
 

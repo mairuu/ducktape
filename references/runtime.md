@@ -19,8 +19,8 @@ points at a GC-managed heap object (`include/object.h`):
 | `VAL_BOOL` | `bool` |
 | `VAL_UNIT` | — |
 | `VAL_RANGE` | start, end (`int64_t`), inclusive flag |
-| `VAL_FUN` | `FunDef *` (top-level function, no captures) |
-| `VAL_OBJ` | `Obj *` — string, array, tuple, struct, or enum instance, see "Heap & GC" |
+| `VAL_FUN` | `FunDef *` (top-level function or method — a callable with no captures) |
+| `VAL_OBJ` | `Obj *` — string, array, tuple, struct, enum instance, or closure, see "Heap & GC" |
 
 `value_equal` (`src/value.c`) is the one equality used by `OP_EQ`/`OP_NEQ`:
 strings compare by pointer (interning makes that correct); arrays, tuples,
@@ -44,6 +44,9 @@ bytes + constant pool (≤256 consts, u8 index). Operands: u8 unless noted.
 | `OP_POP` `OP_POPN n` `OP_SLIDE n` | SLIDE drops n values *beneath* the top — how a block discards its locals while keeping its tail value |
 | `OP_GET_LOCAL` `OP_SET_LOCAL` | frame-relative slot; SET peeks (assignment is an expression) |
 | `OP_GET_GLOBAL` | pushes `VAL_FUN` — top-level funs and impl methods share one slot space: `slot < fun_count` indexes `module->funs`, the rest indexes `module->methods[slot - fun_count]` |
+| `OP_CLOSURE const, n` `, then n×(is_local, idx)` | reads the closure's `FunDef` from constant `const` (a `VAL_FUN`), builds an `ObjClosure` capturing `n` upvalues, pushes it — see "Closures & upvalues" |
+| `OP_GET_UPVALUE` `OP_SET_UPVALUE` | index into the running closure's upvalue array, reading/writing through the (open or closed) cell; SET peeks |
+| `OP_CLOSE_UPVALUE slot` | closes every open upvalue whose stack slot is at/above `base + slot`, right before those locals are popped |
 | `OP_ADD/SUB/MUL/DIV/MOD` | int×int stays int; any float widens (matches checker); div/mod by zero int → runtime error; float mod = `fmod` |
 | `OP_NEG` `OP_NOT` `OP_EQ/NEQ/LT/LTEQ/GT/GTEQ` | comparisons widen like arithmetic |
 | `OP_CAST_INT` `OP_CAST_FLOAT` | dynamic: no-op if already the target kind |
@@ -83,6 +86,8 @@ list used by sweep):
 | `OBJ_TUPLE` | `count`, `Value *items` — same shape as `OBJ_ARRAY`, kept as a distinct kind purely so printing/equality read as a tuple |
 | `OBJ_STRUCT` | `StructDef *def`, `Value *fields` (`def->field_count` entries, declaration order — not necessarily the initializer's source order) |
 | `OBJ_ENUM` | `VariantDef *variant`, `Value *fields` (`variant->field_count` entries, declaration order) |
+| `OBJ_CLOSURE` | `FunDef *fun`, `ObjUpvalue **upvalues` (`upvalue_count` entries) — a capturing function value |
+| `OBJ_UPVALUE` | `Value *location` (→ a live stack slot while open, → `closed` once closed), `closed`, `next` (open-list link) |
 
 `StructDef`/`EnumDef`/`VariantDef` pointers are arena-owned (live for the
 whole compilation), not GC objects, so marking a struct/enum instance walks
@@ -100,11 +105,12 @@ runtime for `+` concat (`heap_concat`) and interpolation (`OP_INTERP`,
 point that grows `bytes_allocated`) once it crosses `next_gc` (starts at
 1 MiB, doubles `bytes_allocated` after each cycle), or unconditionally under
 `--gc-stress`. Roots: every compiled function's *and method's* chunk
-constant pool (scanned directly off `Heap.module`'s `funs[]` and
-`methods[]`, so constants need no special "immortal" case — both need
-scanning: a method has its own chunk with its own constants, just like a
-top-level function) plus the VM's live value stack, reached through
-`Heap.mark_roots` — a
+constant pool (scanned directly off `Heap.module`'s `funs[]`, `methods[]`,
+*and* `closures[]`, so constants need no special "immortal" case — each has
+its own chunk with its own constants; nested closure `FunDef`s aren't
+addressable by `OP_GET_GLOBAL`, so codegen appends them to `module->closures`
+purely to keep their constant pools rooted) plus the VM's live value stack
+*and its open-upvalue list*, reached through `Heap.mark_roots` — a
 function pointer `vm_run` installs on entry and clears on every return path
 (`VM_RETURN` macro), so a collection during codegen (no VM running yet) only
 marks constants. The intern table is *weak*: entries unreached by the mark
@@ -119,7 +125,8 @@ enough collect cycles every slot was tombstoned and a miss in `table_find`
 (whose loop only terminates on a `NULL` slot) spun forever.
 
 Any allocating call (`heap_intern`, `heap_concat`, `heap_array`, `heap_tuple`,
-`heap_struct`, `heap_enum`) may collect *before* the new object exists, so
+`heap_struct`, `heap_enum`, `heap_closure`, `heap_upvalue`) may collect
+*before* the new object exists, so
 the discipline throughout codegen/VM is: keep every already-live operand
 reachable from a root (still on the VM stack, not yet popped) until the new
 object is built and pushed. See the `OP_ARRAY`/`OP_INTERP`/`OP_TUPLE`/
@@ -171,8 +178,9 @@ the stack in place, decrementing `sp` only after the result exists).
   self-supplying calls (`Point::new(...)`, `Shape::area(s)`): see "Methods"
   below.
 - `?` (`compile_propagate`): see "Propagate (`?`)" below.
-- Anything outside the subset (closures, generic functions/methods,
-  destructuring `var` bindings) emits a source-anchored diagnostic
+- Closures (`compile_closure`): see "Closures & upvalues" below.
+- Anything outside the subset (generic functions/methods, destructuring `var`
+  bindings) emits a source-anchored diagnostic
   `"... is not supported by the VM yet"` and fails codegen — it never
   crashes at runtime.
 
@@ -263,11 +271,63 @@ the whole instance unchanged (propagating `Err` up to the caller) — the same
 "just emit `OP_RETURN` wherever, `vm_run` unwinds the frame regardless of
 what else is logically live" trick `return` statements already use.
 
+### Closures & upvalues
+
+A closure expression (`|x| => body`) is compiled the crafting-interpreters
+way: its body goes into its own `Chunk` via a *child* `Cg` whose `parent`
+points at the enclosing function's `Cg`, and the enclosing chunk emits
+`OP_CLOSURE` to build the runtime `ObjClosure` from the captured cells.
+
+**Resolving a name** (in `EXPR_PATH` and assignment targets) now tries, in
+order: a local of this function (`OP_GET_LOCAL`), an *upvalue*
+(`cg_resolve_upvalue` → `OP_GET_UPVALUE`), then a module global
+(`OP_GET_GLOBAL`). `cg_resolve_upvalue` walks the `parent` chain: if the name
+is a local of the enclosing function it records `{is_local=true, slot}` and
+marks that local `is_captured`; otherwise it resolves the name as an upvalue
+of the *parent* (recursively) and records `{is_local=false, parent_upvalue}`.
+So a multi-level capture threads one cell down through every intervening
+closure's upvalue array. `cg_add_upvalue` de-duplicates, so two references to
+the same captured variable share one runtime cell. Assignment to a captured
+variable is symmetric (`OP_SET_UPVALUE`), which is what makes a mutable shared
+cell (two closures over one `var`) behave.
+
+**Upvalues are open then closed.** While the defining frame is alive an
+`ObjUpvalue`'s `location` points straight at the variable's stack slot — reads
+and writes go through the live slot, so the variable and every closure over it
+see the same value. When that slot is about to die the upvalue is *closed*:
+the value is copied into the upvalue's own `closed` field and `location` is
+repointed there, so the closure keeps working after the frame is gone. The VM
+keeps one `open_upvalues` list (ordered by descending stack address);
+`capture_upvalue` reuses an existing entry for a slot (that's the sharing) or
+inserts a new one, and `close_upvalues(last)` closes everything at/above
+`last`.
+
+Two things drive closing:
+- `OP_RETURN` closes from `frame->base` — covers function params and
+  function-level locals a returned/escaping closure captured (the common
+  case), including early `return`s and `?`.
+- `OP_CLOSE_UPVALUE slot`, emitted by `cg_close_scope` at every point a scope
+  pops locals (block exit, loop exit, `break`/`continue`, match-arm cleanup)
+  *when* one of the popped locals was captured — covers a capture inside a
+  block/arm that escapes to an outer binding while the function keeps running.
+  Block-declared captures are therefore per-iteration in a loop; the loop
+  *variable* itself is one shared cell closed at loop exit (a captured `for`
+  variable reads its final value — a deliberate, documented simplification,
+  not UB).
+
+Non-capturing functions (top-level, methods, and closures that happen to
+capture nothing) stay plain `VAL_FUN`; only capturing closures become
+`ObjClosure`. `OP_CALL` accepts either — a `VAL_FUN` frame has `closure ==
+NULL` (it never executes an upvalue op), an `ObjClosure` frame carries the
+closure so `OP_GET/SET_UPVALUE` can reach its cells.
+
 ## VM (`src/vm.c`)
 
 Fixed arrays: 4096-value stack, 128 call frames. A frame is
-`{FunDef*, ip, base}` with `base` pointing at arg slot 0; the callee value
-lives at `base - 1`. Runtime errors (division by zero, stack overflow,
+`{FunDef*, ObjClosure* (NULL for a plain-function call), ip, base}` with
+`base` pointing at arg slot 0; the callee value lives at `base - 1`. The VM
+also threads one `open_upvalues` list of live captures over stack slots (see
+"Closures & upvalues"). Runtime errors (division by zero, stack overflow,
 calling a non-function, array index out of bounds) print
 `runtime error: ...` plus a call trace of function names and make the
 process exit 1. The checker guarantees operand kinds, so opcode handlers
@@ -276,11 +336,6 @@ lengths aren't static).
 
 ## Future (design intent, not implemented)
 
-- **Aggregate runtime, part three (5c-iii):** closures with upvalues
-  (`is_captured` groundwork exists) — `EXPR_CLOSURE` still hits the "not
-  supported by the VM yet" diagnostic. Everything else from 5c (structs,
-  enums, tuples, match, methods, associated calls, `?`) is done — see
-  "Codegen shapes" above and its "Methods"/"Propagate" subsections.
 - **Bytecode serialization** (after a module system exists): flat binary —
   magic/version, string table, recursive chunk records (name, arity, code,
   tagged constants, nested functions). Keep the constant pool free of raw

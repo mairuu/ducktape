@@ -93,6 +93,13 @@ void value_print(Value v, FILE *out) {
       fprintf(out, variant->is_tuple ? ")" : " }");
       break;
     }
+    case OBJ_CLOSURE:
+      fprintf(out, "<fun " SV_FMT ">", SV_ARG(val_as_closure(v)->fun->name));
+      break;
+    case OBJ_UPVALUE:
+      // never a first-class value the language can name or print
+      fprintf(out, "<upvalue>");
+      break;
     }
     break;
   }
@@ -166,6 +173,9 @@ bool value_equal(Value a, Value b) {
       }
       return true;
     }
+    case OBJ_CLOSURE:
+    case OBJ_UPVALUE:
+      return a.as.obj == b.as.obj; // identity; not structurally comparable
     }
     return false;
   }

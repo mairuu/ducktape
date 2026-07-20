@@ -38,6 +38,10 @@ static size_t obj_size(Obj *o) {
     return sizeof(ObjStruct);
   case OBJ_ENUM:
     return sizeof(ObjEnum);
+  case OBJ_CLOSURE:
+    return sizeof(ObjClosure);
+  case OBJ_UPVALUE:
+    return sizeof(ObjUpvalue);
   }
   assert(false && "unreachable");
   return 0;
@@ -71,6 +75,14 @@ static void free_obj(Heap *h, Obj *o) {
     if (e->variant->field_count > 0) {
       heap_dealloc(h, e->fields,
                    sizeof(Value) * (size_t)e->variant->field_count);
+    }
+    break;
+  }
+  case OBJ_CLOSURE: {
+    ObjClosure *c = (ObjClosure *)o;
+    if (c->upvalue_count > 0) {
+      heap_dealloc(h, c->upvalues,
+                   sizeof(ObjUpvalue *) * (size_t)c->upvalue_count);
     }
     break;
   }
@@ -243,6 +255,32 @@ ObjEnum *heap_enum(Heap *h, VariantDef *variant) {
   return e;
 }
 
+ObjClosure *heap_closure(Heap *h, FunDef *fun, int upvalue_count) {
+  // allocate the upvalue array first; new_obj may collect, and the array is
+  // raw (no live Values yet), so ordering here is safe. the caller fills the
+  // slots immediately after, before the next allocation.
+  ObjUpvalue **upvalues = NULL;
+  if (upvalue_count > 0) {
+    upvalues = heap_alloc(h, sizeof(ObjUpvalue *) * (size_t)upvalue_count);
+    for (int i = 0; i < upvalue_count; i++) {
+      upvalues[i] = NULL;
+    }
+  }
+  ObjClosure *c = (ObjClosure *)new_obj(h, OBJ_CLOSURE, sizeof(ObjClosure));
+  c->fun = fun;
+  c->upvalues = upvalues;
+  c->upvalue_count = upvalue_count;
+  return c;
+}
+
+ObjUpvalue *heap_upvalue(Heap *h, Value *slot) {
+  ObjUpvalue *uv = (ObjUpvalue *)new_obj(h, OBJ_UPVALUE, sizeof(ObjUpvalue));
+  uv->location = slot;
+  uv->closed = val_unit();
+  uv->next = NULL;
+  return uv;
+}
+
 // ── mark-sweep ───────────────────────────────────────────────────────────────
 
 static void mark_obj(Obj *o) {
@@ -281,6 +319,19 @@ static void mark_obj(Obj *o) {
     }
     break;
   }
+  case OBJ_CLOSURE: {
+    ObjClosure *c = (ObjClosure *)o;
+    for (int i = 0; i < c->upvalue_count; i++) {
+      mark_obj((Obj *)c->upvalues[i]);
+    }
+    break;
+  }
+  case OBJ_UPVALUE:
+    // `location` points at a live stack slot (already a root) while open, or
+    // at `closed` once closed; marking `closed` covers the closed case and is
+    // harmless while open (initialised to unit at capture time).
+    gc_mark_value(((ObjUpvalue *)o)->closed);
+    break;
   }
 }
 
@@ -308,6 +359,9 @@ void heap_collect(Heap *h) {
     }
     for (int i = 0; i < h->module->method_count; i++) {
       mark_fun_consts(h->module->methods[i]);
+    }
+    for (int i = 0; i < h->module->closure_count; i++) {
+      mark_fun_consts(h->module->closures[i]);
     }
   }
   if (h->mark_roots != NULL) {

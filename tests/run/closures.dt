@@ -1,0 +1,75 @@
+# closures + upvalues: capture of params and locals, mutable shared cells,
+# independent cells per closure instance, multi-level upvalue chains, capture
+# that outlives the defining frame, and block-scoped capture closed on exit.
+#> 15
+#> 105
+#> 1
+#> 2
+#> 3
+#> 1
+#> 1007
+#> 123
+#> 159
+#> 42
+#> 10
+#> 20
+#> 20
+
+# captures a parameter; the returned closure outlives make_adder's frame
+fun make_adder(n: Int) -> fun(Int) -> Int {
+    return |x: Int| => x + n;
+}
+
+# captures and mutates a local; each call to make_counter yields its own cell
+fun make_counter() -> fun() -> Int {
+    var count = 0;
+    return || => {
+        count += 1;
+        count
+    };
+}
+
+# three-level upvalue chain: the innermost closure reads `a` two frames out
+fun make_adder3(a: Int) -> fun(Int) -> fun(Int) -> Int {
+    return |b: Int| => |c: Int| => a + b + c;
+}
+
+fun main() {
+    var add5 = make_adder(5);
+    print(add5(10));
+    print(add5(100));
+
+    var c = make_counter();
+    print(c());
+    print(c());
+    print(c());
+
+    var d = make_counter();
+    print(d());              # a fresh, independent cell
+
+    var base = 1000;
+    var f = |y: Int| => y + base;
+    print(f(7));
+
+    var chain = make_adder3(100);
+    var partial = chain(20);
+    print(partial(3));       # 123
+    print(chain(50)(9));     # 159
+
+    # a capture inside a block that escapes via an outer binding: the upvalue
+    # is closed when the block exits, yet the closure keeps working
+    var h: fun() -> Int = || => 0;
+    if true {
+        var secret = 42;
+        h = || => secret;
+    }
+    print(h());              # 42
+
+    # two closures sharing one mutable cell
+    var total = 0;
+    var inc = || => { total += 10; total };
+    var get = || => total;
+    print(inc());            # 10
+    print(inc());            # 20
+    print(get());            # 20
+}

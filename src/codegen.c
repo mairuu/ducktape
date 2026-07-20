@@ -11,10 +11,20 @@
 
 #define CG_MAX_LOCALS 256
 #define CG_MAX_BREAKS 32
+#define CG_MAX_UPVALUES 256
 
 typedef struct {
-  StringView name; // empty for hidden locals
+  StringView name;   // empty for hidden locals
+  bool is_captured;  // a nested closure captures this slot (needs closing)
 } CgLocal;
+
+// one entry in a closure's capture list: where the value comes from in the
+// *enclosing* function — either that function's local slot (`is_local`) or
+// its own upvalue at `index` (a variable captured further out).
+typedef struct {
+  bool is_local;
+  uint8_t index;
+} CgUpvalue;
 
 typedef struct CgLoop {
   int start; // ip of the loop condition (OP_LOOP target for `while`)
@@ -31,7 +41,7 @@ typedef struct CgLoop {
   struct CgLoop *parent;
 } CgLoop;
 
-typedef struct {
+typedef struct Cg {
   Module *m;
   Heap *heap;
   Chunk *chunk;
@@ -40,6 +50,11 @@ typedef struct {
 
   CgLocal locals[CG_MAX_LOCALS];
   int local_count;
+
+  CgUpvalue upvalues[CG_MAX_UPVALUES];
+  int upvalue_count;
+
+  struct Cg *parent; // enclosing function while compiling a closure; else NULL
 
   CgLoop *loop;
   bool ok;
@@ -135,6 +150,71 @@ static int cg_find_local(Cg *cg, StringView name) {
   return -1;
 }
 
+// record that this closure captures `{is_local, index}`, returning the
+// upvalue's index. de-duplicates so capturing the same variable twice yields
+// one shared upvalue cell at runtime.
+static int cg_add_upvalue(Cg *cg, bool is_local, uint8_t index, Span span) {
+  for (int i = 0; i < cg->upvalue_count; i++) {
+    if (cg->upvalues[i].is_local == is_local &&
+        cg->upvalues[i].index == index) {
+      return i;
+    }
+  }
+  if (cg->upvalue_count >= CG_MAX_UPVALUES) {
+    diag_error(cg->diags, span, "too many captured variables in one closure");
+    cg->ok = false;
+    return 0;
+  }
+  cg->upvalues[cg->upvalue_count] = (CgUpvalue){.is_local = is_local,
+                                                .index = index};
+  return cg->upvalue_count++;
+}
+
+// resolve `name` as an upvalue of `cg`: a variable owned by some enclosing
+// function. returns the upvalue index, or -1 if not found in any parent.
+// walking out marks the owning local `is_captured` so its defining scope
+// closes the upvalue when the slot dies.
+static int cg_resolve_upvalue(Cg *cg, StringView name, Span span) {
+  if (cg->parent == NULL) {
+    return -1;
+  }
+  int local = cg_find_local(cg->parent, name);
+  if (local >= 0) {
+    cg->parent->locals[local].is_captured = true;
+    return cg_add_upvalue(cg, true, (uint8_t)local, span);
+  }
+  int upvalue = cg_resolve_upvalue(cg->parent, name, span);
+  if (upvalue >= 0) {
+    return cg_add_upvalue(cg, false, (uint8_t)upvalue, span);
+  }
+  return -1;
+}
+
+// if any local in [from_slot, local_count) was captured, emit a close so the
+// open upvalues over those dying slots copy their values onto the heap.
+static void cg_close_scope(Cg *cg, int from_slot) {
+  for (int i = from_slot; i < cg->local_count; i++) {
+    if (cg->locals[i].is_captured) {
+      emit2(cg, OP_CLOSE_UPVALUE, (uint8_t)from_slot);
+      return;
+    }
+  }
+}
+
+// register a nested closure's FunDef so heap_collect keeps its chunk constants
+// rooted (closures aren't in m->funs/m->methods).
+static void cg_register_closure(Cg *cg, FunDef *fun) {
+  Module *m = cg->m;
+  if (m->closure_count >= m->closure_cap) {
+    int new_cap = m->closure_cap == 0 ? 4 : m->closure_cap * 2;
+    m->closures = al_realloc(cg->al, m->closures,
+                             sizeof(FunDef *) * (size_t)m->closure_cap,
+                             sizeof(FunDef *) * (size_t)new_cap);
+    m->closure_cap = new_cap;
+  }
+  m->closures[m->closure_count++] = fun;
+}
+
 static FunDef *cg_find_module_fun(Cg *cg, StringView name) {
   for (int i = 0; i < cg->m->fun_count; i++) {
     if (sv_equal(cg->m->funs[i]->name, name)) {
@@ -184,6 +264,7 @@ static FieldInit *find_field_init(FieldInit *fields, int count, bool is_tuple,
 // ── expression / statement compilation ───────────────────────────────────────
 
 static void compile_expr(Cg *cg, Expr *expr);
+static void compile_closure(Cg *cg, Expr *expr);
 
 static void compile_stmt(Cg *cg, Stmt *stmt) {
   switch (stmt->kind) {
@@ -225,6 +306,7 @@ static void compile_stmt(Cg *cg, Stmt *stmt) {
     }
     int n = cg->local_count - loop->break_base;
     if (n > 0) {
+      cg_close_scope(cg, loop->break_base); // detach captures before popping
       emit2(cg, OP_POPN, (uint8_t)n);
     }
     loop->break_jumps[loop->break_count++] = emit_jump(cg, OP_JUMP);
@@ -236,6 +318,7 @@ static void compile_stmt(Cg *cg, Stmt *stmt) {
     assert(loop && "continue outside loop got past the checker");
     int n = cg->local_count - loop->continue_base;
     if (n > 0) {
+      cg_close_scope(cg, loop->continue_base); // detach captures before popping
       emit2(cg, OP_POPN, (uint8_t)n);
     }
     if (loop->continue_is_backward) {
@@ -270,6 +353,7 @@ static void compile_block(Cg *cg, Expr *expr) {
     emit(cg, OP_UNIT);
   }
 
+  cg_close_scope(cg, saved_locals);
   emit_slide(cg, cg->local_count - saved_locals);
   cg->local_count = saved_locals;
 }
@@ -395,17 +479,30 @@ static void compile_assign(Cg *cg, Expr *expr) {
   }
 
   StringView name = assign->target->as.path_expr.path.segments[0].name;
+  // a target is either a local of this function or an upvalue captured from an
+  // enclosing one; both read/write through the same get/set opcode pair.
   int slot = cg_find_local(cg, name);
-  if (slot < 0) {
-    cg_error(cg, assign->target->span, "assignment to a non-local");
-    emit(cg, OP_UNIT);
-    return;
+  uint8_t get_op, set_op, operand;
+  if (slot >= 0) {
+    get_op = OP_GET_LOCAL;
+    set_op = OP_SET_LOCAL;
+    operand = (uint8_t)slot;
+  } else {
+    int upvalue = cg_resolve_upvalue(cg, name, assign->target->span);
+    if (upvalue < 0) {
+      cg_error(cg, assign->target->span, "assignment to a non-local");
+      emit(cg, OP_UNIT);
+      return;
+    }
+    get_op = OP_GET_UPVALUE;
+    set_op = OP_SET_UPVALUE;
+    operand = (uint8_t)upvalue;
   }
 
   if (assign->op == TOKEN_EQ) {
     compile_expr(cg, assign->value);
   } else {
-    emit2(cg, OP_GET_LOCAL, (uint8_t)slot);
+    emit2(cg, get_op, operand);
     compile_expr(cg, assign->value);
     switch (assign->op) {
     case TOKEN_PLUSEQ:
@@ -426,7 +523,7 @@ static void compile_assign(Cg *cg, Expr *expr) {
     }
   }
 
-  emit2(cg, OP_SET_LOCAL, (uint8_t)slot); // value stays as the expr result
+  emit2(cg, set_op, operand); // value stays as the expr result
 }
 
 static void compile_if(Cg *cg, Expr *expr) {
@@ -521,6 +618,7 @@ static void compile_for_range(Cg *cg, Expr *expr) {
 
   patch_jump(cg, exit_jump);
   emit(cg, OP_POP);                            // the test result
+  cg_close_scope(cg, saved_locals);            // detach a captured loop var
   emit2(cg, OP_POPN, 2);                       // i, range
   for (int i = 0; i < loop.break_count; i++) { // breaks pop their own locals
     patch_jump(cg, loop.break_jumps[i]);
@@ -583,6 +681,7 @@ static void compile_for_array(Cg *cg, Expr *expr) {
 
   patch_jump(cg, exit_jump);
   emit(cg, OP_POP);                            // the test result
+  cg_close_scope(cg, saved_locals);            // detach a captured loop var
   emit2(cg, OP_POPN, 3);                       // var, idx, arr
   for (int i = 0; i < loop.break_count; i++) { // breaks pop their own locals
     patch_jump(cg, loop.break_jumps[i]);
@@ -919,15 +1018,18 @@ static void compile_match(Cg *cg, Expr *expr) {
       emit(cg, OP_POP);
 
       compile_expr(cg, arm->body);
+      cg_close_scope(cg, saved_locals); // a closure may capture a bound name
       emit_slide(cg, cg->local_count - saved_locals);
       jump_list_push(cg, &end_jumps, arm->span, emit_jump(cg, OP_JUMP));
 
       patch_jump(cg, guard_fail_jump);
       emit(cg, OP_POP);
+      cg_close_scope(cg, saved_locals); // guard could have captured a bind too
       emit2(cg, OP_POPN, (uint8_t)(cg->local_count - saved_locals));
       jump_list_push(cg, &next_arm_jumps, arm->span, emit_jump(cg, OP_JUMP));
     } else {
       compile_expr(cg, arm->body);
+      cg_close_scope(cg, saved_locals); // a closure may capture a bound name
       emit_slide(cg, cg->local_count - saved_locals);
       jump_list_push(cg, &end_jumps, arm->span, emit_jump(cg, OP_JUMP));
     }
@@ -1035,6 +1137,10 @@ static void compile_expr(Cg *cg, Expr *expr) {
     compile_match(cg, expr);
     break;
 
+  case EXPR_CLOSURE:
+    compile_closure(cg, expr);
+    break;
+
   case EXPR_PATH: {
     Path *path = &expr->as.path_expr.path;
     if (path->count != 1) {
@@ -1056,6 +1162,12 @@ static void compile_expr(Cg *cg, Expr *expr) {
     int slot = cg_find_local(cg, name);
     if (slot >= 0) {
       emit2(cg, OP_GET_LOCAL, (uint8_t)slot);
+      break;
+    }
+
+    int upvalue = cg_resolve_upvalue(cg, name, expr->span);
+    if (upvalue >= 0) {
+      emit2(cg, OP_GET_UPVALUE, (uint8_t)upvalue);
       break;
     }
 
@@ -1164,6 +1276,40 @@ static void compile_fun_body(Module *m, Heap *heap, FunDef *fun, Expr *body,
 
   fun->chunk = cg.chunk;
   *ok &= cg.ok;
+}
+
+// a closure expression: compile its body into its own chunk against a child
+// compiler chained to the enclosing one (so name lookups resolve captures into
+// an upvalue list), then emit OP_CLOSURE to build the runtime ObjClosure from
+// the captured cells. the enclosing chunk holds the compiled FunDef as a
+// VAL_FUN constant that OP_CLOSURE reads back.
+static void compile_closure(Cg *cg, Expr *expr) {
+  ExprClosure *closure = &expr->as.closure;
+  FunDef *fun = closure->def;
+  assert(fun != NULL && "closure not resolved before codegen");
+
+  Cg child = {.m = cg->m, .heap = cg->heap, .diags = cg->diags, .al = cg->al,
+              .ok = true, .self_slot = -1, .parent = cg};
+  child.chunk = al_alloc_zero_for(cg->al, Chunk);
+  chunk_init(child.chunk, cg->al);
+
+  for (int i = 0; i < closure->param_count; i++) {
+    cg_add_local(&child, closure->params[i].name, expr->span);
+  }
+
+  compile_expr(&child, closure->body);
+  emit(&child, OP_RETURN);
+  fun->chunk = child.chunk;
+  cg->ok &= child.ok;
+
+  cg_register_closure(cg, fun);
+
+  int const_idx = chunk_add_const(cg->chunk, val_fun(fun));
+  emit2(cg, OP_CLOSURE, (uint8_t)const_idx);
+  emit(cg, (uint8_t)child.upvalue_count);
+  for (int i = 0; i < child.upvalue_count; i++) {
+    emit2(cg, child.upvalues[i].is_local ? 1 : 0, child.upvalues[i].index);
+  }
 }
 
 static void compile_fun(Module *m, Heap *heap, Decl *decl, DiagBag *diags,
