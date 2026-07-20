@@ -1609,11 +1609,30 @@ static Expr *parse_primary(Parser *p) {
         return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
       }
 
+      // text between the previous `}` and this `{`
+      if (previous_tok(p)->lexeme.len > 2) {
+        if (seg_count >= 16) {
+          error_at(p, current_tok_span(p),
+                   "too many segments in interpolated string");
+          return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
+        }
+        segs[seg_count].kind = ISEG_TEXT;
+        segs[seg_count].text =
+            (StringView){.len = previous_tok(p)->lexeme.len - 2,
+                         .chars = previous_tok(p)->lexeme.chars + 1};
+        seg_count++;
+      }
+
       Expr *expr = parse_expr(p);
       if (expr->kind == EXPR_POISON) {
         return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
       }
 
+      if (seg_count >= 16) {
+        error_at(p, current_tok_span(p),
+                 "too many segments in interpolated string");
+        return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
+      }
       segs[seg_count].kind = ISEG_EXPR;
       segs[seg_count].expr = expr;
       seg_count++;

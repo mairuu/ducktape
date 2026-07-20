@@ -27,5 +27,6 @@ void compiler_destroy(Compiler *c, Allocator *al);
 bool compiler_run(Compiler *c, const char *path);
 
 // compile the checked root module to bytecode and run its `main`.
-// call only after a successful compiler_run.
-bool compiler_execute(Compiler *c);
+// call only after a successful compiler_run. `gc_stress` collects before
+// every heap allocation instead of on the usual size threshold.
+bool compiler_execute(Compiler *c, bool gc_stress);

@@ -5,6 +5,7 @@
 #include "codegen.h"
 #include "diag.h"
 #include "module.h"
+#include "object.h"
 #include "sema.h"
 #include "string_utils.h"
 #include "vm.h"
@@ -170,16 +171,20 @@ bool compiler_run(Compiler *c, const char *path) {
 
 // compile the checked root module to bytecode and run its `main`.
 // requires a successful compiler_run first.
-bool compiler_execute(Compiler *c) {
+bool compiler_execute(Compiler *c, bool gc_stress) {
   Module *m = c->root_module;
 
+  Heap heap;
+  heap_init(&heap, m, gc_stress);
+
   diag_clear(&c->diags);
-  bool ok = codegen_module(m, &c->diags, &c->al);
+  bool ok = codegen_module(m, &heap, &c->diags, &c->al);
   if (diag_has_diags(&c->diags)) {
     diag_report(&c->diags, m->file_path.chars, m->source.chars, stderr);
   }
   if (!ok) {
     fprintf(stderr, "compilation failed during code generation.\n");
+    heap_destroy(&heap);
     return false;
   }
 
@@ -192,8 +197,11 @@ bool compiler_execute(Compiler *c) {
   }
   if (main_fn == NULL) {
     fprintf(stderr, "error: no 'main' function to run\n");
+    heap_destroy(&heap);
     return false;
   }
 
-  return vm_run(m, main_fn);
+  ok = vm_run(m, &heap, main_fn);
+  heap_destroy(&heap);
+  return ok;
 }

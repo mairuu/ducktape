@@ -5,9 +5,10 @@
 #include <stdio.h>
 
 typedef struct FunDef FunDef;
+typedef struct Obj Obj;
 
-// runtime value. heap objects (strings, arrays, structs, closures) arrive
-// with the GC milestone; everything here is a plain value type.
+// runtime value. VAL_OBJ payloads (strings, arrays) live on the GC heap
+// (`object.h`); everything else is a plain value type.
 typedef enum {
   VAL_INT,
   VAL_FLOAT,
@@ -15,6 +16,7 @@ typedef enum {
   VAL_UNIT,
   VAL_RANGE,
   VAL_FUN, // top-level function (no captures)
+  VAL_OBJ, // heap object: string, array
 } ValueKind;
 
 typedef struct {
@@ -29,6 +31,7 @@ typedef struct {
       bool inclusive;
     } range;
     FunDef *fun;
+    Obj *obj;
   } as;
 } Value;
 
@@ -45,5 +48,11 @@ static inline Value val_unit(void) { return (Value){.kind = VAL_UNIT}; }
 static inline Value val_fun(FunDef *fun) {
   return (Value){.kind = VAL_FUN, .as.fun = fun};
 }
+static inline Value val_obj(Obj *obj) {
+  return (Value){.kind = VAL_OBJ, .as.obj = obj};
+}
 
 void value_print(Value v, FILE *out);
+
+// deep equality: strings by pointer (interned), arrays elementwise.
+bool value_equal(Value a, Value b);

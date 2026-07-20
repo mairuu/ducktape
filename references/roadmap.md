@@ -16,28 +16,32 @@
 - **VM core (milestone 5a)** — `Value`, `Chunk`, codegen for the value-type
   subset, stack VM with call frames, `print` builtin, `--run` flag,
   `tests/run` output-checked suite.
+- **GC + heap objects (milestone 5b)** — mark-sweep collector rooted off the
+  VM stack + chunk constants; interned `ObjString` → `String` runtime, `+`
+  concat, interpolation (`OP_INTERP`); heap arrays (`ObjArray`) → literals,
+  indexing, index assignment, `for x in arr`; `--gc-stress` flag. Design:
+  `runtime.md` "Heap & GC". Also fixed two pre-existing bugs surfaced by
+  exercising the feature: `String + String` was dead code in the checker
+  (arithmetic's numeric check ran first), and the parser dropped text
+  segments between two interpolation groups (`"{a} mid {b}"`).
 
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
 milestone (~900 lines).
 
-1. **5b — GC + heap objects** (~0.75–1×): mark-sweep collector with explicit
-   roots (stack, frames, globals); interned `ObjString` → String runtime,
-   `+` concat, interpolation; heap arrays → literals, indexing, `for x in
-   arr`. Design notes: `runtime.md` "Future".
-2. **5c — aggregate runtime** (~1–1.5×): structs/enums as heap objects, field
+1. **5c — aggregate runtime** (~1–1.5×): structs/enums as heap objects, field
    access, methods (`self` dispatch), match compilation (tag dispatch +
    destructuring), closures with upvalues (`is_captured` groundwork exists),
    `?` lowering, tuples.
-3. **Trait completion** (~0.75×): resolve trait-item signatures, impl
+2. **Trait completion** (~0.75×): resolve trait-item signatures, impl
    conformance checking, default methods, calls through bounds
    (`T: Drawable` → `t.draw()`); then inline bounds `<T: Display>` and
    `where` enforcement (~0.5×). Unlocks `Try`-trait `?` and `as` coercions.
-4. **Module system** (~0.5×): real file discovery, `mod_link_imports`
+3. **Module system** (~0.5×): real file discovery, `mod_link_imports`
    (stubbed at `src/compiler.c` phase_register), cross-module visibility,
    cycle detection.
-5. **Bytecode serialization + REPL** — after modules; format sketch in
+4. **Bytecode serialization + REPL** — after modules; format sketch in
    `runtime.md`.
 
 ## Known warts to clean up opportunistically

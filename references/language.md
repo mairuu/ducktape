@@ -44,7 +44,7 @@ case for it) — declare variables inside functions only.
 
 | Syntax | Meaning |
 |---|---|
-| `Int` `Float` `Bool` `String` | primitives (`String` has no runtime yet) |
+| `Int` `Float` `Bool` `String` | primitives |
 | `()` | unit |
 | `(A, B)` | tuple |
 | `[T]` | array of `T` |
@@ -72,7 +72,7 @@ ending in `return` has type `!` (never), which unifies with anything.
 ## Expressions
 
 - Arithmetic `+ - * / %` on numerics; `Int op Float` widens to `Float`.
-  `+` also concatenates `String`s (checker only, no runtime yet).
+  `+` also concatenates `String`s.
 - Comparison `< <= > >=` (numeric), `== !=` (same static type).
 - Logic: keywords `and`, `or` (short-circuit), `not`. There is no `&&`/`||`.
 - Unary minus `-x` (numeric).
@@ -134,4 +134,4 @@ Registered in every module; the only builtin so far.
 | assoc types on generic params `T.Item` | "not yet supported" diagnostic |
 | match exhaustiveness, variable shadowing diags | silently accepted |
 | overlapping method names across impls of one type | bare paths pick the first registered impl |
-| `String` runtime, arrays/structs/enums/closures at runtime | compile-only until the GC milestone (`runtime.md`) |
+| structs/enums/match/closures/tuples/`?` at runtime | compile-only; "not supported by the VM yet" under `--run` (`runtime.md`) |

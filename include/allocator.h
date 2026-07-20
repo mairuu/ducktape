@@ -17,7 +17,8 @@ typedef struct {
 
 #define al_alloc_zero_for(al, type) (type *)al_alloc_zero(al, sizeof(type))
 
-#define al_realloc(al, ptr, old_size, new_size) (al)->realloc((al)->ctx, ptr, old_size, new_size)
+#define al_realloc(al, ptr, old_size, new_size)                                \
+  (al)->realloc((al)->ctx, ptr, old_size, new_size)
 
 #define al_free(al, ptr, size) (al)->free((al)->ctx, ptr, size)
 

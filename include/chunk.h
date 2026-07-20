@@ -48,6 +48,15 @@ typedef enum {
   OP_CALL,  // u8 argc — callee value sits beneath the args
   OP_PRINT, // pops a value, prints it, pushes unit
   OP_RETURN,
+
+  OP_ARRAY,     // u8 count — pop count elems (left-to-right), push array
+  OP_INDEX_GET, // pops index, array; pushes array[index] (bounds-checked)
+  OP_INDEX_SET, // pops value, index, array; sets array[index] = value,
+                // pushes value (bounds-checked)
+  OP_LEN,       // pops array; pushes its length as Int
+  OP_INTERP,    // u8 seg count — pop count values, stringify + concat,
+                // push the resulting string
+  OP_DUP,       // u8 depth — push a copy of the value `depth` below the top
 } OpCode;
 
 typedef struct Chunk {

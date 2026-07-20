@@ -1940,9 +1940,9 @@ static Type *resolve_method_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   }
 
   ImplMatch match;
-  MethodDef *method = impl_index_method(&ctx->tc->impl_index, self_ty,
-                                        mc->method_name, &match, &ctx->infer,
-                                        expr->span, ctx->al);
+  MethodDef *method =
+      impl_index_method(&ctx->tc->impl_index, self_ty, mc->method_name, &match,
+                        &ctx->infer, expr->span, ctx->al);
   if (!method) {
     char self_buf[64];
     type_sprintf(self_ty, self_buf, sizeof(self_buf));
@@ -1973,9 +1973,8 @@ static Type *resolve_method_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   }
 
   if (mc->type_arg_count > 0 && mc->type_arg_count != fun->type_param_count) {
-    diag_error(ctx->diags, expr->span,
-               "expected %d type arguments but got %d", fun->type_param_count,
-               mc->type_arg_count);
+    diag_error(ctx->diags, expr->span, "expected %d type arguments but got %d",
+               fun->type_param_count, mc->type_arg_count);
     return ctx->tc->t_poison;
   }
 
@@ -1993,9 +1992,9 @@ static Type *resolve_method_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   // args) into a single subst, so subst_apply sees every generic that can
   // appear in fun->fun_type in one pass. see subst_exclude_shadowed for why
   // impl-level entries shadowed by the method's own type params are dropped.
-  Subst method_subst = infer_open_generics(
-      &ctx->infer, fun->type_params, explicit_type_args.ptr,
-      fun->type_param_count, expr->span, ctx->al);
+  Subst method_subst =
+      infer_open_generics(&ctx->infer, fun->type_params, explicit_type_args.ptr,
+                          fun->type_param_count, expr->span, ctx->al);
   bool is_generic = method_subst.count > 0;
 
   Subst impl_subst = subst_exclude_shadowed(match.subst, fun->type_params,
@@ -2157,8 +2156,8 @@ static Type *resolve_propagate_expr(CheckCtx *ctx, Expr *expr) {
         &ctx->infer, def->type_params, ret_ty->as.enm.type_args,
         def->type_param_count, expr->span, ctx->al);
     ret_err_payload =
-        infer_apply(&ctx->infer, subst_apply(&ret_subst, ret_err_payload, ctx->al),
-                    ctx->al);
+        infer_apply(&ctx->infer,
+                    subst_apply(&ret_subst, ret_err_payload, ctx->al), ctx->al);
   }
 
   if (!infer_unify(&ctx->infer, ret_err_payload, op_err_payload, ctx->diags,
@@ -2187,8 +2186,7 @@ static Type *resolve_closure_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   def->is_closure = true;
   def->module = ctx->fun != NULL ? ctx->fun->module : NULL;
   def->param_count = closure->param_count;
-  def->params =
-      al_alloc_zero(ctx->al, sizeof(ParamDef) * closure->param_count);
+  def->params = al_alloc_zero(ctx->al, sizeof(ParamDef) * closure->param_count);
   closure->def = def;
 
   TypeScratch param_types;
@@ -2246,8 +2244,7 @@ static Type *resolve_closure_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   ctx->return_type = saved_ret;
   ctx->loop_depth = saved_loop_depth;
 
-  Type *fun_ty =
-      ty_fun(param_types.ptr, closure->param_count, ret_ty, ctx->al);
+  Type *fun_ty = ty_fun(param_types.ptr, closure->param_count, ret_ty, ctx->al);
   def->fun_type = fun_ty;
   return fun_ty;
 }
@@ -2316,7 +2313,9 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     bool is_eq = (op == TOKEN_EQEQ || op == TOKEN_BANGEQ);
     bool is_logic = (op == TOKEN_AND || op == TOKEN_OR);
 
-    if (is_arith) {
+    if (op == TOKEN_PLUS && lhs->kind == TY_STRING && rhs->kind == TY_STRING) {
+      result = ty_string();
+    } else if (is_arith) {
       if (!type_is_numeric(lhs) || !type_is_numeric(rhs)) {
         char lhs_buf[64], rhs_buf[64];
         type_sprintf(lhs, lhs_buf, sizeof(lhs_buf));
@@ -3695,8 +3694,8 @@ MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, StringView name,
         names[j] = impl->type_params[j]->as.generic.name;
       }
 
-      matched = impl_type_match(impl->self_type, self_type, names, n, args,
-                                bound);
+      matched =
+          impl_type_match(impl->self_type, self_type, names, n, args, bound);
       for (int j = 0; matched && j < n; j++) {
         matched = bound[j]; // every impl type param must appear in self_type
       }
@@ -3963,10 +3962,9 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
       }
 
       ImplMatch match;
-      MethodDef *method = impl_index_method(&ctx->tyres->tc->impl_index,
-                                            struct_ty, segment, &match,
-                                            ctx->tyres->infer, path->span,
-                                            ctx->al);
+      MethodDef *method =
+          impl_index_method(&ctx->tyres->tc->impl_index, struct_ty, segment,
+                            &match, ctx->tyres->infer, path->span, ctx->al);
       if (!method) {
         char ty_buf[64];
         type_sprintf(struct_ty, ty_buf, sizeof(ty_buf));

@@ -22,7 +22,8 @@ static void *_heap_alloc(void *ctx, size_t size) {
   return malloc(size);
 }
 
-static void *_heap_realloc(void *ctx, void *ptr, size_t old_size, size_t new_size) {
+static void *_heap_realloc(void *ctx, void *ptr, size_t old_size,
+                           size_t new_size) {
   (void)ctx;
   (void)old_size;
   return realloc(ptr, new_size);

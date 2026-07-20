@@ -8,11 +8,14 @@ static Compiler compiler;
 
 int main(int argc, char *argv[]) {
   bool run = false;
+  bool gc_stress = false;
   const char *root_path = NULL;
 
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "--run") == 0) {
       run = true;
+    } else if (strcmp(argv[i], "--gc-stress") == 0) {
+      gc_stress = true;
     } else if (root_path == NULL) {
       root_path = argv[i];
     } else {
@@ -22,7 +25,7 @@ int main(int argc, char *argv[]) {
   }
 
   if (root_path == NULL) {
-    fprintf(stderr, "usage: %s [--run] <file>\n", argv[0]);
+    fprintf(stderr, "usage: %s [--run] [--gc-stress] <file>\n", argv[0]);
     return 1;
   }
 
@@ -31,7 +34,7 @@ int main(int argc, char *argv[]) {
   compiler_init(&compiler, &heap_al);
   bool ok = compiler_run(&compiler, root_path);
   if (ok && run) {
-    ok = compiler_execute(&compiler);
+    ok = compiler_execute(&compiler, gc_stress);
   }
   compiler_destroy(&compiler, &heap_al);
 

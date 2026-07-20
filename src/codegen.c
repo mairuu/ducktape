@@ -1,6 +1,7 @@
 #include "codegen.h"
 #include "ast.h"
 #include "chunk.h"
+#include "object.h"
 #include "scanner.h"
 #include "string_utils.h"
 #include "value.h"
@@ -32,6 +33,7 @@ typedef struct CgLoop {
 
 typedef struct {
   Module *m;
+  Heap *heap;
   Chunk *chunk;
   DiagBag *diags;
   Allocator *al;
@@ -59,6 +61,27 @@ static void emit2(Cg *cg, uint8_t a, uint8_t b) {
 
 static void emit_const(Cg *cg, Value v) {
   emit2(cg, OP_CONST, (uint8_t)chunk_add_const(cg->chunk, v));
+}
+
+// decode the scanner's accepted escapes (\n \t \r \" \\ \{) and intern; the
+// decoded form is never longer than the raw source slice.
+static ObjString *cg_decode_string(Cg *cg, StringView raw) {
+  char *buf = al_alloc(cg->al, (size_t)raw.len);
+  int n = 0;
+  for (int i = 0; i < raw.len; i++) {
+    char c = raw.chars[i];
+    if (c == '\\' && i + 1 < raw.len) {
+      i++;
+      char e = raw.chars[i];
+      buf[n++] = e == 'n'   ? '\n'
+                 : e == 't' ? '\t'
+                 : e == 'r' ? '\r'
+                            : e; // '"', '\\', '{': literal
+    } else {
+      buf[n++] = c;
+    }
+  }
+  return heap_intern(cg->heap, buf, n);
 }
 
 // emit a forward jump with a placeholder offset; returns the operand's ip.
@@ -278,8 +301,52 @@ static void compile_binary(Cg *cg, Expr *expr) {
   }
 }
 
+// assignment to `arr[i]` (`=` or a compound `+=`/etc). stack discipline:
+// [array, index, value] going into OP_INDEX_SET, which pops all three and
+// pushes `value` back as the expression's result.
+static void compile_index_assign(Cg *cg, Expr *expr) {
+  ExprAssign *assign = &expr->as.assign;
+  ExprIndex *index = &assign->target->as.index;
+
+  compile_expr(cg, index->object); // [array]
+  compile_expr(cg, index->index);  // [array, index]
+
+  if (assign->op == TOKEN_EQ) {
+    compile_expr(cg, assign->value); // [array, index, value]
+  } else {
+    emit2(cg, OP_DUP, 1);            // [array, index, array]
+    emit2(cg, OP_DUP, 1);            // [array, index, array, index]
+    emit(cg, OP_INDEX_GET);          // [array, index, current]
+    compile_expr(cg, assign->value); // [array, index, current, value]
+    switch (assign->op) {
+    case TOKEN_PLUSEQ:
+      emit(cg, OP_ADD);
+      break;
+    case TOKEN_MINUSEQ:
+      emit(cg, OP_SUB);
+      break;
+    case TOKEN_STAREQ:
+      emit(cg, OP_MUL);
+      break;
+    case TOKEN_SLASHEQ:
+      emit(cg, OP_DIV);
+      break;
+    default:
+      cg_error(cg, expr->span, "this compound assignment");
+      break;
+    }
+  }
+
+  emit(cg, OP_INDEX_SET);
+}
+
 static void compile_assign(Cg *cg, Expr *expr) {
   ExprAssign *assign = &expr->as.assign;
+
+  if (assign->target->kind == EXPR_INDEX) {
+    compile_index_assign(cg, expr);
+    return;
+  }
 
   if (assign->target->kind != EXPR_PATH ||
       assign->target->as.path_expr.path.count != 1) {
@@ -372,7 +439,7 @@ static void compile_while(Cg *cg, Expr *expr) {
   emit(cg, OP_UNIT); // loops evaluate to unit
 }
 
-static void compile_for(Cg *cg, Expr *expr) {
+static void compile_for_range(Cg *cg, Expr *expr) {
   ExprFor *for_ = &expr->as.for_expr;
   int saved_locals = cg->local_count;
 
@@ -414,15 +481,88 @@ static void compile_for(Cg *cg, Expr *expr) {
   emit_loop(cg, loop_start);
 
   patch_jump(cg, exit_jump);
-  emit(cg, OP_POP);                             // the test result
-  emit2(cg, OP_POPN, 2);                        // i, range
-  for (int i = 0; i < loop.break_count; i++) {  // breaks pop their own locals
+  emit(cg, OP_POP);                            // the test result
+  emit2(cg, OP_POPN, 2);                       // i, range
+  for (int i = 0; i < loop.break_count; i++) { // breaks pop their own locals
     patch_jump(cg, loop.break_jumps[i]);
   }
 
   cg->loop = loop.parent;
   cg->local_count = saved_locals;
   emit(cg, OP_UNIT); // loops evaluate to unit
+}
+
+static void compile_for_array(Cg *cg, Expr *expr) {
+  ExprFor *for_ = &expr->as.for_expr;
+  int saved_locals = cg->local_count;
+
+  // [arr, idx, var] as hidden + loop locals; var is a placeholder (unit)
+  // until the first bounds-checked read.
+  compile_expr(cg, for_->iterable);
+  int arr_slot = cg_add_local(cg, (StringView){0}, expr->span);
+  emit_const(cg, val_int(0));
+  int idx_slot = cg_add_local(cg, (StringView){0}, expr->span);
+  emit(cg, OP_UNIT);
+  int var_slot = cg_add_local(cg, for_->var_name, for_->var_span);
+
+  CgLoop loop = {
+      .continue_is_backward = false, // continue jumps forward to the increment
+      .continue_base = cg->local_count,
+      .break_base = saved_locals,
+      .parent = cg->loop,
+  };
+  cg->loop = &loop;
+
+  int loop_start = cg->chunk->count;
+  loop.start = loop_start;
+  emit2(cg, OP_GET_LOCAL, (uint8_t)idx_slot);
+  emit2(cg, OP_GET_LOCAL, (uint8_t)arr_slot);
+  emit(cg, OP_LEN);
+  emit(cg, OP_LT);
+  int exit_jump = emit_jump(cg, OP_JUMP_IF_FALSE);
+  emit(cg, OP_POP);
+
+  emit2(cg, OP_GET_LOCAL, (uint8_t)arr_slot);
+  emit2(cg, OP_GET_LOCAL, (uint8_t)idx_slot);
+  emit(cg, OP_INDEX_GET);
+  emit2(cg, OP_SET_LOCAL, (uint8_t)var_slot);
+  emit(cg, OP_POP);
+
+  compile_expr(cg, for_->body);
+  emit(cg, OP_POP);
+
+  // increment; forward `continue`s land here
+  for (int i = 0; i < loop.continue_count; i++) {
+    patch_jump(cg, loop.continue_jumps[i]);
+  }
+  emit2(cg, OP_GET_LOCAL, (uint8_t)idx_slot);
+  emit_const(cg, val_int(1));
+  emit(cg, OP_ADD);
+  emit2(cg, OP_SET_LOCAL, (uint8_t)idx_slot);
+  emit(cg, OP_POP);
+  emit_loop(cg, loop_start);
+
+  patch_jump(cg, exit_jump);
+  emit(cg, OP_POP);                            // the test result
+  emit2(cg, OP_POPN, 3);                       // var, idx, arr
+  for (int i = 0; i < loop.break_count; i++) { // breaks pop their own locals
+    patch_jump(cg, loop.break_jumps[i]);
+  }
+
+  cg->loop = loop.parent;
+  cg->local_count = saved_locals;
+  emit(cg, OP_UNIT); // loops evaluate to unit
+}
+
+static void compile_for(Cg *cg, Expr *expr) {
+  ExprFor *for_ = &expr->as.for_expr;
+  Type *iter_ty = for_->iterable->resolved_type;
+  assert(iter_ty && "for-loop iterable unresolved after checking");
+  if (iter_ty->kind == TY_ARRAY) {
+    compile_for_array(cg, expr);
+  } else {
+    compile_for_range(cg, expr);
+  }
 }
 
 static void compile_call(Cg *cg, Expr *expr) {
@@ -462,6 +602,40 @@ static void compile_expr(Cg *cg, Expr *expr) {
   case EXPR_UNIT:
     emit(cg, OP_UNIT);
     break;
+  case EXPR_STRING:
+    emit_const(cg, val_obj(&cg_decode_string(cg, expr->as.string.value)->obj));
+    break;
+
+  case EXPR_INTERPOLATED: {
+    ExprInterpolated *interp = &expr->as.interpolated;
+    for (int i = 0; i < interp->seg_count; i++) {
+      InterpolSeg *seg = &interp->segs[i];
+      if (seg->kind == ISEG_TEXT) {
+        emit_const(cg, val_obj(&cg_decode_string(cg, seg->text)->obj));
+      } else {
+        compile_expr(cg, seg->expr);
+      }
+    }
+    emit2(cg, OP_INTERP, (uint8_t)interp->seg_count);
+    break;
+  }
+
+  case EXPR_ARRAY: {
+    ExprArray *array = &expr->as.array;
+    for (int i = 0; i < array->count; i++) {
+      compile_expr(cg, array->elems[i]);
+    }
+    emit2(cg, OP_ARRAY, (uint8_t)array->count);
+    break;
+  }
+
+  case EXPR_INDEX: {
+    ExprIndex *index = &expr->as.index;
+    compile_expr(cg, index->object);
+    compile_expr(cg, index->index);
+    emit(cg, OP_INDEX_GET);
+    break;
+  }
 
   case EXPR_PATH: {
     Path *path = &expr->as.path_expr.path;
@@ -551,8 +725,8 @@ static void compile_expr(Cg *cg, Expr *expr) {
 
 // ── entry ────────────────────────────────────────────────────────────────────
 
-static void compile_fun(Module *m, Decl *decl, DiagBag *diags, Allocator *al,
-                        bool *ok) {
+static void compile_fun(Module *m, Heap *heap, Decl *decl, DiagBag *diags,
+                        Allocator *al, bool *ok) {
   DeclFun *fun_decl = &decl->as.fun_decl;
   FunDef *fun = fun_decl->def;
 
@@ -565,7 +739,7 @@ static void compile_fun(Module *m, Decl *decl, DiagBag *diags, Allocator *al,
     return;
   }
 
-  Cg cg = {.m = m, .diags = diags, .al = al, .ok = true};
+  Cg cg = {.m = m, .heap = heap, .diags = diags, .al = al, .ok = true};
   cg.chunk = al_alloc_zero_for(al, Chunk);
   chunk_init(cg.chunk, al);
 
@@ -580,7 +754,7 @@ static void compile_fun(Module *m, Decl *decl, DiagBag *diags, Allocator *al,
   *ok &= cg.ok;
 }
 
-bool codegen_module(Module *m, DiagBag *diags, Allocator *al) {
+bool codegen_module(Module *m, Heap *heap, DiagBag *diags, Allocator *al) {
   for (int i = 0; i < m->fun_count; i++) {
     m->funs[i]->slot = i;
   }
@@ -589,7 +763,7 @@ bool codegen_module(Module *m, DiagBag *diags, Allocator *al) {
   for (int i = 0; i < m->ast->decl_count; i++) {
     Decl *decl = m->ast->decls[i];
     if (decl->kind == DECL_FUN) {
-      compile_fun(m, decl, diags, al, &ok);
+      compile_fun(m, heap, decl, diags, al, &ok);
     }
     // impls/structs/enums/traits: nothing executable yet
   }

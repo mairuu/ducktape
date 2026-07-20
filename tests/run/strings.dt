@@ -1,0 +1,40 @@
+# interned strings, concat, escapes, interpolation
+#> true
+#> false
+#> hello world
+#> true
+#> tab	here
+#> quote"here
+#> brace{here
+#> duck says quack 3 times
+#> pi is roughly 3.14 and true
+#> ab
+#> ab
+fun main() {
+    var s = "hello";
+    var t = "hello";
+    print(s == t);
+    print(s == "world");
+    print(s + " world");
+
+    print("line1\n" + "line2" == "line1\nline2");
+    print("tab\there");
+    print("quote\"here");
+    print("brace\{here");
+
+    var name = "duck";
+    var n = 3;
+    print("{name} says quack {n} times");
+
+    var pi = 3.14;
+    print("pi is roughly {pi} and {true}");
+
+    var acc = "a";
+    var i = 0;
+    while i < 1 {
+        acc += "b";
+        i += 1;
+    }
+    print(acc);
+    print("a" + "b");
+}

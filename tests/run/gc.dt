@@ -1,0 +1,25 @@
+# drives many collections: a long-lived string survives while a fresh,
+# distinct string + array become garbage every iteration.
+#> sentinel
+#> 0
+#> 600030000
+#> 20000
+fun main() {
+    var kept = "sentinel";
+    var i = 0;
+    var acc = 0;
+    var mismatches = 0;
+    while i < 20000 {
+        var tmp = "item-{i}";
+        var arr = [i, i + 1, i + 2];
+        acc += arr[0] + arr[1] + arr[2];
+        if tmp != "item-{i}" {
+            mismatches += 1;
+        }
+        i += 1;
+    }
+    print(kept);
+    print(mismatches);
+    print(acc);
+    print(i);
+}

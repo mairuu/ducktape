@@ -1,5 +1,6 @@
 #include "vm.h"
 #include "chunk.h"
+#include "object.h"
 #include "string_utils.h"
 #include "value.h"
 
@@ -20,6 +21,7 @@ typedef struct {
 
 typedef struct {
   Module *m;
+  Heap *heap;
 
   Value stack[STACK_MAX];
   Value *sp;
@@ -51,30 +53,40 @@ static inline double as_num(Value v) {
   return v.kind == VAL_FLOAT ? v.as.f : (double)v.as.i;
 }
 
-static bool value_equal(Value a, Value b) {
-  if (a.kind != b.kind) {
-    return false;
+static void vm_mark_roots(void *ctx) {
+  Vm *vm = ctx;
+  for (Value *v = vm->stack; v < vm->sp; v++) {
+    gc_mark_value(*v);
   }
-  switch (a.kind) {
-  case VAL_INT:
-    return a.as.i == b.as.i;
-  case VAL_FLOAT:
-    return a.as.f == b.as.f;
-  case VAL_BOOL:
-    return a.as.b == b.as.b;
-  case VAL_UNIT:
-    return true;
-  case VAL_RANGE:
-    return a.as.range.start == b.as.range.start &&
-           a.as.range.end == b.as.range.end &&
-           a.as.range.inclusive == b.as.range.inclusive;
-  case VAL_FUN:
-    return a.as.fun == b.as.fun;
-  }
-  return false;
 }
 
-bool vm_run(Module *m, FunDef *entry) {
+// converts a value to its string form for OP_INTERP; strings pass through
+// without a new allocation.
+static ObjString *stringify(Heap *heap, Value v) {
+  if (val_is_string(v)) {
+    return val_as_string(v);
+  }
+  char buf[64];
+  int len;
+  switch (v.kind) {
+  case VAL_INT:
+    len = snprintf(buf, sizeof(buf), "%lld", (long long)v.as.i);
+    break;
+  case VAL_FLOAT:
+    len = snprintf(buf, sizeof(buf), "%g", v.as.f);
+    break;
+  case VAL_BOOL:
+    len = snprintf(buf, sizeof(buf), "%s", v.as.b ? "true" : "false");
+    break;
+  default:
+    assert(false && "interpolation segment type got past the checker");
+    len = 0;
+    break;
+  }
+  return heap_intern(heap, buf, len);
+}
+
+bool vm_run(Module *m, Heap *heap, FunDef *entry) {
   assert(entry->chunk && "entry function was not compiled");
   if (entry->param_count != 0) {
     fprintf(stderr, "error: '" SV_FMT "' must take no parameters to be run\n",
@@ -82,8 +94,10 @@ bool vm_run(Module *m, FunDef *entry) {
     return false;
   }
 
-  Vm vm = {.m = m, .sp = NULL, .frame_count = 0};
+  Vm vm = {.m = m, .heap = heap, .sp = NULL, .frame_count = 0};
   vm.sp = vm.stack;
+  heap->mark_roots = vm_mark_roots;
+  heap->mark_roots_ctx = &vm;
 
   push(&vm, val_fun(entry));
   vm.frames[vm.frame_count++] = (Frame){
@@ -95,7 +109,13 @@ bool vm_run(Module *m, FunDef *entry) {
   Frame *frame = &vm.frames[vm.frame_count - 1];
 
 #define READ_BYTE() (*frame->ip++)
-#define READ_U16() (frame->ip += 2, (uint16_t)((frame->ip[-2] << 8) | frame->ip[-1]))
+#define READ_U16()                                                             \
+  (frame->ip += 2, (uint16_t)((frame->ip[-2] << 8) | frame->ip[-1]))
+#define VM_RETURN(x)                                                           \
+  do {                                                                         \
+    heap->mark_roots = NULL;                                                   \
+    return (x);                                                                \
+  } while (0)
 
   for (;;) {
     OpCode op = (OpCode)READ_BYTE();
@@ -142,35 +162,65 @@ bool vm_run(Module *m, FunDef *entry) {
     case OP_MUL:
     case OP_DIV:
     case OP_MOD: {
-      Value b = pop(&vm);
-      Value a = pop(&vm);
-      if (a.kind == VAL_INT && b.kind == VAL_INT) {
+      // peek (not pop): a heap_concat below may collect, and the operands
+      // must still be reachable from the VM stack when it does
+      Value b = peek(&vm, 0);
+      Value a = peek(&vm, 1);
+      Value result;
+      if (op == OP_ADD && val_is_string(a) && val_is_string(b)) {
+        result = val_obj(
+            &heap_concat(vm.heap, val_as_string(a), val_as_string(b))->obj);
+      } else if (a.kind == VAL_INT && b.kind == VAL_INT) {
         int64_t x = a.as.i, y = b.as.i, r = 0;
         if ((op == OP_DIV || op == OP_MOD) && y == 0) {
-          return runtime_error(&vm, "division by zero");
+          VM_RETURN(runtime_error(&vm, "division by zero"));
         }
         switch (op) {
-        case OP_ADD: r = x + y; break;
-        case OP_SUB: r = x - y; break;
-        case OP_MUL: r = x * y; break;
-        case OP_DIV: r = x / y; break;
-        case OP_MOD: r = x % y; break;
-        default: break;
+        case OP_ADD:
+          r = x + y;
+          break;
+        case OP_SUB:
+          r = x - y;
+          break;
+        case OP_MUL:
+          r = x * y;
+          break;
+        case OP_DIV:
+          r = x / y;
+          break;
+        case OP_MOD:
+          r = x % y;
+          break;
+        default:
+          break;
         }
-        push(&vm, val_int(r));
+        result = val_int(r);
       } else {
         // Int op Float widens to Float (matches the checker)
         double x = as_num(a), y = as_num(b), r = 0;
         switch (op) {
-        case OP_ADD: r = x + y; break;
-        case OP_SUB: r = x - y; break;
-        case OP_MUL: r = x * y; break;
-        case OP_DIV: r = x / y; break;
-        case OP_MOD: r = fmod(x, y); break;
-        default: break;
+        case OP_ADD:
+          r = x + y;
+          break;
+        case OP_SUB:
+          r = x - y;
+          break;
+        case OP_MUL:
+          r = x * y;
+          break;
+        case OP_DIV:
+          r = x / y;
+          break;
+        case OP_MOD:
+          r = fmod(x, y);
+          break;
+        default:
+          break;
         }
-        push(&vm, val_float(r));
+        result = val_float(r);
       }
+      vm.sp -= 2;
+      push(&vm, result);
       break;
     }
 
@@ -201,20 +251,38 @@ bool vm_run(Module *m, FunDef *entry) {
       bool r = false;
       if (a.kind == VAL_INT && b.kind == VAL_INT) {
         switch (op) {
-        case OP_LT: r = a.as.i < b.as.i; break;
-        case OP_LTEQ: r = a.as.i <= b.as.i; break;
-        case OP_GT: r = a.as.i > b.as.i; break;
-        case OP_GTEQ: r = a.as.i >= b.as.i; break;
-        default: break;
+        case OP_LT:
+          r = a.as.i < b.as.i;
+          break;
+        case OP_LTEQ:
+          r = a.as.i <= b.as.i;
+          break;
+        case OP_GT:
+          r = a.as.i > b.as.i;
+          break;
+        case OP_GTEQ:
+          r = a.as.i >= b.as.i;
+          break;
+        default:
+          break;
         }
       } else {
         double x = as_num(a), y = as_num(b);
         switch (op) {
-        case OP_LT: r = x < y; break;
-        case OP_LTEQ: r = x <= y; break;
-        case OP_GT: r = x > y; break;
-        case OP_GTEQ: r = x >= y; break;
-        default: break;
+        case OP_LT:
+          r = x < y;
+          break;
+        case OP_LTEQ:
+          r = x <= y;
+          break;
+        case OP_GT:
+          r = x > y;
+          break;
+        case OP_GTEQ:
+          r = x >= y;
+          break;
+        default:
+          break;
         }
       }
       push(&vm, val_bool(r));
@@ -276,19 +344,19 @@ bool vm_run(Module *m, FunDef *entry) {
       uint8_t argc = READ_BYTE();
       Value callee = peek(&vm, argc);
       if (callee.kind != VAL_FUN) {
-        return runtime_error(&vm, "can only call functions");
+        VM_RETURN(runtime_error(&vm, "can only call functions"));
       }
       FunDef *fun = callee.as.fun;
       assert(fun->param_count == argc && "arity got past the checker");
       if (fun->chunk == NULL) {
-        return runtime_error(&vm, "call to uncompiled function '" SV_FMT "'",
-                             SV_ARG(fun->name));
+        VM_RETURN(runtime_error(&vm, "call to uncompiled function '" SV_FMT "'",
+                                SV_ARG(fun->name)));
       }
       if (vm.frame_count >= FRAMES_MAX) {
-        return runtime_error(&vm, "stack overflow");
+        VM_RETURN(runtime_error(&vm, "stack overflow"));
       }
       if (vm.sp - vm.stack >= STACK_MAX - STACK_HEADROOM) {
-        return runtime_error(&vm, "value stack overflow");
+        VM_RETURN(runtime_error(&vm, "value stack overflow"));
       }
       vm.frames[vm.frame_count++] = (Frame){
           .fun = fun,
@@ -311,18 +379,80 @@ bool vm_run(Module *m, FunDef *entry) {
       vm.sp = frame->base - 1; // also drops the callee value
       vm.frame_count--;
       if (vm.frame_count == 0) {
-        return true;
+        VM_RETURN(true);
       }
       push(&vm, result);
       frame = &vm.frames[vm.frame_count - 1];
       break;
     }
 
+    case OP_ARRAY: {
+      uint8_t count = READ_BYTE();
+      Value *elems = vm.sp - count; // still-live roots until copied
+      ObjArray *arr = heap_array(vm.heap, count);
+      for (int i = 0; i < count; i++) {
+        arr->items[i] = elems[i];
+      }
+      vm.sp -= count;
+      push(&vm, val_obj(&arr->obj));
+      break;
+    }
+
+    case OP_INDEX_GET: {
+      Value idxv = pop(&vm), arrv = pop(&vm);
+      ObjArray *arr = val_as_array(arrv);
+      int64_t idx = idxv.as.i;
+      if (idx < 0 || idx >= arr->count) {
+        VM_RETURN(runtime_error(&vm, "index %lld out of bounds (len %d)",
+                                (long long)idx, arr->count));
+      }
+      push(&vm, arr->items[idx]);
+      break;
+    }
+    case OP_INDEX_SET: {
+      Value val = pop(&vm), idxv = pop(&vm), arrv = pop(&vm);
+      ObjArray *arr = val_as_array(arrv);
+      int64_t idx = idxv.as.i;
+      if (idx < 0 || idx >= arr->count) {
+        VM_RETURN(runtime_error(&vm, "index %lld out of bounds (len %d)",
+                                (long long)idx, arr->count));
+      }
+      arr->items[idx] = val;
+      push(&vm, val);
+      break;
+    }
+    case OP_LEN: {
+      ObjArray *arr = val_as_array(pop(&vm));
+      push(&vm, val_int(arr->count));
+      break;
+    }
+
+    case OP_INTERP: {
+      uint8_t n = READ_BYTE();
+      Value *segs = vm.sp - n; // still-live roots throughout
+      ObjString *acc = stringify(vm.heap, segs[0]);
+      push(&vm, val_obj(&acc->obj)); // keep the accumulator rooted
+      for (int i = 1; i < n; i++) {
+        ObjString *piece = stringify(vm.heap, segs[i]);
+        acc = heap_concat(vm.heap, acc, piece);
+        vm.sp[-1] = val_obj(&acc->obj);
+      }
+      Value result = pop(&vm);
+      vm.sp -= n;
+      push(&vm, result);
+      break;
+    }
+
+    case OP_DUP:
+      push(&vm, peek(&vm, READ_BYTE()));
+      break;
+
     default:
-      return runtime_error(&vm, "unknown opcode %d", (int)op);
+      VM_RETURN(runtime_error(&vm, "unknown opcode %d", (int)op));
     }
   }
 
 #undef READ_BYTE
 #undef READ_U16
+#undef VM_RETURN
 }
