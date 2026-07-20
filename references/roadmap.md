@@ -96,15 +96,30 @@
   "Closures & upvalues". A captured `for` variable is one shared cell (reads
   its final value) — a deliberate simplification, documented there.
 
+- **Trait signatures + conformance (milestone 6a)** — trait item signatures
+  now resolve (`resolve_trait_decl`): each `TraitMethodDef` gets a
+  `method_type` built against the abstract trait `Self` (self is param 0), and
+  `Self.Assoc` in a trait signature stays abstract (a `ty_assoc` projection —
+  `TYNODE_ASSOC` special-cases a `TY_TRAIT` base). `tc_check_impl_conformance`
+  then checks each trait impl: all associated types and all required methods
+  present (methods with a default body may be omitted), and each method's
+  signature matches after `trait_project` rewrites the trait signature into the
+  impl's terms (`Self` → impl self type, `Self.Assoc` → the impl's concrete
+  bound) and compares with `types_equal`. Design: `architecture.md` sema
+  pass 3. Deliberately checker-only: default method *bodies* aren't checked,
+  *calling* a defaulted-but-omitted method isn't dispatched yet, and extra
+  inherent methods in a trait impl are tolerated — all noted as gaps.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
 milestone (~900 lines).
 
-1. **Trait completion** (~0.75×): resolve trait-item signatures, impl
-   conformance checking, default methods, calls through bounds
-   (`T: Drawable` → `t.draw()`); then inline bounds `<T: Display>` and
-   `where` enforcement (~0.5×). Unlocks `Try`-trait `?` and `as` coercions.
+1. **Trait completion, part 2** (~0.5×): default-method dispatch (call a
+   defaulted method an impl omitted — needs monomorphising the default body
+   against the concrete self), then calls through bounds (`T: Drawable` →
+   `t.draw()`), inline bounds `<T: Display>` and `where` enforcement. Unlocks
+   `Try`-trait `?` and `as` coercions.
 2. **Module system** (~0.5×): real file discovery, `mod_link_imports`
    (stubbed at `src/compiler.c` phase_register), cross-module visibility,
    cycle detection.

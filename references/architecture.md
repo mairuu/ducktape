@@ -54,9 +54,23 @@ Three passes over each module, mirroring compiler phases:
    order matters). Impls resolve self/trait heads, then associated types in a
    pre-pass, then method signatures; `impl_index_add` runs before item
    resolution so `Self.Assoc` is visible to the impl's own methods.
+   `resolve_trait_decl` resolves trait item signatures the same way, with
+   `Self` bound to the abstract trait type (`ty_trait`): each `TraitMethodDef`
+   gets a `method_type` (self, if present, is param 0 typed as the trait) and a
+   `has_default` flag; a `type Assoc;` becomes an `AssocTypeDef` with a NULL
+   type. `Self.Assoc` in a trait signature is left abstract — `TYNODE_ASSOC`
+   sees a `TY_TRAIT` base and yields a `ty_assoc` projection instead of going
+   through the impl index.
 3. **check** — `tc_check_module`: `resolve_expr`/`resolve_stmt` walk bodies.
    `CheckCtx` carries the current function, expected return type, loop depth,
-   scopes, and an `InferCtx`.
+   scopes, and an `InferCtx`. `tc_check_impl` first runs
+   `tc_check_impl_conformance` for trait impls: every trait associated type and
+   every required method must be present (defaulted methods may be omitted),
+   and each method's signature must match. Matching rewrites the trait
+   signature into the impl's terms via `trait_project` (abstract `Self` →
+   impl self type, `Self.Assoc` → the impl's concrete bound) and compares with
+   `types_equal`. Default method *bodies* are not yet checked; extra inherent
+   methods in a trait impl are tolerated.
 
 ### Types and inference
 

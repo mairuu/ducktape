@@ -1,0 +1,13 @@
+#! expect: is missing method 'area'
+struct Circle {
+    radius: Int,
+}
+
+trait Shape {
+    fun area(self) -> Int;
+}
+
+impl Shape for Circle {
+}
+
+fun main() {}

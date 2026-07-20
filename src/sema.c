@@ -1044,10 +1044,100 @@ static void resolve_trait_decl(ResolveCtx *rctx, Decl *decl) {
   Type *trait_ty = ty_trait(trait_def, rctx->al);
   trait_def->self_type = trait_ty;
 
+  // define the trait name up front so its own item signatures (and, in source
+  // order, later impls) can reference it.
   TypeEntry *te = NULL;
   tscope_define(rctx->tyres.tscope, trait_def->name, trait_ty, rctx->diags,
                 decl->span, &te);
   te->as.trait_def = trait_def;
+
+  // count items by kind and allocate the def tables.
+  for (int i = 0; i < trait_decl->item_count; i++) {
+    if (trait_decl->items[i].kind == TRAIT_ITEM_METHOD) {
+      trait_def->method_count++;
+    } else {
+      trait_def->assoc_type_count++;
+    }
+  }
+  trait_def->methods =
+      al_alloc_zero(rctx->al, sizeof(TraitMethodDef) * trait_def->method_count);
+  trait_def->assoc_types = al_alloc_zero(
+      rctx->al, sizeof(AssocTypeDef) * trait_def->assoc_type_count);
+
+  // begin; trait level type scope
+  rctx->tyres.tscope = tscope_push(rctx->tyres.tscope, rctx->al);
+
+  // `Self` inside the trait is the abstract trait type; `Self.Assoc`
+  // projections stay abstract until an impl binds them (see TYNODE_ASSOC).
+  tscope_define(rctx->tyres.tscope, sv_from_cstr("Self"), trait_ty, rctx->diags,
+                decl->span, NULL);
+
+  // record associated-type names first so method signatures can project
+  // `Self.Assoc`. The concrete type is supplied per-impl, so it stays NULL.
+  for (int i = 0, assoc_idx = 0; i < trait_decl->item_count; i++) {
+    TraitItemNode *item = &trait_decl->items[i];
+    if (item->kind != TRAIT_ITEM_ASSOC_TYPE) {
+      continue;
+    }
+    trait_def->assoc_types[assoc_idx].name = item->name;
+    trait_def->assoc_types[assoc_idx].type = NULL;
+    assoc_idx++;
+  }
+
+  // resolve method signatures (bodies of default methods are not checked yet).
+  for (int i = 0, method_idx = 0; i < trait_decl->item_count; i++) {
+    TraitItemNode *item = &trait_decl->items[i];
+    if (item->kind != TRAIT_ITEM_METHOD) {
+      continue;
+    }
+    TraitMethodDef *method_def = &trait_def->methods[method_idx++];
+    method_def->name = item->name;
+    method_def->has_default = item->default_body != NULL;
+    method_def->default_impl = NULL; // default bodies compiled/checked later
+
+    // method type parameters
+    method_def->type_param_count = item->type_param_count;
+    method_def->type_params =
+        al_alloc_zero(rctx->al, sizeof(Type *) * item->type_param_count);
+    for (int j = 0; j < item->type_param_count; j++) {
+      if (item->type_params[j].inline_bound.refs != NULL) {
+        diag_error(rctx->diags, item->type_params[j].span,
+                   "inline bounds on method type parameters are not supported");
+      }
+      method_def->type_params[j] =
+          ty_generic(item->type_params[j].name, NULL, 0, rctx->al);
+    }
+
+    // begin; method level type scope
+    rctx->tyres.tscope = tscope_push(rctx->tyres.tscope, rctx->al);
+    for (int j = 0; j < item->type_param_count; j++) {
+      tscope_define(rctx->tyres.tscope, item->type_params[j].name,
+                    method_def->type_params[j], rctx->diags,
+                    item->type_params[j].span, NULL);
+    }
+
+    // resolve parameters (self resolves to the abstract trait type) and return.
+    TypeScratch param_types;
+    ts_init(&param_types, item->param_count, rctx->al);
+    for (int j = 0; j < item->param_count; j++) {
+      param_types.ptr[j] =
+          item->params[j].is_self
+              ? trait_ty
+              : rctx_resolve(rctx, item->params[j].type_annotation);
+    }
+    Type *return_type = item->return_type
+                            ? rctx_resolve(rctx, item->return_type)
+                            : rctx->tc->t_unit;
+
+    // end; method level type scope
+    rctx->tyres.tscope = tscope_pop(rctx->tyres.tscope);
+
+    method_def->method_type =
+        ty_fun(param_types.ptr, param_types.count, return_type, rctx->al);
+  }
+
+  // end; trait level type scope
+  rctx->tyres.tscope = tscope_pop(rctx->tyres.tscope);
 }
 
 static void resolve_decl(ResolveCtx *rctx, Decl *decl) {
@@ -2618,9 +2708,8 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     for (int i = 0; i < init->field_count; i++) {
       FieldInit *field_init = &init->fields[i];
 
-      FieldDef *field_def =
-          find_variant_field(variant_def, field_init->ident, ctx->diags,
-                             expr->span);
+      FieldDef *field_def = find_variant_field(variant_def, field_init->ident,
+                                               ctx->diags, expr->span);
       if (!field_def) {
         had_error = true;
         continue;
@@ -3120,10 +3209,138 @@ static void tc_check_fun(TypeChecker *tc, Decl *decl) {
   infer_finalize(&cctx.infer, cctx.diags);
 }
 
+// Rewrite a trait method's signature type into the terms of a concrete impl:
+// the abstract `Self` (the trait type) becomes the impl's self type, and each
+// `Self.Assoc` projection becomes the concrete type the impl bound to it. Used
+// to compare a trait's required signature against what an impl actually wrote.
+static Type *trait_project(Type *t, TraitDef *trait, Type *self_to,
+                           ImplDef *impl, Allocator *al) {
+  switch (t->kind) {
+  case TY_TRAIT:
+    return t->as.trait.def == trait ? self_to : t;
+  case TY_ASSOC:
+    if (t->as.assoc.base->kind == TY_TRAIT &&
+        t->as.assoc.base->as.trait.def == trait) {
+      for (int i = 0; i < impl->assoc_type_count; i++) {
+        if (sv_equal(impl->assoc_types[i].name, t->as.assoc.assoc_name)) {
+          return impl->assoc_types[i].type;
+        }
+      }
+    }
+    return t;
+  case TY_FUNCTION: {
+    TypeScratch params;
+    ts_init(&params, t->as.fun.param_count, al);
+    for (int i = 0; i < t->as.fun.param_count; i++) {
+      params.ptr[i] =
+          trait_project(t->as.fun.param_types[i], trait, self_to, impl, al);
+    }
+    Type *ret = trait_project(t->as.fun.return_type, trait, self_to, impl, al);
+    return ty_fun(params.ptr, params.count, ret, al);
+  }
+  case TY_TUPLE: {
+    TypeScratch elems;
+    ts_init(&elems, t->as.tuple.elem_count, al);
+    for (int i = 0; i < t->as.tuple.elem_count; i++) {
+      elems.ptr[i] =
+          trait_project(t->as.tuple.elem_types[i], trait, self_to, impl, al);
+    }
+    return ty_tuple(elems.ptr, elems.count, al);
+  }
+  case TY_ARRAY:
+    return ty_array(
+        trait_project(t->as.array.elem_type, trait, self_to, impl, al), al);
+  case TY_STRUCT: {
+    TypeScratch args;
+    ts_init(&args, t->as.struc.type_arg_count, al);
+    for (int i = 0; i < t->as.struc.type_arg_count; i++) {
+      args.ptr[i] =
+          trait_project(t->as.struc.type_args[i], trait, self_to, impl, al);
+    }
+    return ty_struct(t->as.struc.def, args.ptr, args.count, al);
+  }
+  case TY_ENUM: {
+    TypeScratch args;
+    ts_init(&args, t->as.enm.type_arg_count, al);
+    for (int i = 0; i < t->as.enm.type_arg_count; i++) {
+      args.ptr[i] =
+          trait_project(t->as.enm.type_args[i], trait, self_to, impl, al);
+    }
+    return ty_enum(t->as.enm.def, args.ptr, args.count, al);
+  }
+  default:
+    return t;
+  }
+}
+
+// Verify a `impl Trait for T` provides everything the trait requires: each
+// associated type, and each required method with a matching signature. Methods
+// with a default body may be omitted. Extra (inherent) methods are tolerated.
+static void tc_check_impl_conformance(TypeChecker *tc, Decl *decl,
+                                      ImplDef *impl_def) {
+  if (impl_def->trait_type == NULL || impl_def->trait_type->kind != TY_TRAIT) {
+    return; // inherent impl, or a poisoned trait head already diagnosed
+  }
+  TraitDef *trait = impl_def->trait_type->as.trait.def;
+
+  for (int i = 0; i < trait->assoc_type_count; i++) {
+    StringView name = trait->assoc_types[i].name;
+    bool found = false;
+    for (int j = 0; j < impl_def->assoc_type_count; j++) {
+      if (sv_equal(impl_def->assoc_types[j].name, name)) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      diag_error(tc->diags, decl->span,
+                 "impl of trait '" SV_FMT
+                 "' is missing associated type '" SV_FMT "'",
+                 SV_ARG(trait->name), SV_ARG(name));
+    }
+  }
+
+  for (int i = 0; i < trait->method_count; i++) {
+    TraitMethodDef *tm = &trait->methods[i];
+    MethodDef *impl_method = NULL;
+    for (int j = 0; j < impl_def->method_count; j++) {
+      if (sv_equal(impl_def->methods[j].name, tm->name)) {
+        impl_method = &impl_def->methods[j];
+        break;
+      }
+    }
+
+    if (impl_method == NULL) {
+      if (!tm->has_default) {
+        diag_error(tc->diags, decl->span,
+                   "impl of trait '" SV_FMT "' is missing method '" SV_FMT "'",
+                   SV_ARG(trait->name), SV_ARG(tm->name));
+      }
+      continue;
+    }
+
+    Type *expected = trait_project(tm->method_type, trait, impl_def->self_type,
+                                   impl_def, tc->al);
+    Type *actual = impl_method->fun->fun_type;
+    if (!type_is_poison(expected) && !type_is_poison(actual) &&
+        !types_equal(expected, actual)) {
+      char want[64], got[64];
+      type_sprintf(expected, want, sizeof(want));
+      type_sprintf(actual, got, sizeof(got));
+      diag_error(tc->diags, decl->span,
+                 "method '" SV_FMT "' does not match trait '" SV_FMT
+                 "': expected '%s', found '%s'",
+                 SV_ARG(tm->name), SV_ARG(trait->name), want, got);
+    }
+  }
+}
+
 static void tc_check_impl(TypeChecker *tc, Decl *decl) {
   assert(decl->kind == DECL_IMPL && "expected impl decl");
   DeclImpl *impl_decl = &decl->as.impl_decl;
   ImplDef *impl_def = impl_decl->def;
+
+  tc_check_impl_conformance(tc, decl, impl_def);
 
   CheckCtx cctx;
   cctx_init(&cctx, tc, impl_def->module, tc->diags, tc->al);
@@ -3487,6 +3704,29 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
       diag_error(
           r->diags, node->span,
           "associated types on generic type parameters are not yet supported");
+      result = r->tc->t_poison;
+      break;
+    }
+
+    // `Self.Assoc` inside a trait declaration: the base is the trait's own
+    // abstract self type, so the projection stays abstract (a TY_ASSOC) until
+    // an impl binds it. Only names the trait actually declares are valid.
+    if (base->kind == TY_TRAIT) {
+      TraitDef *trait_def = base->as.trait.def;
+      for (int i = 0; i < trait_def->assoc_type_count; i++) {
+        if (sv_equal(trait_def->assoc_types[i].name, assoc->assoc_name)) {
+          result = ty_assoc(base, assoc->assoc_name, trait_def, r->al);
+          break;
+        }
+      }
+      if (result != NULL) {
+        break;
+      }
+      char buf[64];
+      type_sprintf(base, buf, sizeof(buf));
+      diag_error(r->diags, node->span,
+                 "type '%s' has no associated type '" SV_FMT "'", buf,
+                 SV_ARG(assoc->assoc_name));
       result = r->tc->t_poison;
       break;
     }

@@ -11,7 +11,7 @@ impl Point {
 }
 
 trait Done {
-    fun do();
+    fun do(self);
 }
 
 impl Done for Point {

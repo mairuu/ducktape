@@ -23,10 +23,10 @@ struct Unit;                         # unit struct
 
 enum Result<T, E> { Ok(T), Err(E), }
 
-trait Drawable {                     # traits register + name-resolve only;
-    type Color;                      # items are not checked yet
-    fun draw(self) -> Self.Color;
-    fun visible(self) -> Bool { return true; }
+trait Drawable {                     # item signatures are resolved & checked
+    type Color;                      # against impls (conformance)
+    fun draw(self) -> Self.Color;    # `Self.Color` = abstract projection
+    fun visible(self) -> Bool { return true; }  # default; impls may omit it
 }
 
 impl Drawable for Point<Int> { ... } # trait impl
@@ -125,8 +125,10 @@ Registered in every module; the only builtin so far.
 
 | Gap | Behavior today |
 |---|---|
-| trait-item checking / conformance | trait bodies ignored; impls unchecked against their trait |
-| trait method calls via bounds, default methods | method must come from an impl |
+| calling a *defaulted* trait method | conformance lets an impl omit it, but the checker/VM can't yet dispatch a call to the trait's default body — the method must come from an impl to be callable |
+| trait method calls via bounds `T: Drawable` → `t.draw()` | a call still resolves through a concrete impl, not a bound |
+| default method *bodies* | recognized (satisfy conformance) but not type-checked |
+| extra (non-trait) methods in a trait impl | tolerated as inherent methods (Rust rejects them) |
 | inline bounds `<T: Display>` | parse + "not supported" error; `where` clauses parse, bounds unenforced |
 | modules / imports | `use` is a no-op; single file only |
 | top-level `var` | parses, then aborts registration |

@@ -1,0 +1,17 @@
+#! expect: is missing associated type 'Unit'
+struct Circle {
+    radius: Int,
+}
+
+trait Shape {
+    type Unit;
+    fun area(self) -> Int;
+}
+
+impl Shape for Circle {
+    fun area(self) -> Int {
+        self.radius
+    }
+}
+
+fun main() {}

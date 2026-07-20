@@ -1,0 +1,35 @@
+# trait item signatures + impl conformance: an impl must supply every
+# associated type and every required method with a matching signature; methods
+# with a default body may be omitted.
+struct Circle {
+    radius: Int,
+}
+
+trait Shape {
+    type Unit;
+
+    fun area(self) -> Int;
+    fun scaled(self, factor: Int) -> Self.Unit;
+
+    # default method — impls may omit it
+    fun describe(self) -> Bool {
+        return true;
+    }
+}
+
+impl Shape for Circle {
+    type Unit = Int;
+
+    fun area(self) -> Int {
+        self.radius * self.radius * 3
+    }
+
+    fun scaled(self, factor: Int) -> Self.Unit {
+        self.radius * factor
+    }
+}
+
+fun main() {
+    var c = Circle { radius: 2 };
+    var a = c.area();
+}

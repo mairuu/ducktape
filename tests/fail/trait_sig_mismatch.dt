@@ -1,0 +1,17 @@
+#! expect: does not match trait 'Shape'
+struct Circle {
+    radius: Int,
+}
+
+trait Shape {
+    fun area(self) -> Int;
+}
+
+# wrong return type: trait requires Int, impl returns Bool
+impl Shape for Circle {
+    fun area(self) -> Bool {
+        true
+    }
+}
+
+fun main() {}
