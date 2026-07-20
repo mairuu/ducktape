@@ -1,0 +1,17 @@
+# tuples: construction, field access (.0, .1, ...), printing, structural ==
+#> (1, two, 3.5)
+#> 1
+#> two
+#> 3.5
+#> true
+#> false
+fun main() {
+    var t = (1, "two", 3.5);
+    print(t);
+    print(t.0);
+    print(t.1);
+    print(t.2);
+
+    print(t == (1, "two", 3.5));
+    print(t == (1, "two", 4.0));
+}

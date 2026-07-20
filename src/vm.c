@@ -153,9 +153,16 @@ bool vm_run(Module *m, Heap *heap, FunDef *entry) {
     case OP_SET_LOCAL:
       frame->base[READ_BYTE()] = peek(&vm, 0);
       break;
-    case OP_GET_GLOBAL:
-      push(&vm, val_fun(vm.m->funs[READ_BYTE()]));
+    case OP_GET_GLOBAL: {
+      uint8_t slot = READ_BYTE();
+      // top-level funs occupy [0, fun_count); impl methods continue the same
+      // slot space right after, in [fun_count, fun_count + method_count).
+      FunDef *fun = slot < vm.m->fun_count
+                       ? vm.m->funs[slot]
+                       : vm.m->methods[slot - vm.m->fun_count];
+      push(&vm, val_fun(fun));
       break;
+    }
 
     case OP_ADD:
     case OP_SUB:
@@ -446,6 +453,75 @@ bool vm_run(Module *m, Heap *heap, FunDef *entry) {
     case OP_DUP:
       push(&vm, peek(&vm, READ_BYTE()));
       break;
+
+    case OP_TUPLE: {
+      uint8_t count = READ_BYTE();
+      Value *elems = vm.sp - count; // still-live roots until copied
+      ObjTuple *tup = heap_tuple(vm.heap, count);
+      for (int i = 0; i < count; i++) {
+        tup->items[i] = elems[i];
+      }
+      vm.sp -= count;
+      push(&vm, val_obj(&tup->obj));
+      break;
+    }
+
+    case OP_STRUCT: {
+      StructDef *def = vm.m->structs[READ_BYTE()];
+      Value *elems = vm.sp - def->field_count; // still-live roots
+      ObjStruct *s = heap_struct(vm.heap, def);
+      for (int i = 0; i < def->field_count; i++) {
+        s->fields[i] = elems[i];
+      }
+      vm.sp -= def->field_count;
+      push(&vm, val_obj(&s->obj));
+      break;
+    }
+
+    case OP_ENUM: {
+      uint8_t enum_slot = READ_BYTE();
+      uint8_t tag = READ_BYTE();
+      VariantDef *variant = &vm.m->enums[enum_slot]->variants[tag];
+      Value *elems = vm.sp - variant->field_count; // still-live roots
+      ObjEnum *e = heap_enum(vm.heap, variant);
+      for (int i = 0; i < variant->field_count; i++) {
+        e->fields[i] = elems[i];
+      }
+      vm.sp -= variant->field_count;
+      push(&vm, val_obj(&e->obj));
+      break;
+    }
+
+    case OP_FIELD_GET: {
+      uint8_t idx = READ_BYTE();
+      Value v = pop(&vm);
+      Value *fields;
+      switch (v.as.obj->kind) {
+      case OBJ_TUPLE:
+        fields = val_as_tuple(v)->items;
+        break;
+      case OBJ_STRUCT:
+        fields = val_as_struct(v)->fields;
+        break;
+      case OBJ_ENUM:
+        fields = val_as_enum(v)->fields;
+        break;
+      default:
+        assert(false && "OP_FIELD_GET on a non-aggregate value");
+        fields = NULL;
+      }
+      push(&vm, fields[idx]);
+      break;
+    }
+
+    case OP_TAG:
+      push(&vm, val_int(val_as_enum(pop(&vm))->variant->tag));
+      break;
+
+    case OP_MATCH_FAIL:
+      // the checker doesn't enforce match exhaustiveness yet, so this is a
+      // real, reachable failure mode rather than a should-never-happen case.
+      VM_RETURN(runtime_error(&vm, "no match arm matched"));
 
     default:
       VM_RETURN(runtime_error(&vm, "unknown opcode %d", (int)op));

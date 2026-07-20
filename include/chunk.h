@@ -57,6 +57,17 @@ typedef enum {
   OP_INTERP,    // u8 seg count — pop count values, stringify + concat,
                 // push the resulting string
   OP_DUP,       // u8 depth — push a copy of the value `depth` below the top
+
+  OP_TUPLE,      // u8 count — pop count elems (left-to-right), push a tuple
+  OP_STRUCT,     // u8 module struct slot — pop that struct's field_count
+                 // elems (declaration order), push a struct instance
+  OP_ENUM,       // u8 module enum slot, u8 variant tag — pop that variant's
+                 // field_count elems (declaration order), push an instance
+  OP_FIELD_GET,  // u8 index — pops a tuple/struct/enum instance, pushes its
+                 // index-th field (no bounds check: indices are static)
+  OP_TAG,        // pops an enum instance, pushes its variant tag as Int
+  OP_MATCH_FAIL, // no arm matched a subject not statically proven exhaustive
+                 // (checker doesn't enforce exhaustiveness yet); runtime error
 } OpCode;
 
 typedef struct Chunk {

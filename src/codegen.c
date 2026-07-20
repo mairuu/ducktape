@@ -43,6 +43,8 @@ typedef struct {
 
   CgLoop *loop;
   bool ok;
+
+  int self_slot; // -1 outside a method; the frame slot holding `self`
 } Cg;
 
 static void cg_error(Cg *cg, Span span, const char *what) {
@@ -139,6 +141,43 @@ static FunDef *cg_find_module_fun(Cg *cg, StringView name) {
       return cg->m->funs[i];
     }
   }
+  return NULL;
+}
+
+// ── struct/enum field lookups ────────────────────────────────────────────────
+//
+// the checker validates field names/arity/types but doesn't reorder a
+// struct/variant initializer's fields to declaration order, and pattern
+// fields cache the target StructDef/VariantDef but not a per-field slot
+// index — codegen derives both directly from the (small, fixed) FieldDef
+// arrays already on the def.
+
+// position of `ident` within `fields` (declaration order == runtime slot).
+static int find_field_index(FieldDef *fields, int count, bool is_tuple,
+                            FieldIdent ident) {
+  if (is_tuple) {
+    return ident.index;
+  }
+  for (int i = 0; i < count; i++) {
+    if (sv_equal(fields[i].ident.name, ident.name)) {
+      return i;
+    }
+  }
+  assert(false && "unknown field name got past the checker");
+  return -1;
+}
+
+// the initializer entry supplying `target`, regardless of source order.
+static FieldInit *find_field_init(FieldInit *fields, int count, bool is_tuple,
+                                  FieldIdent target) {
+  for (int i = 0; i < count; i++) {
+    bool match = is_tuple ? fields[i].ident.index == target.index
+                          : sv_equal(fields[i].ident.name, target.name);
+    if (match) {
+      return &fields[i];
+    }
+  }
+  assert(false && "field arity/name mismatch got past the checker");
   return NULL;
 }
 
@@ -588,6 +627,324 @@ static void compile_call(Cg *cg, Expr *expr) {
   emit2(cg, OP_CALL, (uint8_t)call->arg_count);
 }
 
+// `obj.method(args)`: the checker elides `self` from `mc->args` (it's
+// `mc->object` instead), matching it against whichever param position in
+// `fun->params` actually has `is_self` set (checked generically, not
+// assumed to be 0 — see resolve_method_call_expr) — so codegen interleaves
+// `mc->object` back in at that same position when pushing arguments.
+static void compile_method_call(Cg *cg, Expr *expr) {
+  ExprMethodCall *mc = &expr->as.method_call;
+  FunDef *fun = mc->resolved_method->fun;
+
+  emit2(cg, OP_GET_GLOBAL, (uint8_t)fun->slot);
+  int k = 0;
+  for (int i = 0; i < fun->param_count; i++) {
+    if (fun->params[i].is_self) {
+      compile_expr(cg, mc->object);
+    } else {
+      compile_expr(cg, mc->args[k++]);
+    }
+  }
+  emit2(cg, OP_CALL, (uint8_t)fun->param_count);
+}
+
+// `expr?`: Ok/Err are single-field tuple variants of the same enum as the
+// enclosing function's return type (enforced by the checker), so an `Err`
+// value propagates unchanged — no reconstruction, since generic type
+// arguments are erased at runtime and the payload doesn't move.
+static void compile_propagate(Cg *cg, Expr *expr) {
+  ExprPropagate *prop = &expr->as.propagate;
+
+  compile_expr(cg, prop->operand); // [instance]
+  emit2(cg, OP_DUP, 0);            // [instance, instance]
+  emit(cg, OP_TAG);                // [instance, tag]
+  emit_const(cg, val_int(prop->ok_variant->tag));
+  emit(cg, OP_EQ); // [instance, is_ok]
+
+  int err_jump = emit_jump(cg, OP_JUMP_IF_FALSE);
+  emit(cg, OP_POP);               // is_ok was true
+  emit2(cg, OP_FIELD_GET, 0);     // [payload]
+  int end_jump = emit_jump(cg, OP_JUMP);
+
+  patch_jump(cg, err_jump);
+  emit(cg, OP_POP); // is_ok was false; [instance]
+  emit(cg, OP_RETURN); // propagate Err(e) to the caller unchanged
+
+  patch_jump(cg, end_jump);
+}
+
+// compiles field values in *declaration* order (matching the runtime
+// instance layout), not the initializer's source order.
+static void compile_struct_init(Cg *cg, Expr *expr) {
+  ExprStructInit *init = &expr->as.struct_init;
+  StructDef *def = init->resolved_struct->as.struc.def;
+
+  for (int i = 0; i < def->field_count; i++) {
+    FieldInit *fi = find_field_init(init->fields, init->field_count,
+                                    def->is_tuple, def->fields[i].ident);
+    compile_expr(cg, fi->value);
+  }
+  emit2(cg, OP_STRUCT, (uint8_t)def->slot);
+}
+
+static void compile_variant_init(Cg *cg, Expr *expr) {
+  ExprVariant *init = &expr->as.variant;
+  EnumDef *enum_def = init->resolved_enum->as.enm.def;
+  VariantDef *variant = init->resolved_variant;
+
+  for (int i = 0; i < variant->field_count; i++) {
+    FieldInit *fi =
+        find_field_init(init->fields, init->field_count, variant->is_tuple,
+                        variant->fields[i].ident);
+    compile_expr(cg, fi->value);
+  }
+  emit(cg, OP_ENUM);
+  emit(cg, (uint8_t)enum_def->slot);
+  emit(cg, (uint8_t)variant->tag);
+}
+
+// ── pattern matching ─────────────────────────────────────────────────────────
+//
+// a match subject is stored once in a hidden local; a pattern's "location"
+// relative to that local is a chain of field indices (an Accessor). Each arm
+// compiles in two passes over its pattern: `compile_pattern_test` emits the
+// runtime checks (literal equality, enum tag), short-circuiting to the next
+// arm on failure via `fails`; `compile_pattern_bind` (run only once the test
+// passes) declares a local for every name the pattern binds. Splitting the
+// passes avoids threading partial-bind cleanup through the test logic — on
+// failure nothing has been bound yet, so falling through to the next arm
+// never needs to unwind anything.
+
+#define CG_MAX_ACCESSOR_DEPTH 8
+#define CG_MAX_MATCH_JUMPS 64
+
+typedef struct {
+  int base_slot;
+  uint8_t path[CG_MAX_ACCESSOR_DEPTH];
+  int path_len;
+} Accessor;
+
+typedef struct {
+  int ips[CG_MAX_MATCH_JUMPS];
+  int count;
+} JumpList;
+
+static void jump_list_push(Cg *cg, JumpList *list, Span span, int ip) {
+  if (list->count >= CG_MAX_MATCH_JUMPS) {
+    diag_error(cg->diags, span, "match arm has too many pattern tests");
+    cg->ok = false;
+    return;
+  }
+  list->ips[list->count++] = ip;
+}
+
+static void jump_list_patch(Cg *cg, JumpList *list) {
+  for (int i = 0; i < list->count; i++) {
+    patch_jump(cg, list->ips[i]);
+  }
+}
+
+// pushes the value at `acc`'s location: the subject local, then one
+// OP_FIELD_GET per accessor path segment.
+static void emit_accessor(Cg *cg, const Accessor *acc) {
+  emit2(cg, OP_GET_LOCAL, (uint8_t)acc->base_slot);
+  for (int i = 0; i < acc->path_len; i++) {
+    emit2(cg, OP_FIELD_GET, acc->path[i]);
+  }
+}
+
+static Accessor accessor_field(Cg *cg, Accessor acc, Span span, int idx) {
+  if (acc.path_len >= CG_MAX_ACCESSOR_DEPTH) {
+    diag_error(cg->diags, span, "pattern is nested too deeply");
+    cg->ok = false;
+    return acc;
+  }
+  acc.path[acc.path_len++] = (uint8_t)idx;
+  return acc;
+}
+
+static void compile_pattern_test(Cg *cg, Pattern *pat, Accessor acc,
+                                 JumpList *fails) {
+  switch (pat->kind) {
+  case PAT_WILDCARD:
+  case PAT_BIND:
+    break; // always matches; nothing to test
+
+  case PAT_LITERAL:
+    emit_accessor(cg, &acc);
+    compile_expr(cg, pat->as.literal_expr);
+    emit(cg, OP_EQ);
+    jump_list_push(cg, fails, pat->span, emit_jump(cg, OP_JUMP_IF_FALSE));
+    emit(cg, OP_POP);
+    break;
+
+  case PAT_TUPLE:
+    for (int i = 0; i < pat->as.tuple.count; i++) {
+      compile_pattern_test(cg, pat->as.tuple.elems[i],
+                           accessor_field(cg, acc, pat->span, i), fails);
+    }
+    break;
+
+  case PAT_STRUCT: {
+    StructDef *def = pat->as.struc.resolved_struct;
+    for (int i = 0; i < pat->as.struc.field_count; i++) {
+      FieldPat *fp = &pat->as.struc.fields[i];
+      if (fp->sub_pattern == NULL) {
+        continue; // shorthand bind: always matches
+      }
+      int idx =
+          find_field_index(def->fields, def->field_count, def->is_tuple,
+                           fp->ident);
+      compile_pattern_test(cg, fp->sub_pattern,
+                           accessor_field(cg, acc, fp->span, idx), fails);
+    }
+    break;
+  }
+
+  case PAT_VARIANT: {
+    VariantDef *variant = pat->as.variant.resolved_variant;
+
+    emit_accessor(cg, &acc);
+    emit(cg, OP_TAG);
+    emit_const(cg, val_int(variant->tag));
+    emit(cg, OP_EQ);
+    jump_list_push(cg, fails, pat->span, emit_jump(cg, OP_JUMP_IF_FALSE));
+    emit(cg, OP_POP);
+
+    for (int i = 0; i < pat->as.variant.field_count; i++) {
+      FieldPat *fp = &pat->as.variant.fields[i];
+      if (fp->sub_pattern == NULL) {
+        continue;
+      }
+      int idx = find_field_index(variant->fields, variant->field_count,
+                                 variant->is_tuple, fp->ident);
+      compile_pattern_test(cg, fp->sub_pattern,
+                           accessor_field(cg, acc, fp->span, idx), fails);
+    }
+    break;
+  }
+  }
+}
+
+// declares a local for every name the pattern binds; only reached once
+// `compile_pattern_test` has already succeeded.
+static void compile_pattern_bind(Cg *cg, Pattern *pat, Accessor acc) {
+  switch (pat->kind) {
+  case PAT_WILDCARD:
+  case PAT_LITERAL:
+    break;
+
+  case PAT_BIND:
+    emit_accessor(cg, &acc);
+    cg_add_local(cg, pat->as.bind.name, pat->span);
+    break;
+
+  case PAT_TUPLE:
+    for (int i = 0; i < pat->as.tuple.count; i++) {
+      compile_pattern_bind(cg, pat->as.tuple.elems[i],
+                           accessor_field(cg, acc, pat->span, i));
+    }
+    break;
+
+  case PAT_STRUCT: {
+    StructDef *def = pat->as.struc.resolved_struct;
+    for (int i = 0; i < pat->as.struc.field_count; i++) {
+      FieldPat *fp = &pat->as.struc.fields[i];
+      int idx =
+          find_field_index(def->fields, def->field_count, def->is_tuple,
+                           fp->ident);
+      Accessor field_acc = accessor_field(cg, acc, fp->span, idx);
+      if (fp->sub_pattern != NULL) {
+        compile_pattern_bind(cg, fp->sub_pattern, field_acc);
+      } else {
+        emit_accessor(cg, &field_acc);
+        cg_add_local(cg, fp->ident.name, fp->span);
+      }
+    }
+    break;
+  }
+
+  case PAT_VARIANT: {
+    VariantDef *variant = pat->as.variant.resolved_variant;
+    for (int i = 0; i < pat->as.variant.field_count; i++) {
+      FieldPat *fp = &pat->as.variant.fields[i];
+      int idx = find_field_index(variant->fields, variant->field_count,
+                                 variant->is_tuple, fp->ident);
+      Accessor field_acc = accessor_field(cg, acc, fp->span, idx);
+      if (fp->sub_pattern != NULL) {
+        compile_pattern_bind(cg, fp->sub_pattern, field_acc);
+      } else {
+        emit_accessor(cg, &field_acc);
+        cg_add_local(cg, fp->ident.name, fp->span);
+      }
+    }
+    break;
+  }
+  }
+}
+
+// each arm: test the pattern (jumping to the next arm on failure), bind its
+// names, run the (optional) guard — false unwinds the binds and falls
+// through to the next arm same as a failed test — then the body, sliding
+// the arm's locals out from under the result before jumping to the end.
+// falling past every arm is a runtime error: the checker doesn't enforce
+// match exhaustiveness yet, so this can actually happen.
+static void compile_match(Cg *cg, Expr *expr) {
+  ExprMatch *match = &expr->as.match;
+  int saved_locals_outer = cg->local_count;
+
+  compile_expr(cg, match->subject);
+  int subject_slot = cg_add_local(cg, (StringView){0}, expr->span);
+  int saved_locals = cg->local_count;
+  Accessor subject_acc = {.base_slot = subject_slot};
+
+  JumpList end_jumps = {0};
+
+  for (int i = 0; i < match->arm_count; i++) {
+    MatchArm *arm = &match->arms[i];
+    // `fail_jumps` (a failed literal/tag test) land with their own test's
+    // bool still on the stack — OP_JUMP_IF_FALSE never pops it, only the
+    // fallthrough side does — so they route through one shared OP_POP below
+    // before falling into `next_arm_jumps`, whose sources (a failed guard)
+    // already popped everything themselves and jump straight there.
+    JumpList fail_jumps = {0};
+    JumpList next_arm_jumps = {0};
+
+    compile_pattern_test(cg, arm->pattern, subject_acc, &fail_jumps);
+    compile_pattern_bind(cg, arm->pattern, subject_acc);
+
+    if (arm->guard != NULL) {
+      compile_expr(cg, arm->guard);
+      int guard_fail_jump = emit_jump(cg, OP_JUMP_IF_FALSE);
+      emit(cg, OP_POP);
+
+      compile_expr(cg, arm->body);
+      emit_slide(cg, cg->local_count - saved_locals);
+      jump_list_push(cg, &end_jumps, arm->span, emit_jump(cg, OP_JUMP));
+
+      patch_jump(cg, guard_fail_jump);
+      emit(cg, OP_POP);
+      emit2(cg, OP_POPN, (uint8_t)(cg->local_count - saved_locals));
+      jump_list_push(cg, &next_arm_jumps, arm->span, emit_jump(cg, OP_JUMP));
+    } else {
+      compile_expr(cg, arm->body);
+      emit_slide(cg, cg->local_count - saved_locals);
+      jump_list_push(cg, &end_jumps, arm->span, emit_jump(cg, OP_JUMP));
+    }
+
+    jump_list_patch(cg, &fail_jumps);
+    emit(cg, OP_POP); // the one outstanding false from whichever test failed
+    jump_list_patch(cg, &next_arm_jumps);
+    cg->local_count = saved_locals;
+  }
+
+  emit(cg, OP_MATCH_FAIL);
+
+  jump_list_patch(cg, &end_jumps);
+  emit_slide(cg, 1); // drop the hidden subject local, keep the arm result
+  cg->local_count = saved_locals_outer;
+}
+
 static void compile_expr(Cg *cg, Expr *expr) {
   switch (expr->kind) {
   case EXPR_INT:
@@ -637,11 +994,61 @@ static void compile_expr(Cg *cg, Expr *expr) {
     break;
   }
 
+  case EXPR_TUPLE: {
+    ExprTuple *tuple = &expr->as.tuple;
+    for (int i = 0; i < tuple->count; i++) {
+      compile_expr(cg, tuple->elems[i]);
+    }
+    emit2(cg, OP_TUPLE, (uint8_t)tuple->count);
+    break;
+  }
+
+  case EXPR_STRUCT_INIT:
+    compile_struct_init(cg, expr);
+    break;
+
+  case EXPR_VARIANT:
+    compile_variant_init(cg, expr);
+    break;
+
+  case EXPR_FIELD: {
+    ExprField *field = &expr->as.field;
+    compile_expr(cg, field->object);
+    emit2(cg, OP_FIELD_GET, (uint8_t)field->resolved_index);
+    break;
+  }
+
+  case EXPR_METHOD_CALL:
+    compile_method_call(cg, expr);
+    break;
+
+  case EXPR_PROPAGATE:
+    compile_propagate(cg, expr);
+    break;
+
+  case EXPR_SELF:
+    assert(cg->self_slot >= 0 && "'self' outside a method got past the checker");
+    emit2(cg, OP_GET_LOCAL, (uint8_t)cg->self_slot);
+    break;
+
+  case EXPR_MATCH:
+    compile_match(cg, expr);
+    break;
+
   case EXPR_PATH: {
     Path *path = &expr->as.path_expr.path;
     if (path->count != 1) {
-      cg_error(cg, expr->span, "this path expression");
-      emit(cg, OP_UNIT);
+      // a multi-segment path expression only ever names an associated
+      // function/method reached without dot syntax (e.g. `Point::new`,
+      // or `Shape::area(s)` supplying `self` explicitly) — the checker
+      // caches which FunDef that resolved to.
+      FunDef *fun = expr->as.path_expr.resolved_fun;
+      if (fun == NULL) {
+        cg_error(cg, expr->span, "this path expression");
+        emit(cg, OP_UNIT);
+        break;
+      }
+      emit2(cg, OP_GET_GLOBAL, (uint8_t)fun->slot);
       break;
     }
     StringView name = path->segments[0].name;
@@ -725,38 +1132,109 @@ static void compile_expr(Cg *cg, Expr *expr) {
 
 // ── entry ────────────────────────────────────────────────────────────────────
 
-static void compile_fun(Module *m, Heap *heap, Decl *decl, DiagBag *diags,
-                        Allocator *al, bool *ok) {
-  DeclFun *fun_decl = &decl->as.fun_decl;
-  FunDef *fun = fun_decl->def;
-
+// shared by top-level functions and impl methods: `fun` is the resolved
+// target (its `chunk` gets filled in), `body` and `span` come from whichever
+// Decl actually holds the AST (the top-level DeclFun, or an impl item's).
+static void compile_fun_body(Module *m, Heap *heap, FunDef *fun, Expr *body,
+                             Span span, DiagBag *diags, Allocator *al,
+                             bool *ok) {
   if (fun->type_param_count > 0) {
-    // generic functions need monomorphisation or boxed generics; neither
-    // exists yet
-    diag_error(diags, decl->span,
+    // generic functions/methods need monomorphisation or boxed generics;
+    // neither exists yet
+    diag_error(diags, span,
                "generic functions are not supported by the VM yet");
     *ok = false;
     return;
   }
 
-  Cg cg = {.m = m, .heap = heap, .diags = diags, .al = al, .ok = true};
+  Cg cg = {.m = m, .heap = heap, .diags = diags, .al = al, .ok = true,
+           .self_slot = -1};
   cg.chunk = al_alloc_zero_for(al, Chunk);
   chunk_init(cg.chunk, al);
 
   for (int i = 0; i < fun->param_count; i++) {
-    cg_add_local(&cg, fun->params[i].name, decl->span);
+    int slot = cg_add_local(&cg, fun->params[i].name, span);
+    if (fun->params[i].is_self) {
+      cg.self_slot = slot;
+    }
   }
 
-  compile_expr(&cg, fun_decl->body);
+  compile_expr(&cg, body);
   emit(&cg, OP_RETURN);
 
   fun->chunk = cg.chunk;
   *ok &= cg.ok;
 }
 
+static void compile_fun(Module *m, Heap *heap, Decl *decl, DiagBag *diags,
+                        Allocator *al, bool *ok) {
+  DeclFun *fun_decl = &decl->as.fun_decl;
+  compile_fun_body(m, heap, fun_decl->def, fun_decl->body, decl->span, diags,
+                   al, ok);
+}
+
+// impl methods aren't linked back to a FunDef the way top-level DeclFuns are
+// (`item->fun_decl->as.fun_decl.def` is never set — resolve_impl_decl builds
+// the FunDef straight into `ImplDef.methods[]` instead) — so the target
+// FunDef is threaded through explicitly, paired up by iterating in the same
+// order resolve_impl_decl used to fill `impl_def->methods[]` (method items,
+// skipping assoc-type items).
+static void compile_impl(Module *m, Heap *heap, Decl *decl, DiagBag *diags,
+                         Allocator *al, bool *ok) {
+  DeclImpl *impl_decl = &decl->as.impl_decl;
+  ImplDef *impl_def = impl_decl->def;
+
+  if (impl_def->type_param_count > 0) {
+    // a generic impl's methods reference the impl's own type params (in
+    // Self/param/return types); monomorphisation doesn't exist yet, same
+    // limitation as generic functions.
+    diag_error(diags, decl->span,
+               "methods of a generic impl are not supported by the VM yet");
+    *ok = false;
+    return;
+  }
+
+  for (int i = 0, method_idx = 0; i < impl_decl->item_count; i++) {
+    ImplItemNode *item = &impl_decl->items[i];
+    if (item->kind != IMPL_ITEM_METHOD) {
+      continue;
+    }
+    FunDef *fun = impl_def->methods[method_idx++].fun;
+    DeclFun *fun_decl = &item->fun_decl->as.fun_decl;
+    compile_fun_body(m, heap, fun, fun_decl->body, item->span, diags, al, ok);
+  }
+}
+
 bool codegen_module(Module *m, Heap *heap, DiagBag *diags, Allocator *al) {
   for (int i = 0; i < m->fun_count; i++) {
     m->funs[i]->slot = i;
+  }
+  for (int i = 0; i < m->struct_count; i++) {
+    m->structs[i]->slot = i;
+  }
+  for (int i = 0; i < m->enum_count; i++) {
+    m->enums[i]->slot = i;
+    for (int j = 0; j < m->enums[i]->variant_count; j++) {
+      m->enums[i]->variants[j].tag = (uint8_t)j;
+    }
+  }
+
+  // impl methods continue the funs' slot space so OP_GET_GLOBAL can address
+  // either with one operand byte (see vm.c).
+  int method_count = 0;
+  for (int i = 0; i < m->impl_count; i++) {
+    method_count += m->impls[i]->method_count;
+  }
+  m->methods = al_alloc_zero(al, sizeof(FunDef *) * (size_t)method_count);
+  m->method_count = method_count;
+  int slot = m->fun_count, method_slot = 0;
+  for (int i = 0; i < m->impl_count; i++) {
+    ImplDef *impl = m->impls[i];
+    for (int j = 0; j < impl->method_count; j++) {
+      FunDef *fun = impl->methods[j].fun;
+      fun->slot = slot++;
+      m->methods[method_slot++] = fun;
+    }
   }
 
   bool ok = true;
@@ -764,8 +1242,10 @@ bool codegen_module(Module *m, Heap *heap, DiagBag *diags, Allocator *al) {
     Decl *decl = m->ast->decls[i];
     if (decl->kind == DECL_FUN) {
       compile_fun(m, heap, decl, diags, al, &ok);
+    } else if (decl->kind == DECL_IMPL) {
+      compile_impl(m, heap, decl, diags, al, &ok);
     }
-    // impls/structs/enums/traits: nothing executable yet
+    // structs/enums/traits: nothing executable of their own
   }
   return ok;
 }

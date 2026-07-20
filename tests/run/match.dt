@@ -1,0 +1,83 @@
+# match compilation: literal/wildcard/bind patterns, struct/tuple/variant
+# patterns (with shorthand + renamed fields), nested patterns, guards.
+#> literal-one
+#> other-5
+#> struct x=1 y positive: 2
+#> struct fallback 9 -1
+#> tuple exact
+#> tuple bound 3 4
+#> nested x=3 y=4
+#> nested other 5 6
+#> Circle area
+#> Rect area
+#> unit
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+enum Shape {
+    Circle(Float),
+    Rect { w: Float, h: Float },
+    Point,
+}
+
+enum Opt {
+    Some(Point),
+    None,
+}
+
+fun describe_int(n: Int) -> String {
+    return match n {
+        1 => "literal-one",
+        _ => "other-{n}",
+    };
+}
+
+fun describe_point(p: Point) -> String {
+    return match p {
+        Point { x: 1, y } if y > 0 => "struct x=1 y positive: {y}",
+        Point { x, y } => "struct fallback {x} {y}",
+    };
+}
+
+fun describe_pair(pair: (Int, Int)) -> String {
+    return match pair {
+        (1, 2) => "tuple exact",
+        (a, b) => "tuple bound {a} {b}",
+    };
+}
+
+fun describe_opt(o: Opt) -> String {
+    return match o {
+        Opt::Some(Point { x: 3, y }) => "nested x=3 y={y}",
+        Opt::Some(Point { x, y }) => "nested other {x} {y}",
+        Opt::None => "nested none",
+    };
+}
+
+fun describe_shape(s: Shape) -> String {
+    return match s {
+        Shape::Circle(_) => "Circle area",
+        Shape::Rect { w: _, h: _ } => "Rect area",
+        Shape::Point => "unit",
+    };
+}
+
+fun main() {
+    print(describe_int(1));
+    print(describe_int(5));
+
+    print(describe_point(Point { x: 1, y: 2 }));
+    print(describe_point(Point { x: 9, y: -1 }));
+
+    print(describe_pair((1, 2)));
+    print(describe_pair((3, 4)));
+
+    print(describe_opt(Opt::Some(Point { x: 3, y: 4 })));
+    print(describe_opt(Opt::Some(Point { x: 5, y: 6 })));
+
+    print(describe_shape(Shape::Circle(1.0)));
+    print(describe_shape(Shape::Rect { w: 1.0, h: 2.0 }));
+    print(describe_shape(Shape::Point));
+}

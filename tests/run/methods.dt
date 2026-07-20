@@ -1,0 +1,63 @@
+# impl methods: self dispatch, associated functions via `Type::fn(...)`,
+# bare calls supplying self explicitly, methods on enums, methods calling
+# other methods through self.
+#> Point { x: 3, y: 4 }
+#> 7
+#> Point { x: 6, y: 8 }
+#> 14
+#> 7
+#> 12.56
+#> area=12.56
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+impl Point {
+    fun new(x: Int, y: Int) -> Point {
+        return Point { x: x, y: y };
+    }
+
+    fun sum(self) -> Int {
+        return self.x + self.y;
+    }
+
+    fun scaled(self, factor: Int) -> Point {
+        return Point { x: self.x * factor, y: self.y * factor };
+    }
+}
+
+enum Shape {
+    Circle(Float),
+    Square(Float),
+}
+
+impl Shape {
+    fun area(self) -> Float {
+        return match self {
+            Shape::Circle(r) => 3.14 * r * r,
+            Shape::Square(s) => s * s,
+        };
+    }
+
+    fun described(self) -> String {
+        var a = self.area();
+        return "area={a}";
+    }
+}
+
+fun main() {
+    var p = Point::new(3, 4);
+    print(p);
+    print(p.sum());
+
+    var p2 = p.scaled(2);
+    print(p2);
+    print(p2.sum());
+
+    print(Point::sum(p));
+
+    var c = Shape::Circle(2.0);
+    print(c.area());
+    print(c.described());
+}

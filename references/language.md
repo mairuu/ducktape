@@ -132,6 +132,8 @@ Registered in every module; the only builtin so far.
 | top-level `var` | parses, then aborts registration |
 | tuple-struct struct-patterns `var Pair { .. }` | diagnostic suggests tuple destructuring |
 | assoc types on generic params `T.Item` | "not yet supported" diagnostic |
-| match exhaustiveness, variable shadowing diags | silently accepted |
+| match exhaustiveness, variable shadowing diags | silently accepted at check time; a non-exhaustive match that falls through every arm at runtime is a `--run` runtime error, not a compile error (`runtime.md`) |
 | overlapping method names across impls of one type | bare paths pick the first registered impl |
-| structs/enums/match/closures/tuples/`?` at runtime | compile-only; "not supported by the VM yet" under `--run` (`runtime.md`) |
+| closures at runtime | compile-only; "not supported by the VM yet" under `--run` (`runtime.md`) |
+| generic functions/methods/impls at runtime | compile-only; any generic function or method anywhere in the file fails the whole `--run` build (needs monomorphisation or boxed generics — `runtime.md`) |
+| `var (a, b) = ...` / `var Pair { .. } = ...` destructuring at runtime | type-checks; codegen rejects it as unsupported under `--run` |

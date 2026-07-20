@@ -20,11 +20,18 @@ points at a GC-managed heap object (`include/object.h`):
 | `VAL_UNIT` | — |
 | `VAL_RANGE` | start, end (`int64_t`), inclusive flag |
 | `VAL_FUN` | `FunDef *` (top-level function, no captures) |
-| `VAL_OBJ` | `Obj *` — string or array, see "Heap & GC" |
+| `VAL_OBJ` | `Obj *` — string, array, tuple, struct, or enum instance, see "Heap & GC" |
 
 `value_equal` (`src/value.c`) is the one equality used by `OP_EQ`/`OP_NEQ`:
-strings compare by pointer (interning makes that correct), arrays compare
-structurally (elementwise, recursive).
+strings compare by pointer (interning makes that correct); arrays, tuples,
+structs, and enum instances compare structurally (elementwise, recursive —
+enum instances additionally compare unequal if their variant differs).
+`value_print` (used by `print` and, indirectly, nowhere else — string
+interpolation only accepts Int/Float/Bool/String, see `language.md`) prints
+tuples as `(a, b)`, structs as `Name { field: v, ... }` or `Name(a, b)` for
+tuple structs, and enum instances the same way but with the variant's name
+and no enum qualifier (`Some(1)`, not `Option::Some(1)`), matching how Rust's
+`Debug` prints enums.
 
 ## Bytecode (`include/chunk.h`)
 
@@ -36,7 +43,7 @@ bytes + constant pool (≤256 consts, u8 index). Operands: u8 unless noted.
 | `OP_CONST` `OP_UNIT` `OP_TRUE` `OP_FALSE` | push |
 | `OP_POP` `OP_POPN n` `OP_SLIDE n` | SLIDE drops n values *beneath* the top — how a block discards its locals while keeping its tail value |
 | `OP_GET_LOCAL` `OP_SET_LOCAL` | frame-relative slot; SET peeks (assignment is an expression) |
-| `OP_GET_GLOBAL` | pushes `VAL_FUN` of `module->funs[slot]` |
+| `OP_GET_GLOBAL` | pushes `VAL_FUN` — top-level funs and impl methods share one slot space: `slot < fun_count` indexes `module->funs`, the rest indexes `module->methods[slot - fun_count]` |
 | `OP_ADD/SUB/MUL/DIV/MOD` | int×int stays int; any float widens (matches checker); div/mod by zero int → runtime error; float mod = `fmod` |
 | `OP_NEG` `OP_NOT` `OP_EQ/NEQ/LT/LTEQ/GT/GTEQ` | comparisons widen like arithmetic |
 | `OP_CAST_INT` `OP_CAST_FLOAT` | dynamic: no-op if already the target kind |
@@ -51,6 +58,12 @@ bytes + constant pool (≤256 consts, u8 index). Operands: u8 unless noted.
 | `OP_LEN` | pops array; pushes its length as `Int` |
 | `OP_INTERP seg_count` | pops that many values, stringifies + concatenates them in order, pushes the result string |
 | `OP_DUP depth` | pushes a copy of the value `depth` slots below the top |
+| `OP_TUPLE count` | pops `count` elems (left-to-right order), pushes a new tuple |
+| `OP_STRUCT struct_slot` | pops `module->structs[slot]->field_count` elems (declaration order), pushes a struct instance |
+| `OP_ENUM enum_slot tag` | pops that variant's `field_count` elems (declaration order), pushes an enum instance |
+| `OP_FIELD_GET index` | pops a tuple/struct/enum instance, pushes its `index`-th field — no bounds check, since the index is always a compile-time-valid constant |
+| `OP_TAG` | pops an enum instance, pushes its variant tag as `Int` |
+| `OP_MATCH_FAIL` | runtime error "no match arm matched" — reachable because the checker doesn't enforce match exhaustiveness yet |
 
 `OP_ADD` additionally handles `String + String` (interned concat) alongside
 its numeric cases; the checker guarantees operand kinds so no other opcode
@@ -67,6 +80,13 @@ list used by sweep):
 |---|---|
 | `OBJ_STRING` | interned: `len`, cached `hash`, flexible `chars[]` (NUL-terminated) |
 | `OBJ_ARRAY` | `count`, growable `Value *items` |
+| `OBJ_TUPLE` | `count`, `Value *items` — same shape as `OBJ_ARRAY`, kept as a distinct kind purely so printing/equality read as a tuple |
+| `OBJ_STRUCT` | `StructDef *def`, `Value *fields` (`def->field_count` entries, declaration order — not necessarily the initializer's source order) |
+| `OBJ_ENUM` | `VariantDef *variant`, `Value *fields` (`variant->field_count` entries, declaration order) |
+
+`StructDef`/`EnumDef`/`VariantDef` pointers are arena-owned (live for the
+whole compilation), not GC objects, so marking a struct/enum instance walks
+its `fields` array but never touches the def pointer itself.
 
 String identity is pointer identity — `heap_intern` looks up an
 open-addressing table (FNV-1a hash, linear probing, tombstone deletes)
@@ -79,9 +99,12 @@ runtime for `+` concat (`heap_concat`) and interpolation (`OP_INTERP`,
 **Collection** is mark-sweep, triggered from `heap_alloc` (the sole entry
 point that grows `bytes_allocated`) once it crosses `next_gc` (starts at
 1 MiB, doubles `bytes_allocated` after each cycle), or unconditionally under
-`--gc-stress`. Roots: every compiled function's chunk constant pool (scanned
-directly off `Heap.module`, so constants need no special "immortal" case)
-plus the VM's live value stack, reached through `Heap.mark_roots` — a
+`--gc-stress`. Roots: every compiled function's *and method's* chunk
+constant pool (scanned directly off `Heap.module`'s `funs[]` and
+`methods[]`, so constants need no special "immortal" case — both need
+scanning: a method has its own chunk with its own constants, just like a
+top-level function) plus the VM's live value stack, reached through
+`Heap.mark_roots` — a
 function pointer `vm_run` installs on entry and clears on every return path
 (`VM_RETURN` macro), so a collection during codegen (no VM running yet) only
 marks constants. The intern table is *weak*: entries unreached by the mark
@@ -95,12 +118,13 @@ invisible to the load factor, the table never regrew to purge them, so after
 enough collect cycles every slot was tombstoned and a miss in `table_find`
 (whose loop only terminates on a `NULL` slot) spun forever.
 
-Any allocating call (`heap_intern`, `heap_concat`, `heap_array`) may collect
-*before* the new object exists, so the discipline throughout codegen/VM is:
-keep every already-live operand reachable from a root (still on the VM
-stack, not yet popped) until the new object is built and pushed. See the
-`OP_ARRAY`/`OP_INTERP` handlers in `src/vm.c` for the pattern (index math
-into the stack in place, decrementing `sp` only after the result exists).
+Any allocating call (`heap_intern`, `heap_concat`, `heap_array`, `heap_tuple`,
+`heap_struct`, `heap_enum`) may collect *before* the new object exists, so
+the discipline throughout codegen/VM is: keep every already-live operand
+reachable from a root (still on the VM stack, not yet popped) until the new
+object is built and pushed. See the `OP_ARRAY`/`OP_INTERP`/`OP_TUPLE`/
+`OP_STRUCT`/`OP_ENUM` handlers in `src/vm.c` for the pattern (index math into
+the stack in place, decrementing `sp` only after the result exists).
 
 ## Codegen shapes (`src/codegen.c`)
 
@@ -129,10 +153,115 @@ into the stack in place, decrementing `sp` only after the result exists).
   pushes array, index, value, then `OP_INDEX_SET`; a compound `+=` etc.
   additionally duplicates array+index with two `OP_DUP 1`s to read the
   current value before combining (`compile_index_assign`).
-- Anything outside the subset (structs, enums, match, closures, methods,
-  `?`, tuples, generic functions, destructuring) emits a source-anchored
-  diagnostic `"... is not supported by the VM yet"` and fails codegen — it
-  never crashes at runtime.
+- Tuples: `EXPR_TUPLE` compiles elements then `OP_TUPLE`.
+- Structs/enum variants (`compile_struct_init`/`compile_variant_init`): the
+  checker validates field names/arity/types but doesn't reorder a literal's
+  fields to declaration order, so codegen does — for each field in
+  `StructDef`/`VariantDef` order, it scans the initializer's `FieldInit`s for
+  the matching name (or index, for tuple structs/variants) and compiles
+  *that* value, then emits one `OP_STRUCT`/`OP_ENUM`. This guarantees the
+  compiled value order always matches the runtime instance layout regardless
+  of source order.
+- Field access (`EXPR_FIELD`, both `.name` and tuple `.0`/`.1`): the checker
+  resolves and caches the field's declaration-order index on the expr node
+  (`resolved_index`); codegen just compiles the object then emits one
+  `OP_FIELD_GET`.
+- Match (`compile_match`, see "Match compilation" below).
+- Methods (`compile_method_call`) and associated functions/bare
+  self-supplying calls (`Point::new(...)`, `Shape::area(s)`): see "Methods"
+  below.
+- `?` (`compile_propagate`): see "Propagate (`?`)" below.
+- Anything outside the subset (closures, generic functions/methods,
+  destructuring `var` bindings) emits a source-anchored diagnostic
+  `"... is not supported by the VM yet"` and fails codegen — it never
+  crashes at runtime.
+
+### Match compilation
+
+The subject is evaluated once into a hidden local; every pattern is
+addressed relative to that local as a chain of field indices (`Accessor`:
+base slot + a short path of `OP_FIELD_GET` indices). Each arm compiles in
+two passes over its pattern:
+
+- `compile_pattern_test` emits the runtime checks — literal equality
+  (`OP_EQ`), enum tag equality (`OP_TAG` + `OP_EQ`) — recursing into
+  struct/variant/tuple sub-patterns; wildcard and bind patterns need no
+  check. Each check follows the `if`-statement idiom (push bool,
+  `OP_JUMP_IF_FALSE` to a per-arm fail list, `OP_POP` on the fallthrough
+  side) but relies on exactly one of those jumps ever being taken per arm
+  attempt (pattern tests short-circuit), so a *single* shared `OP_POP` after
+  the fail list's patch point balances whichever one test failed, before
+  falling into the next arm.
+- `compile_pattern_bind` — run only once every test has passed — declares a
+  local for every name the pattern binds (plain binds, and struct/variant
+  field shorthand), each via the same "the pushed value's stack slot becomes
+  the local" convention used elsewhere.
+
+Splitting test from bind avoids threading partial-bind cleanup through the
+test logic: on failure nothing has been bound yet, so falling through to the
+next arm never needs to unwind anything. A guard runs after binding (so it
+can reference bound names); on a false guard, codegen pops the guard's own
+condition, `OP_POPN`s the locals `compile_pattern_bind` just added, and jumps
+to the next arm through a *second* jump list (`next_arm_jumps`) that lands
+*after* the shared fail-list `OP_POP` — a guard failure's stack is already
+clean, unlike a failed test's.
+
+Falling past every arm hits `OP_MATCH_FAIL`: the checker doesn't enforce
+match exhaustiveness yet (see `roadmap.md`), so this is a real, reachable
+runtime error rather than a should-never-happen case.
+
+### Methods
+
+Impl methods are ordinary `FunDef`s — `self` is just a regular `ParamDef`
+with `is_self` set, at whatever position it was declared (checked
+generically, not assumed to be first) — so they compile exactly like
+top-level functions (`compile_fun_body`, shared by both). The only wrinkle
+is *finding* the FunDef to compile: unlike a top-level `DeclFun`, an impl
+item's `Decl` is never linked back to the `FunDef` `resolve_impl_decl`
+builds into `ImplDef.methods[]` (`item->fun_decl->as.fun_decl.def` is never
+set). `compile_impl` bridges the two by iterating `impl_decl->items` and
+`impl_def->methods[]` in lockstep, exactly the order `resolve_impl_decl`
+filled them in (method items only, skipping assoc-type items) — the same
+implicit pairing the checker already relies on elsewhere.
+
+Methods and top-level functions share one `OP_GET_GLOBAL` slot space
+(`codegen_module` assigns method slots right after `fun_count`, and
+populates `Module.methods` — see the bytecode table above), so calling one
+needs no new opcode:
+
+- `obj.method(args)` (`compile_method_call`): the checker elides `self` from
+  `mc->args` (`mc->object` holds it instead) and validates arguments against
+  `fun->params` skipping whichever index has `is_self`. Codegen mirrors that
+  exactly — interleaving `mc->object` back in at that same position — so
+  pushed arguments always land positionally where the callee's calling
+  convention expects them, regardless of where `self` was declared.
+- `Point::new(...)` / `Shape::area(s)` (bare paths, no dot syntax — either an
+  associated function, or a method called with `self` supplied as a normal
+  explicit argument): these stay a plain `EXPR_CALL` with a multi-segment
+  `EXPR_PATH` callee; the checker caches which `FunDef` the path resolved to
+  on the path node itself (`resolved_fun`), and codegen's `EXPR_PATH` case
+  just pushes it by slot like any other callable.
+
+A generic impl's methods are rejected the same way a generic function is
+(`impl_def->type_param_count > 0` — the impl's own type params can appear in
+`Self`/param/return types, so this needs the same monomorphisation this VM
+doesn't have yet); a generic method rejects itself via the same
+`type_param_count` check `compile_fun_body` already runs for top-level
+functions.
+
+### Propagate (`?`)
+
+`Ok`/`Err` are both single-field tuple variants of the *same* enum as the
+`?` operand and the enclosing function's return type (enforced by the
+checker, which caches both `VariantDef`s on the expr node) — and since
+generics are erased at runtime, an `Err(e)` instance is already
+correctly-shaped for the return position regardless of whether the operand's
+and the function's `Ok` payload types differ. So `expr?` never reconstructs
+anything: duplicate the operand, read its tag (`OP_TAG`), and either
+`OP_FIELD_GET 0` the `Ok` payload (the expression's value) or `OP_RETURN`
+the whole instance unchanged (propagating `Err` up to the caller) — the same
+"just emit `OP_RETURN` wherever, `vm_run` unwinds the frame regardless of
+what else is logically live" trick `return` statements already use.
 
 ## VM (`src/vm.c`)
 
@@ -147,10 +276,11 @@ lengths aren't static).
 
 ## Future (design intent, not implemented)
 
-- **Aggregate runtime (5c):** structs/enums as heap objects, field access,
-  methods (`self` dispatch), match compilation (tag dispatch +
-  destructuring), closures with upvalues (`is_captured` groundwork exists),
-  `?` lowering, tuples.
+- **Aggregate runtime, part three (5c-iii):** closures with upvalues
+  (`is_captured` groundwork exists) — `EXPR_CLOSURE` still hits the "not
+  supported by the VM yet" diagnostic. Everything else from 5c (structs,
+  enums, tuples, match, methods, associated calls, `?`) is done — see
+  "Codegen shapes" above and its "Methods"/"Propagate" subsections.
 - **Bytecode serialization** (after a module system exists): flat binary —
   magic/version, string table, recursive chunk records (name, arity, code,
   tagged constants, nested functions). Keep the constant pool free of raw

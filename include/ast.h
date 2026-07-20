@@ -23,6 +23,7 @@ typedef struct Path Path;
 typedef struct Module Module;
 typedef struct StructDef StructDef;
 typedef struct EnumDef EnumDef;
+typedef struct VariantDef VariantDef;
 typedef struct TraitDef TraitDef;
 typedef struct ImplDef ImplDef;
 typedef struct FunDef FunDef;
@@ -194,13 +195,13 @@ struct StructDef {
   int slot;
 };
 
-typedef struct {
+struct VariantDef {
   StringView name;
   FieldDef *fields;
   int field_count;
   bool is_tuple;
   uint8_t tag;
-} VariantDef;
+};
 
 struct EnumDef {
   Module *module;
@@ -395,12 +396,14 @@ typedef struct {
   Path path;
   FieldPat *fields;
   int field_count;
+  VariantDef *resolved_variant; // NULL until resolver runs
 } PatternVariant;
 
 typedef struct {
   Path path;
   FieldPat *fields;
   int field_count;
+  StructDef *resolved_struct; // NULL until resolver runs
 } PatternStruct;
 
 typedef struct {
@@ -569,6 +572,8 @@ typedef struct {
   Path path;
   // TypeNode **type_args;
   // int type_arg_count;
+  FunDef *resolved_fun; // multi-segment paths only (e.g. `Point::new`); NULL
+                        // until resolved, and for single-segment paths
 } ExprPath;
 
 typedef struct {
@@ -640,6 +645,8 @@ typedef struct {
 
 typedef struct {
   Expr *operand;
+  VariantDef *ok_variant;  // the Result-like enum's single-field Ok(T)
+  VariantDef *err_variant; // ...and Err(E); both NULL until resolved
 } ExprPropagate;
 
 typedef struct {

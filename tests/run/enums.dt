@@ -1,0 +1,27 @@
+# enum variant instances: unit/tuple/struct-like variants, printing,
+# structural ==
+#> Circle(2.5)
+#> Rect { w: 3, h: 4 }
+#> Point
+#> true
+#> false
+#> false
+enum Shape {
+    Circle(Float),
+    Rect { w: Float, h: Float },
+    Point,
+}
+
+fun main() {
+    var c = Shape::Circle(2.5);
+    var r = Shape::Rect { w: 3.0, h: 4.0 };
+    var u = Shape::Point;
+
+    print(c);
+    print(r);
+    print(u);
+
+    print(c == Shape::Circle(2.5));
+    print(c == Shape::Circle(9.0));
+    print(u == Shape::Circle(2.5));
+}

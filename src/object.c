@@ -32,17 +32,50 @@ static size_t obj_size(Obj *o) {
     return sizeof(ObjString) + (size_t)((ObjString *)o)->len + 1;
   case OBJ_ARRAY:
     return sizeof(ObjArray);
+  case OBJ_TUPLE:
+    return sizeof(ObjTuple);
+  case OBJ_STRUCT:
+    return sizeof(ObjStruct);
+  case OBJ_ENUM:
+    return sizeof(ObjEnum);
   }
   assert(false && "unreachable");
   return 0;
 }
 
 static void free_obj(Heap *h, Obj *o) {
-  if (o->kind == OBJ_ARRAY) {
+  switch (o->kind) {
+  case OBJ_ARRAY: {
     ObjArray *arr = (ObjArray *)o;
     if (arr->items != NULL) {
       heap_dealloc(h, arr->items, sizeof(Value) * (size_t)arr->count);
     }
+    break;
+  }
+  case OBJ_TUPLE: {
+    ObjTuple *tup = (ObjTuple *)o;
+    if (tup->items != NULL) {
+      heap_dealloc(h, tup->items, sizeof(Value) * (size_t)tup->count);
+    }
+    break;
+  }
+  case OBJ_STRUCT: {
+    ObjStruct *s = (ObjStruct *)o;
+    if (s->def->field_count > 0) {
+      heap_dealloc(h, s->fields, sizeof(Value) * (size_t)s->def->field_count);
+    }
+    break;
+  }
+  case OBJ_ENUM: {
+    ObjEnum *e = (ObjEnum *)o;
+    if (e->variant->field_count > 0) {
+      heap_dealloc(h, e->fields,
+                   sizeof(Value) * (size_t)e->variant->field_count);
+    }
+    break;
+  }
+  default:
+    break;
   }
   heap_dealloc(h, o, obj_size(o));
 }
@@ -168,6 +201,48 @@ ObjArray *heap_array(Heap *h, int count) {
   return arr;
 }
 
+ObjTuple *heap_tuple(Heap *h, int count) {
+  Value *items = NULL;
+  if (count > 0) {
+    items = heap_alloc(h, sizeof(Value) * (size_t)count);
+    for (int i = 0; i < count; i++) {
+      items[i] = val_unit();
+    }
+  }
+  ObjTuple *tup = (ObjTuple *)new_obj(h, OBJ_TUPLE, sizeof(ObjTuple));
+  tup->count = count;
+  tup->items = items;
+  return tup;
+}
+
+ObjStruct *heap_struct(Heap *h, StructDef *def) {
+  Value *fields = NULL;
+  if (def->field_count > 0) {
+    fields = heap_alloc(h, sizeof(Value) * (size_t)def->field_count);
+    for (int i = 0; i < def->field_count; i++) {
+      fields[i] = val_unit();
+    }
+  }
+  ObjStruct *s = (ObjStruct *)new_obj(h, OBJ_STRUCT, sizeof(ObjStruct));
+  s->def = def;
+  s->fields = fields;
+  return s;
+}
+
+ObjEnum *heap_enum(Heap *h, VariantDef *variant) {
+  Value *fields = NULL;
+  if (variant->field_count > 0) {
+    fields = heap_alloc(h, sizeof(Value) * (size_t)variant->field_count);
+    for (int i = 0; i < variant->field_count; i++) {
+      fields[i] = val_unit();
+    }
+  }
+  ObjEnum *e = (ObjEnum *)new_obj(h, OBJ_ENUM, sizeof(ObjEnum));
+  e->variant = variant;
+  e->fields = fields;
+  return e;
+}
+
 // ── mark-sweep ───────────────────────────────────────────────────────────────
 
 static void mark_obj(Obj *o) {
@@ -175,11 +250,37 @@ static void mark_obj(Obj *o) {
     return;
   }
   o->marked = true;
-  if (o->kind == OBJ_ARRAY) {
+  switch (o->kind) {
+  case OBJ_STRING:
+    break;
+  case OBJ_ARRAY: {
     ObjArray *arr = (ObjArray *)o;
     for (int i = 0; i < arr->count; i++) {
       gc_mark_value(arr->items[i]);
     }
+    break;
+  }
+  case OBJ_TUPLE: {
+    ObjTuple *tup = (ObjTuple *)o;
+    for (int i = 0; i < tup->count; i++) {
+      gc_mark_value(tup->items[i]);
+    }
+    break;
+  }
+  case OBJ_STRUCT: {
+    ObjStruct *s = (ObjStruct *)o;
+    for (int i = 0; i < s->def->field_count; i++) {
+      gc_mark_value(s->fields[i]);
+    }
+    break;
+  }
+  case OBJ_ENUM: {
+    ObjEnum *e = (ObjEnum *)o;
+    for (int i = 0; i < e->variant->field_count; i++) {
+      gc_mark_value(e->fields[i]);
+    }
+    break;
+  }
   }
 }
 
@@ -189,17 +290,24 @@ void gc_mark_value(Value v) {
   }
 }
 
+static void mark_fun_consts(FunDef *fun) {
+  Chunk *chunk = fun->chunk;
+  if (chunk == NULL) {
+    return;
+  }
+  for (int j = 0; j < chunk->const_count; j++) {
+    gc_mark_value(chunk->consts[j]);
+  }
+}
+
 void heap_collect(Heap *h) {
   // roots: every compiled chunk's constants, plus the VM stack if running
   if (h->module != NULL) {
     for (int i = 0; i < h->module->fun_count; i++) {
-      Chunk *chunk = h->module->funs[i]->chunk;
-      if (chunk == NULL) {
-        continue;
-      }
-      for (int j = 0; j < chunk->const_count; j++) {
-        gc_mark_value(chunk->consts[j]);
-      }
+      mark_fun_consts(h->module->funs[i]);
+    }
+    for (int i = 0; i < h->module->method_count; i++) {
+      mark_fun_consts(h->module->methods[i]);
     }
   }
   if (h->mark_roots != NULL) {

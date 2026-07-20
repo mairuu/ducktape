@@ -19,6 +19,12 @@ struct Module {
   FunDef **funs;
   int fun_count, fun_cap;
 
+  // impl methods, flattened; populated by codegen_module. Slots for
+  // OP_GET_GLOBAL continue past `funs` (fun_count..fun_count+method_count-1)
+  // so both share one callable-value slot space.
+  FunDef **methods;
+  int method_count;
+
   StructDef **structs;
   int struct_count, struct_cap;
 

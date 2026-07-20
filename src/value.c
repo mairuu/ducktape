@@ -41,6 +41,58 @@ void value_print(Value v, FILE *out) {
       fputc(']', out);
       break;
     }
+    case OBJ_TUPLE: {
+      ObjTuple *tup = val_as_tuple(v);
+      fputc('(', out);
+      for (int i = 0; i < tup->count; i++) {
+        if (i > 0) {
+          fprintf(out, ", ");
+        }
+        value_print(tup->items[i], out);
+      }
+      fputc(')', out);
+      break;
+    }
+    case OBJ_STRUCT: {
+      ObjStruct *s = val_as_struct(v);
+      StructDef *def = s->def;
+      fprintf(out, SV_FMT, SV_ARG(def->name));
+      if (def->field_count == 0) {
+        break;
+      }
+      fprintf(out, def->is_tuple ? "(" : " { ");
+      for (int i = 0; i < def->field_count; i++) {
+        if (i > 0) {
+          fprintf(out, ", ");
+        }
+        if (!def->is_tuple) {
+          fprintf(out, SV_FMT ": ", SV_ARG(def->fields[i].ident.name));
+        }
+        value_print(s->fields[i], out);
+      }
+      fprintf(out, def->is_tuple ? ")" : " }");
+      break;
+    }
+    case OBJ_ENUM: {
+      ObjEnum *e = val_as_enum(v);
+      VariantDef *variant = e->variant;
+      fprintf(out, SV_FMT, SV_ARG(variant->name));
+      if (variant->field_count == 0) {
+        break;
+      }
+      fprintf(out, variant->is_tuple ? "(" : " { ");
+      for (int i = 0; i < variant->field_count; i++) {
+        if (i > 0) {
+          fprintf(out, ", ");
+        }
+        if (!variant->is_tuple) {
+          fprintf(out, SV_FMT ": ", SV_ARG(variant->fields[i].ident.name));
+        }
+        value_print(e->fields[i], out);
+      }
+      fprintf(out, variant->is_tuple ? ")" : " }");
+      break;
+    }
     }
     break;
   }
@@ -79,6 +131,36 @@ bool value_equal(Value a, Value b) {
       }
       for (int i = 0; i < x->count; i++) {
         if (!value_equal(x->items[i], y->items[i])) {
+          return false;
+        }
+      }
+      return true;
+    }
+    case OBJ_TUPLE: {
+      ObjTuple *x = val_as_tuple(a), *y = val_as_tuple(b);
+      for (int i = 0; i < x->count; i++) {
+        if (!value_equal(x->items[i], y->items[i])) {
+          return false;
+        }
+      }
+      return true;
+    }
+    case OBJ_STRUCT: {
+      ObjStruct *x = val_as_struct(a), *y = val_as_struct(b);
+      for (int i = 0; i < x->def->field_count; i++) {
+        if (!value_equal(x->fields[i], y->fields[i])) {
+          return false;
+        }
+      }
+      return true;
+    }
+    case OBJ_ENUM: {
+      ObjEnum *x = val_as_enum(a), *y = val_as_enum(b);
+      if (x->variant != y->variant) {
+        return false;
+      }
+      for (int i = 0; i < x->variant->field_count; i++) {
+        if (!value_equal(x->fields[i], y->fields[i])) {
           return false;
         }
       }

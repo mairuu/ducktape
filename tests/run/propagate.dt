@@ -1,0 +1,26 @@
+# the '?' operator: propagates Err unchanged, unwraps Ok, short-circuits
+# the rest of the function on the first Err.
+#> Ok(2)
+#> Err(odd: 3)
+enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
+
+fun half(n: Int) -> Result<Int, String> {
+    if n % 2 == 0 {
+        return Result::Ok(n / 2);
+    }
+    return Result::Err("odd: {n}");
+}
+
+fun quarter(n: Int) -> Result<Int, String> {
+    var h = half(n)?;
+    var q = half(h)?;
+    return Result::Ok(q);
+}
+
+fun main() {
+    print(quarter(8));
+    print(quarter(6));
+}

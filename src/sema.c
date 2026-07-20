@@ -1439,6 +1439,7 @@ static Type *resolve_callee(CheckCtx *ctx, Expr *expr, Subst *subst) {
   switch (r.type->kind) {
   case TY_FUNCTION: {
     FunDef *def = r.as.method.fun;
+    callee->as.path_expr.resolved_fun = def;
 
     if (def->type_param_count == 0) {
       // the impl-level subst may map its generics to fresh unknowns (bare
@@ -1575,6 +1576,8 @@ static bool check_pattern(CheckCtx *ctx, Pattern *pattern, Type *expected_ty);
 
 static bool check_struct_pattern(CheckCtx *ctx, Pattern *pattern,
                                  Type *expected_ty, StructDef *struct_def) {
+  pattern->as.struc.resolved_struct = struct_def;
+
   if (type_is_poison(expected_ty)) {
     // still bind pattern names (as poison) so later uses don't cascade
     for (int i = 0; i < pattern->as.struc.field_count; i++) {
@@ -1643,7 +1646,7 @@ static bool check_struct_pattern(CheckCtx *ctx, Pattern *pattern,
     }
 
     if (fp->sub_pattern != NULL) {
-      sub_pattern_error |= check_pattern(ctx, fp->sub_pattern, field_ty);
+      sub_pattern_error |= !check_pattern(ctx, fp->sub_pattern, field_ty);
     } else {
       assert(!struct_def->is_tuple &&
              "tuple struct patterns must have sub-patterns");
@@ -1657,6 +1660,8 @@ static bool check_struct_pattern(CheckCtx *ctx, Pattern *pattern,
 static bool check_variant_pattern(CheckCtx *ctx, Pattern *pattern,
                                   Type *expected_ty, EnumDef *enum_def,
                                   VariantDef *variant_def) {
+  pattern->as.variant.resolved_variant = variant_def;
+
   if (type_is_poison(expected_ty)) {
     // still bind pattern names (as poison) so later uses don't cascade
     for (int i = 0; i < pattern->as.variant.field_count; i++) {
@@ -1753,7 +1758,7 @@ static bool check_variant_pattern(CheckCtx *ctx, Pattern *pattern,
     }
 
     if (fp->sub_pattern != NULL) {
-      sub_pattern_error |= check_pattern(ctx, fp->sub_pattern, field_ty);
+      sub_pattern_error |= !check_pattern(ctx, fp->sub_pattern, field_ty);
     } else {
       assert(!variant_def->is_tuple &&
              "tuple variant patterns must have sub-patterns");
@@ -1763,7 +1768,7 @@ static bool check_variant_pattern(CheckCtx *ctx, Pattern *pattern,
   }
 
   for (int i = check_n; i < got_argc; i++) {
-    sub_pattern_error |= check_pattern(
+    sub_pattern_error |= !check_pattern(
         ctx, pattern->as.variant.fields[i].sub_pattern, ctx->tc->t_poison);
   }
 
@@ -1871,7 +1876,7 @@ static bool check_pattern(CheckCtx *ctx, Pattern *pattern, Type *expected_ty) {
     for (int i = 0; i < check_n; i++) {
       Type *elem_ty = expected_ty->as.tuple.elem_types[i];
       Pattern *elem_pat = pattern->as.tuple.elems[i];
-      sub_pattern_error |= check_pattern(ctx, elem_pat, elem_ty);
+      sub_pattern_error |= !check_pattern(ctx, elem_pat, elem_ty);
     }
 
     if (sub_pattern_error) {
@@ -2118,6 +2123,8 @@ static Type *resolve_propagate_expr(CheckCtx *ctx, Expr *expr) {
                buf);
     return ctx->tc->t_poison;
   }
+  prop->ok_variant = op_ok;
+  prop->err_variant = op_err;
 
   EnumDef *def = op_ty->as.enm.def;
 
@@ -2386,9 +2393,32 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   }
   case EXPR_PATH: {
     if (expr->as.path_expr.path.count != 1) {
-      diag_error(ctx->diags, expr->span,
-                 "unexpected multi-segment path expression without a call");
-      result = ctx->tc->t_poison;
+      // the only valid multi-segment path expression (without a call or
+      // struct-init suffix) is a qualified unit variant, e.g. `Status::Off`.
+      PathRes r;
+      if (!cctx_resolve_path(ctx, &expr->as.path_expr.path, &r)) {
+        result = ctx->tc->t_poison;
+        break;
+      }
+
+      if (r.kind != PATHRES_VARIANT) {
+        diag_error(ctx->diags, expr->span,
+                   "unexpected multi-segment path expression without a call");
+        result = ctx->tc->t_poison;
+        break;
+      }
+
+      if (r.as.variant.def->field_count != 0) {
+        diag_error(ctx->diags, expr->span,
+                   "variant '" SV_FMT "' requires arguments",
+                   SV_ARG(r.as.variant.def->name));
+        result = ctx->tc->t_poison;
+        break;
+      }
+
+      rewrite_tuple_variant_call(ctx, expr, r.type, r.as.variant.enum_def,
+                                 r.as.variant.def);
+      result = r.type;
       break;
     }
 
@@ -2588,7 +2618,14 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     for (int i = 0; i < init->field_count; i++) {
       FieldInit *field_init = &init->fields[i];
 
-      FieldDef *field_def = &variant_def->fields[i];
+      FieldDef *field_def =
+          find_variant_field(variant_def, field_init->ident, ctx->diags,
+                             expr->span);
+      if (!field_def) {
+        had_error = true;
+        continue;
+      }
+
       Type *field_ty = field_def->type;
       if (is_generic) {
         field_ty = subst_apply(&subst, field_ty, ctx->al);
@@ -2653,6 +2690,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
         result = ctx->tc->t_poison;
       } else {
         result = field_def->type;
+        field->resolved_index = (int)(field_def - def->fields);
       }
 
       if (is_generic) {
@@ -2660,6 +2698,28 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
         // result = infer_apply(&ctx->infer, result, ctx->al);
       }
 
+      break;
+    }
+
+    if (base_ty->kind == TY_TUPLE) {
+      if (!field->is_tuple) {
+        diag_error(ctx->diags, expr->span,
+                   "tuple fields must be accessed with '.0', '.1', ...");
+        result = ctx->tc->t_poison;
+        break;
+      }
+
+      int idx = field->ident.index;
+      if (idx < 0 || idx >= base_ty->as.tuple.elem_count) {
+        diag_error(ctx->diags, expr->span,
+                   "tuple index %d out of bounds for tuple of size %d", idx,
+                   base_ty->as.tuple.elem_count);
+        result = ctx->tc->t_poison;
+        break;
+      }
+
+      field->resolved_index = idx;
+      result = base_ty->as.tuple.elem_types[idx];
       break;
     }
 

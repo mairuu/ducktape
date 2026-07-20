@@ -8,6 +8,9 @@
 
 typedef struct Module Module;
 typedef struct Heap Heap;
+typedef struct StructDef StructDef;
+typedef struct EnumDef EnumDef;
+typedef struct VariantDef VariantDef;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Heap objects
@@ -16,6 +19,9 @@ typedef struct Heap Heap;
 typedef enum {
   OBJ_STRING,
   OBJ_ARRAY,
+  OBJ_TUPLE,
+  OBJ_STRUCT,
+  OBJ_ENUM,
 } ObjKind;
 
 // intrusive header shared by every heap object; `next` threads the heap's
@@ -42,6 +48,31 @@ typedef struct {
   Value *items;
 } ObjArray;
 
+// (a, b, c) — same shape as ObjArray, kept as a distinct ObjKind so
+// printing/equality read as a tuple rather than an array.
+typedef struct {
+  Obj obj;
+  int count;
+  Value *items;
+} ObjTuple;
+
+// struct instance; `fields` holds `def->field_count` values in declaration
+// order (not necessarily the initializer's source order).
+typedef struct {
+  Obj obj;
+  StructDef *def;
+  Value *fields;
+} ObjStruct;
+
+// enum variant instance; `fields` holds `variant->field_count` values in
+// declaration order. `variant->tag` (assigned at codegen time) is what
+// match compiles to a runtime tag test.
+typedef struct {
+  Obj obj;
+  VariantDef *variant;
+  Value *fields;
+} ObjEnum;
+
 static inline bool val_is_string(Value v) {
   return v.kind == VAL_OBJ && v.as.obj->kind == OBJ_STRING;
 }
@@ -49,6 +80,11 @@ static inline ObjString *val_as_string(Value v) {
   return (ObjString *)v.as.obj;
 }
 static inline ObjArray *val_as_array(Value v) { return (ObjArray *)v.as.obj; }
+static inline ObjTuple *val_as_tuple(Value v) { return (ObjTuple *)v.as.obj; }
+static inline ObjStruct *val_as_struct(Value v) {
+  return (ObjStruct *)v.as.obj;
+}
+static inline ObjEnum *val_as_enum(Value v) { return (ObjEnum *)v.as.obj; }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Heap — owns every runtime object; mark-sweep collected
@@ -85,6 +121,9 @@ void heap_destroy(Heap *h);
 ObjString *heap_intern(Heap *h, const char *chars, int len);
 ObjString *heap_concat(Heap *h, ObjString *a, ObjString *b);
 ObjArray *heap_array(Heap *h, int count); // items start as unit
+ObjTuple *heap_tuple(Heap *h, int count); // items start as unit
+ObjStruct *heap_struct(Heap *h, StructDef *def);
+ObjEnum *heap_enum(Heap *h, VariantDef *variant);
 
 void gc_mark_value(Value v);
 void heap_collect(Heap *h);
