@@ -499,6 +499,7 @@ static FieldInit *find_field_init(FieldInit *fields, int count, bool is_tuple,
 
 static void compile_expr(Cg *cg, Expr *expr);
 static void compile_closure(Cg *cg, Expr *expr);
+static void compile_destructure(Cg *cg, Pattern *pat, int subject_slot);
 
 static void compile_stmt(Cg *cg, Stmt *stmt) {
   switch (stmt->kind) {
@@ -509,13 +510,20 @@ static void compile_stmt(Cg *cg, Stmt *stmt) {
 
   case STMT_VAR: {
     StmtVar *var = &stmt->as.var_stmt;
-    if (var->binding.kind != BIND_IDENT) {
-      cg_error(cg, stmt->span, "destructuring binding");
+    compile_expr(cg, var->initializer);
+
+    if (var->binding->kind == PAT_BIND) {
+      // the initializer's stack slot becomes the local
+      cg_add_local(cg, var->binding->as.bind.name, stmt->span);
       break;
     }
-    compile_expr(cg, var->initializer);
-    // the initializer's stack slot becomes the local
-    cg_add_local(cg, var->binding.as.ident, stmt->span);
+
+    // destructuring: the initializer stays put as an anonymous local that the
+    // pattern's accessors read from, and the names it binds are appended
+    // above it. The temp costs a slot for the rest of the scope, which is
+    // what keeps every bound name a plain local like any other.
+    int subject_slot = cg_add_local(cg, (StringView){0}, stmt->span);
+    compile_destructure(cg, var->binding, subject_slot);
     break;
   }
 
@@ -1259,6 +1267,30 @@ static void compile_pattern_bind(Cg *cg, Pattern *pat, Accessor acc) {
     break;
   }
   }
+}
+
+// a `var` binding is a one-arm match with no guard and no body: the subject is
+// already in `subject_slot`, so the whole statement is the two pattern passes.
+// The checker rejects a refutable binding, but its answer is tri-state — an
+// unsolved column type reports nothing — so the tests are still emitted and
+// still trap through OP_MATCH_FAIL rather than binding from a value that never
+// had the shape. For an irrefutable pattern `compile_pattern_test` emits
+// nothing at all, so this costs the common case zero instructions.
+static void compile_destructure(Cg *cg, Pattern *pat, int subject_slot) {
+  Accessor acc = {.base_slot = subject_slot};
+  JumpList fails = {0};
+
+  compile_pattern_test(cg, pat, acc, &fails);
+
+  if (fails.count > 0) {
+    int ok_jump = emit_jump(cg, OP_JUMP);
+    jump_list_patch(cg, &fails);
+    emit(cg, OP_POP); // the outstanding false from whichever test failed
+    emit(cg, OP_MATCH_FAIL);
+    patch_jump(cg, ok_jump);
+  }
+
+  compile_pattern_bind(cg, pat, acc);
 }
 
 // each arm: test the pattern (jumping to the next arm on failure), bind its

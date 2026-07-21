@@ -397,21 +397,62 @@
   few hundred types into a fixed-size table — so the limit lives where the
   divergence is.
 
+- **Runtime destructuring (milestone 11)** — `var (a, b) = pair;` runs, and
+  so does every other irrefutable pattern. The change is a deletion: a `var`
+  binding *is* a `Pattern` now, so the parallel `BindingPat` grammar (parser),
+  its 140-line type-checking switch (sema) and its dump (ast) are gone, and
+  the three consumers each reuse the match machinery they already had.
+  Design: `architecture.md` "Binding patterns", `runtime.md` "Destructuring a
+  `var`".
+
+  The observation the milestone turns on: **a binding is a match with one arm
+  and no guard.** Everything follows from taking that literally rather than
+  approximately.
+  - Nesting, renaming field patterns (`Point { x: px }`), `_`, and the
+    tuple-struct constructor spelling `Pair(a, b)` all arrive for free —
+    the old `BindingPat` supported none of them, being a flat list of names.
+  - "Irrefutable" needs no new analysis: it is *exhaustive* over a one-row
+    matrix, so `check_binding_pattern` asks `matrix_covers` the same question
+    `check_match_exhaustive` asks, and inherits its tri-state answer.
+  - Because that answer is tri-state, codegen still emits the test pass and
+    still traps through `OP_MATCH_FAIL`. An irrefutable pattern compiles no
+    tests at all, so the backstop is free — the same role `OP_MATCH_FAIL`
+    already plays for guarded arms.
+
+  Deleting a checker path is only safe if the one that replaces it is at
+  least as strict, and it was not: `check_struct_pattern` never compared the
+  struct its path resolved to against the struct the value actually has, so
+  `var B { x } = a;` (and `B { x } => ...` in a match arm, unreachable for
+  `var` before this milestone but always live there) read A's field through
+  B's declared types — `x` bound as `String` over an `Int`, and `x + "!"`
+  printed garbage. `check_variant_pattern` had made the matching check for
+  enums since 5c-i; the struct half now does too
+  (`tests/fail/struct_pattern_wrong_type.dt`). The old `BindingPat` code had
+  its own version of this check, which is what made the omission visible.
+
+  Also fixed a pre-existing bug this surfaced, one the milestone made
+  reachable from a second direction: `check_pattern` rewrites a `PAT_VARIANT`
+  whose path names a struct into a `PAT_STRUCT` (and the mirror) with
+  `*pattern = new`, which replaced the whole node and so dropped
+  `resolved_type`. Exhaustiveness reads the column type off exactly that
+  field and treats NULL as "unconstrained", so **every tuple-struct pattern
+  looked like a coverage gap** — and since the struct spelling `Pair { a, b }`
+  is rejected outright, a tuple struct could not be matched at all
+  (`tests/run/match.dt`). Both rewrites now carry the type across.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
 milestone (~900 lines).
 
-1. **Runtime destructuring** — `var (a, b) = pair;` and struct patterns in a
-   binding position type-check but codegen rejects them, which is now the
-   largest remaining hole in `tests/pass/in_fixed.dt` under `--run`. The match
-   compiler already lowers every pattern shape against an `Accessor`; a
-   binding is that machinery with no test and no arms.
-2. **Inherited default method bodies** — the last construct in `in_fixed.dt`
+1. **Inherited default method bodies** — the last construct in `in_fixed.dt`
    the VM refuses. `TraitMethodDef.default_impl` is never built, so there is
    no `FunDef` to instantiate, and `Self` in a trait body is a `TY_TRAIT`
    rather than a `TY_GENERIC` — a name-keyed `Subst` cannot bind it, so this
-   needs `Self` to become a real type parameter of the default body.
+   needs `Self` to become a real type parameter of the default body. It is now
+   the *only* construct `tests/pass/in_fixed.dt` still hits under `--run`
+   (`tests/fail_run/mod_unsupported` is written against it for the same
+   reason).
 
 Not on the roadmap: the **REPL** is a side feature, not a milestone — it lives
 on the `feature/repl` branch (`--repl`, incremental compilation over one module
@@ -421,6 +462,9 @@ via `Module.decl_base`) and is not part of the main line.
 
 - no shadowing diagnostics for `var` (`vscope_define` todo); top-level item
   names do collide, but a `var` may silently shadow one in the same scope
+- a refutable `var` binding whose column type inference never pinned down is
+  accepted (the tri-state answer reports nothing) and traps at runtime via
+  `OP_MATCH_FAIL` instead of at compile time
 - a bare unit variant of a generic enum can't be instantiated without a
   turbofish (`Opt::<Bool>::None`) — neither an annotation nor the argument
   position infers it

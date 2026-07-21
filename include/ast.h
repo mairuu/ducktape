@@ -848,43 +848,15 @@ typedef enum {
   STMT_POISON,   // sentinel
 } StmtKind;
 
-typedef enum {
-  BIND_IDENT,  // var x = ...
-  BIND_TUPLE,  // var (x, y) = ...
-  BIND_STRUCT, // var Point { x, y } = ...
-  BIND_POISON, // sentinel
-} BindKind;
-
-// BindingPat union variants
-typedef struct {
-  StringView *names;
-  int count;
-} BindingPatTuple;
-
-typedef struct {
-  Path path;
-  StringView *field_names;
-  int field_count;
-} BindingPatStruct;
-
-typedef struct {
-  BindKind kind;
-  Span span;
-
-  union {
-    StringView ident;
-    BindingPatTuple tuple;
-    BindingPatStruct struc;
-  } as;
-} BindingPat;
-
 // Stmt union variants
 typedef struct {
   Expr *expr;
 } StmtExpr;
 
 typedef struct {
-  BindingPat binding;
+  // the same Pattern a match arm uses, restricted to the irrefutable ones by
+  // the checker: `var x`, `var (a, b)`, `var Point { x, y }`, nested freely.
+  Pattern *binding;
   TypeNode *type_annotation; // NULL if inferred
   Expr *initializer;
 } StmtVar;
@@ -1052,7 +1024,7 @@ typedef struct {
 } DeclFun;
 
 typedef struct {
-  BindingPat binding;
+  Pattern *binding;
   TypeNode *type_annotation;
   Expr *initializer;
 } DeclVar;

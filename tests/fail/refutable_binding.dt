@@ -1,0 +1,13 @@
+#! expect: refutable pattern in a 'var' binding
+# a binding is a one-arm match, so it must cover every value: Opt::None
+# reaches no arm.
+enum Opt {
+    Some(Int),
+    None,
+}
+
+fun main() {
+    var o = Opt::Some(1);
+    var Opt::Some(n) = o;
+    print(n);
+}

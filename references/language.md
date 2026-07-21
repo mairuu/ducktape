@@ -58,8 +58,8 @@ case for it) — declare variables inside functions only.
 ```
 var x = 1;                    # inferred; no `let`, no `mut` — all vars mutable
 var y: [Int] = [1, 2, 3];     # annotated
-var (a, b) = (1, 2.5);        # tuple destructuring
-var Point { x, y } = p;       # struct destructuring (named structs only)
+var (a, b) = (1, 2.5);        # destructuring — the binding is a pattern
+var Point { x: px, y } = p;   # ... any irrefutable one, nested freely
 x = 2;  x += 1;               # assignment / compound assignment (+= -= *= /=)
 return expr;  return;         # bare return means ()
 break;  continue;             # inside loops only
@@ -127,7 +127,14 @@ var m = match p {
 
 Patterns: literals, `_`, bindings, tuples `(a, b)`, variants
 `Result::Ok(v)` / `Status::Active`, structs `Point { x, y }` (including
-literal sub-patterns `x: 10`).
+literal sub-patterns `x: 10`). A tuple struct is written with its constructor
+spelling, `Pair(a, b)`, in a pattern as in an expression.
+
+The same patterns are the binding form of `var`, restricted to the
+irrefutable ones — a `var` binding is a match with one arm and no guard, so
+"irrefutable" is decided by the exhaustiveness checker below. `var Opt::Some(n)
+= o;` is rejected (`refutable pattern in a 'var' binding`) because `Opt::None`
+would reach no arm; use `match`.
 
 Matches must be **exhaustive**; a gap is a compile error naming the missing
 enum variant where it can (`match is not exhaustive: 'Shape::Point' is not
@@ -203,7 +210,7 @@ Registered in every module; the only builtin so far.
 | visibility below module granularity (`pub(crate)` &c.) | `pub` is the only modifier |
 | two spellings of one file (symlinks, unusual paths) | dedup is lexical, so the file would load twice and collide |
 | top-level `var` (globals) | parses, then a registration diagnostic: move it into a function |
-| tuple-struct struct-patterns `var Pair { .. }` | diagnostic suggests tuple destructuring |
+| tuple-struct struct-patterns `Pair { a, b }` | write the constructor spelling `Pair(a, b)` — "matching tuple struct with struct pattern syntax is not allowed" |
 | variable shadowing diagnostics | a `var` may silently shadow an earlier one in the same scope (top-level *item* names do collide — that is an error) |
 | overlapping method names across impls of one type | bare paths pick the first registered impl |
 | capturing a `for` loop variable in a closure | runs, but the closure sees the loop variable's *final* value (one shared cell), not a per-iteration copy — `runtime.md` "Closures & upvalues" |
@@ -211,4 +218,3 @@ Registered in every module; the only builtin so far.
 | more than 256 functions, counting one per instantiation | each instantiation takes a global slot, so a heavily generic program can outgrow the one-byte operand space |
 | `print` named as a value (`var p = print;`) | a call lowers to `OP_PRINT`, so the builtin has no body to point a slot at — "using a builtin as a value is not supported by the VM yet" |
 | generic `main` | nothing calls the entry point, so no instance is ever made — "'main' must not be generic" |
-| `var (a, b) = ...` / `var Pair { .. } = ...` destructuring at runtime | type-checks; codegen rejects it as unsupported under `--run` |

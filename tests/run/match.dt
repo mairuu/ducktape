@@ -1,5 +1,7 @@
 # match compilation: literal/wildcard/bind patterns, struct/tuple/variant
 # patterns (with shorthand + renamed fields), nested patterns, guards.
+# A tuple struct is only matchable through its constructor spelling, so
+# `Pair(a, b)` is the one arm that has to cover the type by itself.
 #> literal-one
 #> other-5
 #> struct x=1 y positive: 2
@@ -11,10 +13,13 @@
 #> Circle area
 #> Rect area
 #> unit
+#> tuple struct 7 8
 struct Point {
     x: Int,
     y: Int,
 }
+
+struct Pair(Int, Int)
 
 enum Shape {
     Circle(Float),
@@ -64,6 +69,12 @@ fun describe_shape(s: Shape) -> String {
     };
 }
 
+fun describe_tuple_struct(p: Pair) -> String {
+    return match p {
+        Pair(a, b) => "tuple struct {a} {b}",
+    };
+}
+
 fun main() {
     print(describe_int(1));
     print(describe_int(5));
@@ -80,4 +91,6 @@ fun main() {
     print(describe_shape(Shape::Circle(1.0)));
     print(describe_shape(Shape::Rect { w: 1.0, h: 2.0 }));
     print(describe_shape(Shape::Point));
+
+    print(describe_tuple_struct(Pair(7, 8)));
 }

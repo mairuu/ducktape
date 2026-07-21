@@ -1,0 +1,67 @@
+# a `var` binding is an irrefutable pattern, lowered by the match compiler's
+# bind pass against a hidden local holding the initializer.
+#> 1
+#> 2.5
+#> 7
+#> 30
+#> 24
+#> w: 10 11
+#> 14
+#> 24
+#> 303
+#> 15s
+struct Point { x: Int, y: Int }
+struct Pair(Int, Int)
+struct Wrap { inner: Point, tag: String }
+
+fun make_point() -> Point {
+  return Point { x: 3, y: 4 };
+}
+
+fun main() {
+  var (a, b) = (1, 2.5);
+  print(a);
+  print(b);
+
+  var Point { x, y } = make_point();
+  print(x + y);
+
+  # a tuple struct is destructured with the constructor spelling
+  var Pair(p, q) = Pair(5, 6);
+  print(p * q);
+
+  # nested
+  var (m, (n, o)) = (7, (8, 9));
+  print(m + n + o);
+
+  # a field pattern that renames, around a nested struct pattern
+  var Wrap { inner: Point { x: ix, y: iy }, tag } = Wrap {
+    inner: Point { x: 10, y: 11 },
+    tag: "w",
+  };
+  print("{tag}: {ix} {iy}");
+
+  # `_` binds nothing, at the top level or inside
+  var _ = 12;
+  var (_, keep) = (13, 14);
+  print(keep);
+
+  # a destructured name is a local like any other: assignable, and usable
+  # from an inner scope
+  var (sum, step) = (0, 5);
+  for i in 0..3 {
+    var (lo, hi) = (i, i * 2);
+    sum = sum + lo + hi + step;
+  }
+  print(sum);
+
+  # ... and capturable, which means the hidden subject local must not
+  # disturb upvalue slots
+  var (base, mult) = (100, 3);
+  var scale = |v: Int| => (v + base) * mult;
+  print(scale(1));
+
+  # an annotation applies to the whole initializer
+  var (ta, tb): (Int, String) = (15, "s");
+  print("{ta}{tb}");
+}

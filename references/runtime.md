@@ -183,9 +183,11 @@ the stack in place, decrementing `sp` only after the result exists).
 - Closures (`compile_closure`): see "Closures & upvalues" below.
 - Generic functions, methods and impls (`compile_fun_body` under a `Subst`):
   see "Monomorphisation" below.
-- Anything outside the subset (destructuring `var` bindings, a default method
-  the impl inherited — which has no `FunDef`, so no chunk — and `print` named
-  as a value rather than called) emits a source-anchored diagnostic
+- Destructuring `var` bindings (`compile_destructure`): see "Match
+  compilation" below.
+- Anything outside the subset (a default method the impl inherited — which
+  has no `FunDef`, so no chunk — and `print` named as a value rather than
+  called) emits a source-anchored diagnostic
   `"... is not supported by the VM yet"` and fails codegen — it never
   crashes at runtime.
 
@@ -223,6 +225,24 @@ Falling past every arm hits `OP_MATCH_FAIL`. The checker now enforces
 exhaustiveness (`architecture.md` "Match exhaustiveness"), but a guarded arm
 cannot count towards coverage, so a match whose only applicable arms are
 guarded can still fall through — this stays a real, reachable runtime error.
+
+#### Destructuring a `var`
+
+A `var` binding is that machinery with no arms: `compile_destructure` is the
+same two passes over one pattern, against a hidden local holding the
+initializer. `var x = e;` keeps the old shape — the initializer's own stack
+slot becomes the local, no temp — and every other pattern evaluates the
+initializer into an anonymous local that the accessors read from, appending
+the bound names above it. The temp costs one slot for the rest of the scope,
+which is what keeps each bound name a plain local: assignable, capturable by
+a closure, and popped by the ordinary scope-close path.
+
+The test pass runs even though the checker rejects refutable bindings,
+because its answer is tri-state — an unsolved column type reports nothing
+(`architecture.md` "Binding patterns"). For an irrefutable pattern
+`compile_pattern_test` emits nothing at all, so the common case costs zero
+instructions; anything it does emit traps through `OP_MATCH_FAIL` rather than
+binding names out of a value that never had the shape.
 
 ### Methods
 

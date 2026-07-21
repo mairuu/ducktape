@@ -292,6 +292,25 @@ A guarded arm contributes no row at all — whether it matches is a runtime
 question, so it can never be what makes a match exhaustive. That is also why
 `OP_MATCH_FAIL` stays reachable (`runtime.md`).
 
+### Binding patterns (`var`)
+
+A `var` binding is the same `Pattern` a match arm carries — there is no
+separate binding grammar. `check_binding_pattern` runs `check_pattern` against
+the initializer's type (which defines every name the pattern binds into the
+enclosing scope, exactly as a match arm does) and then asks the *same*
+exhaustiveness question over a one-row matrix: a binding is a match with one
+arm and no guard, so irrefutable is precisely exhaustive. `EXH_NO` is the
+"refutable pattern in a 'var' binding" diagnostic; `EXH_UNKNOWN` reports
+nothing, for the reason above.
+
+When the pattern cannot be checked — a poisoned initializer, or a mismatch
+that stopped the walk partway — `bind_pattern_poison` defines the remaining
+names as poison. `vscope_lookup` returns the *first* entry it finds, so the
+correctly-typed names an aborted `check_pattern` already defined still win,
+and only the ones it never reached come back poisoned. Without it one bad
+initializer becomes an "undefined variable" for every name it was meant to
+bind.
+
 ### Impls and method lookup
 
 `ImplIndex` is a flat list. `impl_index_method` matches a receiver type

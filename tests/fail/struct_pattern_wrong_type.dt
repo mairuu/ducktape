@@ -1,0 +1,11 @@
+#! expect: struct pattern 'B' does not match expected type 'A'
+# the path names *a* struct, but field types are read off it while the value
+# has A's layout — so without this check `x` binds as String over an Int.
+struct A { x: Int }
+struct B { x: String }
+
+fun main() {
+    var a = A { x: 1 };
+    var B { x } = a;
+    print(x + "!");
+}

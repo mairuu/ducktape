@@ -691,7 +691,6 @@ static void dump_path(const Path *path, int indent) {
 }
 
 static void dump_typenode(const TypeNode *tn, int indent);
-static void dump_binding_pat(const BindingPat *bp, int indent);
 
 void dump_type(const Type *t) {
   if (!t) {
@@ -875,32 +874,6 @@ void dump_pattern(const Pattern *p, int indent) {
     for (int i = 0; i < p->as.tuple.count; i++) {
       dump_pattern(p->as.tuple.elems[i], indent + 1);
     }
-    break;
-  }
-}
-
-static void dump_binding_pat(const BindingPat *bp, int indent) {
-  ind(indent);
-  switch (bp->kind) {
-  case BIND_IDENT:
-    fprintf(stdout, "Bind: " SV_FMT "\n", SV_ARG(bp->as.ident));
-    break;
-  case BIND_TUPLE:
-    fprintf(stdout, "BindTuple: (");
-    for (int i = 0; i < bp->as.tuple.count; i++) {
-      fprintf(stdout, SV_FMT, SV_ARG(bp->as.tuple.names[i]));
-      if (i < bp->as.tuple.count - 1)
-        fprintf(stdout, ", ");
-    }
-    fprintf(stdout, ")\n");
-    break;
-  case BIND_STRUCT:
-    fprintf(stdout, "BindStruct: ");
-    dump_path(&bp->as.struc.path, indent + 1);
-    fprintf(stdout, "\n");
-    break;
-  case BIND_POISON:
-    fprintf(stdout, "Bind: <POISON>\n");
     break;
   }
 }
@@ -1184,7 +1157,7 @@ void dump_stmt(const Stmt *s, int indent) {
     break;
   case STMT_VAR:
     fprintf(stdout, "VarStmt\n");
-    dump_binding_pat(&s->as.var_stmt.binding, indent + 1);
+    dump_pattern(s->as.var_stmt.binding, indent + 1);
     if (s->as.var_stmt.type_annotation) {
       dump_typenode(s->as.var_stmt.type_annotation, indent + 1);
     }
@@ -1301,7 +1274,7 @@ void dump_decl(const Decl *d, int indent) {
 
   case DECL_VAR:
     fprintf(stdout, "VarDecl\n");
-    dump_binding_pat(&d->as.var_decl.binding, indent + 1);
+    dump_pattern(d->as.var_decl.binding, indent + 1);
     if (d->as.var_decl.initializer) {
       dump_expr(d->as.var_decl.initializer, indent + 1);
     }

@@ -57,7 +57,12 @@ pub fun process_data<T>(data: T) -> Result<Int, String> {
     var shown: String = render(p);
     # `is_visible` has a default body the impl omits — inherited from the trait
     var visible: Bool = p.is_visible();
+    # a `var` binding is an irrefutable pattern: tuples, named-field structs,
+    # tuple structs, nesting and `_` all bind the same way a match arm does
     var (a, b) = (1, 2.5);
+    var Point { x: px, y: _ } = p;
+    var Wrapper(inner, tag) = Wrapper(true, 7);
+    var (nested, (deep, _)) = (a, (px, tag));
     var unit_val: () = ();
 
     var count = 0;

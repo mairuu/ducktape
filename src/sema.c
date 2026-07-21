@@ -1648,6 +1648,7 @@ bool tc_resolve_module(TypeChecker *tc, Module *m) {
 static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint);
 static Type *trait_project(Type *t, TraitDef *trait, Type *self_to,
                            ImplDef *impl, Allocator *al);
+static void check_binding_pattern(CheckCtx *ctx, Pattern *pat, Type *init_ty);
 
 static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
   switch (stmt->kind) {
@@ -1673,147 +1674,7 @@ static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
               : ctx->tc->t_poison;
     }
 
-    switch (var->binding.kind) {
-    case BIND_IDENT: {
-      vscope_define(ctx->vscope, var->binding.as.ident, init_ty, ctx->diags,
-                    stmt->span, NULL);
-      break;
-    }
-    case BIND_TUPLE: {
-      BindingPatTuple *pat = &var->binding.as.tuple;
-
-      if (type_is_poison(init_ty)) {
-        for (int i = 0; i < pat->count; i++) {
-          vscope_define(ctx->vscope, pat->names[i], ctx->tc->t_poison,
-                        ctx->diags, stmt->span, NULL);
-        }
-        break;
-      }
-
-      switch (init_ty->kind) {
-      case TY_TUPLE: {
-        if (init_ty->as.tuple.elem_count != pat->count) {
-          diag_error(
-              ctx->diags, stmt->span,
-              "tuple destructuring count mismatch: expected %d but got %d",
-              pat->count, init_ty->as.tuple.elem_count);
-          break;
-        }
-
-        for (int i = 0; i < pat->count; i++) {
-          Type *ty = init_ty->as.tuple.elem_types[i];
-          vscope_define(ctx->vscope, pat->names[i], ty, ctx->diags, stmt->span,
-                        NULL);
-        }
-        break;
-      }
-      case TY_STRUCT: {
-        StructDef *def = init_ty->as.struc.def;
-        if (!def->is_tuple) {
-          char ty_buf[64];
-          type_sprintf(init_ty, ty_buf, sizeof(ty_buf));
-          diag_error(ctx->diags, stmt->span,
-                     "cannot destructure type '%s' as a tuple", ty_buf);
-          break;
-        }
-        if (def->field_count != pat->count) {
-          diag_error(
-              ctx->diags, stmt->span,
-              "tuple destructuring count mismatch: expected %d but got %d",
-              pat->count, def->field_count);
-          break;
-        }
-
-        for (int i = 0; i < pat->count; i++) {
-          Type *ty = def->fields[i].type;
-          vscope_define(ctx->vscope, pat->names[i], ty, ctx->diags, stmt->span,
-                        NULL);
-        }
-        break;
-      }
-      default: {
-        char ty_buf[64];
-        type_sprintf(init_ty, ty_buf, sizeof(ty_buf));
-        diag_error(ctx->diags, stmt->span,
-                   "cannot destructure type '%s' as a tuple", ty_buf);
-        break;
-      }
-      }
-      break;
-    }
-    case BIND_STRUCT: {
-      BindingPatStruct *pat = &var->binding.as.struc;
-
-      if (type_is_poison(init_ty)) {
-        for (int i = 0; i < pat->field_count; i++) {
-          vscope_define(ctx->vscope, pat->field_names[i], ctx->tc->t_poison,
-                        ctx->diags, stmt->span, NULL);
-        }
-        break;
-      }
-
-      if (init_ty->kind != TY_STRUCT) {
-        char ty_buf[64];
-        type_sprintf(init_ty, ty_buf, sizeof(ty_buf));
-        diag_error(ctx->diags, stmt->span,
-                   "cannot destructure type '%s' as a struct", ty_buf);
-        break;
-      }
-
-      PathRes r;
-      if (!cctx_resolve_path(ctx, &pat->path, &r)) {
-        break;
-      }
-
-      if (r.kind != PATHRES_TYPE || r.type->kind != TY_STRUCT) {
-        char ty_buf[64];
-        type_sprintf(r.type, ty_buf, sizeof(ty_buf));
-        diag_error(ctx->diags, stmt->span,
-                   "cannot destructure type '%s' as a struct", ty_buf);
-        break;
-      }
-
-      if (r.type->as.struc.def != init_ty->as.struc.def) {
-        char expected_buf[64], actual_buf[64];
-        type_sprintf(r.type, expected_buf, sizeof(expected_buf));
-        type_sprintf(init_ty, actual_buf, sizeof(actual_buf));
-        diag_error(
-            ctx->diags, stmt->span,
-            "struct destructuring type mismatch: expected '%s' but got '%s'",
-            expected_buf, actual_buf);
-        break;
-      }
-
-      StructDef *def = init_ty->as.struc.def;
-      if (def->is_tuple) {
-        diag_error(ctx->diags, stmt->span,
-                   "cannot destructure tuple struct '" SV_FMT
-                   "' with a struct pattern; use tuple destructuring: "
-                   "var (a, b) = ...",
-                   SV_ARG(def->name));
-        for (int i = 0; i < pat->field_count; i++) {
-          vscope_define(ctx->vscope, pat->field_names[i], ctx->tc->t_poison,
-                        ctx->diags, stmt->span, NULL);
-        }
-        break;
-      }
-
-      for (int i = 0; i < pat->field_count; i++) {
-        StringView name = pat->field_names[i];
-        FieldIdent ident = {.name = name};
-        FieldDef *field_def =
-            find_struct_field(def, ident, ctx->diags, stmt->span);
-        if (!field_def) {
-          continue;
-        }
-        vscope_define(ctx->vscope, name, field_def->type, ctx->diags,
-                      stmt->span, NULL);
-      }
-      break;
-    }
-    default:
-      assert(false && "unhandled var binding kind in resolve_stmt");
-    }
+    check_binding_pattern(ctx, var->binding, init_ty);
     break;
   }
   case STMT_BREAK: {
@@ -2169,6 +2030,20 @@ static bool check_struct_pattern(CheckCtx *ctx, Pattern *pattern,
     return false;
   }
 
+  // the path names a struct, but not necessarily *this* one. Field types are
+  // read off `struct_def` while the value has `expected_ty`'s layout, so
+  // without this every same-shaped struct is silently interchangeable and a
+  // field comes back with the wrong type entirely. `check_variant_pattern`
+  // has always made the matching check for enums.
+  if (expected_ty->as.struc.def != struct_def) {
+    char et[64];
+    type_sprintf(expected_ty, et, sizeof(et));
+    diag_error(ctx->diags, pattern->span,
+               "struct pattern '" SV_FMT "' does not match expected type '%s'",
+               SV_ARG(struct_def->name), et);
+    return false;
+  }
+
   if (pattern->as.struc.field_count > 0) {
     if (struct_def->is_tuple &&
         pattern->as.struc.fields[0].ident.name.len > 0) {
@@ -2372,9 +2247,14 @@ static bool check_pattern(CheckCtx *ctx, Pattern *pattern, Type *expected_ty) {
     }
 
     if (r.kind == PATHRES_TYPE && r.type->kind == TY_STRUCT) {
+      // `*pattern = new` replaces the whole node, so resolved_type has to be
+      // carried across: exhaustiveness reads the column type off it, and a
+      // NULL there reads as "unconstrained" — which made every tuple-struct
+      // pattern look like a coverage gap.
       Pattern new = {
           .kind = PAT_STRUCT,
           .span = pattern->span,
+          .resolved_type = expected_ty,
           .as.struc =
               {
                   .path = pattern->as.variant.path,
@@ -2400,6 +2280,7 @@ static bool check_pattern(CheckCtx *ctx, Pattern *pattern, Type *expected_ty) {
       Pattern new = {
           .kind = PAT_VARIANT,
           .span = pattern->span,
+          .resolved_type = expected_ty, // see the mirrored rewrite above
           .as.variant =
               {
                   .path = pattern->as.struc.path,
@@ -2813,6 +2694,76 @@ static void check_match_exhaustive(CheckCtx *ctx, Expr *expr,
     diag_error(ctx->diags, expr->span,
                "match is not exhaustive: add a '_' arm to cover the "
                "remaining cases");
+  }
+}
+
+// define every name `pat` binds as poison. Reached when the pattern could not
+// be checked against a real type: the names are still in scope as far as the
+// programmer is concerned, so binding them suppresses a cascade of
+// "undefined variable" errors on top of the one real diagnostic.
+static void bind_pattern_poison(CheckCtx *ctx, Pattern *pat) {
+  if (pat == NULL) {
+    return;
+  }
+
+  switch (pat->kind) {
+  case PAT_WILDCARD:
+  case PAT_LITERAL:
+    break;
+  case PAT_BIND:
+    vscope_define(ctx->vscope, pat->as.bind.name, ctx->tc->t_poison, ctx->diags,
+                  pat->span, NULL);
+    break;
+  case PAT_TUPLE:
+    for (int i = 0; i < pat->as.tuple.count; i++) {
+      bind_pattern_poison(ctx, pat->as.tuple.elems[i]);
+    }
+    break;
+  case PAT_STRUCT:
+  case PAT_VARIANT: {
+    FieldPat *fields =
+        pat->kind == PAT_STRUCT ? pat->as.struc.fields : pat->as.variant.fields;
+    int count = pat->kind == PAT_STRUCT ? pat->as.struc.field_count
+                                        : pat->as.variant.field_count;
+    for (int i = 0; i < count; i++) {
+      if (fields[i].sub_pattern != NULL) {
+        bind_pattern_poison(ctx, fields[i].sub_pattern);
+      } else {
+        vscope_define(ctx->vscope, fields[i].ident.name, ctx->tc->t_poison,
+                      ctx->diags, fields[i].span, NULL);
+      }
+    }
+    break;
+  }
+  }
+}
+
+// a `var` binding is a match with one arm and no guard, so "irrefutable" is
+// exactly "exhaustive" over a one-row matrix — the same question
+// check_match_exhaustive asks, and the same tri-state answer: a column whose
+// type inference has not pinned down reports nothing rather than guessing.
+static void check_binding_pattern(CheckCtx *ctx, Pattern *pat, Type *init_ty) {
+  if (type_is_poison(init_ty)) {
+    bind_pattern_poison(ctx, pat);
+    return;
+  }
+
+  if (!check_pattern(ctx, pat, init_ty)) {
+    // check_pattern reported the mismatch and stopped where it found it, so
+    // some of the names below that point were never defined.
+    bind_pattern_poison(ctx, pat);
+    return;
+  }
+
+  Pattern **cols = al_alloc_zero(ctx->al, sizeof(Pattern *));
+  cols[0] = pat;
+  PatRow row = {.cols = cols};
+  PatMatrix m = {.rows = &row, .row_count = 1, .width = 1};
+
+  if (matrix_covers(ctx, &m) == EXH_NO) {
+    diag_error(ctx->diags, pat->span,
+               "refutable pattern in a 'var' binding: it does not cover every "
+               "value of the initializer; use 'match' instead");
   }
 }
 

@@ -17,8 +17,9 @@ useItem        = IDENT ( "as" IDENT )? ;
                  (* leading segments name the file, the last segment or the
                     brace group names the items — language.md "Modules" *)
 
-varDecl        = "var" binding ( ":" type )? "=" expr ";" ;
-                 (* file-scope var parses but is rejected later — known gap *)
+varDecl        = "var" pattern ( ":" type )? "=" expr ";" ;
+                 (* the pattern must be irrefutable — checked, not parsed;
+                    file-scope var parses but is rejected later — known gap *)
 
 funDecl        = "fun" IDENT typeParams? "(" paramList? ")"
                  ( "->" type )? whereClause?
@@ -82,10 +83,6 @@ stmt           = varDecl
                | expr ";"
                | ifExpr | matchExpr | whileExpr | forExpr ;
                  (* block-form expressions need no ";" as statements *)
-
-binding        = IDENT
-               | "(" IDENT ( "," IDENT )* ")"            (* tuple  *)
-               | path "{" IDENT ( "," IDENT )* ","? "}" ; (* struct *)
 
 (* ── expressions (lowest to highest precedence) ───────────────────────── *)
 

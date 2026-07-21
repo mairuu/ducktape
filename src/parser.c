@@ -192,111 +192,8 @@ typedef enum {
 
 static bool parse_path(Parser *p, PathParseMode mode, Path *out);
 
-static BindingPat parse_binding(Parser *p) {
-  if (check_tok(p, TOKEN_IDENT)) {
-    Span start = current_tok_span(p);
-
-    Path path;
-    if (!parse_path(p, PATH_USE, &path)) {
-      return (BindingPat){.kind = BIND_POISON, .span = current_tok_span(p)};
-    }
-
-    if (match_tok(p, TOKEN_LBRACE)) {
-      StringView field_names[16];
-      int field_count = 0;
-
-      if (!check_tok(p, TOKEN_RBRACE)) {
-        do {
-          if (field_count >= 16) {
-            error_at(p, current_tok_span(p),
-                     "too many fields in struct pattern");
-            return (BindingPat){.kind = BIND_POISON,
-                                .span = current_tok_span(p)};
-          }
-          if (check_tok(p, TOKEN_RBRACE)) {
-            break;
-          }
-          if (!consume_tok(p, TOKEN_IDENT,
-                           "expected field name in struct pattern")) {
-            return (BindingPat){.kind = BIND_POISON,
-                                .span = current_tok_span(p)};
-          }
-          field_names[field_count++] = previous_tok(p)->lexeme;
-        } while (match_tok(p, TOKEN_COMMA));
-
-        if (!consume_tok(p, TOKEN_RBRACE,
-                         "expected '}' after struct pattern fields")) {
-          return (BindingPat){.kind = BIND_POISON, .span = current_tok_span(p)};
-        }
-      }
-
-      BindingPat b = (BindingPat){
-          .kind = BIND_STRUCT,
-          .span = span_merge(start, previous_tok_span(p)),
-          .as.struc.path = path,
-          .as.struc.field_names =
-              al_alloc(p->al, sizeof(StringView) * field_count),
-          .as.struc.field_count = field_count,
-      };
-      memcpy(b.as.struc.field_names, field_names,
-             sizeof(StringView) * field_count);
-      return b;
-    }
-
-    if (path.count > 1) {
-      error_at(p, start, "unexpected path in binding pattern");
-      return (BindingPat){.kind = BIND_POISON, .span = current_tok_span(p)};
-    }
-
-    return (BindingPat){
-        .kind = BIND_IDENT,
-        .span = path.span,
-        .as.ident = path.segments[0].name,
-    };
-  }
-
-  if (match_tok(p, TOKEN_LPAREN)) {
-    // tuple pattern
-    StringView names[16];
-    int count = 0;
-
-    Token *start_tok = previous_tok(p);
-
-    if (!check_tok(p, TOKEN_RPAREN)) {
-      do {
-        if (count >= 16) {
-          error_at(p, current_tok_span(p),
-                   "too many elements in tuple pattern");
-          return (BindingPat){.kind = BIND_POISON, .span = current_tok_span(p)};
-        }
-        if (check_tok(p, TOKEN_RPAREN)) {
-          break;
-        }
-        if (!consume_tok(p, TOKEN_IDENT,
-                         "expected identifier in tuple pattern")) {
-          return (BindingPat){.kind = BIND_POISON, .span = current_tok_span(p)};
-        }
-        names[count++] = previous_tok(p)->lexeme;
-      } while (match_tok(p, TOKEN_COMMA));
-    }
-
-    if (!consume_tok(p, TOKEN_RPAREN, "expected ')' after tuple pattern")) {
-      return (BindingPat){.kind = BIND_POISON, .span = current_tok_span(p)};
-    }
-
-    BindingPat b = (BindingPat){
-        .kind = BIND_TUPLE,
-        .span = span_merge(token_span(start_tok), previous_tok_span(p)),
-        .as.tuple.names = al_alloc(p->al, sizeof(StringView) * count),
-        .as.tuple.count = count,
-    };
-    memcpy(b.as.tuple.names, names, sizeof(StringView) * count);
-    return b;
-  }
-
-  error_at(p, current_tok_span(p), "expected identifier in binding pattern");
-  return (BindingPat){.kind = BIND_POISON, .span = current_tok_span(p)};
-}
+// a `var` binding is a pattern; the checker rejects the refutable ones.
+static Pattern *parse_pattern(Parser *p);
 
 static TypeNode *parse_type(Parser *p) {
   TypeNode *base = NULL;
@@ -1965,9 +1862,9 @@ static Decl *parse_var_decl(Parser *p, bool is_pub) {
   }
   Token *var_tok = previous_tok(p);
 
-  BindingPat binding = parse_binding(p);
-  if (binding.kind == BIND_POISON) {
-    return ast_decl(DECL_POISON, binding.span, p->al);
+  Pattern *binding = parse_pattern(p);
+  if (binding == NULL) {
+    return ast_decl(DECL_POISON, current_tok_span(p), p->al);
   }
 
   TypeNode *ann = NULL;
@@ -2011,9 +1908,9 @@ static Stmt *parse_var_stmt(Parser *p) {
   }
   Token *var_tok = previous_tok(p);
 
-  BindingPat binding = parse_binding(p);
-  if (binding.kind == BIND_POISON) {
-    return ast_stmt(STMT_POISON, binding.span, p->al);
+  Pattern *binding = parse_pattern(p);
+  if (binding == NULL) {
+    return ast_stmt(STMT_POISON, current_tok_span(p), p->al);
   }
 
   TypeNode *ann = NULL;
