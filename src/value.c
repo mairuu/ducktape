@@ -3,14 +3,62 @@
 #include "object.h"
 #include "string_utils.h"
 
+#include <math.h>
+#include <stdlib.h>
+#include <string.h>
+
+int value_format_float(double f, char *buf, size_t cap) {
+  if (isnan(f)) {
+    return snprintf(buf, cap, "NaN");
+  }
+  if (isinf(f)) {
+    return snprintf(buf, cap, f < 0 ? "-inf" : "inf");
+  }
+
+  // the fewest significant digits that still read back as the same double:
+  // fewer would lose the value, more would print noise the user never typed.
+  // 17 always suffice for a binary64.
+  char sci[32];
+  int digits = 17;
+  for (int d = 1; d <= 17; d++) {
+    snprintf(sci, sizeof(sci), "%.*e", d - 1, f);
+    if (strtod(sci, NULL) == f) {
+      digits = d;
+      break;
+    }
+  }
+  int exp10 = (int)strtol(strchr(sci, 'e') + 1, NULL, 10);
+
+  int len;
+  if (exp10 < -5 || exp10 >= 17) {
+    // far enough out that the digits would be mostly zeros
+    len = snprintf(buf, cap, "%.*e", digits - 1, f);
+  } else {
+    // plain notation in the range a reader can still count: `300.0`, not the
+    // `3e+02` that picking the shortest `%g` would give.
+    int decimals = digits - 1 - exp10;
+    len = snprintf(buf, cap, "%.*f", decimals < 0 ? 0 : decimals, f);
+  }
+
+  // `%g` drops the point on a whole value, which would make `1.0` print as
+  // `1` — indistinguishable from the Int.
+  if (!strpbrk(buf, ".e") && (size_t)len + 3 <= cap) {
+    len += snprintf(buf + len, cap - (size_t)len, ".0");
+  }
+  return len;
+}
+
 void value_print(Value v, FILE *out) {
   switch (v.kind) {
   case VAL_INT:
     fprintf(out, "%lld", (long long)v.as.i);
     break;
-  case VAL_FLOAT:
-    fprintf(out, "%g", v.as.f);
+  case VAL_FLOAT: {
+    char buf[32];
+    value_format_float(v.as.f, buf, sizeof(buf));
+    fputs(buf, out);
     break;
+  }
   case VAL_BOOL:
     fprintf(out, v.as.b ? "true" : "false");
     break;

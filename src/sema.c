@@ -2393,6 +2393,29 @@ static bool check_pattern(CheckCtx *ctx, Pattern *pattern, Type *expected_ty) {
     break;
   }
   case PAT_BIND: {
+    // mirrors the expression side: a bare unit struct name is a constructor,
+    // not a binding, so `match x { Marker => ... }` tests for `Marker`
+    // instead of silently matching everything under that name.
+    TypeEntry *te = tscope_lookup(ctx->tscope, pattern->as.bind.name);
+    if (te && te->type->kind == TY_STRUCT &&
+        te->as.struct_def->field_count == 0) {
+      PathSegment *seg = al_alloc_zero(ctx->al, sizeof(PathSegment));
+      seg->name = pattern->as.bind.name;
+      Pattern new = {
+          .kind = PAT_STRUCT,
+          .span = pattern->span,
+          .resolved_type = expected_ty,
+          .as.struc =
+              {
+                  .path = {.segments = seg, .count = 1, .span = pattern->span},
+                  .field_count = 0,
+                  .fields = NULL,
+              },
+      };
+      *pattern = new;
+      return check_struct_pattern(ctx, pattern, expected_ty, te->as.struct_def);
+    }
+
     vscope_define(ctx->vscope, pattern->as.bind.name, expected_ty, ctx->diags,
                   pattern->span, NULL);
     break;
@@ -3639,6 +3662,29 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     bool crossed_fn = false;
     VarEntry *ve = vscope_lookup(ctx->vscope, name, &crossed_fn);
     if (!ve) {
+      // a bare unit struct names a value as well as a type: `struct Unit;`
+      // then `var u = Unit;`. Consulted only after the value scope, so a
+      // binding of that name would still win — though the mirrored rewrite in
+      // `check_pattern` means one can no longer be created.
+      TypeEntry *te = tscope_lookup(ctx->tscope, name);
+      if (te && te->type->kind == TY_STRUCT &&
+          te->as.struct_def->field_count == 0) {
+        // the struct-init path resolves the path itself, so type arguments
+        // and the hint are handled the same as for `Unit {}`.
+        ExprStructInit init = {
+            .path = expr->as.path_expr.path,
+            .fields = NULL,
+            .field_count = 0,
+            .resolved_struct = NULL,
+        };
+        *expr = (Expr){
+            .kind = EXPR_STRUCT_INIT,
+            .span = expr->span,
+            .as.struct_init = init,
+        };
+        return resolve_expr(ctx, expr, hint);
+      }
+
       diag_error(ctx->diags, expr->span, "undefined variable '%.*s'", name.len,
                  name.chars);
       result = ctx->tc->t_poison;

@@ -1,7 +1,7 @@
 # enum variant instances: unit/tuple/struct-like variants, printing,
 # structural ==
 #> Circle(2.5)
-#> Rect { w: 3, h: 4 }
+#> Rect { w: 3.0, h: 4.0 }
 #> Point
 #> true
 #> false

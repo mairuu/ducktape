@@ -1,0 +1,29 @@
+# a bare unit struct is a value under its own name, in an expression and in a
+# pattern — `Marker` needs no `{}` suffix.
+#> Marker
+#> true
+#> 7
+#> [Marker, Marker]
+#> Wrap
+#> matched Marker
+
+struct Marker;
+struct Wrap<T>;
+
+fun take(m: Marker) -> Int => 7
+
+fun main() {
+  var m = Marker;
+  print(m);
+  print(m == Marker {});
+  print(take(Marker));
+  print([Marker, Marker]);
+
+  # a generic unit struct still takes its type argument from the annotation
+  var w: Wrap<Int> = Wrap;
+  print(w);
+
+  match m {
+    Marker => print("matched Marker"),
+  }
+}

@@ -656,15 +656,14 @@ via `Module.decl_base`) and is not part of the main line.
 
 ## Known warts to clean up opportunistically
 
-- `value_print` renders a `Float` through `%g`: `1.0` prints as `1`,
-  indistinguishable from the `Int`, and `1.0 / 3.0` prints as `0.333333` — six
-  significant figures, so output does not round-trip. Both bite a standard
-  library the moment it grows a `to_string`, and every `#>` expectation written
-  before a fix has to be revisited after one
-- a **bare** unit struct cannot be used as a value: `struct Unit;` then
-  `var u = Unit;` reports "undefined variable 'Unit'". The *qualified* case was
-  fixed in 5c-i (`Status::Off`, and `E::A` works today), so this is the
-  single-segment path missing the same rewrite
+- a `Float` still has no user-facing formatting control: `value_format_float`
+  picks the shortest round-tripping decimal and that is all there is. A
+  `to_string` with a precision or a width needs a real formatting story
+  (`runtime.md` "Values")
+- a unit struct's name cannot be bound as a variable any more: `var Marker =
+  7;` is a struct pattern against an `Int`, and the diagnostic ("expected
+  struct type in struct pattern") describes the rewrite rather than the
+  mistake. Rust behaves the same way; the message could be kinder
 - no shadowing diagnostics for `var` (`vscope_define` todo); top-level item
   names do collide, but a `var` may silently shadow one in the same scope
 - a refutable `var` binding whose column type inference never pinned down is

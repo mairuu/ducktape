@@ -122,6 +122,8 @@ closure        = "|" ( closureParam ( "," closureParam )* )? "|"
 closureParam   = IDENT ( ":" type )? ;
 
 exprPath       = pathSegE ( "::" pathSegE )* ;
+                 (* a bare path may also be a value: a unit struct or a unit
+                    enum variant, rewritten to an initializer by the checker *)
 pathSegE       = IDENT ( "::" "<" type ( "," type )* ">" )? ;
                  (* expression position requires turbofish: Point::<Int>:: *)
 structInit     = "{" fieldInit ( "," fieldInit )* ","? "}" ;
@@ -140,9 +142,20 @@ pattern        = "_"
                | path ( "(" pattern ( "," pattern )* ")"
                       | "{" fieldPat ( "," fieldPat )* ","? "}" )?
                | IDENT ;                                (* binding *)
+                 (* a bare IDENT naming a unit struct is that struct's
+                    pattern, not a binding — decided by the checker *)
 fieldPat       = IDENT ( ":" pattern )? ;
 
 path           = IDENT ( "::" IDENT )* ;
+
+(* ── numbers ──────────────────────────────────────────────────────────── *)
+
+INT            = DIGIT+ ;
+FLOAT          = DIGIT+ ( "." DIGIT+ )? EXPONENT
+               | DIGIT+ "." DIGIT+ ;
+EXPONENT       = ( "e" | "E" ) ( "+" | "-" )? DIGIT+ ;
+                 (* an exponent with no digits is not consumed: `1e` scans as
+                    INT 1 then IDENT e *)
 
 (* ── strings ──────────────────────────────────────────────────────────── *)
 

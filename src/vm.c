@@ -115,7 +115,7 @@ static ObjString *stringify(Heap *heap, Value v) {
     len = snprintf(buf, sizeof(buf), "%lld", (long long)v.as.i);
     break;
   case VAL_FLOAT:
-    len = snprintf(buf, sizeof(buf), "%g", v.as.f);
+    len = value_format_float(v.as.f, buf, sizeof(buf));
     break;
   case VAL_BOOL:
     len = snprintf(buf, sizeof(buf), "%s", v.as.b ? "true" : "false");

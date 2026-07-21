@@ -225,13 +225,36 @@ static Token scan_number(Scanner *s) {
   while (isdigit(peek(s)))
     advance(s);
 
+  bool is_float = false;
+
   if (peek(s) == '.' && isdigit(peek_next(s))) {
     advance(s); // consume '.'
     while (isdigit(peek(s)))
       advance(s);
-    return make_token(s, TOKEN_FLOAT);
+    is_float = true;
   }
-  return make_token(s, TOKEN_INT);
+
+  // an exponent makes it a Float even without a point, so that every form the
+  // runtime prints (`1e+18`) is also a literal the scanner accepts.
+  if (peek(s) == 'e' || peek(s) == 'E') {
+    const char *rewind = s->current;
+    int rewind_col = s->col;
+    advance(s); // consume 'e'
+    if (peek(s) == '+' || peek(s) == '-') {
+      advance(s);
+    }
+    if (isdigit(peek(s))) {
+      while (isdigit(peek(s)))
+        advance(s);
+      is_float = true;
+    } else {
+      // `1e` is the Int 1 followed by an identifier
+      s->current = rewind;
+      s->col = rewind_col;
+    }
+  }
+
+  return make_token(s, is_float ? TOKEN_FLOAT : TOKEN_INT);
 }
 
 // ── Keyword table

@@ -33,6 +33,16 @@ tuple structs, and enum instances the same way but with the variant's name
 and no enum qualifier (`Some(1)`, not `Option::Some(1)`), matching how Rust's
 `Debug` prints enums.
 
+Floats go through `value_format_float` (`src/value.c`), which both
+`value_print` and the VM's `stringify` call so `print(x)` and `"{x}"` never
+disagree. It picks the fewest significant digits that `strtod` reads back as
+the same double, then chooses notation: plain decimal while the exponent is in
+`[-5, 17)`, scientific outside it, and a `.0` suffix whenever neither a point
+nor an exponent survived — otherwise `1.0` would print as `1` and be
+indistinguishable from the `Int`. `NaN`, `inf`, and `-inf` are spelled out.
+The scanner accepts exponent literals (`1e+18`), so every form printed is one
+the language can also read.
+
 ## Bytecode (`include/chunk.h`)
 
 A `Chunk` per function (`FunDef->chunk`, arena-allocated): growable code

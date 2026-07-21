@@ -73,6 +73,9 @@ ending in `return` has type `!` (never), which unifies with anything.
 
 ## Expressions
 
+- Number literals: `12`, `2.5`, and an exponent form that is a `Float` with or
+  without a point (`1e-7`, `3E2`, `1.5e+10`). `1e` with no digits after it is
+  the `Int` `1` followed by the identifier `e`.
 - Arithmetic `+ - * / %` on numerics; `Int op Float` widens to `Float`.
   `+` also concatenates `String`s.
 - Comparison `< <= > >=` (numeric), `== !=` (same static type).
@@ -89,6 +92,9 @@ ending in `return` has type `!` (never), which unifies with anything.
   Unannotated params infer from a function-typed hint
   (`var f: fun(Int) -> Int = |x| => x + 1;`) or from use; a closure whose
   types can't be pinned down is an error. `break` cannot escape a closure.
+- A unit struct is a value under its bare name: `struct Marker;` then
+  `var m = Marker;`, no `{}` suffix. The name is looked up in the value scope
+  first, then as a zero-field struct.
 - Paths: `Result::Ok(5)`, `Point::new(..)`. Explicit type arguments use
   turbofish in expression position: `Point::<Int>::new(1, 2)`. A bare
   `Point::new(..)` on a generic type selects the impl by method name and
@@ -171,7 +177,10 @@ var m = match p {
 Patterns: literals, `_`, bindings, tuples `(a, b)`, variants
 `Result::Ok(v)` / `Status::Active`, structs `Point { x, y }` (including
 literal sub-patterns `x: 10`). A tuple struct is written with its constructor
-spelling, `Pair(a, b)`, in a pattern as in an expression.
+spelling, `Pair(a, b)`, in a pattern as in an expression, and so is a unit
+struct: a bare `Marker` is a test for that struct, not a binding. The cost is
+that a unit struct's name can no longer be bound as a variable — `var Marker =
+7;` is a struct pattern against an `Int` and is rejected.
 
 The same patterns are the binding form of `var`, restricted to the
 irrefutable ones — a `var` binding is a match with one arm and no guard, so
@@ -275,6 +284,12 @@ working as designed: object safety is only demanded where `dyn` is written.
 `print<T>(value)` — prints any value followed by a newline, returns `()`.
 Registered in every module; the only builtin so far, and the only thing that
 does not need importing.
+
+A `Float` prints — and interpolates — as the shortest decimal that reads back
+as the same double, always carrying a `.` or an exponent so it is never
+mistaken for an `Int`: `1.0`, `0.3333333333333333`, `300.0`, `1e+18`, `1e-07`,
+`-0.0`, `inf`, `-inf`, `NaN`. Exponent form takes over below `1e-5` and at
+`1e17`; every form printed is also a literal the scanner accepts.
 
 `use std::io::print;` is accepted and does nothing — it predates the embedded
 library and names a builtin that is already in scope. It is the one `std::`

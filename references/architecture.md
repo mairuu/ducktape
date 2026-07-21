@@ -361,6 +361,16 @@ type scope contexts (struct → associated fn, enum → variant). In
 resolved as a first-class function value; generic functions go through path
 resolution so their params are opened into the call's `Subst`.
 
+A bare name that the value scope does not know is looked up in the type scope
+before "undefined variable" is emitted: a zero-field struct there means the
+name is a unit-struct constructor, and the `EXPR_PATH` node is rewritten into
+an empty `EXPR_STRUCT_INIT` and re-resolved — the struct-init path already
+handles type arguments and the hint, so a generic `Wrap<Int>` works the same
+way. `check_pattern` makes the mirrored rewrite for `PAT_BIND`, so `Marker` in
+a pattern is a struct pattern rather than a binding that matches anything.
+Both consult the value scope first, which keeps an ordinary variable winning —
+though the pattern rewrite means such a variable can no longer be declared.
+
 ### Match exhaustiveness
 
 `check_match_exhaustive` (`src/sema.c`) runs at the end of

@@ -1,0 +1,47 @@
+# a Float always prints with a point or an exponent, so it never reads as an
+# Int, and it prints the shortest form that reads back as the same double.
+#> 1.0
+#> 1
+#> -2.5
+#> 0.1
+#> 0.3333333333333333
+#> 1e+18
+#> 1e-07
+#> 0.0
+#> -0.0
+#> inf
+#> -inf
+#> NaN
+#> [1.5, 2.0]
+#> Pair { a: 0.5, b: 3.0 }
+#> f=1.0 i=1
+#> true
+#> 300.0
+
+struct Pair { a: Float, b: Float }
+
+fun main() {
+  print(1.0);
+  print(1);
+  print(0.0 - 2.5);
+  print(0.1);
+  print(1.0 / 3.0);
+  print(1000000000.0 * 1000000000.0);
+  print(1e-7);
+  print(0.0);
+  print(0.0 * (0.0 - 1.0));
+
+  var inf = 1.0 / 0.0;
+  print(inf);
+  print(0.0 - inf);
+  print(inf - inf);
+
+  print([1.5, 2.0]);
+  print(Pair { a: 0.5, b: 3.0 });
+
+  print("f={1.0} i={1}");
+
+  # every printed form is also a literal the scanner accepts
+  print(1e+18 == 1000000000.0 * 1000000000.0);
+  print(3E2);
+}
