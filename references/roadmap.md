@@ -621,11 +621,31 @@ by appetite rather than by necessity.
    paths). Now also the reason a user's `impl Ord for Int` collides with
    `std::cmp`'s. Fixing the first is a scoping change; the second is parser
    plus `tc_link_imports`.
-3. **Wider slot spaces** — 256 functions/structs/enums program-wide, now
-   reached by *use* of generics rather than by how many are written, and by
-   trait-object vtables on top of that. A two-byte operand (or a
+3. **Native functions** — the standard library cannot grow past what the
+   language can already express: there is no array length in source, no push,
+   no string length/index/compare, and `print` is still the only builtin. The
+   design is settled and written up in `runtime.md` "Future → Native
+   functions" — a `NativeFn` on `FunDef` called through the existing
+   `OP_CALL`, declared as bodyless `@native`/`@intrinsic` signatures in std
+   modules. It should come out *net-negative* in compiler lines, since porting
+   `print` deletes three separate special cases.
+4. **Wider slot spaces** — 256 functions/structs/enums program-wide, now
+   reached by *use* of generics rather than by how many are written, by
+   trait-object vtables on top of that, and by natives once they take slots
+   too — three independent pressures on one byte. A two-byte operand (or a
    wide-operand opcode pair) lifts it.
-4. **Object-safe traits with associated types** — the object-safety rule
+
+   Worth weighing first, though: **reachability-based linking** may buy more
+   for less. `exe_link` currently gives every non-generic definition a slot
+   whether or not anything calls it, which is why importing `std::cmp` spends
+   two slots on `Int::cmp`/`Float::cmp` even when only one is used — and why a
+   growing std taxes every program that touches it. Generic definitions
+   already behave the right way (an uncalled one is never compiled and costs
+   nothing), so making non-generics match is the *consistent* fix rather than
+   a new mechanism. It needs a reachability walk from `main` through calls,
+   vtables, closures and `?`, which is real work — but it shrinks the pressure
+   instead of just moving the ceiling.
+5. **Object-safe traits with associated types** — the object-safety rule
    rejects `Self.Item` outright. Allowing `dyn Iterator` with the associated
    type *named* at the coercion site (`dyn Iterator<Item = Int>`) is the
    natural follow-on, and needs `dyn` to carry type arguments at all.
@@ -636,6 +656,15 @@ via `Module.decl_base`) and is not part of the main line.
 
 ## Known warts to clean up opportunistically
 
+- `value_print` renders a `Float` through `%g`: `1.0` prints as `1`,
+  indistinguishable from the `Int`, and `1.0 / 3.0` prints as `0.333333` — six
+  significant figures, so output does not round-trip. Both bite a standard
+  library the moment it grows a `to_string`, and every `#>` expectation written
+  before a fix has to be revisited after one
+- a **bare** unit struct cannot be used as a value: `struct Unit;` then
+  `var u = Unit;` reports "undefined variable 'Unit'". The *qualified* case was
+  fixed in 5c-i (`Status::Off`, and `E::A` works today), so this is the
+  single-segment path missing the same rewrite
 - no shadowing diagnostics for `var` (`vscope_define` todo); top-level item
   names do collide, but a `var` may silently shadow one in the same scope
 - a refutable `var` binding whose column type inference never pinned down is

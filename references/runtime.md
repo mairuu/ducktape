@@ -621,3 +621,72 @@ re-runs it, so a construct the format forgets shows up as an output diff.
 
 - **REPL:** does not exist; would re-run the pipeline per line with a fresh
   arena, keeping the GC heap alive across lines.
+
+### Native functions
+
+`print` is currently special in three unrelated ways: `tc_register_builtins`
+hand-builds its `FunDef` in C, codegen pattern-matches the call into a
+dedicated `OP_PRINT`, and `cg_names_builtin_print` exists only to chase
+`use std::io::print as p;` aliases. None of that scales — an opcode per native
+spends a one-byte opcode space, and `print` still cannot be used as a value
+(`cg_call_target` refuses it: a builtin has no body to point a slot at).
+
+The intended replacement is one field and one branch.
+
+**Mechanism.** `FunDef` gains a `NativeFn native`, with exactly one of
+`chunk`/`native` non-NULL. `OP_CALL` gets a branch where it currently rejects
+a NULL chunk, calling the C function and pushing its result without opening a
+frame. Natives take **ordinary global slots**, so `OP_GET_GLOBAL` works on them
+and they are first-class for free: passable as values, storable in arrays,
+capturable by closures, and usable as vtable entries — `OP_DYN_METHOD` pushes
+a `FunDef *` and `OP_CALL` does not care what is behind it.
+
+**Surface.** A *bodyless* declaration in an ordinary std module, so the
+signature is written in ducktape and the checker needs no special path at all:
+
+```
+@native("dt_sqrt")   pub fun sqrt(x: Float) -> Float;
+@intrinsic("len")    pub fun len<T>(xs: [T]) -> Int;
+```
+
+C supplies only a name → function-pointer registry, resolved at link time; an
+unknown name is a compile error with a real span, which a hand-built builtin
+can never have. A body next to a native binding would read as "which one
+wins?", so there is none — the attribute *is* the body.
+
+Three tiers, one declaration surface: **`@intrinsic`** lowers inline to an
+opcode (this is what would finally expose `OP_LEN`, today reachable only from
+the `for` desugaring), **`@native`** becomes a call, and everything expressible
+stays plain ducktape, where `std::cmp` already sits.
+
+**A generic native needs no monomorphisation.** The runtime is uniform in type
+arguments, so `print<T>` has one body for every `T`; `cg_call_target` returns it
+directly rather than keying a copy. This is the monomorphisation observation
+paying out one more time.
+
+Two parts need designing rather than assuming:
+
+- **GC calling convention.** A native that allocates can trigger a collection,
+  and the VM stack is the root set — so arguments must stay on the stack across
+  the call, with the native receiving a `Value *` into it and the result pushed
+  only afterwards. `OP_MAKE_DYN` already follows exactly this discipline for
+  `heap_dyn`; copy it rather than reinvent it. Getting it wrong reproduces the
+  5c-ii class of bug: something reachable-looking the collector cannot see.
+- **Serialization.** A C function pointer cannot go in an image, and an image
+  is the runtime projection of the program with no compiler behind it. So a
+  native is written **by name** and `bc_load` re-binds it against the running
+  binary's registry. That couples an image to a native ABI rather than to
+  `BC_VERSION` alone — an unknown name at load is a clean error, but the header
+  probably wants a registry hash so it fails at load instead of at first call.
+
+The milestone should be **net-negative lines in the compiler**. Porting `print`
+to it deletes `OP_PRINT`, `cg_names_builtin_print`, the hand-built `FunDef` in
+`tc_register_builtins`, the "using a builtin as a value" diagnostic, and the
+`std::io` no-op special case in `mod_collect_imports`/`tc_link_imports`. If it
+is not net-negative, the design is wrong.
+
+Rejected, with reasons: **inline C in `.dt` files** (needs a compiler at runtime
+or a per-program build step, which destroys the hermetic embedded std);
+**a separate `OP_NATIVE` index space** (dodges slot pressure but costs
+first-class-ness); **variadics** (the VM asserts `param_count == argc`, and
+relaxing it touches frame setup for a feature only `print`-alikes want).
