@@ -145,22 +145,55 @@
   - `resolve_bound_refs` reports "too many trait bounds" instead of silently
     dropping past `MAX_BOUNDS`, matching the parser's caps.
 
+- **Trait completion, part 3 (milestone 6c)** — an abstract receiver now
+  dispatches through trait signatures instead of the impl index:
+  `resolve_bound_method_call` picks the first bound declaring the name (a
+  bounded `T`, or the `Self` of a default body, which offers its own trait) and
+  `check_trait_method_call` checks the call against that `TraitMethodDef`,
+  projecting the trait's terms into the caller's. The same checker serves
+  *inherited* default methods: when `impl_index_method` misses,
+  `impl_index_default_method` finds an applicable trait impl whose trait
+  declares the name with a default body. `tc_check_trait` type-checks default
+  bodies once against the abstract `Self` (so `self.other()` inside one
+  dispatches through the trait). `T.Assoc` on a bounded type parameter now
+  resolves (replacing the "not yet supported" diagnostic), and explicit
+  turbofish arguments finally get their bounds enforced, via
+  `InferCtx.explicit_bounds`. Design: `architecture.md` "Calls through a trait
+  bound" / "Associated-type projections".
+
+  Making projections actually work required three fixes to the type layer,
+  each a latent bug the moment a `T.Assoc` could reach inference at all:
+  - `TY_ASSOC` wasn't interned, breaking the pointer-identity invariant every
+    other structural type keeps: the `T.Unit` written in an annotation and the
+    one `trait_project` produced were different pointers, so unifying them
+    reached `infer_unify`'s `default:` and *aborted the compiler* on an assert.
+    Now interned, with `TY_TRAIT`/`TY_ASSOC` handled in `infer_unify` as a
+    plain mismatch rather than an assert.
+  - `subst_apply` and `infer_apply` both ignored `TY_ASSOC`, so a projection
+    never followed its base: `T.Unit` stayed `T.Unit` after T was solved.
+    `subst_apply` now rewrites the base, `infer_apply` collapses the projection
+    to the impl's binding once the base is concrete, and `infer_unify`
+    normalises `TY_ASSOC` operands up front.
+  - `type_sprintf`/`type_name_sprintf` printed a `TY_ASSOC` by reading
+    `base->as.generic.name` unconditionally — garbage (a wild `StringView`) for
+    the `Self.Assoc` case, which is exactly what a trait-signature diagnostic
+    prints. Both print the base recursively now.
+
+  Also factored the "does this impl apply to this receiver" logic, duplicated
+  three times, into `impl_applies`. Known gaps: an inherited default method
+  type-checks but can't run (`--run` reports it — the body needs
+  monomorphising against the concrete self), and a call through a bound is
+  unreachable at runtime anyway since codegen rejects generic functions.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
 milestone (~900 lines).
 
-1. **Trait completion, part 3** (~0.5×): calls through bounds (`T: Drawable`
-   → `t.draw()` — resolve a method on a bounded `TY_GENERIC` receiver against
-   its bounds' `TraitMethodDef`s), then default-method dispatch (calling a
-   defaulted method an impl omitted — needs monomorphising the default body
-   against the concrete self) and checking default bodies. Enforcing bounds on
-   explicit turbofish args (the one remaining gap) belongs here too. Unlocks
-   `Try`-trait `?` and `as` coercions.
-2. **Module system** (~0.5×): real file discovery, `mod_link_imports`
+1. **Module system** (~0.5×): real file discovery, `mod_link_imports`
    (stubbed at `src/compiler.c` phase_register), cross-module visibility,
    cycle detection.
-3. **Bytecode serialization + REPL** — after modules; format sketch in
+2. **Bytecode serialization + REPL** — after modules; format sketch in
    `runtime.md`.
 
 ## Known warts to clean up opportunistically

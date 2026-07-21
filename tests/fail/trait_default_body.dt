@@ -1,0 +1,23 @@
+#! expect: type mismatch: expected 'Int' but got 'String'
+# default method bodies are checked once, against the abstract Self.
+trait Named {
+    fun name(self) -> String;
+
+    fun id(self) -> Int {
+        return self.name();
+    }
+}
+
+struct P {
+    x: Int,
+}
+
+impl Named for P {
+    fun name(self) -> String {
+        "p"
+    }
+}
+
+fun main() {
+    var p = P { x: 1 };
+}

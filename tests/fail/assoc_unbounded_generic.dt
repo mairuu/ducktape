@@ -1,0 +1,15 @@
+#! expect: no trait bound on 'T' declares an associated type 'Unit'
+# `T.Unit` is only meaningful when one of T's bounds declares it.
+trait Shape {
+    type Unit;
+
+    fun area(self) -> Self.Unit;
+}
+
+fun measure<T>(s: T) -> T.Unit {
+    0
+}
+
+fun main() {
+    var x = 1;
+}

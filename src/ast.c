@@ -50,6 +50,12 @@ static uint32_t type_hash(const Type *t) {
     // for (int i = 0; i < t->as.trait.type_arg_count; i++)
     //   h = h * 31 + (uint32_t)(uintptr_t)t->as.trait.type_args[i];
     break;
+  case TY_ASSOC:
+    h = h * 31 + (uint32_t)(uintptr_t)t->as.assoc.base;
+    h = h * 31 + (uint32_t)(uintptr_t)t->as.assoc.trait;
+    for (int i = 0; i < (int)t->as.assoc.assoc_name.len; i++)
+      h = h * 31 + (uint8_t)t->as.assoc.assoc_name.chars[i];
+    break;
   case TY_UNKNOWN:
     h = h * 31 + t->as.unknown.id;
     h = h * 31 + (uint32_t)(uintptr_t)t->as.unknown.bound;
@@ -113,6 +119,10 @@ static bool type_structurally_equal(const Type *a, const Type *b) {
     return true;
   case TY_TRAIT:
     return a->as.trait.def == b->as.trait.def;
+  case TY_ASSOC:
+    return a->as.assoc.base == b->as.assoc.base &&
+           a->as.assoc.trait == b->as.assoc.trait &&
+           sv_equal(a->as.assoc.assoc_name, b->as.assoc.assoc_name);
   default:
     return true; // singletons equal by kind
   }
@@ -145,6 +155,11 @@ static inline bool type_is_internable(Type *t) {
     break;
   case TY_ARRAY:
     if (!type_is_internable(t->as.array.elem_type)) {
+      return false;
+    }
+    break;
+  case TY_ASSOC:
+    if (!type_is_internable(t->as.assoc.base)) {
       return false;
     }
     break;
@@ -350,12 +365,23 @@ Type *ty_generic(StringView name, TraitDef **bounds, int bound_count,
 
 Type *ty_assoc(Type *base, StringView assoc_name, TraitDef *trait,
                Allocator *al) {
+  Type probe = {.kind = TY_ASSOC,
+                .as.assoc = {
+                    .base = base,
+                    .trait = trait,
+                    .assoc_name = assoc_name,
+                }};
+  Type *interned = type_intern_lookup(&probe);
+  if (interned) {
+    return interned;
+  }
+
   Type *t = al_alloc_zero_for(al, Type);
   t->kind = TY_ASSOC;
   t->as.assoc.base = base;
   t->as.assoc.assoc_name = assoc_name;
   t->as.assoc.trait = trait;
-  return t;
+  return type_intern(t);
 }
 
 Type *ty_struct(StructDef *def, Type **args, int argc, Allocator *al) {
@@ -475,10 +501,16 @@ int type_name_sprintf(const Type *t, char *buf, size_t buf_size) {
     return snprintf(buf, buf_size, "Array<...>");
   case TY_RANGE:
     return snprintf(buf, buf_size, "Range");
-  case TY_ASSOC:
-    return snprintf(buf, buf_size, SV_FMT "." SV_FMT,
-                    SV_ARG(t->as.assoc.base->as.generic.name),
-                    SV_ARG(t->as.assoc.assoc_name));
+  case TY_ASSOC: {
+    // the base is a type parameter (`T.Item`) or a trait's abstract `Self` —
+    // print it recursively rather than assuming a generic.
+    int n = type_name_sprintf(t->as.assoc.base, buf, buf_size);
+    if (n < 0 || (size_t)n >= buf_size) {
+      return n;
+    }
+    return n + snprintf(buf + n, buf_size - n, "." SV_FMT,
+                        SV_ARG(t->as.assoc.assoc_name));
+  }
   }
   assert(false && "type_sprintf not implemented for non-singleton types");
   return 0;
@@ -599,11 +631,14 @@ int type_sprintf(const Type *t, char *buf, size_t buf_size) {
     return snprintf(buf, buf_size, "[...]"); // todo: include elem type
   case TY_RANGE:
     return snprintf(buf, buf_size, "Range");
-  case TY_ASSOC:
-    return snprintf(
-        buf, buf_size, SV_FMT "." SV_FMT,
-        SV_ARG(t->as.assoc.base->as.generic.name),
-        SV_ARG(t->as.assoc.assoc_name)); // todo: include base type args
+  case TY_ASSOC: {
+    // the base is a type parameter (`T.Item`) or the abstract `Self` of a
+    // trait declaration — print it recursively rather than assuming a generic.
+    int n = sp_bump(0, buf_size, type_sprintf(t->as.assoc.base, buf, buf_size));
+    return sp_bump(n, buf_size,
+                   snprintf(buf + n, buf_size - n, "." SV_FMT,
+                            SV_ARG(t->as.assoc.assoc_name)));
+  }
   }
   assert(false && "type_sprintf not implemented for non-singleton types");
   return 0;

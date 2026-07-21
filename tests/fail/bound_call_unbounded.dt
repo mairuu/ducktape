@@ -1,0 +1,13 @@
+#! expect: no method named 'a' found for type 'T'
+# a type parameter with no bound declaring the method has no method to call.
+trait A {
+    fun a(self) -> Int;
+}
+
+fun call_it<T>(t: T) -> Int {
+    t.a()
+}
+
+fun main() {
+    var x = 1;
+}

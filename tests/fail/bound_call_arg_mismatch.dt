@@ -1,0 +1,13 @@
+#! expect: argument 1: expected 'Int' but got 'Bool'
+# a call through a bound is checked against the trait's signature.
+trait Scale {
+    fun scaled(self, k: Int) -> Int;
+}
+
+fun twice<T: Scale>(t: T) -> Int {
+    t.scaled(true)
+}
+
+fun main() {
+    var x = 1;
+}

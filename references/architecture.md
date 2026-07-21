@@ -56,8 +56,8 @@ Three passes over each module, mirroring compiler phases:
    resolution so `Self.Assoc` is visible to the impl's own methods.
    `resolve_trait_decl` resolves trait item signatures the same way, with
    `Self` bound to the abstract trait type (`ty_trait`): each `TraitMethodDef`
-   gets a `method_type` (self, if present, is param 0 typed as the trait) and a
-   `has_default` flag; a `type Assoc;` becomes an `AssocTypeDef` with a NULL
+   gets a `method_type` (with `self_index` recording where `self` sits, typed
+   as the trait) and a `has_default` flag; a `type Assoc;` becomes an `AssocTypeDef` with a NULL
    type. `Self.Assoc` in a trait signature is left abstract — `TYNODE_ASSOC`
    sees a `TY_TRAIT` base and yields a `ty_assoc` projection instead of going
    through the impl index.
@@ -69,8 +69,9 @@ Three passes over each module, mirroring compiler phases:
    and each method's signature must match. Matching rewrites the trait
    signature into the impl's terms via `trait_project` (abstract `Self` →
    impl self type, `Self.Assoc` → the impl's concrete bound) and compares with
-   `types_equal`. Default method *bodies* are not yet checked; extra inherent
-   methods in a trait impl are tolerated.
+   `types_equal`. `tc_check_trait` then checks each default method *body* —
+   once, against the abstract `Self`, not per impl. Extra inherent methods in a
+   trait impl are tolerated.
 
 ### Types and inference
 
@@ -102,13 +103,51 @@ judged once its parameter is solved. `infer_open_generics` stashes the source
 asks `impl_index_implements` (does any `impl Trait for T` head match — exact for
 a non-generic impl, `impl_type_match` for a generic one) and reports
 "type '%s' does not implement trait '%s'" at the unknown's introduction span.
-Both `tc_check_fun` and `tc_check_impl` run the finalize + bound-check pair.
-Explicit turbofish args skip the fresh unknown entirely, so they still aren't
-checked.
+`tc_check_fun`, `tc_check_impl` and `tc_check_trait` all run the finalize +
+bound-check pair. An explicitly written type argument skips the fresh unknown
+entirely, so `infer_open_generics` records the (param, argument) pair in
+`InferCtx.explicit_bounds` and `infer_check_bounds` checks those too.
 
 `ty_generic` interns like every other `ty_*` constructor, canonicalising bound
 order first (`T: A + B` and `T: B + A` are one type) — the intern hash is
 order-sensitive, so sorting must happen *before* the probe.
+
+### Calls through a trait bound
+
+An *abstract* receiver has no impl to select: a bounded type parameter
+(`T: Drawable`), or the `Self` of a trait's own default body. Both dispatch
+through trait signatures instead — `resolve_bound_method_call` picks the first
+bound declaring the name (`Self` offers its own trait), and
+`check_trait_method_call` checks the call against that `TraitMethodDef`. The
+signature is written in the trait's terms, so it is rewritten in three steps:
+the method's own type params are opened first (`subst_apply` matches generics
+by *name*, so doing `Self` first would let a method type param capture the
+receiver), then `trait_project` rebases `Self`, then the impl's substitution —
+if any — maps the impl's type params to the receiver's type arguments.
+
+The same checker serves an inherited default method: when
+`impl_index_method` misses, `impl_index_default_method` looks for an applicable
+trait impl whose trait declares the name with a default body, and the call is
+checked against the trait signature projected through *that* impl.
+`ExprMethodCall.resolved_method` stays NULL in both cases — codegen refuses
+them (neither has a chunk until monomorphisation exists).
+
+`impl_applies` is the one place that answers "does this impl apply to this
+receiver" (identity for a non-generic impl, `impl_type_match` binding the
+params for a generic one); method lookup, default lookup, `impl_index_implements`
+and associated-type lookup all go through it.
+
+### Associated-type projections
+
+`T.Assoc` (`TY_ASSOC`, interned like every other structural type) is a
+placeholder for whatever an impl binds. `tyres_resolve` accepts it when a bound
+on `T` — or the trait itself, for `Self.Assoc` — declares that name.
+`subst_apply` substitutes inside the base but cannot collapse the projection
+(it has no impl index); `infer_apply` does, reading the binding off the
+applicable impl as soon as the base is concrete, and `infer_unify` normalises
+`TY_ASSOC` operands up front so `T.Item` and `Int` don't look like different
+kinds. While the base is still abstract the projection survives unchanged,
+which is exactly what a generic body needs.
 
 **Poison convention:** on error, emit one `diag_error` and return
 `t_poison`; poison operands propagate silently so one mistake produces one

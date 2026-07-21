@@ -1,0 +1,77 @@
+# calls through trait bounds: a bounded type parameter can call the methods its
+# bounds declare, `T.Assoc` names an associated type through a bound, default
+# method bodies are checked once against the abstract `Self`, and an impl that
+# omits a defaulted method still inherits it.
+trait Shape {
+    type Unit;
+
+    fun area(self) -> Self.Unit;
+    fun name(self) -> String;
+
+    # default bodies are checked against the abstract Self: `self.area()`
+    # dispatches through the trait's own signatures.
+    fun doubled(self) -> Self.Unit {
+        return self.area();
+    }
+
+    fun describe(self) -> String {
+        var n = self.name();
+        return "shape {n}";
+    }
+}
+
+struct Circle {
+    r: Int,
+}
+
+impl Shape for Circle {
+    type Unit = Int;
+
+    fun area(self) -> Self.Unit {
+        self.r * self.r * 3
+    }
+
+    fun name(self) -> String {
+        "circle"
+    }
+}
+
+struct Boxed<T> {
+    v: T,
+}
+
+impl<T> Shape for Boxed<T> {
+    type Unit = T;
+
+    fun area(self) -> Self.Unit {
+        self.v
+    }
+
+    fun name(self) -> String {
+        "boxed"
+    }
+}
+
+# the callee is the bound's signature, not any impl's method
+fun label<T: Shape>(s: T) -> String {
+    s.name()
+}
+
+# ... and `T.Unit` is the projection that signature returns
+fun measure<T: Shape>(s: T) -> T.Unit {
+    s.area()
+}
+
+fun main() {
+    var c = Circle { r: 2 };
+    var l: String = label(c);
+    var a: Int = measure(c);
+
+    # `doubled` and `describe` are inherited: neither impl overrides them.
+    var d: Int = c.doubled();
+    var t: String = c.describe();
+
+    # through a generic impl, `Self.Unit` is the impl's own type param
+    var b = Boxed { v: 7 };
+    var e: Int = b.doubled();
+}

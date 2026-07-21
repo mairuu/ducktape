@@ -1,0 +1,28 @@
+#! expect: type 'Q' does not implement trait 'A'
+# an explicitly written type argument must satisfy the parameter's bounds too.
+trait A {
+    fun a(self) -> Int;
+}
+
+struct P {
+    x: Int,
+}
+
+struct Q {
+    y: Int,
+}
+
+impl A for P {
+    fun a(self) -> Int {
+        self.x
+    }
+}
+
+fun need_a<T: A>(t: T) -> Int {
+    0
+}
+
+fun main() {
+    var q = Q { y: 1 };
+    var r = need_a::<Q>(q);
+}

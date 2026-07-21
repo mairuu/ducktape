@@ -224,6 +224,7 @@ typedef struct {
   Type *method_type; // TY_FUNCTION with Self still unresolved
   Type **type_params;
   int type_param_count;
+  int self_index; // position of `self` in method_type, -1 => assoc function
   bool has_default;
   FunDef *default_impl; // NULL if required
 } TraitMethodDef;

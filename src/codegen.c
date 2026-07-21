@@ -733,6 +733,17 @@ static void compile_call(Cg *cg, Expr *expr) {
 // `mc->object` back in at that same position when pushing arguments.
 static void compile_method_call(Cg *cg, Expr *expr) {
   ExprMethodCall *mc = &expr->as.method_call;
+  if (mc->resolved_method == NULL) {
+    // the checker resolved this against a trait signature, not an impl method:
+    // either a call through a trait bound (unreachable today — the enclosing
+    // generic function is rejected first), or a default body the impl
+    // inherited, which has no chunk of its own until it can be monomorphised
+    // against the concrete self type.
+    cg_error(cg, expr->span,
+             mc->resolved_impl != NULL ? "calling an inherited default method"
+                                       : "a call through a trait bound");
+    return;
+  }
   FunDef *fun = mc->resolved_method->fun;
 
   emit2(cg, OP_GET_GLOBAL, (uint8_t)fun->slot);

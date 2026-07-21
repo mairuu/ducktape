@@ -181,9 +181,38 @@ Type *subst_apply(const Subst *s, Type *t, Allocator *al) {
     Type *elem = subst_apply(s, t->as.array.elem_type, al);
     return elem != t->as.array.elem_type ? ty_array(elem, al) : t;
   }
+  case TY_ASSOC: {
+    // `T.Item` follows T. The projection can't be collapsed here (the binding
+    // lives on an impl, and subst_apply has no index); infer_apply does that
+    // once the base is concrete.
+    Type *base = subst_apply(s, t->as.assoc.base, al);
+    return base != t->as.assoc.base
+               ? ty_assoc(base, t->as.assoc.assoc_name, t->as.assoc.trait, al)
+               : t;
+  }
   default:
     return t;
   }
+}
+
+static Type *impl_index_assoc_type(ImplIndex *idx, Type *self_type,
+                                   StringView name, Allocator *al);
+static bool impl_applies(ImplDef *impl, Type *self_type, Subst *out_subst,
+                         Allocator *al);
+
+static void infer_note_explicit_bound(InferCtx *ctx, Type *param, Type *arg,
+                                      Span span) {
+  if (ctx->explicit_bound_count == ctx->explicit_bound_cap) {
+    int new_cap =
+        ctx->explicit_bound_cap == 0 ? 4 : ctx->explicit_bound_cap * 2;
+    ctx->explicit_bounds =
+        al_realloc(ctx->al, ctx->explicit_bounds,
+                   sizeof(ExplicitBound) * ctx->explicit_bound_cap,
+                   sizeof(ExplicitBound) * new_cap);
+    ctx->explicit_bound_cap = new_cap;
+  }
+  ctx->explicit_bounds[ctx->explicit_bound_count++] =
+      (ExplicitBound){.param = param, .arg = arg, .span = span};
 }
 
 // build a substitution mapping generic type parameters to either fresh unknowns
@@ -203,9 +232,16 @@ Subst infer_open_generics(InferCtx *ctx, Type **params,
     // a bounded param carries its source TY_GENERIC as the unknown's `bound`,
     // so infer_check_bounds can enforce the trait bounds once it's solved.
     Type *bound = params[i]->as.generic.bound_count > 0 ? params[i] : NULL;
-    args[i] = concretes && concretes[i]
-                  ? concretes[i]
-                  : infer_fresh(ctx, params[i]->as.generic.name, bound, span);
+    if (concretes && concretes[i]) {
+      args[i] = concretes[i];
+      // an explicit type argument bypasses inference entirely; queue its
+      // bounds so infer_check_bounds still gets to see them.
+      if (bound != NULL) {
+        infer_note_explicit_bound(ctx, params[i], concretes[i], span);
+      }
+    } else {
+      args[i] = infer_fresh(ctx, params[i]->as.generic.name, bound, span);
+    }
   }
   Subst s;
   subst_init(&s, names, args, count);
@@ -251,11 +287,9 @@ static Subst subst_exclude_shadowed(Subst outer, Type **shadow,
 // Inference
 // ═══════════════════════════════════════════════════════════════════════════════
 
-void infer_init(InferCtx *ctx, Allocator *al) {
-  ctx->solutions = NULL;
-  ctx->nodes = NULL;
-  ctx->cap = 0;
-  ctx->next_id = 0;
+void infer_init(InferCtx *ctx, ImplIndex *impls, Allocator *al) {
+  memset(ctx, 0, sizeof(*ctx));
+  ctx->impls = impls;
   ctx->al = al;
 }
 
@@ -306,6 +340,16 @@ Type *infer_find(InferCtx *ctx, Type *ty) {
 bool infer_unify(InferCtx *ctx, Type *a, Type *b, DiagBag *diags, Span span) {
   a = infer_find(ctx, a);
   b = infer_find(ctx, b);
+
+  // a projection whose base has been solved is really whatever the impl bound
+  // it to — collapse it before comparing, or `T.Item` and `Int` would look
+  // like different kinds.
+  if (a->kind == TY_ASSOC) {
+    a = infer_apply(ctx, a, ctx->al);
+  }
+  if (b->kind == TY_ASSOC) {
+    b = infer_apply(ctx, b, ctx->al);
+  }
 
   if (types_equal(a, b)) {
     return true;
@@ -392,6 +436,20 @@ bool infer_unify(InferCtx *ctx, Type *a, Type *b, DiagBag *diags, Span span) {
   case TY_ARRAY:
     return infer_unify(ctx, a->as.array.elem_type, b->as.array.elem_type, diags,
                        span);
+
+  case TY_TRAIT:
+  case TY_ASSOC: {
+    // abstract types: both are interned, so anything that reaches here (they
+    // weren't types_equal) is a genuine mismatch — `T.Item` vs `U.Item`, or
+    // two different traits. There is nothing to decompose.
+    char ab[64], bb[64];
+    type_sprintf(a, ab, sizeof(ab));
+    type_sprintf(b, bb, sizeof(bb));
+    diag_error(diags, span, "type mismatch: expected '%s' but got '%s'", ab,
+               bb);
+    return false;
+  }
+
   default:
     assert(false && "infer_unify: unhandled kind");
     return false;
@@ -426,6 +484,26 @@ Type *infer_apply(InferCtx *ctx, Type *ty, Allocator *al) {
     Type *ret = infer_apply(ctx, f->return_type, al);
     changed |= ret != f->return_type;
     return changed ? ty_fun(ps.ptr, ps.count, ret, al) : ty;
+  }
+
+  case TY_ASSOC: {
+    // `T.Item` is a placeholder: once T is solved, the projection collapses to
+    // whatever the applicable impl bound that associated type to. While the
+    // base is still abstract (a free unknown, or a type parameter inside a
+    // generic function's own body) it stays a projection.
+    Type *base = infer_apply(ctx, ty->as.assoc.base, al);
+    Type *bound = NULL;
+    if (base->kind != TY_UNKNOWN && base->kind != TY_GENERIC &&
+        base->kind != TY_TRAIT && ctx->impls != NULL) {
+      bound =
+          impl_index_assoc_type(ctx->impls, base, ty->as.assoc.assoc_name, al);
+    }
+    if (bound != NULL) {
+      return infer_apply(ctx, bound, al);
+    }
+    return base != ty->as.assoc.base
+               ? ty_assoc(base, ty->as.assoc.assoc_name, ty->as.assoc.trait, al)
+               : ty;
   }
 
   case TY_STRUCT: {
@@ -497,6 +575,20 @@ void infer_finalize(InferCtx *ctx, DiagBag *diags) {
 // instantiated with a type implementing each of its trait bounds. A bounded
 // unknown carries its source TY_GENERIC in `.bound` (see infer_open_generics);
 // unsolved unknowns are left to infer_finalize.
+// report every bound of `param` (a TY_GENERIC) that `arg` fails to implement.
+static void check_bounds_satisfied(ImplIndex *idx, Type *param, Type *arg,
+                                   DiagBag *diags, Span span, Allocator *al) {
+  for (int b = 0; b < param->as.generic.bound_count; b++) {
+    TraitDef *trait = param->as.generic.bounds[b];
+    if (!impl_index_implements(idx, arg, trait, al)) {
+      char buf[64];
+      type_sprintf(arg, buf, sizeof(buf));
+      diag_error(diags, span, "type '%s' does not implement trait '" SV_FMT "'",
+                 buf, SV_ARG(trait->name));
+    }
+  }
+}
+
 void infer_check_bounds(InferCtx *ctx, ImplIndex *idx, DiagBag *diags,
                         Allocator *al) {
   for (uint32_t id = 0; id < ctx->next_id; id++) {
@@ -513,16 +605,17 @@ void infer_check_bounds(InferCtx *ctx, ImplIndex *idx, DiagBag *diags,
     if (type_is_poison(sol)) {
       continue;
     }
-    for (int b = 0; b < g->as.generic.bound_count; b++) {
-      TraitDef *trait = g->as.generic.bounds[b];
-      if (!impl_index_implements(idx, sol, trait, al)) {
-        char buf[64];
-        type_sprintf(sol, buf, sizeof(buf));
-        diag_error(diags, node->as.unknown.intro_span,
-                   "type '%s' does not implement trait '" SV_FMT "'", buf,
-                   SV_ARG(trait->name));
-      }
+    check_bounds_satisfied(idx, g, sol, diags, node->as.unknown.intro_span, al);
+  }
+
+  // and the type arguments written out explicitly, which never became unknowns
+  for (int i = 0; i < ctx->explicit_bound_count; i++) {
+    ExplicitBound *eb = &ctx->explicit_bounds[i];
+    Type *arg = infer_apply(ctx, eb->arg, al);
+    if (type_is_poison(arg) || arg->kind == TY_UNKNOWN) {
+      continue;
     }
+    check_bounds_satisfied(idx, eb->param, arg, diags, eb->span, al);
   }
 }
 
@@ -1194,11 +1287,15 @@ static void resolve_trait_decl(ResolveCtx *rctx, Decl *decl) {
     // resolve parameters (self resolves to the abstract trait type) and return.
     TypeScratch param_types;
     ts_init(&param_types, item->param_count, rctx->al);
+    method_def->self_index = -1;
     for (int j = 0; j < item->param_count; j++) {
-      param_types.ptr[j] =
-          item->params[j].is_self
-              ? trait_ty
-              : rctx_resolve(rctx, item->params[j].type_annotation);
+      if (item->params[j].is_self) {
+        method_def->self_index = j;
+        param_types.ptr[j] = trait_ty;
+      } else {
+        param_types.ptr[j] =
+            rctx_resolve(rctx, item->params[j].type_annotation);
+      }
     }
     Type *return_type = item->return_type
                             ? rctx_resolve(rctx, item->return_type)
@@ -1253,6 +1350,8 @@ bool tc_resolve_module(TypeChecker *tc, Module *m) {
 }
 
 static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint);
+static Type *trait_project(Type *t, TraitDef *trait, Type *self_to,
+                           ImplDef *impl, Allocator *al);
 
 static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
   switch (stmt->kind) {
@@ -2100,6 +2199,122 @@ static Type *resolve_match_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   return result_ty ? result_ty : ctx->tc->t_unit;
 }
 
+// Check `obj.m(args)` against a *trait's* method signature rather than an
+// impl method — either because the receiver is abstract (a bounded type
+// parameter, or `Self` in a default body), or because the receiver's impl
+// inherited the method's default body without overriding it.
+//
+// The signature is written in the trait's terms, so it is rewritten in two
+// steps: `impl` (NULL for an abstract receiver) resolves `Self.Assoc` against
+// what that impl bound, and `impl_subst` then replaces the impl's own type
+// params with the receiver's type arguments.
+static Type *check_trait_method_call(CheckCtx *ctx, Expr *expr, TraitDef *trait,
+                                     TraitMethodDef *tm, Type *self_ty,
+                                     ImplDef *impl, Subst impl_subst) {
+  ExprMethodCall *mc = &expr->as.method_call;
+
+  if (tm->self_index < 0) {
+    diag_error(ctx->diags, expr->span,
+               "'" SV_FMT "' is an associated function, not a method — it has "
+               "no 'self' parameter",
+               SV_ARG(mc->method_name));
+    return ctx->tc->t_poison;
+  }
+
+  if (mc->type_arg_count > 0 && mc->type_arg_count != tm->type_param_count) {
+    diag_error(ctx->diags, expr->span, "expected %d type arguments but got %d",
+               tm->type_param_count, mc->type_arg_count);
+    return ctx->tc->t_poison;
+  }
+
+  TypeScratch explicit_type_args;
+  ts_init(&explicit_type_args, mc->type_arg_count, ctx->al);
+  for (int i = 0; i < mc->type_arg_count; i++) {
+    explicit_type_args.ptr[i] = tyres_resolve(&ctx->tyres, mc->type_args[i]);
+    if (type_is_poison(explicit_type_args.ptr[i])) {
+      return ctx->tc->t_poison;
+    }
+  }
+
+  // the method's own type params first (subst_apply matches TY_GENERIC by
+  // name), only then `Self` — otherwise a method type param sharing the
+  // receiver parameter's name would capture the just-projected receiver.
+  Subst subst =
+      infer_open_generics(&ctx->infer, tm->type_params, explicit_type_args.ptr,
+                          tm->type_param_count, expr->span, ctx->al);
+  bool is_generic = subst.count > 0;
+  Type *fun_ty = subst_apply(&subst, tm->method_type, ctx->al);
+  fun_ty = trait_project(fun_ty, trait, self_ty, impl, ctx->al);
+
+  impl_subst = subst_exclude_shadowed(impl_subst, tm->type_params,
+                                      tm->type_param_count, ctx->al);
+  if (impl_subst.count > 0) {
+    fun_ty = subst_apply(&impl_subst, fun_ty, ctx->al);
+  }
+
+  int expected_argc = fun_ty->as.fun.param_count - 1;
+  if (mc->arg_count != expected_argc) {
+    diag_error(ctx->diags, expr->span, "expected %d arguments but got %d",
+               expected_argc, mc->arg_count);
+    return ctx->tc->t_poison;
+  }
+
+  bool had_error = false;
+  for (int i = 0, k = 0; i < fun_ty->as.fun.param_count; i++) {
+    if (i == tm->self_index) {
+      continue;
+    }
+    Type *param_ty = fun_ty->as.fun.param_types[i];
+    Expr *arg = mc->args[k++];
+    Type *arg_ty = resolve_expr(ctx, arg, param_ty);
+
+    if (type_is_poison(arg_ty) || type_is_poison(param_ty)) {
+      had_error = true;
+      continue;
+    }
+
+    if (is_generic) {
+      had_error |=
+          !infer_unify(&ctx->infer, arg_ty, param_ty, ctx->diags, arg->span);
+    } else if (!types_equal(arg_ty, param_ty)) {
+      char ab[64], pb[64];
+      type_sprintf(arg_ty, ab, sizeof(ab));
+      type_sprintf(param_ty, pb, sizeof(pb));
+      diag_error(ctx->diags, arg->span,
+                 "argument %d: expected '%s' but got '%s'", k, pb, ab);
+      had_error = true;
+    }
+  }
+
+  if (had_error) {
+    return ctx->tc->t_poison;
+  }
+
+  Type *ret_ty = fun_ty->as.fun.return_type;
+  return is_generic ? infer_apply(&ctx->infer, ret_ty, ctx->al) : ret_ty;
+}
+
+// Dispatch `obj.m(args)` on an abstract receiver through its trait bounds: a
+// bounded type parameter offers its bounds, `Self` in a default body offers
+// the trait itself. Returns NULL when no bound declares the name, so the
+// caller can fall back to the impl index (a blanket `impl<T> Trait for T` can
+// still apply). First bound declaring the name wins, like impl selection.
+static Type *resolve_bound_method_call(CheckCtx *ctx, Expr *expr, Type *self_ty,
+                                       TraitDef **bounds, int bound_count) {
+  StringView name = expr->as.method_call.method_name;
+
+  for (int i = 0; i < bound_count; i++) {
+    for (int j = 0; j < bounds[i]->method_count; j++) {
+      if (sv_equal(bounds[i]->methods[j].name, name)) {
+        return check_trait_method_call(ctx, expr, bounds[i],
+                                       &bounds[i]->methods[j], self_ty,
+                                       /*impl=*/NULL, subst_empty());
+      }
+    }
+  }
+  return NULL;
+}
+
 static Type *resolve_method_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   (void)hint;
   ExprMethodCall *mc = &expr->as.method_call;
@@ -2109,11 +2324,47 @@ static Type *resolve_method_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     return ctx->tc->t_poison;
   }
 
+  // an abstract receiver dispatches through its trait bounds instead of the
+  // impl index: a type parameter offers the bounds it was declared with, and
+  // `Self` inside a trait default body offers that trait's own signatures.
+  TraitDef *self_trait[1];
+  TraitDef **bounds = NULL;
+  int bound_count = 0;
+  if (self_ty->kind == TY_GENERIC) {
+    bounds = self_ty->as.generic.bounds;
+    bound_count = self_ty->as.generic.bound_count;
+  } else if (self_ty->kind == TY_TRAIT) {
+    self_trait[0] = self_ty->as.trait.def;
+    bounds = self_trait;
+    bound_count = 1;
+  }
+  if (bound_count > 0) {
+    Type *bound_ty =
+        resolve_bound_method_call(ctx, expr, self_ty, bounds, bound_count);
+    if (bound_ty != NULL) {
+      return bound_ty;
+    }
+  }
+
   ImplMatch match;
   MethodDef *method =
       impl_index_method(&ctx->tc->impl_index, self_ty, mc->method_name, &match,
                         &ctx->infer, /*bare_path=*/false, expr->span, ctx->al);
   if (!method) {
+    // no impl defines it — the receiver may still inherit a trait's default
+    // body, which is checked against the trait's signature.
+    ImplDef *via_impl = NULL;
+    TraitDef *via_trait = NULL;
+    Subst via_subst = subst_empty();
+    TraitMethodDef *inherited = impl_index_default_method(
+        &ctx->tc->impl_index, self_ty, mc->method_name, &via_impl, &via_trait,
+        &via_subst, ctx->al);
+    if (inherited != NULL) {
+      mc->resolved_impl = via_impl;
+      return check_trait_method_call(ctx, expr, via_trait, inherited, self_ty,
+                                     via_impl, via_subst);
+    }
+
     char self_buf[64];
     type_sprintf(self_ty, self_buf, sizeof(self_buf));
     diag_error(ctx->diags, expr->span,
@@ -3289,6 +3540,10 @@ static void tc_check_fun(TypeChecker *tc, Decl *decl) {
 // the abstract `Self` (the trait type) becomes the impl's self type, and each
 // `Self.Assoc` projection becomes the concrete type the impl bound to it. Used
 // to compare a trait's required signature against what an impl actually wrote.
+// `impl` may be NULL — then there is no binding to substitute and `Self.Assoc`
+// is merely rebased onto `self_to`, which is what a call through a trait bound
+// (`T: Iterator` → `t.next()`) needs: the projection stays abstract as
+// `T.Item`.
 static Type *trait_project(Type *t, TraitDef *trait, Type *self_to,
                            ImplDef *impl, Allocator *al) {
   switch (t->kind) {
@@ -3297,6 +3552,11 @@ static Type *trait_project(Type *t, TraitDef *trait, Type *self_to,
   case TY_ASSOC:
     if (t->as.assoc.base->kind == TY_TRAIT &&
         t->as.assoc.base->as.trait.def == trait) {
+      if (impl == NULL) {
+        // no impl to read the binding from (a call through a bound): the
+        // projection stays abstract, just rebased onto the new self.
+        return ty_assoc(self_to, t->as.assoc.assoc_name, trait, al);
+      }
       for (int i = 0; i < impl->assoc_type_count; i++) {
         if (sv_equal(impl->assoc_types[i].name, t->as.assoc.assoc_name)) {
           return impl->assoc_types[i].type;
@@ -3493,6 +3753,69 @@ static void tc_check_impl(TypeChecker *tc, Decl *decl) {
   infer_check_bounds(&cctx.infer, &tc->impl_index, cctx.diags, cctx.al);
 }
 
+// Check the bodies of a trait's default methods, once, against the abstract
+// `Self` — not once per impl. `self` has the trait type, so `self.other()`
+// dispatches through the trait's own signatures (resolve_bound_method_call)
+// and `Self.Assoc` stays an unbound projection: a body that checks here is
+// valid for every impl that could inherit it.
+static void tc_check_trait(TypeChecker *tc, Decl *decl) {
+  assert(decl->kind == DECL_TRAIT && "expected trait decl");
+  DeclTrait *trait_decl = &decl->as.trait_decl;
+  TraitDef *trait_def = trait_decl->def;
+
+  CheckCtx cctx;
+  cctx_init(&cctx, tc, trait_def->module, tc->diags, tc->al);
+
+  // begin trait type scope
+  cctx.tyres.tscope = tscope_push(cctx.tyres.tscope, cctx.al);
+  tscope_define(cctx.tyres.tscope, sv_from_cstr("Self"), trait_def->self_type,
+                cctx.diags, decl->span, NULL);
+
+  for (int i = 0, method_idx = 0; i < trait_decl->item_count; i++) {
+    TraitItemNode *item = &trait_decl->items[i];
+    if (item->kind != TRAIT_ITEM_METHOD) {
+      continue;
+    }
+    TraitMethodDef *method_def = &trait_def->methods[method_idx++];
+    if (item->default_body == NULL) {
+      continue; // required method: a signature only
+    }
+
+    Type *method_ty = method_def->method_type;
+    cctx.return_type = method_ty->as.fun.return_type;
+
+    // begin method type scope
+    cctx.tyres.tscope = tscope_push(cctx.tyres.tscope, cctx.al);
+    for (int j = 0; j < item->type_param_count; j++) {
+      tscope_define(cctx.tyres.tscope, item->type_params[j].name,
+                    method_def->type_params[j], cctx.diags,
+                    item->type_params[j].span, NULL);
+    }
+
+    // begin method var scope
+    cctx.vscope = vscope_push(cctx.vscope, true, false, cctx.al);
+    for (int j = 0; j < item->param_count; j++) {
+      StringView param_name =
+          item->params[j].is_self ? sv_from_cstr("self") : item->params[j].name;
+      vscope_define(cctx.vscope, param_name, method_ty->as.fun.param_types[j],
+                    cctx.diags, item->params[j].span, NULL);
+    }
+
+    resolve_expr_coerced(&cctx, item->default_body, cctx.return_type);
+
+    // end method var scope
+    cctx.vscope = vscope_pop(cctx.vscope);
+    // end method type scope
+    cctx.tyres.tscope = tscope_pop(cctx.tyres.tscope);
+  }
+
+  // end trait type scope
+  cctx.tyres.tscope = tscope_pop(cctx.tyres.tscope);
+
+  infer_finalize(&cctx.infer, cctx.diags);
+  infer_check_bounds(&cctx.infer, &tc->impl_index, cctx.diags, cctx.al);
+}
+
 bool tc_check_module(TypeChecker *tc, Module *m) {
   for (int i = 0; i < m->ast->decl_count; i++) {
     Decl *decl = m->ast->decls[i];
@@ -3502,8 +3825,10 @@ bool tc_check_module(TypeChecker *tc, Module *m) {
       break;
     case DECL_STRUCT:
     case DECL_ENUM:
-    case DECL_TRAIT: // trait items (default methods) are not checked yet
     case DECL_USE:
+      break;
+    case DECL_TRAIT:
+      tc_check_trait(tc, decl);
       break;
     case DECL_IMPL:
       tc_check_impl(tc, decl);
@@ -3779,11 +4104,32 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
       break;
     }
 
+    // `T.Assoc` on a type parameter: the projection is only meaningful if one
+    // of T's bounds declares that associated type. It stays abstract (like
+    // `Self.Assoc` below) — instantiation substitutes T, and the concrete
+    // binding is read off the impl then.
     if (base->kind == TY_GENERIC) {
-      diag_error(
-          r->diags, node->span,
-          "associated types on generic type parameters are not yet supported");
-      result = r->tc->t_poison;
+      TraitDef *owner = NULL;
+      for (int i = 0; i < base->as.generic.bound_count && !owner; i++) {
+        TraitDef *trait_def = base->as.generic.bounds[i];
+        for (int j = 0; j < trait_def->assoc_type_count; j++) {
+          if (sv_equal(trait_def->assoc_types[j].name, assoc->assoc_name)) {
+            owner = trait_def;
+            break;
+          }
+        }
+      }
+      if (owner == NULL) {
+        char buf[64];
+        type_sprintf(base, buf, sizeof(buf));
+        diag_error(r->diags, node->span,
+                   "no trait bound on '%s' declares an associated type '" SV_FMT
+                   "'",
+                   buf, SV_ARG(assoc->assoc_name));
+        result = r->tc->t_poison;
+        break;
+      }
+      result = ty_assoc(base, assoc->assoc_name, owner, r->al);
       break;
     }
 
@@ -3945,31 +4291,8 @@ static Type *impl_index_assoc_type(ImplIndex *idx, Type *self_type,
       continue;
     }
 
-    Subst subst = subst_empty();
-    bool matched;
-
-    if (impl->type_param_count == 0) {
-      matched = types_equal(impl->self_type, self_type);
-    } else {
-      int n = impl->type_param_count;
-      StringView *names = al_alloc(al, sizeof(StringView) * n);
-      Type **args = al_alloc(al, sizeof(Type *) * n);
-      bool *bound = al_alloc_zero(al, sizeof(bool) * n);
-      for (int j = 0; j < n; j++) {
-        names[j] = impl->type_params[j]->as.generic.name;
-      }
-
-      matched =
-          impl_type_match(impl->self_type, self_type, names, n, args, bound);
-      for (int j = 0; matched && j < n; j++) {
-        matched = bound[j];
-      }
-      if (matched) {
-        subst_init(&subst, names, args, n);
-      }
-    }
-
-    if (!matched) {
+    Subst subst;
+    if (!impl_applies(impl, self_type, &subst, al)) {
       continue;
     }
 
@@ -4012,6 +4335,78 @@ static bool type_same_nominal_def(Type *a, Type *b) {
     return a->as.enm.def == b->as.enm.def;
   }
   return false;
+}
+
+// Does `impl` apply to a receiver of type `self_type`? For a non-generic impl
+// that's plain type identity; for a generic one, the impl's self type is
+// matched structurally against the receiver and *out_subst is filled with the
+// resulting binding of the impl's type params (every one of which must be
+// pinned down by the receiver, or the impl doesn't apply).
+static bool impl_applies(ImplDef *impl, Type *self_type, Subst *out_subst,
+                         Allocator *al) {
+  *out_subst = subst_empty();
+  if (impl->self_type == NULL || type_is_poison(impl->self_type)) {
+    return false;
+  }
+
+  if (impl->type_param_count == 0) {
+    return types_equal(impl->self_type, self_type);
+  }
+
+  int n = impl->type_param_count;
+  StringView *names = al_alloc(al, sizeof(StringView) * n);
+  Type **args = al_alloc(al, sizeof(Type *) * n);
+  bool *bound = al_alloc_zero(al, sizeof(bool) * n);
+  for (int j = 0; j < n; j++) {
+    names[j] = impl->type_params[j]->as.generic.name;
+  }
+
+  bool matched =
+      impl_type_match(impl->self_type, self_type, names, n, args, bound);
+  for (int j = 0; matched && j < n; j++) {
+    matched = bound[j];
+  }
+  if (matched) {
+    subst_init(out_subst, names, args, n);
+  }
+  return matched;
+}
+
+// A trait method the receiver inherits rather than defines: some
+// `impl Trait for <self_type>` exists, the trait declares `name` with a default
+// body, and the impl didn't override it (if it had, impl_index_method would
+// have found it first). *out_impl / *out_trait / *out_subst describe the impl
+// the default is inherited through, so the caller can project the trait's
+// signature into concrete terms.
+TraitMethodDef *impl_index_default_method(ImplIndex *idx, Type *self_type,
+                                          StringView name, ImplDef **out_impl,
+                                          TraitDef **out_trait,
+                                          Subst *out_subst, Allocator *al) {
+  if (type_is_poison(self_type)) {
+    return NULL;
+  }
+  for (int i = 0; i < idx->count; i++) {
+    ImplDef *impl = idx->all[i];
+    if (impl->trait_type == NULL || impl->trait_type->kind != TY_TRAIT) {
+      continue;
+    }
+    Subst subst;
+    if (!impl_applies(impl, self_type, &subst, al)) {
+      continue;
+    }
+    TraitDef *trait = impl->trait_type->as.trait.def;
+    for (int j = 0; j < trait->method_count; j++) {
+      if (!trait->methods[j].has_default ||
+          !sv_equal(trait->methods[j].name, name)) {
+        continue;
+      }
+      *out_impl = impl;
+      *out_trait = trait;
+      *out_subst = subst;
+      return &trait->methods[j];
+    }
+  }
+  return NULL;
 }
 
 MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, StringView name,
@@ -4059,35 +4454,8 @@ MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, StringView name,
 
   for (int i = 0; i < idx->count; i++) {
     ImplDef *impl = idx->all[i];
-    if (type_is_poison(impl->self_type)) {
-      continue;
-    }
-
-    Subst subst = subst_empty();
-    bool matched;
-
-    if (impl->type_param_count == 0) {
-      matched = types_equal(impl->self_type, self_type);
-    } else {
-      int n = impl->type_param_count;
-      StringView *names = al_alloc(al, sizeof(StringView) * n);
-      Type **args = al_alloc(al, sizeof(Type *) * n);
-      bool *bound = al_alloc_zero(al, sizeof(bool) * n);
-      for (int j = 0; j < n; j++) {
-        names[j] = impl->type_params[j]->as.generic.name;
-      }
-
-      matched =
-          impl_type_match(impl->self_type, self_type, names, n, args, bound);
-      for (int j = 0; matched && j < n; j++) {
-        matched = bound[j]; // every impl type param must appear in self_type
-      }
-      if (matched) {
-        subst_init(&subst, names, args, n);
-      }
-    }
-
-    if (!matched) {
+    Subst subst;
+    if (!impl_applies(impl, self_type, &subst, al)) {
       continue;
     }
 
@@ -4116,29 +4484,11 @@ bool impl_index_implements(ImplIndex *idx, Type *type, TraitDef *trait,
   for (int i = 0; i < idx->count; i++) {
     ImplDef *impl = idx->all[i];
     if (impl->trait_type == NULL || impl->trait_type->kind != TY_TRAIT ||
-        impl->trait_type->as.trait.def != trait || impl->self_type == NULL ||
-        type_is_poison(impl->self_type)) {
+        impl->trait_type->as.trait.def != trait) {
       continue;
     }
-    if (impl->type_param_count == 0) {
-      if (types_equal(impl->self_type, type)) {
-        return true;
-      }
-      continue;
-    }
-    int n = impl->type_param_count;
-    StringView *names = al_alloc(al, sizeof(StringView) * n);
-    Type **args = al_alloc(al, sizeof(Type *) * n);
-    bool *bound = al_alloc_zero(al, sizeof(bool) * n);
-    for (int j = 0; j < n; j++) {
-      names[j] = impl->type_params[j]->as.generic.name;
-    }
-    bool matched =
-        impl_type_match(impl->self_type, type, names, n, args, bound);
-    for (int j = 0; matched && j < n; j++) {
-      matched = bound[j];
-    }
-    if (matched) {
+    Subst subst;
+    if (impl_applies(impl, type, &subst, al)) {
       return true;
     }
   }
@@ -4172,7 +4522,7 @@ void rctx_init(ResolveCtx *rctx, TypeChecker *tc, DiagBag *diags,
 void cctx_init(CheckCtx *cctx, TypeChecker *tc, Module *m, DiagBag *diags,
                Allocator *al) {
   memset(cctx, 0, sizeof(*cctx));
-  infer_init(&cctx->infer, al);
+  infer_init(&cctx->infer, &tc->impl_index, al);
 
   cctx->tc = tc;
   cctx->diags = diags;

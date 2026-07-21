@@ -180,7 +180,9 @@ the stack in place, decrementing `sp` only after the result exists).
 - `?` (`compile_propagate`): see "Propagate (`?`)" below.
 - Closures (`compile_closure`): see "Closures & upvalues" below.
 - Anything outside the subset (generic functions/methods, destructuring `var`
-  bindings) emits a source-anchored diagnostic
+  bindings, and calls the checker resolved against a *trait* signature rather
+  than an impl method — a call through a bound, or a default method the impl
+  inherited, neither of which has a chunk) emits a source-anchored diagnostic
   `"... is not supported by the VM yet"` and fails codegen — it never
   crashes at runtime.
 

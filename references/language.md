@@ -92,14 +92,21 @@ ending in `return` has type `!` (never), which unifies with anything.
   `Point::new(..)` on a generic type selects the impl by method name and
   infers the type arguments from the call (first name match wins if several
   impls define the same name).
-- Method calls: `p.draw()`, `p.x`, tuple access `t.0`.
+- Method calls: `p.draw()`, `p.x`, tuple access `t.0`. A method an impl
+  omitted but whose trait gives a default body is inherited: the call checks
+  against the trait's signature, projected into the impl's terms.
 - Trait bounds on type parameters are written inline (`fun f<T: A + B>(..)`),
   in a `where` clause (`fun f<T>(..) -> R where T: B`), or both — they merge.
   A bound must name a trait. Bounds are *enforced*: instantiating a bounded
   parameter with a type that has no `impl Trait for T` is an error
   ("type 'Int' does not implement trait 'Named'"), reported at the call site
-  once inference has solved the parameter. Inside the generic body the bound
-  does not yet grant access to the trait's methods (see the gap table).
+  once inference has solved the parameter — including for an explicitly
+  written type argument (`need_a::<Q>(q)`). Inside the generic body the bound
+  *is* what makes the trait's methods callable: `t.draw()` on a `T: Drawable`
+  resolves against the bound's signature (first bound declaring the name
+  wins), and `T.Color` names an associated type through it. Both are abstract
+  until instantiation — the projection collapses to whatever the applicable
+  impl bound it to once T is solved (`tests/pass/trait_bound_calls.dt`).
 
 ### match
 
@@ -132,15 +139,12 @@ Registered in every module; the only builtin so far.
 
 | Gap | Behavior today |
 |---|---|
-| calling a *defaulted* trait method | conformance lets an impl omit it, but the checker/VM can't yet dispatch a call to the trait's default body — the method must come from an impl to be callable |
-| trait method calls via bounds `T: Drawable` → `t.draw()` | inside a generic body a bounded param's methods aren't resolved through the bound yet — a call still needs a concrete impl |
-| default method *bodies* | recognized (satisfy conformance) but not type-checked |
+| calling an inherited default method under `--run` | type-checks, but the VM has no chunk for it (the body would need monomorphising against the concrete self) — "calling an inherited default method is not supported by the VM yet" |
 | extra (non-trait) methods in a trait impl | tolerated as inherent methods (Rust rejects them) |
-| bounds via explicit turbofish `foo::<Int>()` | the arg bypasses the fresh unknown, so its bounds aren't checked (inferred instantiations are) |
+| trait objects (`dyn Trait` values) | a trait names a type only in bound / `Self` position; there is no dynamic dispatch |
 | modules / imports | `use` is a no-op; single file only |
 | top-level `var` | parses, then aborts registration |
 | tuple-struct struct-patterns `var Pair { .. }` | diagnostic suggests tuple destructuring |
-| assoc types on generic params `T.Item` | "not yet supported" diagnostic |
 | match exhaustiveness, variable shadowing diags | silently accepted at check time; a non-exhaustive match that falls through every arm at runtime is a `--run` runtime error, not a compile error (`runtime.md`) |
 | overlapping method names across impls of one type | bare paths pick the first registered impl |
 | capturing a `for` loop variable in a closure | runs, but the closure sees the loop variable's *final* value (one shared cell), not a per-iteration copy — `runtime.md` "Closures & upvalues" |

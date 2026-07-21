@@ -46,14 +46,17 @@ impl Point<Int> {
     }
 }
 
-# a bounded generic: the argument type must implement Drawable
-pub fun render<T: Drawable>(item: T) -> Bool {
-    return true;
+# a bounded generic: the argument type must implement Drawable, and the bound
+# is also what makes `item.draw()` (and the projection `T.Color`) resolve
+pub fun render<T: Drawable>(item: T) -> T.Color {
+    return item.draw();
 }
 
 pub fun process_data<T>(data: T) -> Result<Int, String> {
     var p = Point::new(10, 20);
-    var shown = render(p);
+    var shown: String = render(p);
+    # `is_visible` has a default body the impl omits — inherited from the trait
+    var visible: Bool = p.is_visible();
     var (a, b) = (1, 2.5);
     var unit_val: () = ();
 

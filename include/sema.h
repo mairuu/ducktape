@@ -79,6 +79,16 @@ MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, StringView name,
                              ImplMatch *out_match, InferCtx *infer,
                              bool bare_path, Span span, Allocator *al);
 
+// find a trait method `self_type` inherits by default: an applicable
+// `impl Trait for <self_type>` exists and the trait declares `name` with a
+// default body the impl didn't override. call after impl_index_method misses.
+// on a match *out_impl/*out_trait/*out_subst describe the impl it comes
+// through, enough to project the trait signature into concrete terms.
+TraitMethodDef *impl_index_default_method(ImplIndex *idx, Type *self_type,
+                                          StringView name, ImplDef **out_impl,
+                                          TraitDef **out_trait,
+                                          Subst *out_subst, Allocator *al);
+
 // does `type` implement `trait`? true if some registered impl heads
 // `impl [<..>] trait for T` with a self type matching `type`.
 bool impl_index_implements(ImplIndex *idx, Type *type, TraitDef *trait,
@@ -88,15 +98,33 @@ bool impl_index_implements(ImplIndex *idx, Type *type, TraitDef *trait,
 // Inference
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// a bounded type parameter instantiated with an explicitly written type
+// argument (`need_a::<Q>(..)`). No unknown is ever created for it, so
+// infer_check_bounds has nothing to inspect after solving — the pair is
+// recorded here instead and checked alongside the solved unknowns.
+typedef struct {
+  Type *param; // the source TY_GENERIC, carrying the bounds
+  Type *arg;   // the type argument written at the call site
+  Span span;
+} ExplicitBound;
+
 struct InferCtx {
   Type **solutions; // NULL=free, TY_UNKNOWN=redirect, else solved
   Type **nodes;     // the original TY_UNKNOWN node (never changes)
   int cap;          // allocated slot count
   uint32_t next_id; // next fresh id
+
+  ExplicitBound *explicit_bounds;
+  int explicit_bound_count, explicit_bound_cap;
+
+  // needed to collapse a `T.Assoc` projection once T is solved: the binding
+  // lives on whichever impl applies. see infer_apply.
+  ImplIndex *impls;
+
   Allocator *al;
 };
 
-void infer_init(InferCtx *ctx, Allocator *al);
+void infer_init(InferCtx *ctx, ImplIndex *impls, Allocator *al);
 
 // allocate a fresh TY_UNKNOWN with an optional trait bound.
 Type *infer_fresh(InferCtx *ctx, StringView param_name, Type *bound,
