@@ -8,6 +8,9 @@
 #   tests/fail_run/*.dt  like tests/fail, but invoked with --run — for things
 #                        that type-check yet the VM rejects
 #
+# every tests/run program is additionally emitted as a bytecode image and
+# re-run from it, so the suite doubles as the serialization round-trip suite.
+#
 # multi-file tests live in a subdirectory of any of the above, entry point
 # `main.dt`, imported modules alongside it. The flat globs are non-recursive,
 # so those siblings are never picked up as tests in their own right.
@@ -90,12 +93,82 @@ check_run() {
         return
     fi
     pass=$((pass + 1))
+    check_image "$f" "$expected"
+}
+
+# every runnable program is also serialized, reloaded and re-run: the whole
+# tests/run suite doubles as the round-trip suite, so a construct the image
+# format forgets shows up as a diff rather than as a missing dedicated test.
+check_image() {
+    f=$1
+    expected=$2
+    img=$(mktemp)
+    out_tmp=$(mktemp)
+
+    err=$("$BIN" --emit-bc "$img" "$f" 2>&1 >/dev/null)
+    code=$?
+    if [ "$code" -ne 0 ] || [ -n "$err" ]; then
+        fail=$((fail + 1))
+        echo "FAIL (emit failed): $f (exit $code)"
+        [ -n "$err" ] && printf '%s\n' "$err" | sed 's/^/    /'
+        rm -f "$img" "$out_tmp"
+        return
+    fi
+
+    err=$("$BIN" --run "$img" 2>&1 >"$out_tmp")
+    code=$?
+    actual=$(cat "$out_tmp")
+    rm -f "$img" "$out_tmp"
+
+    if [ "$code" -ne 0 ] || [ -n "$err" ]; then
+        fail=$((fail + 1))
+        echo "FAIL (image run failed): $f (exit $code)"
+        [ -n "$err" ] && printf '%s\n' "$err" | sed 's/^/    /'
+        return
+    fi
+    if [ "$actual" != "$expected" ]; then
+        fail=$((fail + 1))
+        echo "FAIL (image output differs): $f"
+        echo "    expected: $(printf '%s' "$expected" | tr '\n' '|')"
+        echo "    actual:   $(printf '%s' "$actual" | tr '\n' '|')"
+        return
+    fi
+    pass=$((pass + 1))
+}
+
+# a malformed image must be rejected, never executed.
+check_bad_image() {  # $1 = description, $2 = file holding the image
+    desc=$1
+    img=$2
+    err=$("$BIN" --run "$img" 2>&1 >/dev/null)
+    code=$?
+    if [ "$code" -eq 0 ]; then
+        fail=$((fail + 1))
+        echo "FAIL (bad image accepted): $desc"
+    else
+        pass=$((pass + 1))
+    fi
+    rm -f "$img"
 }
 
 for f in "$ROOT"/tests/run/*.dt "$ROOT"/tests/run/*/main.dt; do
     [ -e "$f" ] || continue
     check_run "$f"
 done
+
+bad=$(mktemp)
+printf 'DTBC\002\000\000\000' > "$bad"
+check_bad_image "wrong version" "$bad"
+
+bad=$(mktemp)
+seed=$ROOT/tests/run/arithmetic.dt
+if [ -e "$seed" ] && "$BIN" --emit-bc "$bad" "$seed" >/dev/null 2>&1; then
+    dd if="$bad" of="$bad.cut" bs=1 count=32 2>/dev/null
+    mv "$bad.cut" "$bad"
+    check_bad_image "truncated image" "$bad"
+else
+    rm -f "$bad"
+fi
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

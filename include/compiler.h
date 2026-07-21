@@ -30,3 +30,12 @@ bool compiler_run(Compiler *c, const char *path);
 // call only after a successful compiler_run. `gc_stress` collects before
 // every heap allocation instead of on the usual size threshold.
 bool compiler_execute(Compiler *c, bool gc_stress);
+
+// compile the checked program and write it to `out_path` as a bytecode image
+// (`bytecode.h`) instead of running it. call only after a successful
+// compiler_run.
+bool compiler_emit(Compiler *c, const char *out_path);
+
+// load a bytecode image and run it. independent of any Compiler — an image
+// carries the whole linked program.
+bool bytecode_execute(const char *path, bool gc_stress, Allocator *al);

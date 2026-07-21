@@ -2,6 +2,7 @@
 #include "allocator.h"
 #include "arena.h"
 #include "ast.h"
+#include "bytecode.h"
 #include "codegen.h"
 #include "diag.h"
 #include "module.h"
@@ -243,30 +244,27 @@ bool compiler_run(Compiler *c, const char *path) {
   return true;
 }
 
-// compile every checked module to bytecode and run the root module's `main`.
-// requires a successful compiler_run first.
-bool compiler_execute(Compiler *c, bool gc_stress) {
-  Module *m = c->root_module;
-
+// link and compile every checked module to bytecode, reporting the root
+// module's `main`. on success the caller owns `heap` and must destroy it.
+static bool compiler_codegen(Compiler *c, Executable *exe, Heap *heap,
+                             bool gc_stress, FunDef **main_out) {
   // linking precedes codegen, not the other way round: a chunk can name a
   // definition from any module, so every slot must exist before the first
   // instruction is emitted — and the heap roots off the linked tables, since
   // codegen interns strings as it goes and may collect mid-compile.
-  Executable exe = {0};
-  if (!exe_link(&exe, &c->mod_reg, &c->al)) {
+  if (!exe_link(exe, &c->mod_reg, &c->al)) {
     fprintf(stderr, "compilation failed during linking.\n");
     return false;
   }
 
-  Heap heap;
-  heap_init(&heap, &exe, gc_stress);
+  heap_init(heap, exe, gc_stress);
 
   bool ok = true;
   for (int i = 0; i < c->mod_reg.module_count; i++) {
     Module *mod = modreg_topo(&c->mod_reg, i);
     diag_clear(&c->diags);
 
-    ok &= codegen_module(mod, &exe, &heap, &c->diags, &c->al);
+    ok &= codegen_module(mod, exe, heap, &c->diags, &c->al);
     // per module, so a diagnostic is reported against its own source.
     if (diag_has_diags(&c->diags)) {
       diag_report(&c->diags, mod->file_path.chars, mod->source.chars, stderr);
@@ -274,10 +272,11 @@ bool compiler_execute(Compiler *c, bool gc_stress) {
   }
   if (!ok) {
     fprintf(stderr, "compilation failed during code generation.\n");
-    heap_destroy(&heap);
+    heap_destroy(heap);
     return false;
   }
 
+  Module *m = c->root_module;
   FunDef *main_fn = NULL;
   for (int i = 0; i < m->fun_count; i++) {
     if (sv_equal_cstr(m->funs[i]->name, "main")) {
@@ -287,11 +286,57 @@ bool compiler_execute(Compiler *c, bool gc_stress) {
   }
   if (main_fn == NULL) {
     fprintf(stderr, "error: no 'main' function to run\n");
-    heap_destroy(&heap);
+    heap_destroy(heap);
     return false;
   }
 
-  ok = vm_run(&exe, &heap, main_fn);
+  *main_out = main_fn;
+  return true;
+}
+
+// compile every checked module to bytecode and run the root module's `main`.
+// requires a successful compiler_run first.
+bool compiler_execute(Compiler *c, bool gc_stress) {
+  Executable exe = {0};
+  Heap heap;
+  FunDef *main_fn;
+  if (!compiler_codegen(c, &exe, &heap, gc_stress, &main_fn)) {
+    return false;
+  }
+
+  bool ok = vm_run(&exe, &heap, main_fn);
+  heap_destroy(&heap);
+  return ok;
+}
+
+// compile every checked module and write the linked program to `out_path` as
+// a bytecode image instead of running it.
+bool compiler_emit(Compiler *c, const char *out_path) {
+  Executable exe = {0};
+  Heap heap;
+  FunDef *main_fn;
+  // the heap is only here because codegen interns string literals into it;
+  // bc_write copies their bytes out, so nothing survives the destroy below.
+  if (!compiler_codegen(c, &exe, &heap, false, &main_fn)) {
+    return false;
+  }
+
+  bool ok = bc_write(&exe, main_fn, out_path, &c->al);
+  heap_destroy(&heap);
+  return ok;
+}
+
+// load a bytecode image and run its recorded entry point. no compiler state is
+// involved: an image is a complete program.
+bool bytecode_execute(const char *path, bool gc_stress, Allocator *al) {
+  Executable exe = {0};
+  Heap heap;
+  FunDef *entry;
+  if (!bc_load(path, al, &exe, &heap, gc_stress, &entry)) {
+    return false;
+  }
+
+  bool ok = vm_run(&exe, &heap, entry);
   heap_destroy(&heap);
   return ok;
 }

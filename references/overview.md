@@ -35,9 +35,13 @@ make test          # build + run the whole test suite
 ./build/ducktape file.dt                    # compile (type-check) only
 ./build/ducktape --run file.dt              # compile and execute main()
 ./build/ducktape --run --gc-stress file.dt  # + collect on every allocation
+./build/ducktape --emit-bc prog.dtbc file.dt # compile to a bytecode image
+./build/ducktape --run prog.dtbc            # run an image (no source needed)
 ```
 
 `main()` exits 0 only when every phase succeeded; diagnostics go to stderr.
+`--run` tells an image from a source file by its magic bytes, not by the
+extension.
 
 ## Pipeline
 
@@ -65,6 +69,10 @@ With `--run`, `compiler_execute` (`src/compiler.c`) additionally runs:
 7. **codegen** — `src/codegen.c`: AST → bytecode `Chunk` per function, per
    module
 8. **vm** — `src/vm.c`: stack VM executes the root module's `main()`
+
+`--emit-bc` stops after 7 and serializes the linked program instead
+(`src/bytecode.c`); `--run` on an image skips 1–7 entirely, decoding straight
+into the same `Executable` the VM would have been handed.
 
 Diagnostics accumulate in a `DiagBag` (`src/diag.c`) shared by all phases; no
 phase aborts mid-file. Error recovery uses a poison type/expr convention (see

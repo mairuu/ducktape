@@ -387,12 +387,63 @@ may be an alias (`use lib::helper as h;`) or belong to another module
 entirely — a search over the enclosing module's own `funs[]` would find
 neither.
 
+## Serialization (`src/bytecode.c`, `include/bytecode.h`)
+
+`--emit-bc <out> file.dt` writes the linked program to a flat binary image;
+`--run <image>` decodes it and executes it with no compiler in the process.
+`--run` picks the path by sniffing the four magic bytes rather than the file
+extension.
+
+```
+header   "DTBC", u16 version, u16 entry (a globals index)
+counts   u32 strings, globals, structs, enums, closures
+strings  [u32 len, len bytes]*        — every name and string constant
+structs  [u32 name, u8 is_tuple, u16 field_count, u32 field_name*]
+enums    [u32 name, u16 variant_count,
+            [u32 name, u8 is_tuple, u16 field_count, u32 field_name*]*]
+funs     [u32 name, u16 param_count, u8 has_chunk,
+            u32 code_len, code_len bytes,
+            u16 const_count, const*]*  — globals first, then closures
+```
+
+Every multi-byte field is little-endian and written byte by byte, so an image
+depends on neither the host's byte order nor any struct layout. Floats go out
+as their IEEE-754 bit pattern.
+
+**An image is the runtime projection of the program.** Only what `vm.c` and
+`value_print` actually read off a `FunDef`/`StructDef`/`EnumDef` is written —
+names, arities, field shapes, chunks. Types, spans and the owning `Module` are
+compile-time concerns, so a loaded def has them NULL: an image has no AST
+behind it, and nothing in the VM asks for one.
+
+**The pool holds no raw pointers.** A string constant becomes a string-table
+index, a `VAL_FUN` constant an index into the funs section (globals, then
+closures — a nested closure function is reachable only through a constant, so
+it has no slot of its own). That is what keeps both directions a straight
+loop. Struct and enum references need no encoding at all: `OP_STRUCT`/`OP_ENUM`
+already carry a slot the VM resolves through `exe`, and the tables are written
+in slot order. Variant tags are positional, exactly as `exe_link` assigns them.
+
+Two ordering constraints, both inherited from linking:
+
+- **The string table precedes everything that indexes it,** so writing is two
+  walks — one that only interns, one that only writes. The writer checks the
+  table didn't grow during the second walk; if it did, the two walks disagree
+  about which strings an image mentions.
+- **Every definition is allocated before any record is decoded.** That is what
+  lets a `VAL_FUN` constant name a function further down the file without a
+  patch-up pass, and it is why `bc_load` — not its caller — calls `heap_init`:
+  decoding a chunk interns its string constants, so the heap must already be
+  rooted off complete tables (chunks still NULL) before the first pool is read.
+  Same shape as the codegen constraint above, one level over.
+
+Every read is bounds-checked against the buffer, and section counts are
+sanity-checked against the one-byte operand ceiling, so a truncated or corrupt
+image is rejected rather than executed. `tests/run` doubles as the round-trip
+suite: `scripts/run_tests.sh` emits an image for every runnable program and
+re-runs it, so a construct the format forgets shows up as an output diff.
+
 ## Future (design intent, not implemented)
 
-- **Bytecode serialization** (the module system now exists): flat binary —
-  magic/version, string table, recursive chunk records (name, arity, code,
-  tagged constants, nested functions). Keep the constant pool free of raw
-  pointers (string-table indices instead) so this stays a straight loop.
-  Deliberately deferred: the chunk format is still changing.
 - **REPL:** does not exist; would re-run the pipeline per line with a fresh
   arena, keeping the GC heap alive across lines.

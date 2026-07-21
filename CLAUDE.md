@@ -9,6 +9,8 @@ make               # build build/ducktape
 make test          # build + full test suite (must stay green)
 ./build/ducktape file.dt         # compile / type-check only
 ./build/ducktape --run file.dt   # compile and execute main()
+./build/ducktape --emit-bc out.dtbc file.dt   # compile to a bytecode image
+./build/ducktape --run out.dtbc               # execute an image
 make format        # clang-format over src/ and include/
 ```
 
@@ -36,6 +38,8 @@ in `.vscode/ref/` are historical — do not trust them.
   so the siblings are never collected as tests themselves.
 - Add a test with every feature or fix. `tests/pass/in_fixed.dt` is the
   full-language showcase.
+- Every `tests/run` program is also emitted as a bytecode image and re-run
+  from it, so anything the image format forgets fails as an output diff.
 
 ## Conventions
 

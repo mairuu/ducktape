@@ -306,12 +306,43 @@
   `check_pattern` stamps `resolved_type` after substitution — so the matrix
   reads it from the first row that constrains the column.
 
+- **Bytecode serialization (milestone 9a)** — `--emit-bc <out> file.dt` writes
+  the linked program as a flat little-endian image; `--run <image>` decodes and
+  executes it with no compiler in the process (the two forms are told apart by
+  the magic bytes, not the extension). Format and rationale: `runtime.md`
+  "Serialization".
+
+  The design falls out of one observation: **an image is the runtime projection
+  of the program, not a snapshot of the compiler.** Only the fields `vm.c` and
+  `value_print` actually read off a `FunDef`/`StructDef`/`EnumDef` are written,
+  so a loaded def has no types, spans or `Module` behind it — which is what
+  makes the loader independent of the AST entirely.
+
+  Both ordering constraints are the linking ones from milestone 8, one level
+  over:
+  - the string table precedes every record that indexes it, so writing is two
+    walks (collect, then write) with an after-the-fact check that the table
+    didn't grow during the second;
+  - every definition is allocated before any record is decoded, so a `VAL_FUN`
+    constant can name a function further down the file without a patch-up pass
+    — and so `bc_load` can `heap_init` off complete tables before decoding the
+    first constant pool, since interning a string constant is exactly the
+    "collection mid-load" hazard codegen already has.
+
+  `compiler_execute` split into `compiler_codegen` (link + codegen + find
+  `main`) and the two things that consume it. Testing is a round-trip rather
+  than a fixture: `scripts/run_tests.sh` emits an image for every `tests/run`
+  program and re-runs it, so anything the format forgets is an output diff (17
+  extra cases, all of them also verified under `--gc-stress`), plus two
+  malformed-image rejections.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
 milestone (~900 lines).
 
-1. **Bytecode serialization + REPL** — format sketch in `runtime.md`.
+1. **REPL (milestone 9b)** — sketch in `runtime.md`: re-run the pipeline per
+   line with a fresh arena, keeping the GC heap alive across lines.
 
 ## Known warts to clean up opportunistically
 
@@ -336,3 +367,8 @@ milestone (~900 lines).
   (a symlink, say) would load twice and collide
 - the linked slot spaces are one byte wide, so 256 functions/structs/enums is
   a hard program-wide ceiling (reported, not silently truncated)
+- a bytecode image is structurally validated (bounds, indices, counts) but the
+  code itself is not verified: an image with a plausible header and nonsense
+  instructions can still crash the VM
+- an image carries no source, so a runtime error in one reports function names
+  with no line information
