@@ -479,6 +479,79 @@
   collide — and `EXPR_SELF` falls back to an upvalue
   (`tests/run/closures.dt`).
 
+- **Trait objects (milestone 13)** — `dyn Trait` values dispatch dynamically,
+  so one collection can hold several concrete types. Design:
+  `architecture.md` "Trait objects", `runtime.md` "Trait objects",
+  `language.md` "Trait objects".
+
+  The observation the milestone turns on is the **dual of monomorphisation's**.
+  Milestone 10 rested on "the runtime is uniform in type arguments, so a type
+  argument changes exactly one thing: which function a call resolves to." A
+  trait object is the case where that choice cannot be made at compile time —
+  so it is *carried by the value*. A `dyn Shape` is the pair `(value, the
+  table of slots monomorphisation would have picked)`. The vtable is the
+  monomorphisation key moved from compile time into the value, and nothing
+  else about the representation changes.
+
+  Three things follow, and they are the whole milestone:
+  - **`TY_DYN` is a separate kind from `TY_TRAIT`, and is *concrete*.**
+    `TY_TRAIT` is the abstract `Self` of a default body — resolved statically,
+    monomorphised. `TY_DYN` is a real runtime representation, so
+    `type_is_concrete` says yes and a `dyn Show` keys an instantiation exactly
+    like a struct. Sharing one kind would have put both dispatch strategies
+    behind one type. The *checker* barely notices the difference:
+    `resolve_method_call_expr` hands a `TY_DYN` receiver to the same
+    `resolve_bound_method_call` a bounded `T` uses, since a trait object
+    offers exactly the one trait it names. Only codegen tells them apart.
+  - **Coercion is the one new concept.** The language had no subtyping at all:
+    identity is pointer equality, `infer_unify` only decomposes structurally.
+    That is enough everywhere else, but `Sq` → `dyn Shape` is a real operation
+    (allocate the fat value, attach the vtable), not a re-reading of the same
+    bits — so it is modelled as exactly that: explicit, one-way, attempted
+    only where a value flows into a *known* `dyn` position, never inside
+    unification. The test is `impl_index_implements`, the same question a
+    bound asks, which is the honest way to put it: a trait object is a bound
+    whose witness travels with the value instead of being resolved. The
+    coercion is recorded on the `Expr` node, the same collect-then-consume
+    shape `inst` already needed, because at the moment it is discovered the
+    type may still be an unsolved unknown.
+  - **Dispatch reuses `OP_CALL`.** `OP_DYN_METHOD` pops the trait object and
+    pushes the method's function *then* the unwrapped receiver, which leaves
+    the stack in the shape `OP_CALL` already understands. So dynamic dispatch
+    added no call machinery, no frame changes, no arity special case — the
+    same move that let methods reuse `OP_GET_GLOBAL` in 5c-ii.
+
+  Object safety is checked where `dyn Trait` is *written*, not at the trait
+  declaration. That is not a shortcut: a trait is free to be
+  static-dispatch-only, and `tests/run/trait_default.dt` leans on every rule
+  the check enforces (`-> Self`, `other: Self`, `Self.Label`, a method with
+  its own type parameter). Only naming a trait as a *type* asks for more.
+
+  Coercion sites are call arguments, `return`, a `var` with a `dyn`
+  annotation, a struct/variant field initializer, and an element of a `[dyn T]`
+  or `(dyn T, ..)` literal. The two literal cases needed the *hint* threaded
+  through first — an array literal used to let its first element decide the
+  element type, and a tuple literal ignored the hint entirely.
+
+  Also fixed two pre-existing bugs this surfaced, neither about traits:
+  - **`infer_unify`'s arguments were swapped at four call sites**, so those
+    diagnostics printed backwards: `pair(1, "no")` on a `fun pair<T>(a: T,
+    b: T)` reported "expected 'String' but got 'Int'" when `T` was already
+    bound to `Int`. The convention is documented ("the *expected* type goes
+    first") and every other caller honours it; the generic call-argument path,
+    both generic method-argument paths, and struct/variant field init did not.
+    Unification is symmetric about which side it binds, so only the wording
+    was ever wrong — which is exactly why it survived.
+  - a **parser bug**, found because a test wanted `return Rect { .. };` inside
+    an `if`: `p->allow_struct_init` was cleared for the `if` *condition* and
+    left cleared across `parse_block` for the body, so a struct literal was
+    unparseable anywhere inside an `if` — while the identical code in a `for`
+    body was fine, because `for` restores the flag before its block. The
+    restriction only ever existed to make the `{` after a condition start the
+    body (`tests/run/if_struct_literal.dt`). The `else` branch had a matching
+    clear/restore pair around a line that only assigned NULL — dead code that
+    made the omission look deliberate.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -489,18 +562,19 @@ Nothing on the main line is *blocked*: every construct the checker accepts in
 warts" section would promote first, in the order that pays off soonest — pick
 by appetite rather than by necessity.
 
-1. **Trait objects (`dyn Trait`)** — the one language feature whose absence
-   shapes the rest: a trait names a type only in bound / `Self` position
-   today, and every dispatch is static. It needs a vtable representation, a
-   fat value, and a rule for which traits are object-safe.
-2. **Module-granular impls and `pub use`** — `ImplIndex` lives on the
+1. **Module-granular impls and `pub use`** — `ImplIndex` lives on the
    `TypeChecker`, so an impl applies even where its module was never
    imported, and imports don't compose (no re-export, no glob, no qualified
    paths). Fixing the first is a scoping change; the second is parser plus
    `tc_link_imports`.
-3. **Wider slot spaces** — 256 functions/structs/enums program-wide, now
-   reached by *use* of generics rather than by how many are written. A
-   two-byte operand (or a wide-operand opcode pair) lifts it.
+2. **Wider slot spaces** — 256 functions/structs/enums program-wide, now
+   reached by *use* of generics rather than by how many are written, and by
+   trait-object vtables on top of that. A two-byte operand (or a
+   wide-operand opcode pair) lifts it.
+3. **Object-safe traits with associated types** — the object-safety rule
+   rejects `Self.Item` outright. Allowing `dyn Iterator` with the associated
+   type *named* at the coercion site (`dyn Iterator<Item = Int>`) is the
+   natural follow-on, and needs `dyn` to carry type arguments at all.
 
 Not on the roadmap: the **REPL** is a side feature, not a milestone — it lives
 on the `feature/repl` branch (`--repl`, incremental compilation over one module
@@ -532,6 +606,16 @@ via `Module.decl_base`) and is not part of the main line.
   and trait default bodies alike
 - trait impls are program-global: an impl applies even if its module was never
   imported (`ImplIndex` lives on the `TypeChecker`, not the `Module`)
+- a trait object cannot be made from the abstract `Self` of a default body:
+  `check_coerce_dyn` refuses a `TY_TRAIT`, so `self` inside a default body
+  can't be handed on as a `dyn Trait` even when the trait is object-safe
+- no downcast from `dyn Trait` back to a concrete type, and no `dyn` with type
+  arguments (`dyn Into<Int>`) — a generic trait can only be named bare
+- every distinct (trait, concrete type) pair a program coerces takes a vtable
+  slot out of the same 256-wide operand space as everything else
+- an unsupported construct inside a trait method is reported at the coercion
+  site that builds the vtable, since that is where the body is first demanded
+  — the same "only seen where it is instantiated" limitation generics have
 - no `pub use` re-export, no glob `use a::*`, no module-qualified paths
 - `pub` on impls/methods/fields is parsed and ignored — visibility is
   per-item at module granularity only

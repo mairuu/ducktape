@@ -46,6 +46,40 @@ impl Point<Int> {
     }
 }
 
+# `Drawable` is deliberately *not* object-safe (`Self.Color`), which is fine —
+# object safety is only demanded where `dyn` is written. This one is, so it can
+# be a trait object as well as a bound.
+trait Weigh {
+    fun weight(self) -> Int;
+
+    fun heavy(self) -> Bool {
+        return self.weight() > 10;
+    }
+}
+
+struct Brick { kg: Int }
+struct Feather { grams: Int }
+
+impl Weigh for Brick {
+    fun weight(self) -> Int { self.kg }
+}
+
+impl Weigh for Feather {
+    fun weight(self) -> Int { 1 }
+    fun heavy(self) -> Bool { false }
+}
+
+# one collection, several concrete types — what static dispatch cannot express
+pub fun total_weight(items: [dyn Weigh]) -> Int {
+    var sum = 0;
+    for item in items {
+        if item.heavy() {
+            sum += item.weight();
+        }
+    }
+    return sum;
+}
+
 # a bounded generic: the argument type must implement Drawable, and the bound
 # is also what makes `item.draw()` (and the projection `T.Color`) resolve
 pub fun render<T: Drawable>(item: T) -> T.Color {
@@ -136,4 +170,6 @@ pub fun process_data<T>(data: T) -> Result<Int, String> {
 
 fun main() {
     var r = process_data(1);
+    # coercion at a call site, mixing two concrete types in one array
+    var w = total_weight([Brick { kg: 20 }, Feather { grams: 1 }, Brick { kg: 3 }]);
 }

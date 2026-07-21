@@ -41,6 +41,8 @@ static size_t obj_size(Obj *o) {
     return sizeof(ObjClosure);
   case OBJ_UPVALUE:
     return sizeof(ObjUpvalue);
+  case OBJ_DYN:
+    return sizeof(ObjDyn);
   }
   assert(false && "unreachable");
   return 0;
@@ -272,6 +274,16 @@ ObjClosure *heap_closure(Heap *h, FunDef *fun, int upvalue_count) {
   return c;
 }
 
+ObjDyn *heap_dyn(Heap *h, Value inner, VTable *vtable) {
+  // new_obj may collect, and `inner` is only reachable from the VM stack until
+  // it lands in the object — which is why OP_MAKE_DYN leaves it on the stack
+  // until the wrapper exists.
+  ObjDyn *d = (ObjDyn *)new_obj(h, OBJ_DYN, sizeof(ObjDyn));
+  d->inner = inner;
+  d->vtable = vtable;
+  return d;
+}
+
 ObjUpvalue *heap_upvalue(Heap *h, Value *slot) {
   ObjUpvalue *uv = (ObjUpvalue *)new_obj(h, OBJ_UPVALUE, sizeof(ObjUpvalue));
   uv->location = slot;
@@ -330,6 +342,13 @@ static void mark_obj(Obj *o) {
     // at `closed` once closed; marking `closed` covers the closed case and is
     // harmless while open (initialised to unit at capture time).
     gc_mark_value(((ObjUpvalue *)o)->closed);
+    break;
+  case OBJ_DYN:
+    // the vtable is arena-allocated with the Executable, not on this heap —
+    // only the wrapped value needs marking. Its methods' constant pools are
+    // already roots, since a vtable can only name definitions that are in
+    // `exe->globals`.
+    gc_mark_value(((ObjDyn *)o)->inner);
     break;
   }
 }

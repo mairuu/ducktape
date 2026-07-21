@@ -551,10 +551,14 @@ bool infer_unify(InferCtx *ctx, Type *a, Type *b, DiagBag *diags, Span span) {
                        span);
 
   case TY_TRAIT:
+  case TY_DYN:
   case TY_ASSOC: {
-    // abstract types: both are interned, so anything that reaches here (they
-    // weren't types_equal) is a genuine mismatch — `T.Item` vs `U.Item`, or
-    // two different traits. There is nothing to decompose.
+    // both are interned, so anything that reaches here (they weren't
+    // types_equal) is a genuine mismatch — `T.Item` vs `U.Item`, or two
+    // different traits. There is nothing to decompose. Note that
+    // `dyn Show` vs a concrete `Sq` never reaches this switch at all: the
+    // kinds differ, so it is caught above — and a *coercion* is offered
+    // there instead (see check_coerce).
     char ab[64], bb[64];
     type_sprintf(a, ab, sizeof(ab));
     type_sprintf(b, bb, sizeof(bb));
@@ -1737,6 +1741,8 @@ bool tc_resolve_module(TypeChecker *tc, Module *m) {
 }
 
 static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint);
+static bool check_coerce_dyn(CheckCtx *ctx, Expr *e, Type *actual,
+                             Type *expected);
 static Type *trait_project(Type *t, TraitDef *trait, Type *self_to,
                            ImplDef *impl, Allocator *al);
 static void check_binding_pattern(CheckCtx *ctx, Pattern *pat, Type *init_ty);
@@ -1759,10 +1765,14 @@ static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
     if (type_is_poison(init_ty) || (annot_ty && type_is_poison(annot_ty))) {
       init_ty = ctx->tc->t_poison;
     } else if (annot_ty) {
-      init_ty =
-          infer_unify(&ctx->infer, annot_ty, init_ty, ctx->diags, stmt->span)
-              ? annot_ty // prefer annotation on success
-              : ctx->tc->t_poison;
+      if (check_coerce_dyn(ctx, var->initializer, init_ty, annot_ty)) {
+        init_ty = annot_ty;
+      } else {
+        init_ty =
+            infer_unify(&ctx->infer, annot_ty, init_ty, ctx->diags, stmt->span)
+                ? annot_ty // prefer annotation on success
+                : ctx->tc->t_poison;
+      }
     }
 
     check_binding_pattern(ctx, var->binding, init_ty);
@@ -1793,7 +1803,8 @@ static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
       break;
     }
 
-    if (!type_is_poison(val_ty) && !type_is_poison(ctx->return_type)) {
+    if (!type_is_poison(val_ty) && !type_is_poison(ctx->return_type) &&
+        !check_coerce_dyn(ctx, ret->value, val_ty, ctx->return_type)) {
       infer_unify(&ctx->infer, ctx->return_type, val_ty, ctx->diags,
                   stmt->span);
     }
@@ -2019,6 +2030,57 @@ static Type *resolve_callee(CheckCtx *ctx, Expr *expr, Subst *subst) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Coercion to a trait object
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// The language has no subtyping: type identity is pointer equality and
+// `infer_unify` only ever decomposes structurally. A trait object is the one
+// place that is not enough — `Sq` and `dyn Shape` are genuinely different
+// runtime representations, and the conversion between them is a real
+// operation (allocate the fat value, attach the vtable), not a re-reading of
+// the same bits.
+//
+// So it is modelled as exactly that: an explicit, one-way, non-transitive
+// coercion, attempted only where a value flows into a *known* `dyn Trait`
+// position and never as part of unification. The check is `impl_index_
+// implements`, the same question a trait bound asks — a trait object is a
+// bound whose witness is carried at runtime instead of resolved at compile
+// time.
+//
+// The result is recorded on the expression rather than folded into its type,
+// so the node keeps saying what it *is* and codegen learns what to wrap.
+// Returns true when `expected` was satisfied by coercing `e`.
+static bool check_coerce_dyn(CheckCtx *ctx, Expr *e, Type *actual,
+                             Type *expected) {
+  if (e == NULL || expected == NULL || expected->kind != TY_DYN) {
+    return false;
+  }
+  actual = infer_apply(&ctx->infer, actual, ctx->al);
+  switch (actual->kind) {
+  case TY_DYN:     // already one
+  case TY_UNKNOWN: // undecidable here; unification may still solve it
+  case TY_POISON:  // already reported
+  case TY_TRAIT:   // the abstract `Self` of a default body — known gap
+  case TY_ASSOC:
+    return false;
+  default:
+    // TY_GENERIC is deliberately allowed: `impl_index_implements` answers a
+    // bounded `T` from its own declared bounds, and codegen substitutes the
+    // concrete type before building the vtable — so a generic function can
+    // hand its parameter over as a trait object.
+    break;
+  }
+
+  TraitDef *trait = expected->as.dyn.def;
+  if (!impl_index_implements(&ctx->tc->impl_index, actual, trait, ctx->al)) {
+    return false;
+  }
+
+  e->coerce_dyn = trait;
+  return true;
+}
+
 static Type *resolve_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   // todo: handle hint
 
@@ -2065,8 +2127,12 @@ static Type *resolve_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       continue;
     }
 
+    if (check_coerce_dyn(ctx, call->args[i], arg_ty, param_ty)) {
+      continue;
+    }
+
     if (is_generic) {
-      had_error |= !infer_unify(&ctx->infer, arg_ty, param_ty, ctx->diags,
+      had_error |= !infer_unify(&ctx->infer, param_ty, arg_ty, ctx->diags,
                                 call->args[i]->span);
     } else {
       if (!types_equal(arg_ty, param_ty)) {
@@ -2998,9 +3064,13 @@ static Type *check_trait_method_call(CheckCtx *ctx, Expr *expr, TraitDef *trait,
       continue;
     }
 
+    if (check_coerce_dyn(ctx, arg, arg_ty, param_ty)) {
+      continue;
+    }
+
     if (is_generic) {
       had_error |=
-          !infer_unify(&ctx->infer, arg_ty, param_ty, ctx->diags, arg->span);
+          !infer_unify(&ctx->infer, param_ty, arg_ty, ctx->diags, arg->span);
     } else if (!types_equal(arg_ty, param_ty)) {
       char ab[64], pb[64];
       type_sprintf(arg_ty, ab, sizeof(ab));
@@ -3060,6 +3130,14 @@ static Type *resolve_method_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     bound_count = self_ty->as.generic.bound_count;
   } else if (self_ty->kind == TY_TRAIT) {
     self_trait[0] = self_ty->as.trait.def;
+    bounds = self_trait;
+    bound_count = 1;
+  } else if (self_ty->kind == TY_DYN) {
+    // a trait object offers exactly the one trait it names. It checks like
+    // any other abstract receiver — object safety is what guarantees the
+    // signature stays callable once `Self` is gone — and only *codegen* tells
+    // the two apart, by the vtable.
+    self_trait[0] = self_ty->as.dyn.def;
     bounds = self_trait;
     bound_count = 1;
   }
@@ -3173,9 +3251,13 @@ static Type *resolve_method_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       continue;
     }
 
+    if (check_coerce_dyn(ctx, arg, arg_ty, param_ty)) {
+      continue;
+    }
+
     if (is_generic) {
       had_error |=
-          !infer_unify(&ctx->infer, arg_ty, param_ty, ctx->diags, arg->span);
+          !infer_unify(&ctx->infer, param_ty, arg_ty, ctx->diags, arg->span);
     } else if (!types_equal(arg_ty, param_ty)) {
       char ab[64], pb[64];
       type_sprintf(arg_ty, ab, sizeof(ab));
@@ -3697,7 +3779,11 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
         continue;
       }
 
-      if (!infer_unify(&ctx->infer, arg_ty, field_ty, ctx->diags,
+      if (check_coerce_dyn(ctx, field_init->value, arg_ty, field_ty)) {
+        continue;
+      }
+
+      if (!infer_unify(&ctx->infer, field_ty, arg_ty, ctx->diags,
                        field_init->value->span)) {
         had_error = true;
       }
@@ -3770,7 +3856,11 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
         continue;
       }
 
-      if (!infer_unify(&ctx->infer, arg_ty, field_ty, ctx->diags,
+      if (check_coerce_dyn(ctx, field_init->value, arg_ty, field_ty)) {
+        continue;
+      }
+
+      if (!infer_unify(&ctx->infer, field_ty, arg_ty, ctx->diags,
                        field_init->value->span)) {
         had_error = true;
       }
@@ -3887,11 +3977,26 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     TypeScratch elem_types;
     ts_init(&elem_types, tuple->count, ctx->al);
 
+    // an element-wise hint, so a `(dyn Shape, Int)` annotation reaches the
+    // element that has to coerce. Only used when the shape already matches;
+    // a mismatched hint is left for the surrounding unification to report.
+    Type *hint_ty = hint ? infer_find(&ctx->infer, hint) : NULL;
+    if (hint_ty != NULL && (hint_ty->kind != TY_TUPLE ||
+                            hint_ty->as.tuple.elem_count != tuple->count)) {
+      hint_ty = NULL;
+    }
+
     bool had_error = false;
     for (int i = 0; i < tuple->count; i++) {
-      elem_types.ptr[i] = resolve_expr(ctx, tuple->elems[i], NULL);
+      Type *elem_hint = hint_ty ? hint_ty->as.tuple.elem_types[i] : NULL;
+      elem_types.ptr[i] = resolve_expr(ctx, tuple->elems[i], elem_hint);
       if (type_is_poison(elem_types.ptr[i])) {
         had_error = true;
+        continue;
+      }
+      if (elem_hint != NULL && check_coerce_dyn(ctx, tuple->elems[i],
+                                                elem_types.ptr[i], elem_hint)) {
+        elem_types.ptr[i] = elem_hint;
       }
     }
     if (had_error) {
@@ -4109,6 +4214,28 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
               ? elem_hint
               : infer_fresh(&ctx->infer, (StringView){0}, NULL, expr->span);
       result = ty_array(elem_ty, ctx->al);
+      break;
+    }
+
+    // `[dyn Shape]` is the shape trait objects exist for: a heterogeneous
+    // array. The hint decides the element type up front and every element
+    // coerces into it, rather than the first element deciding and the rest
+    // having to match it.
+    if (elem_hint != NULL && elem_hint->kind == TY_DYN) {
+      bool ok = true;
+      for (int i = 0; i < array->count; i++) {
+        Type *ty = resolve_expr(ctx, array->elems[i], elem_hint);
+        if (type_is_poison(ty)) {
+          ok = false;
+          continue;
+        }
+        if (check_coerce_dyn(ctx, array->elems[i], ty, elem_hint)) {
+          continue;
+        }
+        ok &= infer_unify(&ctx->infer, elem_hint, ty, ctx->diags,
+                          array->elems[i]->span);
+      }
+      result = ok ? ty_array(elem_hint, ctx->al) : ctx->tc->t_poison;
       break;
     }
 
@@ -4710,6 +4837,106 @@ void tscope_define(TypeScope *scope, StringView name, Type *type,
 static Type *impl_index_assoc_type(ImplIndex *idx, Type *self_type,
                                    StringView name, Allocator *al);
 
+// does `t` mention `trait`'s abstract `Self`, either directly or under a
+// projection (`Self.Item`)? Used for object safety: such a type is only
+// meaningful once `Self` is a *known* concrete type, which is exactly what a
+// trait object has thrown away.
+static bool type_mentions_self(const Type *t, const TraitDef *trait) {
+  switch (t->kind) {
+  case TY_TRAIT:
+    return t->as.trait.def == trait;
+  case TY_ASSOC:
+    return t->as.assoc.trait == trait ||
+           type_mentions_self(t->as.assoc.base, trait);
+  case TY_FUNCTION:
+    for (int i = 0; i < t->as.fun.param_count; i++) {
+      if (type_mentions_self(t->as.fun.param_types[i], trait)) {
+        return true;
+      }
+    }
+    return type_mentions_self(t->as.fun.return_type, trait);
+  case TY_TUPLE:
+    for (int i = 0; i < t->as.tuple.elem_count; i++) {
+      if (type_mentions_self(t->as.tuple.elem_types[i], trait)) {
+        return true;
+      }
+    }
+    return false;
+  case TY_ARRAY:
+    return type_mentions_self(t->as.array.elem_type, trait);
+  case TY_STRUCT:
+    for (int i = 0; i < t->as.struc.type_arg_count; i++) {
+      if (type_mentions_self(t->as.struc.type_args[i], trait)) {
+        return true;
+      }
+    }
+    return false;
+  case TY_ENUM:
+    for (int i = 0; i < t->as.enm.type_arg_count; i++) {
+      if (type_mentions_self(t->as.enm.type_args[i], trait)) {
+        return true;
+      }
+    }
+    return false;
+  default:
+    return false;
+  }
+}
+
+// Object safety. A `dyn Trait` value is one vtable slot per method, called
+// with the receiver as its own first argument and nothing else known about
+// it — so a method belongs in a vtable only if that is enough to call it:
+//
+//   • it must take `self` (an associated function has no receiver to dispatch
+//     on, so there is no vtable to find it in);
+//   • it must have no type parameters of its own (each instantiation would
+//     need a slot, and which ones exist isn't known at the coercion site);
+//   • `Self` must not appear anywhere but the receiver — a `-> Self` or a
+//     `other: Self` parameter means the *caller* has to know the concrete
+//     type, which is precisely what the coercion erased. `Self.Item` is the
+//     same problem behind a projection.
+//
+// Checked where `dyn Trait` is written rather than at the trait declaration:
+// a trait is free to be statically-dispatch-only (`tests/run/trait_default.dt`
+// leans on every one of these), and only naming it as a type asks for more.
+static bool trait_check_object_safe(TypeResolver *r, TraitDef *trait,
+                                    Span span) {
+  for (int i = 0; i < trait->method_count; i++) {
+    TraitMethodDef *m = &trait->methods[i];
+    const char *why = NULL;
+
+    if (m->self_index < 0) {
+      why = "it has no 'self' parameter";
+    } else if (m->type_param_count > 0) {
+      why = "it has type parameters of its own";
+    } else if (m->method_type != NULL &&
+               type_mentions_self(m->method_type, trait)) {
+      // the receiver is `Self` by construction; look past it.
+      Type *ft = m->method_type;
+      bool elsewhere = type_mentions_self(ft->as.fun.return_type, trait);
+      for (int p = 0; !elsewhere && p < ft->as.fun.param_count; p++) {
+        if (p == m->self_index) {
+          continue;
+        }
+        elsewhere = type_mentions_self(ft->as.fun.param_types[p], trait);
+      }
+      if (elsewhere) {
+        why = "'Self' appears in its signature outside the receiver";
+      }
+    }
+
+    if (why != NULL) {
+      diag_error(r->diags, span,
+                 "trait '" SV_FMT "' is not object-safe: method '" SV_FMT
+                 "' cannot be called through 'dyn " SV_FMT "' because %s",
+                 SV_ARG(trait->name), SV_ARG(m->name), SV_ARG(trait->name),
+                 why);
+      return false;
+    }
+  }
+  return true;
+}
+
 Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
   if (node->resolved) {
     return node->resolved;
@@ -4791,6 +5018,36 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
       result = pr.type;
     }
 
+    break;
+  }
+  case TYNODE_DYN: {
+    TypeNodeNamed *dyn = &node->as.dyn;
+
+    if (dyn->path.count != 1) {
+      diag_error(r->diags, node->span,
+                 "a qualified path cannot name a trait object — import the "
+                 "trait with 'use' and write 'dyn <Trait>'");
+      result = r->tc->t_poison;
+      break;
+    }
+
+    StringView name = dyn->path.segments[0].name;
+    TypeEntry *e = tscope_lookup(r->tscope, name);
+    if (e == NULL || e->type == NULL || e->type->kind != TY_TRAIT) {
+      diag_error(r->diags, node->span,
+                 "'dyn' needs a trait, but '" SV_FMT "' is not one",
+                 SV_ARG(name));
+      result = r->tc->t_poison;
+      break;
+    }
+
+    TraitDef *trait = e->type->as.trait.def;
+    if (!trait_check_object_safe(r, trait, node->span)) {
+      result = r->tc->t_poison;
+      break;
+    }
+
+    result = ty_dyn(trait, r->al);
     break;
   }
   case TYNODE_TUPLE: {

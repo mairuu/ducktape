@@ -1,0 +1,30 @@
+# The "no struct literal here" restriction exists to disambiguate an `if`
+# *condition* from the `{` that starts its body. It used to leak into the body
+# itself, so a struct literal was unparseable anywhere inside an `if` — while
+# the same code in a `for` body was fine.
+#> R { w: 1 }
+#> R { w: 2 }
+#> 10
+
+struct R { w: Int }
+
+fun pick(b: Bool) -> R {
+    if b {
+        return R { w: 1 };
+    }
+    return R { w: 2 };
+}
+
+fun main() {
+    print(pick(true));
+    print(pick(false));
+
+    var n = 0;
+    for i in 0..3 {
+        if i > 0 {
+            var r = R { w: i * 3 };
+            n += r.w;
+        }
+    }
+    print(n + 1);
+}

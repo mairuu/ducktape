@@ -1,0 +1,13 @@
+#! expect: 'dyn' needs a trait
+# `dyn` names a trait and nothing else — a struct already has one
+# representation, so there is no vtable to attach.
+
+struct Sq { s: Int }
+
+fun use_it(x: dyn Sq) -> Int {
+    return 1;
+}
+
+fun main() {
+    print(use_it(Sq { s: 2 }));
+}

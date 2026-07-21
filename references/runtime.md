@@ -66,6 +66,8 @@ bytes + constant pool (≤256 consts, u8 index). Operands: u8 unless noted.
 | `OP_ENUM enum_slot tag` | pops that variant's `field_count` elems (declaration order), pushes an enum instance |
 | `OP_FIELD_GET index` | pops a tuple/struct/enum instance, pushes its `index`-th field — no bounds check, since the index is always a compile-time-valid constant |
 | `OP_TAG` | pops an enum instance, pushes its variant tag as `Int` |
+| `OP_MAKE_DYN vtable_slot` | pops a value, pushes it wrapped as a trait object carrying `exe->vtables[slot]` |
+| `OP_DYN_METHOD index` | pops a trait object, pushes its `index`-th method *then* the unwrapped receiver — so the `OP_CALL` that follows sees an ordinary callee-beneath-args stack |
 | `OP_MATCH_FAIL` | runtime error "no match arm matched" — a backstop; the checker enforces exhaustiveness, but guards can still fail every arm |
 
 `OP_ADD` additionally handles `String + String` (interned concat) alongside
@@ -88,6 +90,7 @@ list used by sweep):
 | `OBJ_ENUM` | `VariantDef *variant`, `Value *fields` (`variant->field_count` entries, declaration order) |
 | `OBJ_CLOSURE` | `FunDef *fun`, `ObjUpvalue **upvalues` (`upvalue_count` entries) — a capturing function value |
 | `OBJ_UPVALUE` | `Value *location` (→ a live stack slot while open, → `closed` once closed), `closed`, `next` (open-list link) |
+| `OBJ_DYN` | `Value inner` (the coerced value, stored as-is), `VTable *vtable` — a trait object |
 
 `StructDef`/`EnumDef`/`VariantDef` pointers are arena-owned (live for the
 whole compilation), not GC objects, so marking a struct/enum instance walks
@@ -364,6 +367,53 @@ one array deeper than the last, so nothing converges. The one-byte slot space
 would stop it eventually, but only after interning a few hundred new types
 into a fixed-size intern table — so the limit lives where the divergence is.
 
+### Trait objects
+
+Monomorphisation rests on the observation that *the runtime is uniform in
+type arguments*, so a type argument changes exactly one thing: which function
+a call resolves to. A trait object is the case where that choice cannot be
+made at compile time — so it is **carried by the value**. A `dyn Shape` is
+the pair `(value, the table of slots monomorphisation would have picked)`.
+That is the whole feature; nothing else about the representation changes.
+
+A `VTable` (`include/object.h`) is one `FunDef *` per method the trait
+declares, in declaration order, already resolved and monomorphised for one
+concrete self type. Filling a slot is the same two-way choice
+`compile_method_call` makes for a bound receiver — the impl's own method, or
+the trait's default body instantiated at `Self` = that type
+(`cg_dyn_slot_target`) — just made ahead of time for every method at once.
+
+Vtables live in `exe->vtables`, appended during codegen exactly as
+monomorphised globals are, and for the same reason: which `(trait, type)`
+pairs a program needs is a property of its coercion sites. `Mono.vtables`
+memoises the compile-time key so two coercions of one type to one trait share
+a table; the slot is reserved *before* the table is filled, since compiling a
+method body can reach the same pair again (`mono_request` does the same).
+Note what the runtime `VTable` does **not** hold: the trait and the self type.
+Those are compiler bookkeeping the VM never reads — the serialization rule,
+one level over.
+
+Two opcodes, and deliberately no third:
+
+- `OP_MAKE_DYN <vtable>` pops a value and pushes it wrapped as an `ObjDyn`.
+  Codegen emits it from `compile_expr`, which wraps every expression so a
+  coercion the checker recorded on a node cannot be missed by whichever of
+  the ~30 expression cases produced the value.
+- `OP_DYN_METHOD <index>` pops the trait object and pushes its method's
+  function *then* the unwrapped receiver. That leaves the stack in the shape
+  `OP_CALL` already understands — callee beneath its arguments, concrete
+  receiver as argument zero — so dynamic dispatch needs no call machinery of
+  its own, the same way methods reuse `OP_GET_GLOBAL`.
+
+The receiver is unwrapped because the method was compiled for the concrete
+type, not for the trait object; coercion *wraps*, it never converts, so the
+inner value is byte-identical to what was coerced. GC marks only `inner` —
+the vtable is arena-allocated with the `Executable`, and its methods' constant
+pools are already roots by virtue of being in `exe->globals`.
+
+`value_print` and `value_equal` both see through the wrapper, so a `dyn Shape`
+over a `Sq` prints and compares as the `Sq`.
+
 ### Propagate (`?`)
 
 `Ok`/`Err` are both single-field tuple variants of the *same* enum as the
@@ -513,11 +563,12 @@ extension.
 
 ```
 header   "DTBC", u16 version, u16 entry (a globals index)
-counts   u32 strings, globals, structs, enums, closures
+counts   u32 strings, globals, structs, enums, closures, vtables
 strings  [u32 len, len bytes]*        — every name and string constant
 structs  [u32 name, u8 is_tuple, u16 field_count, u32 field_name*]
 enums    [u32 name, u16 variant_count,
             [u32 name, u8 is_tuple, u16 field_count, u32 field_name*]*]
+vtables  [u16 method_count, u16 fun_index*]*
 funs     [u32 name, u16 param_count, u8 has_chunk,
             u32 code_len, code_len bytes,
             u16 const_count, const*]*  — globals first, then closures
@@ -540,6 +591,12 @@ it has no slot of its own). That is what keeps both directions a straight
 loop. Struct and enum references need no encoding at all: `OP_STRUCT`/`OP_ENUM`
 already carry a slot the VM resolves through `exe`, and the tables are written
 in slot order. Variant tags are positional, exactly as `exe_link` assigns them.
+A vtable is likewise written as bare function indices: which trait and which
+self type it was built for is compile-time bookkeeping, so it is not in the
+image at all. Vtables sit between the data definitions and the code — they
+only point *into* globals, which already exist, and being decoded before any
+chunk means an `OP_MAKE_DYN` operand is valid as soon as code carrying it can
+run.
 
 Two ordering constraints, both inherited from linking:
 

@@ -11,14 +11,19 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 //
 //   header   "DTBC", u16 version, u16 entry (a globals index)
-//   counts   u32 strings, globals, structs, enums, closures
+//   counts   u32 strings, globals, structs, enums, closures, vtables
 //   strings  [u32 len, len bytes]*        — every name and string constant
 //   structs  [u32 name, u8 is_tuple, u16 field_count, u32 field_name*]
 //   enums    [u32 name, u16 variant_count,
 //               [u32 name, u8 is_tuple, u16 field_count, u32 field_name*]*]
+//   vtables  [u16 method_count, u16 fun_index*]*
 //   funs     [u32 name, u16 param_count, u8 has_chunk,
 //               u32 code_len, code_len bytes,
 //               u16 const_count, const*]*  — globals first, then closures
+//
+// A vtable is written as bare function indices: which trait and which self
+// type it was built for is compile-time bookkeeping the VM never consults, so
+// it is not in the image — the same rule that keeps types and spans out.
 //
 // A constant is a u8 tag and its payload; the pointer-shaped ones become
 // indices (BC_C_STR into the string table, BC_C_FUN into the funs section,
@@ -287,6 +292,7 @@ bool bc_write(const Executable *exe, const FunDef *entry, const char *path,
   w_u32(&w, (uint32_t)exe->struct_count);
   w_u32(&w, (uint32_t)exe->enum_count);
   w_u32(&w, (uint32_t)exe->closure_count);
+  w_u32(&w, (uint32_t)exe->vtable_count);
 
   // the table is complete before anything indexes it, so w_str can only ever
   // hit an existing entry from here on.
@@ -309,6 +315,19 @@ bool bc_write(const Executable *exe, const FunDef *entry, const char *path,
       const VariantDef *v = &e->variants[j];
       w_str(&w, v->name);
       w_fields(&w, v->fields, v->field_count, v->is_tuple);
+    }
+  }
+  for (int i = 0; i < exe->vtable_count; i++) {
+    const VTable *vt = exe->vtables[i];
+    w_u16(&w, (uint16_t)vt->method_count);
+    for (int j = 0; j < vt->method_count; j++) {
+      int idx = fun_index(exe, vt->methods[j]);
+      if (idx < 0) {
+        w.ok = bc_error("internal: vtable method " SV_FMT " is not linked",
+                        SV_ARG(vt->methods[j]->name));
+        idx = 0;
+      }
+      w_u16(&w, (uint16_t)idx);
     }
   }
   for (int i = 0; i < exe->global_count; i++) {
@@ -556,13 +575,14 @@ bool bc_load(const char *path, Allocator *al, Executable *exe, Heap *heap,
   exe->struct_count = (int)r_u32(&r);
   exe->enum_count = (int)r_u32(&r);
   exe->closure_count = (int)r_u32(&r);
+  exe->vtable_count = (int)r_u32(&r);
   if (!r.ok) {
     return false;
   }
   if (r.string_count < 0 || exe->global_count < 0 || exe->struct_count < 0 ||
-      exe->enum_count < 0 || exe->closure_count < 0 ||
+      exe->enum_count < 0 || exe->closure_count < 0 || exe->vtable_count < 0 ||
       exe->global_count > BC_MAX_SLOTS || exe->struct_count > BC_MAX_SLOTS ||
-      exe->enum_count > BC_MAX_SLOTS) {
+      exe->enum_count > BC_MAX_SLOTS || exe->vtable_count > BC_MAX_SLOTS) {
     return bc_error("bytecode image: implausible section counts");
   }
   if (entry_idx >= exe->global_count) {
@@ -639,6 +659,36 @@ bool bc_load(const char *path, Allocator *al, Executable *exe, Heap *heap,
       v->tag = (uint8_t)j; // tags are positional, as exe_link assigns them
     }
   }
+  // vtables sit between the data definitions and the code, matching bc_write:
+  // a vtable only ever points *into* globals, which already exist, and being
+  // decoded before any chunk means an OP_MAKE_DYN operand is valid as soon as
+  // the code carrying it can run.
+  exe->vtables =
+      al_alloc_zero(al, sizeof(VTable *) * (size_t)exe->vtable_count);
+  exe->vtable_cap = exe->vtable_count;
+  for (int i = 0; i < exe->vtable_count && r.ok; i++) {
+    VTable *vt = al_alloc_zero_for(al, VTable);
+    exe->vtables[i] = vt;
+    vt->method_count = r_u16(&r);
+    if (vt->method_count < 0) {
+      r.ok = bc_error("bytecode image: implausible vtable size");
+      break;
+    }
+    if (vt->method_count > 0) {
+      vt->methods =
+          al_alloc_zero(al, sizeof(FunDef *) * (size_t)vt->method_count);
+    }
+    for (int j = 0; j < vt->method_count && r.ok; j++) {
+      uint16_t idx = r_u16(&r);
+      if (idx >= (uint16_t)exe->global_count) {
+        r.ok = bc_error("bytecode image: vtable method index %u out of range",
+                        idx);
+        break;
+      }
+      vt->methods[j] = exe->globals[idx];
+    }
+  }
+
   for (int i = 0; i < exe->global_count && r.ok; i++) {
     r_fun(&r, exe->globals[i]);
   }

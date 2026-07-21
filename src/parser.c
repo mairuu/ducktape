@@ -326,6 +326,23 @@ static TypeNode *parse_type(Parser *p) {
     base = ast_type_node(TYNODE_SELF, token_span(previous_tok(p)), p->al);
   }
 
+  // `dyn Trait` — a trait object. The keyword is required: a bare trait name
+  // in type position stays the *bound* spelling (`impl Show for T`), so the
+  // two dispatch strategies are told apart in the source, not inferred.
+  if (match_tok(p, TOKEN_DYN)) {
+    Token start = *previous_tok(p);
+
+    Path path = {0};
+    if (!parse_path(p, PATH_TYPE, &path)) {
+      return ast_type_node(TYNODE_POISON, current_tok_span(p), p->al);
+    }
+
+    base = ast_type_node(TYNODE_DYN,
+                         span_merge(token_span(&start), previous_tok_span(p)),
+                         p->al);
+    base->as.dyn.path = path;
+  }
+
   if (check_tok(p, TOKEN_IDENT)) {
     Token start = *current_tok(p);
 
@@ -1749,18 +1766,16 @@ static Expr *parse_primary(Parser *p) {
       return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
     }
 
-    p->allow_struct_init = false;
+    // the restriction belongs to the *condition* — it is what makes the `{`
+    // after it start the body rather than a struct literal. Inside the body
+    // there is no ambiguity left, so parse_block runs with the flag restored
+    // (which is what `for` above already did, and `if` did not).
     Expr *then_block = parse_block(p);
-    p->allow_struct_init = old_allow_struct_init;
-
     if (then_block->kind == EXPR_POISON) {
       return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
     }
 
-    p->allow_struct_init = false;
     Expr *else_branch = NULL;
-    p->allow_struct_init = old_allow_struct_init;
-
     if (match_tok(p, TOKEN_ELSE)) {
       if (check_tok(p, TOKEN_IF)) {
         else_branch = parse_expr(p);

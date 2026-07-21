@@ -51,6 +51,7 @@ case for it) — declare variables inside functions only.
 | `[T]` | array of `T` |
 | `fun(A, B) -> R` | function type |
 | `Point<Int>` | generic instance |
+| `dyn Drawable` | trait object — see "Trait objects" |
 | `Self`, `Self.Color`, `Point.Color` | self type, associated types |
 
 ## Statements and blocks
@@ -119,6 +120,44 @@ ending in `return` has type `!` (never), which unifies with anything.
   per distinct tuple of type arguments, discovered from its call sites
   (`runtime.md` "Monomorphisation"). A generic definition nobody calls is
   never compiled and is not an error.
+
+### Trait objects
+
+`dyn Trait` is a value that carries its own implementation, so a collection
+can hold several concrete types at once:
+
+```
+var shapes: [dyn Shape] = [Sq { s: 3 }, Rect { w: 2, h: 5 }];
+for s in shapes { print(s.area()); }        # dispatched per element
+```
+
+The `dyn` keyword is **required**. A bare trait name in type position stays
+the *bound* spelling (`impl Shape for Sq`, `where T: Shape`) — the two are
+different dispatch strategies, so the source says which one it means.
+
+A concrete value **coerces** to `dyn Trait` where one is expected: as a call
+argument, a `return` value, a `var` initializer with a `dyn` annotation, a
+struct or enum-variant field initializer, or an element of a `[dyn T]` or
+`(dyn T, ..)` literal. This is the language's only
+subtyping, and it is one-way and non-transitive — a `dyn Shape` is not a `Sq`
+again, and there is no cast back. The coercion needs an `impl Trait for T` to
+exist, the same question a bound asks; without one the type error is the
+ordinary "expected 'dyn Shape' but got 'Circle'". A bounded type parameter
+coerces too, so a generic function can hand its own parameter over.
+
+Not every trait can be one. A trait is **object-safe** only if every method
+takes `self`, has no type parameters of its own, and does not mention `Self`
+outside the receiver (so no `-> Self`, no `other: Self`, no `Self.Item`) — a
+trait object has erased the concrete type, and those signatures all need it
+back. The rule is checked where `dyn Trait` is *written*, not at the trait
+declaration, so a trait may freely be static-dispatch-only and still be used
+as a bound (`tests/run/trait_default.dt` leans on all three).
+
+A default body works through a trait object like any other method, and an
+impl that overrides it wins, exactly as under static dispatch. Printing and
+`==` see through the wrapper — a `dyn Shape` over a `Sq` prints as the `Sq`.
+See `tests/run/trait_objects.dt`, and `runtime.md` "Trait objects" for the
+vtable representation.
 
 ### match
 
@@ -204,7 +243,10 @@ Registered in every module; the only builtin so far.
 | Gap | Behavior today |
 |---|---|
 | extra (non-trait) methods in a trait impl | tolerated as inherent methods (Rust rejects them) |
-| trait objects (`dyn Trait` values) | a trait names a type only in bound / `Self` position; there is no dynamic dispatch |
+| `dyn Trait` for a non-object-safe trait | rejected where `dyn` is written, naming the method and the reason |
+| coercing the abstract `Self` of a default body to `dyn Trait` | not offered — `self` inside a default body cannot be handed over as a trait object |
+| casting a `dyn Trait` back to its concrete type | no downcast; the coercion is one-way |
+| `dyn Trait` with type arguments (`dyn Into<Int>`) | generic traits are not parameterised in `dyn` position |
 | `mod` declarations | no such keyword; `use` is what pulls a file in |
 | `pub use` re-export | imports are not transitive; a third module can't reach through an importer |
 | glob imports (`use a::*`) | not parsed; name each item |

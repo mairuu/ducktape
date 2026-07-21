@@ -50,6 +50,9 @@ static uint32_t type_hash(const Type *t) {
     // for (int i = 0; i < t->as.trait.type_arg_count; i++)
     //   h = h * 31 + (uint32_t)(uintptr_t)t->as.trait.type_args[i];
     break;
+  case TY_DYN:
+    h = h * 31 + (uint32_t)(uintptr_t)t->as.dyn.def;
+    break;
   case TY_ASSOC:
     h = h * 31 + (uint32_t)(uintptr_t)t->as.assoc.base;
     h = h * 31 + (uint32_t)(uintptr_t)t->as.assoc.trait;
@@ -119,6 +122,8 @@ static bool type_structurally_equal(const Type *a, const Type *b) {
     return true;
   case TY_TRAIT:
     return a->as.trait.def == b->as.trait.def;
+  case TY_DYN:
+    return a->as.dyn.def == b->as.dyn.def;
   case TY_ASSOC:
     return a->as.assoc.base == b->as.assoc.base &&
            a->as.assoc.trait == b->as.assoc.trait &&
@@ -446,6 +451,19 @@ Type *ty_trait(TraitDef *def, Allocator *al) {
   return type_intern(t);
 }
 
+Type *ty_dyn(TraitDef *def, Allocator *al) {
+  Type probe = {.kind = TY_DYN, .as.dyn = {.def = def}};
+  Type *interned = type_intern_lookup(&probe);
+  if (interned) {
+    return interned;
+  }
+
+  Type *t = al_alloc_zero_for(al, Type);
+  t->kind = TY_DYN;
+  t->as.dyn.def = def;
+  return type_intern(t);
+}
+
 // bool types_equal(const Type *a, const Type *b) { return a == b; }
 
 bool type_is_numeric(const Type *t) {
@@ -495,8 +513,9 @@ int type_name_sprintf(const Type *t, char *buf, size_t buf_size) {
   case TY_ENUM:
     return snprintf(buf, buf_size, SV_FMT, SV_ARG(t->as.enm.def->name));
   case TY_TRAIT:
-    return snprintf(buf, buf_size, "dyn " SV_FMT,
-                    SV_ARG(t->as.trait.def->name));
+    return snprintf(buf, buf_size, SV_FMT, SV_ARG(t->as.trait.def->name));
+  case TY_DYN:
+    return snprintf(buf, buf_size, "dyn " SV_FMT, SV_ARG(t->as.dyn.def->name));
   case TY_ARRAY:
     return snprintf(buf, buf_size, "Array<...>");
   case TY_RANGE:
@@ -625,8 +644,10 @@ int type_sprintf(const Type *t, char *buf, size_t buf_size) {
     return n;
   }
   case TY_TRAIT:
-    return snprintf(buf, buf_size, "dyn " SV_FMT,
+    return snprintf(buf, buf_size, SV_FMT,
                     SV_ARG(t->as.trait.def->name)); // todo: include type args
+  case TY_DYN:
+    return snprintf(buf, buf_size, "dyn " SV_FMT, SV_ARG(t->as.dyn.def->name));
   case TY_ARRAY:
     return snprintf(buf, buf_size, "[...]"); // todo: include elem type
   case TY_RANGE:
@@ -766,7 +787,10 @@ void dump_type(const Type *t) {
     fprintf(stdout, SV_FMT, SV_ARG(t->as.enm.def->name));
     break;
   case TY_TRAIT:
-    fprintf(stdout, "dyn " SV_FMT, SV_ARG(t->as.trait.def->name));
+    fprintf(stdout, SV_FMT, SV_ARG(t->as.trait.def->name));
+    break;
+  case TY_DYN:
+    fprintf(stdout, "dyn " SV_FMT, SV_ARG(t->as.dyn.def->name));
     break;
   }
 }
@@ -788,6 +812,10 @@ static void dump_typenode(const TypeNode *tn, int indent) {
   case TYNODE_NAMED:
     fprintf(stdout, "TypeNode: Named\n");
     dump_path(&tn->as.named.path, indent + 1);
+    break;
+  case TYNODE_DYN:
+    fprintf(stdout, "TypeNode: Dyn\n");
+    dump_path(&tn->as.dyn.path, indent + 1);
     break;
   case TYNODE_TUPLE:
     fprintf(stdout, "TypeNode: Tuple\n");

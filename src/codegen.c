@@ -99,6 +99,7 @@ static void cg_error(Cg *cg, Span span, const char *what) {
 // of stopping one level down.
 
 static bool exe_add_global(Executable *exe, FunDef *fun);
+static bool exe_too_many(const char *what, int count);
 
 void mono_init(Mono *mono, Executable *exe, Heap *heap, ImplIndex *impls,
                Allocator *al) {
@@ -146,6 +147,11 @@ static bool type_is_concrete(const Type *t) {
     return true;
   case TY_ARRAY:
     return type_is_concrete(t->as.array.elem_type);
+  case TY_DYN:
+    // concrete, unlike the TY_TRAIT above it: `dyn Show` names one runtime
+    // representation (a value plus a vtable), so it can key an instantiation
+    // exactly like a struct can. That difference *is* the feature.
+    return true;
   default:
     return true;
   }
@@ -984,6 +990,128 @@ static void compile_call(Cg *cg, Expr *expr) {
   emit2(cg, OP_CALL, (uint8_t)call->arg_count);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Trait objects
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// The body one vtable slot points at, for a concrete `self`: the impl's own
+// method, or the trait's default body when the impl omitted it. This is the
+// same two-way choice `compile_method_call` makes for a bound receiver — a
+// vtable is just that choice made ahead of time, for every method at once.
+static FunDef *cg_dyn_slot_target(Cg *cg, Type *self, StringView name,
+                                  Span span) {
+  ImplMatch match;
+  MethodDef *method =
+      impl_index_method(cg->mono->impls, self, name, &match, /*infer=*/NULL,
+                        /*bare_path=*/false, span, cg->al);
+  if (method != NULL) {
+    return cg_call_target(cg, method->fun, &match.subst, NULL, span);
+  }
+
+  ImplDef *via_impl = NULL;
+  TraitDef *via_trait = NULL;
+  Subst via_subst = subst_empty();
+  TraitMethodDef *inherited = impl_index_default_method(
+      cg->mono->impls, self, name, &via_impl, &via_trait, &via_subst, cg->al);
+  if (inherited == NULL || inherited->default_impl == NULL) {
+    return NULL;
+  }
+
+  // the default body is a generic function whose first type parameter is
+  // `Self` (milestone 12), so binding that one name instantiates it.
+  StringView self_name = sv_from_cstr("Self");
+  Type *args[1] = {self};
+  Subst s;
+  subst_init(&s, &self_name, args, 1);
+  return cg_call_target(cg, inherited->default_impl, &s, &via_subst, span);
+}
+
+// find or build the vtable for coercing `self` to `dyn trait`, returning its
+// slot. Memoised on the (trait, self) pair so every coercion of one type to
+// one trait shares a table.
+static int cg_vtable_for(Cg *cg, TraitDef *trait, Type *self, Span span) {
+  Mono *mono = cg->mono;
+  for (int i = 0; i < mono->vtable_count; i++) {
+    if (mono->vtables[i].trait == trait && mono->vtables[i].self_type == self) {
+      return mono->vtables[i].index;
+    }
+  }
+
+  Executable *exe = mono->exe;
+  if (exe->vtable_count == exe->vtable_cap) {
+    exe_too_many("trait-object vtables", exe->vtable_count + 1);
+    cg->ok = false;
+    return -1;
+  }
+
+  // Reserve the slot *before* filling the table in. Compiling a method body
+  // can reach this same (trait, self) pair again — a `dyn Show` handed back
+  // to something that coerces it — and without the reservation that recursion
+  // would allocate a second table forever. Same shape as `mono_request`
+  // memoising an instance before its body is compiled.
+  int index = exe->vtable_count++;
+  VTable *vt = al_alloc_zero_for(cg->al, VTable);
+  vt->method_count = trait->method_count;
+  vt->methods =
+      al_alloc_zero(cg->al, sizeof(FunDef *) * (size_t)trait->method_count);
+  exe->vtables[index] = vt;
+
+  if (mono->vtable_count == mono->vtable_cap) {
+    int new_cap = mono->vtable_cap == 0 ? 4 : mono->vtable_cap * 2;
+    mono->vtables = al_realloc(mono->al, mono->vtables,
+                               sizeof(DynVTable) * (size_t)mono->vtable_cap,
+                               sizeof(DynVTable) * (size_t)new_cap);
+    mono->vtable_cap = new_cap;
+  }
+  mono->vtables[mono->vtable_count++] =
+      (DynVTable){.trait = trait, .self_type = self, .index = index};
+
+  for (int i = 0; i < trait->method_count; i++) {
+    FunDef *target = cg_dyn_slot_target(cg, self, trait->methods[i].name, span);
+    if (target == NULL) {
+      char buf[64];
+      type_sprintf(self, buf, sizeof(buf));
+      diag_error(cg->diags, span,
+                 "cannot build a trait object: '%s' has no body for '" SV_FMT
+                 "::" SV_FMT "'",
+                 buf, SV_ARG(trait->name), SV_ARG(trait->methods[i].name));
+      cg->ok = false;
+      return -1;
+    }
+    vt->methods[i] = target;
+  }
+
+  return index;
+}
+
+// wrap the value on top of the stack as a trait object. `expr->coerce_dyn` is
+// the checker's answer that this has to happen; the concrete type comes from
+// the expression, pushed through whatever instantiation is being compiled.
+static void compile_coerce_dyn(Cg *cg, Expr *expr) {
+  Type *self = expr->resolved_type;
+  if (self == NULL) {
+    cg_error(cg, expr->span, "this trait-object coercion");
+    return;
+  }
+  self = subst_apply(&cg->subst, self, cg->al);
+  if (!type_is_concrete(self)) {
+    char buf[64];
+    type_sprintf(self, buf, sizeof(buf));
+    diag_error(cg->diags, expr->span,
+               "cannot build a trait object from '%s': the concrete type is "
+               "not known here",
+               buf);
+    cg->ok = false;
+    return;
+  }
+
+  int slot = cg_vtable_for(cg, expr->coerce_dyn, self, expr->span);
+  if (slot < 0) {
+    return;
+  }
+  emit2(cg, OP_MAKE_DYN, (uint8_t)slot);
+}
+
 // `obj.method(args)`: the checker elides `self` from `mc->args` (it's
 // `mc->object` instead), matching it against whichever param position in
 // `fun->params` actually has `is_self` set (checked generically, not
@@ -1003,6 +1131,34 @@ static void compile_method_call(Cg *cg, Expr *expr) {
     // concrete, and the impl index then names the body — which is the whole
     // reason generic code has to be monomorphised rather than erased.
     Type *self = subst_apply(&cg->subst, mc->bound_self, cg->al);
+
+    // ...unless it is a trait object, where it stays abstract on purpose.
+    // The receiver carries the table, so the slot is all codegen picks: the
+    // position the trait fixes for this method name.
+    if (self->kind == TY_DYN) {
+      TraitDef *trait = self->as.dyn.def;
+      int index = -1;
+      for (int i = 0; i < trait->method_count; i++) {
+        if (sv_equal(trait->methods[i].name, mc->method_name)) {
+          index = i;
+          break;
+        }
+      }
+      if (index < 0) {
+        cg_error(cg, expr->span, "this method call");
+        return;
+      }
+      // OP_DYN_METHOD leaves [fun, receiver], so the arguments push straight
+      // on top of it and the ordinary OP_CALL below closes the call.
+      compile_expr(cg, mc->object);
+      emit2(cg, OP_DYN_METHOD, (uint8_t)index);
+      for (int i = 0; i < mc->arg_count; i++) {
+        compile_expr(cg, mc->args[i]);
+      }
+      emit2(cg, OP_CALL, (uint8_t)(mc->arg_count + 1));
+      return;
+    }
+
     ImplMatch match;
     MethodDef *method = impl_index_method(
         cg->mono->impls, self, mc->method_name, &match,
@@ -1371,7 +1527,20 @@ static void compile_match(Cg *cg, Expr *expr) {
   cg->local_count = saved_locals_outer;
 }
 
+static void compile_expr_inner(Cg *cg, Expr *expr);
+
+// every expression goes through here, so a coercion recorded by the checker
+// cannot be missed by whichever of the ~30 expression cases produced the
+// value. The wrap is always the *last* thing: `expr` is compiled as the
+// concrete type it is, then boxed.
 static void compile_expr(Cg *cg, Expr *expr) {
+  compile_expr_inner(cg, expr);
+  if (expr->coerce_dyn != NULL) {
+    compile_coerce_dyn(cg, expr);
+  }
+}
+
+static void compile_expr_inner(Cg *cg, Expr *expr) {
   switch (expr->kind) {
   case EXPR_INT:
     emit_const(cg, val_int(expr->as.int_val));
@@ -1739,6 +1908,10 @@ bool exe_link(Executable *exe, ModuleRegistry *reg, Allocator *al) {
 
   exe->global_cap = CG_MAX_SLOTS;
   exe->globals = al_alloc_zero(al, sizeof(FunDef *) * (size_t)CG_MAX_SLOTS);
+  // vtables, like monomorphised globals, are discovered while compiling, so
+  // the table is sized to the whole operand space up front.
+  exe->vtable_cap = CG_MAX_SLOTS;
+  exe->vtables = al_alloc_zero(al, sizeof(VTable *) * (size_t)CG_MAX_SLOTS);
   exe->structs = al_alloc_zero(al, sizeof(StructDef *) * (size_t)structs);
   exe->enums = al_alloc_zero(al, sizeof(EnumDef *) * (size_t)enums);
 

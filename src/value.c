@@ -100,6 +100,11 @@ void value_print(Value v, FILE *out) {
       // never a first-class value the language can name or print
       fprintf(out, "<upvalue>");
       break;
+    case OBJ_DYN:
+      // the wrapper is an implementation detail of dispatch, not something the
+      // program put in the value — so it prints as whatever it wraps.
+      value_print(val_as_dyn(v)->inner, out);
+      break;
     }
     break;
   }
@@ -173,6 +178,11 @@ bool value_equal(Value a, Value b) {
       }
       return true;
     }
+    case OBJ_DYN:
+      // compare through the wrapper, matching how it prints. Two trait objects
+      // over different concrete types are still unequal — the inner values
+      // have different kinds (or defs), which the recursion catches.
+      return value_equal(val_as_dyn(a)->inner, val_as_dyn(b)->inner);
     case OBJ_CLOSURE:
     case OBJ_UPVALUE:
       return a.as.obj == b.as.obj; // identity; not structurally comparable

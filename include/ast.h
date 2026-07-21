@@ -48,7 +48,8 @@ typedef enum {
   TY_TUPLE,   // (A, B, C)
   TY_STRUCT,  // back-pointer to StructDef
   TY_ENUM,    // back-pointer to EnumDef
-  TY_TRAIT,   // trait object / bound
+  TY_TRAIT,   // the abstract `Self` of a trait: bound position, default bodies
+  TY_DYN,     // `dyn Trait` — a trait object: a value plus its vtable
   TY_ARRAY,   // Array<T>
   TY_RANGE,   // a..b / a..=b — Int-only for now
   TY_GENERIC, // unresolved type parameter, e.g. T
@@ -86,6 +87,18 @@ typedef struct {
   // int type_arg_count;
 } TypeTrait;
 
+// TY_DYN — `dyn Trait`, a trait object.
+//
+// Distinct from TY_TRAIT on purpose, even though both name one trait: they
+// are the two halves of the same choice. A TY_TRAIT receiver (the abstract
+// `Self` of a default body, or a bounded `T`) is resolved *statically* —
+// codegen substitutes a concrete self and monomorphises. A TY_DYN receiver
+// cannot be, so the choice travels with the value as a vtable. Sharing one
+// kind would put both dispatch strategies behind one type.
+typedef struct {
+  TraitDef *def;
+} TypeDyn;
+
 typedef struct {
   Type *elem_type;
 } TypeArray;
@@ -119,6 +132,7 @@ struct Type {
     TypeStruct struc;
     TypeEnum enm;
     TypeTrait trait;
+    TypeDyn dyn;
     TypeArray array;
     TypeGeneric generic;
     TypeAssoc assoc;
@@ -146,6 +160,7 @@ Type *ty_assoc(Type *base, StringView assoc_name, TraitDef *trait,
 Type *ty_struct(StructDef *def, Type **args, int argc, Allocator *al);
 Type *ty_enum(EnumDef *def, Type **args, int argc, Allocator *al);
 Type *ty_trait(TraitDef *def, Allocator *al);
+Type *ty_dyn(TraitDef *def, Allocator *al);
 
 static inline bool types_equal(const Type *a, const Type *b) { return a == b; }
 bool type_is_numeric(const Type *t);
@@ -384,6 +399,7 @@ typedef enum {
   TYNODE_FUN,   // fun(A, B): R
   TYNODE_SELF,  // Self
   TYNODE_ASSOC, // T.Item
+  TYNODE_DYN,   // dyn Trait
   TYNODE_POISON // sentinel
 } TypeNodeKind;
 
@@ -419,6 +435,7 @@ struct TypeNode {
 
   union {
     TypeNodeNamed named;
+    TypeNodeNamed dyn; // TYNODE_DYN — the path names the trait
     TypeNodeTuple tuple;
     TypeNodeFun fun;
     TypeNodeAssoc assoc;
@@ -793,6 +810,14 @@ struct Expr {
   ExprKind kind;
   Type *resolved_type;
   Span span;
+
+  // set by the checker when this expression's value flows into a `dyn Trait`
+  // and so must be wrapped with a vtable on the way (see check_coerce_dyn).
+  // NULL for the overwhelming majority of nodes. Recorded here rather than
+  // applied to `resolved_type` for the same reason `inst` is: at the moment
+  // the coercion is discovered the receiver type may still be an unsolved
+  // unknown, and codegen is the consumer either way.
+  TraitDef *coerce_dyn;
 
   union {
     int64_t int_val;

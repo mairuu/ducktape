@@ -25,6 +25,7 @@ static const char *token_type_string[] = {
     [TOKEN_AS] = "AS",
     [TOKEN_BREAK] = "BREAK",
     [TOKEN_CONTINUE] = "CONTINUE",
+    [TOKEN_DYN] = "DYN",
     [TOKEN_ELSE] = "ELSE",
     [TOKEN_ENUM] = "ENUM",
     [TOKEN_FOR] = "FOR",
@@ -250,9 +251,9 @@ static const Keyword kw2[] = { //
     {NULL, 0}};
 
 static const Keyword kw3[] = { //
-    {"and", TOKEN_AND}, {"for", TOKEN_FOR}, {"fun", TOKEN_FUN},
-    {"not", TOKEN_NOT}, {"pub", TOKEN_PUB}, {"use", TOKEN_USE},
-    {"var", TOKEN_VAR}, {NULL, 0}};
+    {"and", TOKEN_AND}, {"dyn", TOKEN_DYN}, {"for", TOKEN_FOR},
+    {"fun", TOKEN_FUN}, {"not", TOKEN_NOT}, {"pub", TOKEN_PUB},
+    {"use", TOKEN_USE}, {"var", TOKEN_VAR}, {NULL, 0}};
 
 static const Keyword kw4[] = { //
     {"else", TOKEN_ELSE},      {"enum", TOKEN_ENUM},

@@ -601,6 +601,30 @@ bool vm_run(Executable *exe, Heap *heap, FunDef *entry) {
       push(&vm, val_int(val_as_enum(pop(&vm))->variant->tag));
       break;
 
+    case OP_MAKE_DYN: {
+      VTable *vt = exe->vtables[READ_BYTE()];
+      // the operand stays on the stack across heap_dyn: allocating may
+      // collect, and until the wrapper exists the stack is what keeps the
+      // value alive.
+      ObjDyn *d = heap_dyn(vm.heap, peek(&vm, 0), vt);
+      pop(&vm);
+      push(&vm, val_obj((Obj *)d));
+      break;
+    }
+
+    case OP_DYN_METHOD: {
+      uint8_t index = READ_BYTE();
+      ObjDyn *d = val_as_dyn(pop(&vm));
+      assert(index < d->vtable->method_count && "vtable index out of range");
+      // leave the call in the shape OP_CALL already understands: callee
+      // beneath its arguments, with the *unwrapped* receiver as argument
+      // zero — the method was compiled for the concrete type, not for the
+      // trait object.
+      push(&vm, val_fun(d->vtable->methods[index]));
+      push(&vm, d->inner);
+      break;
+    }
+
     case OP_MATCH_FAIL:
       // the checker doesn't enforce match exhaustiveness yet, so this is a
       // real, reachable failure mode rather than a should-never-happen case.

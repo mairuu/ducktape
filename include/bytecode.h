@@ -16,7 +16,7 @@
 // does not depend on the host's byte order or struct layout.
 
 #define BC_MAGIC "DTBC"
-#define BC_VERSION 1
+#define BC_VERSION 2 // 2: added the vtables section (trait objects)
 
 // serialize the linked program to `path`. `entry` is the function `--run`
 // would have started at; its slot is recorded in the header. `exe`'s chunks

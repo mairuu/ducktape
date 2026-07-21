@@ -12,6 +12,25 @@ typedef struct EnumDef EnumDef;
 typedef struct VariantDef VariantDef;
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// VTable — the dynamic half of a trait object
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// One entry per method the trait declares, in declaration order, each already
+// resolved (and monomorphised) for one concrete self type. This is exactly the
+// choice monomorphisation makes at compile time, deferred: a `dyn Show` value
+// carries the table its concrete type would have selected, so `OP_DYN_METHOD`
+// can index it by the position the trait fixes.
+//
+// Note what is *not* here: the trait and the self type it was built for. Those
+// are the compile-time memo key (`Mono.vtables`), not something the VM reads —
+// the same rule the serialization milestone set, that an image is the runtime
+// projection of the program rather than a snapshot of the compiler.
+typedef struct {
+  FunDef **methods;
+  int method_count;
+} VTable;
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // Executable — the linked program: every module's definitions in one slot space
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -45,6 +64,12 @@ typedef struct {
   // but their chunks' constant pools still need to be GC roots.
   FunDef **closures;
   int closure_count, closure_cap;
+
+  // OP_MAKE_DYN operand space. Appended by codegen as coercion sites are
+  // discovered, like the monomorphised globals above and for the same reason:
+  // which (trait, type) pairs a program needs is a property of its call sites.
+  VTable **vtables;
+  int vtable_count, vtable_cap;
 } Executable;
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -59,6 +84,7 @@ typedef enum {
   OBJ_ENUM,
   OBJ_CLOSURE,
   OBJ_UPVALUE,
+  OBJ_DYN,
 } ObjKind;
 
 // intrusive header shared by every heap object; `next` threads the heap's
@@ -133,6 +159,16 @@ typedef struct {
   int upvalue_count;
 } ObjClosure;
 
+// a trait object: the value that was coerced, plus the vtable of the impl it
+// was coerced through. The inner value is stored as-is — coercion wraps, it
+// never converts — so `OP_DYN_METHOD` hands the method exactly the receiver it
+// was compiled for.
+typedef struct {
+  Obj obj;
+  Value inner;
+  VTable *vtable;
+} ObjDyn;
+
 static inline bool val_is_string(Value v) {
   return v.kind == VAL_OBJ && v.as.obj->kind == OBJ_STRING;
 }
@@ -151,6 +187,10 @@ static inline ObjStruct *val_as_struct(Value v) {
   return (ObjStruct *)v.as.obj;
 }
 static inline ObjEnum *val_as_enum(Value v) { return (ObjEnum *)v.as.obj; }
+static inline bool val_is_dyn(Value v) {
+  return v.kind == VAL_OBJ && v.as.obj->kind == OBJ_DYN;
+}
+static inline ObjDyn *val_as_dyn(Value v) { return (ObjDyn *)v.as.obj; }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Heap — owns every runtime object; mark-sweep collected
@@ -197,6 +237,7 @@ ObjStruct *heap_struct(Heap *h, StructDef *def);
 ObjEnum *heap_enum(Heap *h, VariantDef *variant);
 ObjClosure *heap_closure(Heap *h, FunDef *fun, int upvalue_count);
 ObjUpvalue *heap_upvalue(Heap *h, Value *slot);
+ObjDyn *heap_dyn(Heap *h, Value inner, VTable *vtable);
 
 void gc_mark_value(Value v);
 void heap_collect(Heap *h);

@@ -39,6 +39,17 @@ typedef struct {
 // distinct tuple of type arguments, discovered from the call sites codegen
 // walks — so compiling one instance can enqueue more, and the caller must
 // drain until `mono_pending_module` reports none left.
+// the compile-time key a vtable is memoised under. Two coercions of the same
+// concrete type to the same trait must reach the same `exe->vtables` entry —
+// otherwise identical trait objects would carry different tables, and the
+// slot space would grow with coercion *sites* rather than with (trait, type)
+// pairs.
+typedef struct {
+  TraitDef *trait;
+  Type *self_type; // interned, so pointer equality is identity
+  int index;       // into exe->vtables
+} DynVTable;
+
 typedef struct {
   Executable *exe;
   Heap *heap;
@@ -48,6 +59,9 @@ typedef struct {
   Instance *insts;
   int count, cap;
   int compiled; // insts[0..compiled) already have chunks
+
+  DynVTable *vtables;
+  int vtable_count, vtable_cap;
 } Mono;
 
 void mono_init(Mono *mono, Executable *exe, Heap *heap, ImplIndex *impls,

@@ -1,0 +1,24 @@
+#! expect: is not object-safe
+# `-> Self` needs the caller to know the concrete type, which is exactly what
+# the coercion to a trait object throws away. Checked where `dyn` is written,
+# not at the trait: the trait itself is perfectly usable as a bound.
+
+trait Pick {
+    fun area(self) -> Int;
+    fun bigger(self, other: Self) -> Self;
+}
+
+struct Sq { s: Int }
+
+impl Pick for Sq {
+    fun area(self) -> Int { self.s * self.s }
+    fun bigger(self, other: Sq) -> Sq { self }
+}
+
+fun use_it(x: dyn Pick) -> Int {
+    return x.area();
+}
+
+fun main() {
+    print(use_it(Sq { s: 2 }));
+}

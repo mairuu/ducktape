@@ -71,6 +71,12 @@ typedef enum {
                  // field_count elems (declaration order), push an instance
   OP_FIELD_GET,  // u8 index — pops a tuple/struct/enum instance, pushes its
                  // index-th field (no bounds check: indices are static)
+  OP_MAKE_DYN,   // u8 vtable slot — pops a value, pushes it wrapped as a
+                 // trait object carrying that vtable
+  OP_DYN_METHOD, // u8 vtable method index — pops a trait object, pushes its
+                 // method's function *then* the unwrapped receiver, so the
+                 // ordinary OP_CALL below sees a normal callee-beneath-args
+                 // stack and needs no dynamic-dispatch case of its own
   OP_TAG,        // pops an enum instance, pushes its variant tag as Int
   OP_MATCH_FAIL, // no arm matched a subject not statically proven exhaustive
                  // (checker doesn't enforce exhaustiveness yet); runtime error

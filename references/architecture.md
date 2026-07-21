@@ -25,12 +25,14 @@ Notables:
   parsed `if`/`match` statement immediately before `}` is unwrapped into the
   block's tail (that's what makes `{ if c { 1 } else { 2 } }` an `Int` block).
 - `parse_closure` — `|params| ( -> type )? ( => expr | { block } )`.
-- `parse_type` — `()`, tuples, `fun(..) -> R`, `[T]`, `Self`, named paths,
-  and `.Assoc` postfix chains.
+- `parse_type` — `()`, tuples, `fun(..) -> R`, `[T]`, `dyn Trait`, `Self`,
+  named paths, and `.Assoc` postfix chains.
 - `parse_path(mode)` — expression paths require turbofish (`::<T>`) for type
   args; type paths accept plain `<T>`.
 - `p->allow_struct_init` disambiguates `Point { .. }` from a block in `if`/
-  `match`/`while` headers.
+  `match`/`while` headers. It is cleared for the *header only* — inside the
+  body the `{` is unambiguous again, so it must be restored before
+  `parse_block`.
 - Error recovery: `error_at` sets panic mode; `sync_to_stmt`/`sync_to_decl`
   skip to a boundary; unparseable nodes become `*_POISON` kinds.
 
@@ -258,6 +260,49 @@ applicable impl as soon as the base is concrete, and `infer_unify` normalises
 `TY_ASSOC` operands up front so `T.Item` and `Int` don't look like different
 kinds. While the base is still abstract the projection survives unchanged,
 which is exactly what a generic body needs.
+
+### Trait objects (`dyn Trait`)
+
+Two type kinds, deliberately not one. `TY_TRAIT` is the *abstract* `Self` of
+a trait — bound position, default bodies — and is resolved statically.
+`TY_DYN` is a trait object: a real runtime representation, and so `concrete`
+as far as codegen is concerned (`type_is_concrete` says yes, and a `dyn Show`
+can key an instantiation exactly like a struct can). Sharing one kind would
+put two dispatch strategies behind one type.
+
+Resolution is `TYNODE_DYN` → `ty_dyn(trait)`, interned like every other
+structural type. **Object safety** is checked there — where `dyn Trait` is
+written, not at the trait declaration, because a trait is free to be
+static-dispatch-only and only naming it as a type asks for more. A method is
+vtable-able only if a receiver and nothing else is enough to call it:
+`self` required, no method-level type parameters, and `Self` nowhere but the
+receiver (`type_mentions_self` looks past the receiver position).
+
+Dispatch needs nothing new: `resolve_method_call_expr` treats a `TY_DYN`
+receiver as offering exactly the one trait it names, and hands it to
+`resolve_bound_method_call` like any other abstract receiver. Object safety
+is what guarantees the projected signature stays callable once `Self` is
+gone. Only *codegen* tells the two apart, by the vtable.
+
+**Coercion** is the one genuinely new concept, and the language's only
+subtyping. Identity is pointer equality and `infer_unify` only decomposes
+structurally, which is enough everywhere else — but `Sq` and `dyn Shape` are
+different runtime representations, and converting between them is a real
+operation, not a re-reading of the same bits. So it is modelled as exactly
+that: `check_coerce_dyn`, explicit and one-way, attempted only where a value
+flows into a *known* `dyn` position (call argument, `return`, a `var` with a
+`dyn` annotation, an element of a `[dyn T]` literal) and never as part of
+unification. The test is `impl_index_implements` — the same question a bound
+asks, since a trait object is a bound whose witness travels with the value.
+A `TY_GENERIC` is allowed to coerce, because that function answers a bounded
+parameter from its own declared bounds and codegen substitutes the concrete
+type before building the vtable.
+
+The result is recorded on the expression (`Expr.coerce_dyn`) rather than
+folded into its type, so the node keeps saying what it *is*. That is the same
+collect-then-consume shape `inst` uses for monomorphisation, and for the same
+reason: at the moment the coercion is discovered the type may still be an
+unsolved unknown, and codegen is the consumer either way.
 
 **Poison convention:** on error, emit one `diag_error` and return
 `t_poison`; poison operands propagate silently so one mistake produces one

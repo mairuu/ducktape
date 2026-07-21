@@ -1,0 +1,23 @@
+#! expect: expected 'dyn Shape' but got 'Circle'
+# coercion is not a free pass: a value only becomes a trait object if some
+# impl witnesses the trait for it. Same question a bound asks — a trait object
+# is a bound whose witness travels with the value.
+
+trait Shape {
+    fun area(self) -> Int;
+}
+
+struct Sq { s: Int }
+struct Circle { r: Int }
+
+impl Shape for Sq {
+    fun area(self) -> Int { self.s * self.s }
+}
+
+fun total(x: dyn Shape) -> Int {
+    return x.area();
+}
+
+fun main() {
+    print(total(Circle { r: 2 }));
+}

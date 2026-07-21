@@ -1,0 +1,30 @@
+# a trait object crossing a module boundary: the trait and one impl come from
+# `shapes`, the other impl is local. Both land in the same program-wide vtable
+# slot space, because linking already flattened every module into one.
+#> area 9
+#> area 6
+#> 15
+
+use shapes::{Shape, Sq};
+
+struct Rect { w: Int, h: Int }
+
+impl Shape for Rect {
+    fun area(self) -> Int { self.w * self.h }
+}
+
+fun total(xs: [dyn Shape]) -> Int {
+    var sum = 0;
+    for s in xs {
+        sum += s.area();
+    }
+    return sum;
+}
+
+fun main() {
+    var xs: [dyn Shape] = [Sq { s: 3 }, Rect { w: 2, h: 3 }];
+    for s in xs {
+        print(s.describe());
+    }
+    print(total(xs));
+}
