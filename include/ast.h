@@ -27,6 +27,7 @@ typedef struct VariantDef VariantDef;
 typedef struct TraitDef TraitDef;
 typedef struct ImplDef ImplDef;
 typedef struct FunDef FunDef;
+typedef struct Subst Subst;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TYPE SYSTEM
@@ -157,6 +158,33 @@ type_name(const Type *t); // shared underlying char buffer, not thread safe
 int type_name_sprintf(const Type *t, char *buf, size_t buf_size);
 int type_sprintf(const Type *t, char *buf,
                  size_t buf_size); // fully qualified, with type args
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SUBSTITUTION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// a mapping from type-parameter names to type arguments. Built by the checker
+// while solving a call (see `infer_open_generics`), and recorded on the call
+// node afterwards so codegen can monomorphise: `subst_apply` is what rewrites
+// a definition's generic signature or body types into a caller's terms.
+// Lives here rather than in sema.h because AST nodes store one.
+struct Subst {
+  StringView *params; // param names, e.g. ["T", "U", "V"]
+  Type **args;        // replacement types — parallel array, same length
+  int count;
+};
+
+static inline Subst subst_empty(void) { return (Subst){0}; }
+
+// look up one parameter by name; NULL when the substitution doesn't bind it.
+static inline Type *subst_find(const Subst *s, StringView name) {
+  for (int i = 0; i < s->count; i++) {
+    if (sv_equal(s->params[i], name)) {
+      return s->args[i];
+    }
+  }
+  return NULL;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DEFINITION TABLES
@@ -292,13 +320,35 @@ struct FunDef {
   Type **type_params;
   int type_param_count;
 
+  // the impl this method belongs to; NULL for top-level functions and
+  // closures. Its type params are in scope in the body just like the
+  // method's own, so both together are what an instantiation must bind.
+  ImplDef *impl;
+
+  // the body codegen compiles, and the span to report against. NULL/zero for
+  // builtins (no body at all) and for definitions decoded from a bytecode
+  // image (which carries chunks, not ASTs). A generic definition is compiled
+  // once per instantiation, so codegen needs to reach the body from the
+  // FunDef alone — a call site in another module has nothing else.
+  Expr *body;
+  Span span;
+
   ParamDef *params;
   int param_count;
   Type *return_type;
 
   struct Chunk *chunk; // filled by codegen; NULL until then
-  int slot;
+  int slot;            // FUN_SLOT_NONE until exe_link (or never, if generic)
 };
+
+#define FUN_SLOT_NONE (-1)
+
+// a definition whose body can only be compiled once its type parameters — its
+// own and any its impl introduces — are bound to concrete types.
+static inline bool fun_is_generic(const FunDef *f) {
+  return f->type_param_count > 0 ||
+         (f->impl != NULL && f->impl->type_param_count > 0);
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PATH
@@ -579,6 +629,12 @@ typedef struct {
   // for a name bound to a local of function type — a closure or parameter
   // lives in a stack slot, not a global one.
   FunDef *resolved_fun;
+
+  // when `resolved_fun` is generic: the type arguments this path instantiates
+  // it with, covering both its own type params and its impl's. Entries may
+  // still name the *enclosing* definition's type params (`f::<T>()` inside a
+  // generic `f`), which the monomorphiser substitutes away.
+  Subst inst;
 } ExprPath;
 
 typedef struct {
@@ -631,6 +687,18 @@ typedef struct {
   int type_arg_count;
   MethodDef *resolved_method;
   ImplDef *resolved_impl;
+
+  // the type arguments this call instantiates the target with (impl params
+  // then the method's own), in the enclosing definition's terms — see
+  // ExprPath.inst.
+  Subst inst;
+
+  // set instead of `resolved_method` when the receiver is abstract and the
+  // call went through a trait bound: which impl provides the body is not
+  // knowable until `bound_self` is substituted with a concrete type, so
+  // codegen redoes the impl lookup per instantiation.
+  TraitDef *bound_trait;
+  Type *bound_self;
 } ExprMethodCall;
 
 typedef struct {

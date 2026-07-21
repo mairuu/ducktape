@@ -259,17 +259,33 @@ static bool compiler_codegen(Compiler *c, Executable *exe, Heap *heap,
 
   heap_init(heap, exe, gc_stress);
 
+  Mono mono;
+  mono_init(&mono, exe, heap, &c->tc.impl_index, &c->al);
+
   bool ok = true;
   for (int i = 0; i < c->mod_reg.module_count; i++) {
     Module *mod = modreg_topo(&c->mod_reg, i);
     diag_clear(&c->diags);
 
-    ok &= codegen_module(mod, exe, heap, &c->diags, &c->al);
+    ok &= codegen_module(mod, &mono, &c->diags);
     // per module, so a diagnostic is reported against its own source.
     if (diag_has_diags(&c->diags)) {
       diag_report(&c->diags, mod->file_path.chars, mod->source.chars, stderr);
     }
   }
+
+  // then the monomorphised copies the walk above discovered. Compiling one can
+  // discover more (a generic body calling another generic), so this drains
+  // rather than iterating a fixed list. Each instance is reported against the
+  // module its body was written in, not the one that instantiated it.
+  for (Module *mod; (mod = mono_pending_module(&mono)) != NULL;) {
+    diag_clear(&c->diags);
+    ok &= mono_compile_next(&mono, &c->diags);
+    if (diag_has_diags(&c->diags)) {
+      diag_report(&c->diags, mod->file_path.chars, mod->source.chars, stderr);
+    }
+  }
+
   if (!ok) {
     fprintf(stderr, "compilation failed during code generation.\n");
     heap_destroy(heap);
@@ -286,6 +302,13 @@ static bool compiler_codegen(Compiler *c, Executable *exe, Heap *heap,
   }
   if (main_fn == NULL) {
     fprintf(stderr, "error: no 'main' function to run\n");
+    heap_destroy(heap);
+    return false;
+  }
+  if (main_fn->slot == FUN_SLOT_NONE) {
+    // a generic definition has no compiled body of its own, only the copies
+    // its call sites ask for — and nothing calls the entry point.
+    fprintf(stderr, "error: 'main' must not be generic\n");
     heap_destroy(heap);
     return false;
   }

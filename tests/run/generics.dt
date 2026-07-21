@@ -1,0 +1,70 @@
+# monomorphisation: one compiled copy per distinct tuple of type arguments.
+# Covers a generic function reused at several types, a turbofish, several type
+# params, generic types flowing through tuples and arrays, a generic function
+# calling another, and recursion (which must reuse the instance, not queue a
+# fresh one forever).
+#> 1
+#> hi
+#> true
+#> (1, x)
+#> 7
+#> 7
+#> 3
+#> [2, 4, 6]
+#> 10
+#> 120
+
+fun identity<T>(v: T) -> T {
+  return v;
+}
+
+fun pair_up<A, B>(a: A, b: B) -> (A, B) {
+  return (a, b);
+}
+
+# an instantiation reached only through another generic function
+fun echo<T>(v: T) -> T {
+  return identity(v);
+}
+
+fun first<T>(items: [T]) -> T {
+  return items[0];
+}
+
+fun count<T>(items: [T]) -> Int {
+  var n = 0;
+  for _item in items {
+    n += 1;
+  }
+  return n;
+}
+
+fun map_ints(items: [Int], f: fun(Int) -> Int) -> [Int] {
+  return [f(items[0]), f(items[1]), f(items[2])];
+}
+
+# a generic function that recurses: `fact::<Int>` must resolve to the copy
+# already being compiled rather than queueing a new one at every level
+fun fact<T>(n: Int, acc: T) -> Int {
+  if n <= 1 {
+    return 1;
+  }
+  return n * fact(n - 1, acc);
+}
+
+fun main() {
+  print(identity(1));
+  print(identity("hi"));
+  print(identity(true));
+  print(pair_up(1, "x"));
+
+  print(echo(7));
+  print(identity::<Int>(7));
+
+  var nums = [3, 5, 8];
+  print(first(nums));
+  print(map_ints([1, 2, 3], |x| => x * 2));
+  print(count(["a", "b", "c"]) + count(nums) + count([true]) * 4);
+
+  print(fact(5, "unused"));
+}

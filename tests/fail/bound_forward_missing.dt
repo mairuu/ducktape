@@ -1,0 +1,25 @@
+#! expect: type 'U' does not implement trait 'Show'
+# a type parameter satisfies exactly the bounds it was declared with, so
+# forwarding it to a function requiring a *different* trait is an error —
+# `impl Show for Int` does not help, since `U` is not Int here.
+trait Show {
+  fun show(self) -> String;
+}
+
+trait Other {
+  fun other(self) -> Int;
+}
+
+impl Show for Int {
+  fun show(self) -> String {
+    return "i";
+  }
+}
+
+fun describe<T: Show>(v: T) -> String {
+  return v.show();
+}
+
+fun relay<U: Other>(v: U) -> String {
+  return describe(v);
+}

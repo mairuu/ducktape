@@ -336,15 +336,82 @@
   extra cases, all of them also verified under `--gc-stress`), plus two
   malformed-image rejections.
 
+- **Monomorphisation (milestone 10)** — generic code runs. Every generic
+  function, method and impl is compiled once per distinct tuple of type
+  arguments; `Mono` (`include/codegen.h`) memoises `(FunDef, type args)` and
+  doubles as the worklist. Design: `runtime.md` "Monomorphisation".
+
+  The design falls out of one observation, the mirror of the serialization
+  one: **the runtime is uniform in type arguments.** Field slots are
+  declaration order, tags are per enum, no opcode reads a static type — which
+  is exactly why `?` propagates an `Err` without rebuilding it. So a type
+  argument changes one thing about the compiled code: *which function a call
+  resolves to*. Monomorphisation duplicates code and nothing else; struct and
+  enum defs stay shared across every instantiation, and the whole feature is
+  "give a call site the right slot".
+
+  Three ordering constraints, all of them the milestone-8 linking ones one
+  level over:
+  - **The type arguments have to be recorded by the checker, and cannot be
+    read until inference is done.** The `Subst` `resolve_callee` /
+    `resolve_method_call_expr` solve is the answer, but at the moment it is
+    built its arguments are the call's fresh unknowns. So `cctx_record_inst`
+    stashes a *copy* on the call node and queues it, and `cctx_solve_insts`
+    rewrites it after `infer_finalize` — the same collect-then-write shape the
+    bytecode string table needed. `Subst` moved from `sema.h` to `ast.h` for
+    this: AST nodes store one now.
+  - **A recorded type argument is in the enclosing definition's terms, not the
+    program's.** `f::<T>()` inside a generic `f` records `T`. Instantiating it
+    means pushing the *caller's* bindings through it (`Cg.subst`), which is
+    what makes the queue a fixpoint rather than a one-level expansion —
+    `describe_twice<Point>` → `describe<Point>` → `Point::show`.
+  - **A generic definition gets no slot at link time,** so `exe->globals` is
+    sized to the whole operand space and instances are appended during
+    codegen. The consequence worth having: an uncalled generic is no longer an
+    error, because nothing ever looks at it.
+
+  The interesting call shape is dispatch through a bound. The checker resolved
+  `v.show()` against the trait *signature*, so the node carries no
+  `MethodDef` — only `bound_trait`/`bound_self`. Codegen substitutes the
+  receiver into a concrete type and re-runs `impl_index_method`. That is the
+  one place codegen consults the impl index, and it is the reason generics
+  can't simply be erased.
+
+  Also fixed, each a latent bug this made reachable:
+  - `infer_unify`, `subst_apply` and `infer_apply` all ignored `TY_TUPLE` —
+    the first *aborted the compiler* on its `default:` assert, the other two
+    silently left `(T, T)` unsubstituted. Nothing had unified a tuple against
+    a generic before; `first((1, 2))` does.
+  - `impl_index_implements` judged a `TY_GENERIC` by searching the impl index,
+    which has no entry for a type parameter — so a bounded generic could not
+    hand its parameter to another bounded generic. It now answers from the
+    parameter's own declared bounds, which is sound because the bound is
+    re-checked where the outer function is instantiated
+    (`tests/fail/bound_forward_missing.dt`).
+  - `print` named as a value compiled to `OP_GET_GLOBAL 0` — a silently wrong
+    function, since a builtin has no slot. Now a diagnostic.
+  - a generic `main` hit `vm_run`'s "entry function was not compiled" assert.
+
+  `MONO_MAX_DEPTH` bounds a divergent instantiation chain (`grow([v])` inside
+  `grow<T>`). The slot ceiling would stop it too, but only after interning a
+  few hundred types into a fixed-size table — so the limit lives where the
+  divergence is.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
 milestone (~900 lines).
 
-1. **Monomorphisation** — the largest remaining gap between what type-checks
-   and what runs: codegen rejects every generic function, method and impl, so
-   `tests/pass/in_fixed.dt` cannot execute at all. Needs instantiation at the
-   call site (or boxed generics) plus a per-instantiation slot in the linker.
+1. **Runtime destructuring** — `var (a, b) = pair;` and struct patterns in a
+   binding position type-check but codegen rejects them, which is now the
+   largest remaining hole in `tests/pass/in_fixed.dt` under `--run`. The match
+   compiler already lowers every pattern shape against an `Accessor`; a
+   binding is that machinery with no test and no arms.
+2. **Inherited default method bodies** — the last construct in `in_fixed.dt`
+   the VM refuses. `TraitMethodDef.default_impl` is never built, so there is
+   no `FunDef` to instantiate, and `Self` in a trait body is a `TY_TRAIT`
+   rather than a `TY_GENERIC` — a name-keyed `Subst` cannot bind it, so this
+   needs `Self` to become a real type parameter of the default body.
 
 Not on the roadmap: the **REPL** is a side feature, not a milestone — it lives
 on the `feature/repl` branch (`--repl`, incremental compilation over one module
@@ -360,10 +427,10 @@ via `Module.decl_base`) and is not part of the main line.
 - overlapping method names across impls: bare generic paths take the first
   registered impl
 - `Point::new` vs `Point::<Int>::new`: expression paths require turbofish
-- codegen rejects *any* generic function/method/impl, even uncalled ones,
-  under `--run` (needs monomorphisation or boxed generics eventually) — now
-  program-wide, so one generic function in a dependency fails a program that
-  never calls it
+- every instantiation takes a global slot, so the 256-function ceiling is now
+  reached by *use* of generics, not just by how many are written
+- a generic definition's diagnostics are only seen where it is instantiated,
+  so an unsupported construct inside an uncalled generic goes unreported
 - trait impls are program-global: an impl applies even if its module was never
   imported (`ImplIndex` lives on the `TypeChecker`, not the `Module`)
 - no `pub use` re-export, no glob `use a::*`, no module-qualified paths

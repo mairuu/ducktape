@@ -108,6 +108,13 @@ ending in `return` has type `!` (never), which unifies with anything.
   wins), and `T.Color` names an associated type through it. Both are abstract
   until instantiation — the projection collapses to whatever the applicable
   impl bound it to once T is solved (`tests/pass/trait_bound_calls.dt`).
+  A type parameter also *satisfies* the bounds it was declared with, so a
+  bounded generic can hand its parameter to another one that requires the same
+  trait (`tests/run/generic_impls.dt`).
+- Generic code runs: each generic function, method and impl is compiled once
+  per distinct tuple of type arguments, discovered from its call sites
+  (`runtime.md` "Monomorphisation"). A generic definition nobody calls is
+  never compiled and is not an error.
 
 ### match
 
@@ -200,5 +207,8 @@ Registered in every module; the only builtin so far.
 | variable shadowing diagnostics | a `var` may silently shadow an earlier one in the same scope (top-level *item* names do collide — that is an error) |
 | overlapping method names across impls of one type | bare paths pick the first registered impl |
 | capturing a `for` loop variable in a closure | runs, but the closure sees the loop variable's *final* value (one shared cell), not a per-iteration copy — `runtime.md` "Closures & upvalues" |
-| generic functions/methods/impls at runtime | compile-only; any generic function or method anywhere in the file fails the whole `--run` build (needs monomorphisation or boxed generics — `runtime.md`) |
+| infinitely deep generic instantiation | `fun grow<T>(v: T) { grow([v]) }` type-checks but names a new instantiation at every level; codegen stops at 32 and reports it (`runtime.md` "Monomorphisation") |
+| more than 256 functions, counting one per instantiation | each instantiation takes a global slot, so a heavily generic program can outgrow the one-byte operand space |
+| `print` named as a value (`var p = print;`) | a call lowers to `OP_PRINT`, so the builtin has no body to point a slot at — "using a builtin as a value is not supported by the VM yet" |
+| generic `main` | nothing calls the entry point, so no instance is ever made — "'main' must not be generic" |
 | `var (a, b) = ...` / `var Pair { .. } = ...` destructuring at runtime | type-checks; codegen rejects it as unsupported under `--run` |

@@ -23,11 +23,16 @@ typedef struct VariantDef VariantDef;
 // dependency's slots are stable before anything that uses them compiles —
 // and writes the assigned index back into each def's `slot`. Codegen then
 // only ever emits `def->slot`, whichever module the def came from.
+//
+// Generic definitions get no slot at link time: they have no single body to
+// address. Codegen appends one copy per instantiation to `globals` as it
+// discovers call sites, which is why the table has spare capacity.
 typedef struct {
   // OP_GET_GLOBAL operand space: each module's top-level funs, then its impl
-  // methods, then the next module's.
+  // methods, then the next module's; monomorphised instances after all of it.
   FunDef **globals;
   int global_count;
+  int global_cap;
 
   StructDef **structs; // OP_STRUCT operand space
   int struct_count;

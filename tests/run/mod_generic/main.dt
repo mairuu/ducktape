@@ -1,0 +1,33 @@
+# instantiating a dependency's generics: the instances share the importer's
+# one program-wide slot space, and `tag` dispatches to an impl declared here,
+# in a module `util` never sees.
+#> 1
+#> 2
+#> b
+#> <int 7>
+#> <bool true>
+use util::{Pair, swap, tag, Label};
+
+impl Label for Int {
+  fun label(self) -> String {
+    return "int {self}";
+  }
+}
+
+impl Label for Bool {
+  fun label(self) -> String {
+    return "bool {self}";
+  }
+}
+
+fun main() {
+  var p = Pair::<Int>::new(1, 2);
+  print(p.left());
+  print(swap(p).left());
+
+  var s = Pair::<String>::new("a", "b");
+  print(swap(s).left());
+
+  print(tag(7));
+  print(tag(true));
+}

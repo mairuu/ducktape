@@ -177,6 +177,16 @@ Type *subst_apply(const Subst *s, Type *t, Allocator *al) {
                ? ty_enum(t->as.enm.def, args.ptr, t->as.enm.type_arg_count, al)
                : t;
   }
+  case TY_TUPLE: {
+    TypeScratch elems;
+    ts_init(&elems, t->as.tuple.elem_count, al);
+    bool changed = false;
+    for (int i = 0; i < t->as.tuple.elem_count; i++) {
+      elems.ptr[i] = subst_apply(s, t->as.tuple.elem_types[i], al);
+      changed |= elems.ptr[i] != t->as.tuple.elem_types[i];
+    }
+    return changed ? ty_tuple(elems.ptr, elems.count, al) : t;
+  }
   case TY_ARRAY: {
     Type *elem = subst_apply(s, t->as.array.elem_type, al);
     return elem != t->as.array.elem_type ? ty_array(elem, al) : t;
@@ -281,6 +291,72 @@ static Subst subst_exclude_shadowed(Subst outer, Type **shadow,
   Subst s;
   subst_init(&s, names, args, n);
   return s;
+}
+
+// append `inner`'s entries after `outer`'s, so one subst_apply pass sees every
+// generic in scope at a call site (an impl's type params and the method's own).
+// Entries of `outer` shadowed by a name in `inner` must already have been
+// dropped — see subst_exclude_shadowed for why, and because subst_apply takes
+// the first match, which would otherwise be the outer one.
+static Subst subst_concat(Subst outer, Subst inner, Allocator *al) {
+  if (outer.count == 0) {
+    return inner;
+  }
+  if (inner.count == 0) {
+    return outer;
+  }
+  int n = outer.count + inner.count;
+  StringView *names = al_alloc(al, sizeof(StringView) * n);
+  Type **args = al_alloc(al, sizeof(Type *) * n);
+  memcpy(names, outer.params, sizeof(StringView) * outer.count);
+  memcpy(args, outer.args, sizeof(Type *) * outer.count);
+  memcpy(names + outer.count, inner.params, sizeof(StringView) * inner.count);
+  memcpy(args + outer.count, inner.args, sizeof(Type *) * inner.count);
+  Subst s;
+  subst_init(&s, names, args, n);
+  return s;
+}
+
+// ── instantiation records ────────────────────────────────────────────────────
+
+// Stash on a call node the substitution that instantiated its target, so
+// codegen can monomorphise it. `s` is copied rather than aliased: the caller's
+// arrays are its own working substitution, and the copy is what
+// cctx_solve_insts later rewrites in place — the arguments recorded here are
+// still the call's fresh unknowns.
+static void cctx_record_inst(CheckCtx *ctx, Subst *slot, Subst s) {
+  *slot = subst_empty();
+  if (s.count == 0) {
+    return;
+  }
+  StringView *params = al_alloc(ctx->al, sizeof(StringView) * s.count);
+  Type **args = al_alloc(ctx->al, sizeof(Type *) * s.count);
+  memcpy(params, s.params, sizeof(StringView) * s.count);
+  memcpy(args, s.args, sizeof(Type *) * s.count);
+  subst_init(slot, params, args, s.count);
+
+  if (ctx->pending_inst_count == ctx->pending_inst_cap) {
+    int new_cap = ctx->pending_inst_cap == 0 ? 8 : ctx->pending_inst_cap * 2;
+    ctx->pending_insts = al_realloc(ctx->al, ctx->pending_insts,
+                                    sizeof(Subst *) * ctx->pending_inst_cap,
+                                    sizeof(Subst *) * new_cap);
+    ctx->pending_inst_cap = new_cap;
+  }
+  ctx->pending_insts[ctx->pending_inst_count++] = slot;
+}
+
+// Rewrite every recorded instantiation against the solved inference state.
+// Run after infer_finalize, whose diagnostics cover the arguments that stayed
+// free; those keep a TY_UNKNOWN here, which is exactly what makes codegen
+// refuse to instantiate rather than emit a slot for the wrong copy.
+static void cctx_solve_insts(CheckCtx *ctx) {
+  for (int i = 0; i < ctx->pending_inst_count; i++) {
+    Subst *s = ctx->pending_insts[i];
+    for (int j = 0; j < s->count; j++) {
+      s->args[j] = infer_apply(&ctx->infer, s->args[j], ctx->al);
+    }
+  }
+  ctx->pending_inst_count = 0;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -433,6 +509,22 @@ bool infer_unify(InferCtx *ctx, Type *a, Type *b, DiagBag *diags, Span span) {
       ok &= infer_unify(ctx, ae->type_args[i], be->type_args[i], diags, span);
     return ok;
   }
+  case TY_TUPLE: {
+    TypeTuple *at = &a->as.tuple, *bt = &b->as.tuple;
+    if (at->elem_count != bt->elem_count) {
+      char ab[64], bb[64];
+      type_sprintf(a, ab, sizeof(ab));
+      type_sprintf(b, bb, sizeof(bb));
+      diag_error(diags, span, "type mismatch: expected '%s' but got '%s'", ab,
+                 bb);
+      return false;
+    }
+    bool ok = true;
+    for (int i = 0; i < at->elem_count; i++)
+      ok &= infer_unify(ctx, at->elem_types[i], bt->elem_types[i], diags, span);
+    return ok;
+  }
+
   case TY_ARRAY:
     return infer_unify(ctx, a->as.array.elem_type, b->as.array.elem_type, diags,
                        span);
@@ -536,6 +628,19 @@ Type *infer_apply(InferCtx *ctx, Type *ty, Allocator *al) {
       changed |= args.ptr[i] != e->type_args[i];
     }
     return changed ? ty_enum(e->def, args.ptr, args.count, al) : ty;
+  }
+
+  case TY_TUPLE: {
+    TypeTuple *t = &ty->as.tuple;
+    TypeScratch elems;
+    ts_init(&elems, t->elem_count, al);
+    bool changed = false;
+
+    for (int i = 0; i < t->elem_count; i++) {
+      elems.ptr[i] = infer_apply(ctx, t->elem_types[i], al);
+      changed |= elems.ptr[i] != t->elem_types[i];
+    }
+    return changed ? ty_tuple(elems.ptr, elems.count, al) : ty;
   }
 
   case TY_ARRAY: {
@@ -652,6 +757,9 @@ static void tc_register_fun(TypeChecker *tc, Module *m, Decl *decl) {
   // stub
   def->is_pub = decl->is_pub;
   def->name = fun_decl->name;
+  def->slot = FUN_SLOT_NONE;
+  def->body = fun_decl->body;
+  def->span = decl->span;
   def->param_count = fun_decl->param_count;
   def->params = al_alloc_zero(tc->al, sizeof(ParamDef) * fun_decl->param_count);
   def->type_param_count = fun_decl->type_param_count;
@@ -756,6 +864,7 @@ static void tc_register_builtins(TypeChecker *tc, Module *m) {
   def->name = sv_from_cstr("print");
   def->module = m;
   def->is_builtin = true;
+  def->slot = FUN_SLOT_NONE;
 
   def->type_param_count = 1;
   def->type_params = al_alloc_zero(tc->al, sizeof(Type *));
@@ -1333,6 +1442,10 @@ static void resolve_impl_decl(ResolveCtx *rctx, Decl *decl) {
 
       fun_def->name = fun_decl->name;
       fun_def->module = impl_def->module;
+      fun_def->impl = impl_def;
+      fun_def->body = fun_decl->body;
+      fun_def->span = item->span;
+      fun_def->slot = FUN_SLOT_NONE;
 
       // resolve method type parameters
       fun_def->type_param_count = fun_decl->type_param_count;
@@ -1893,6 +2006,7 @@ static Type *resolve_callee(CheckCtx *ctx, Expr *expr, Subst *subst) {
       // generic self like `Point::new`); pass it up so arguments are unified
       // rather than compared strictly. it was already applied into r.type.
       *subst = r.as.method.subst;
+      cctx_record_inst(ctx, &callee->as.path_expr.inst, *subst);
       return r.type;
     }
 
@@ -1913,6 +2027,14 @@ static Type *resolve_callee(CheckCtx *ctx, Expr *expr, Subst *subst) {
 
     *subst = infer_open_generics(&ctx->infer, def->type_params, type_args.ptr,
                                  def->type_param_count, callee->span, ctx->al);
+
+    // the instantiation covers the impl's type params too: `r.type` already
+    // has the impl subst applied, so `*subst` alone need not, but the body
+    // codegen compiles still mentions them.
+    Subst impl_subst = subst_exclude_shadowed(
+        r.as.method.subst, def->type_params, def->type_param_count, ctx->al);
+    cctx_record_inst(ctx, &callee->as.path_expr.inst,
+                     subst_concat(impl_subst, *subst, ctx->al));
 
     return subst_apply(subst, r.type, ctx->al);
   }
@@ -2788,6 +2910,16 @@ static Type *check_trait_method_call(CheckCtx *ctx, Expr *expr, TraitDef *trait,
       infer_open_generics(&ctx->infer, tm->type_params, explicit_type_args.ptr,
                           tm->type_param_count, expr->span, ctx->al);
   bool is_generic = subst.count > 0;
+
+  if (impl == NULL) {
+    // dispatch through a bound: which impl supplies the body depends on what
+    // `self_ty` is instantiated with, so codegen redoes the lookup once it
+    // knows. Only the method's own type args can be recorded here.
+    mc->bound_trait = trait;
+    mc->bound_self = self_ty;
+    cctx_record_inst(ctx, &mc->inst, subst);
+  }
+
   Type *fun_ty = subst_apply(&subst, tm->method_type, ctx->al);
   fun_ty = trait_project(fun_ty, trait, self_ty, impl, ctx->al);
 
@@ -2953,11 +3085,11 @@ static Type *resolve_method_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     }
   }
 
-  // combine the impl-level substitution (already concrete, from matching
-  // self_ty) with the method's own generics (fresh unknowns / explicit type
-  // args) into a single subst, so subst_apply sees every generic that can
-  // appear in fun->fun_type in one pass. see subst_exclude_shadowed for why
-  // impl-level entries shadowed by the method's own type params are dropped.
+  // combine the impl-level substitution (from matching self_ty) with the
+  // method's own generics (fresh unknowns / explicit type args) into a single
+  // subst, so subst_apply sees every generic that can appear in fun->fun_type
+  // in one pass — and so the instantiation recorded for codegen binds all of
+  // them, which is what compiling the body needs.
   Subst method_subst =
       infer_open_generics(&ctx->infer, fun->type_params, explicit_type_args.ptr,
                           fun->type_param_count, expr->span, ctx->al);
@@ -2966,25 +3098,8 @@ static Type *resolve_method_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   Subst impl_subst = subst_exclude_shadowed(match.subst, fun->type_params,
                                             fun->type_param_count, ctx->al);
 
-  int n_impl = impl_subst.count;
-  int n_total = n_impl + method_subst.count;
-
-  Subst subst = subst_empty();
-  if (n_total > 0) {
-    StringView *names = al_alloc(ctx->al, sizeof(StringView) * n_total);
-    Type **args = al_alloc(ctx->al, sizeof(Type *) * n_total);
-    if (n_impl > 0) {
-      memcpy(names, impl_subst.params, sizeof(StringView) * n_impl);
-      memcpy(args, impl_subst.args, sizeof(Type *) * n_impl);
-    }
-    if (method_subst.count > 0) {
-      memcpy(names + n_impl, method_subst.params,
-             sizeof(StringView) * method_subst.count);
-      memcpy(args + n_impl, method_subst.args,
-             sizeof(Type *) * method_subst.count);
-    }
-    subst_init(&subst, names, args, n_total);
-  }
+  Subst subst = subst_concat(impl_subst, method_subst, ctx->al);
+  cctx_record_inst(ctx, &mc->inst, subst);
 
   Type *fun_ty = subst_apply(&subst, fun->fun_type, ctx->al);
 
@@ -3153,6 +3268,9 @@ static Type *resolve_closure_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   FunDef *def = al_alloc_zero_for(ctx->al, FunDef);
   def->is_closure = true;
   def->module = ctx->fun != NULL ? ctx->fun->module : NULL;
+  def->slot = FUN_SLOT_NONE; // closures are built by OP_CLOSURE, not addressed
+  def->body = closure->body;
+  def->span = expr->span;
   def->param_count = closure->param_count;
   def->params = al_alloc_zero(ctx->al, sizeof(ParamDef) * closure->param_count);
   closure->def = def;
@@ -3432,6 +3550,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       Subst subst =
           infer_open_generics(&ctx->infer, def->type_params, type_args.ptr,
                               def->type_param_count, expr->span, ctx->al);
+      cctx_record_inst(ctx, &expr->as.path_expr.inst, subst);
 
       ty = subst_apply(&subst, ty, ctx->al);
       ty = infer_apply(&ctx->infer, ty, ctx->al);
@@ -4084,6 +4203,7 @@ static void tc_check_fun(TypeChecker *tc, Decl *decl) {
 
   infer_finalize(&cctx.infer, cctx.diags);
   infer_check_bounds(&cctx.infer, &tc->impl_index, cctx.diags, cctx.al);
+  cctx_solve_insts(&cctx);
 }
 
 // Rewrite a trait method's signature type into the terms of a concrete impl:
@@ -4301,6 +4421,7 @@ static void tc_check_impl(TypeChecker *tc, Decl *decl) {
 
   infer_finalize(&cctx.infer, cctx.diags);
   infer_check_bounds(&cctx.infer, &tc->impl_index, cctx.diags, cctx.al);
+  cctx_solve_insts(&cctx);
 }
 
 // Check the bodies of a trait's default methods, once, against the abstract
@@ -4364,6 +4485,7 @@ static void tc_check_trait(TypeChecker *tc, Decl *decl) {
 
   infer_finalize(&cctx.infer, cctx.diags);
   infer_check_bounds(&cctx.infer, &tc->impl_index, cctx.diags, cctx.al);
+  cctx_solve_insts(&cctx);
 }
 
 bool tc_check_module(TypeChecker *tc, Module *m) {
@@ -5030,6 +5152,19 @@ bool impl_index_implements(ImplIndex *idx, Type *type, TraitDef *trait,
                            Allocator *al) {
   if (type_is_poison(type)) {
     return true; // already diagnosed; don't pile on
+  }
+  if (type->kind == TY_GENERIC) {
+    // a type parameter has no impls of its own; what it satisfies is exactly
+    // what it was declared to. This is what lets one bounded generic hand its
+    // parameter to another (`fun a<T: Show>(v: T) { b(v) }`), and it is sound
+    // because the bound is re-checked against the concrete type wherever the
+    // outer function is instantiated.
+    for (int i = 0; i < type->as.generic.bound_count; i++) {
+      if (type->as.generic.bounds[i] == trait) {
+        return true;
+      }
+    }
+    return false;
   }
   for (int i = 0; i < idx->count; i++) {
     ImplDef *impl = idx->all[i];

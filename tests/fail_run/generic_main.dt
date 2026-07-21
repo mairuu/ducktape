@@ -1,0 +1,6 @@
+#! expect: 'main' must not be generic
+# a generic definition has no body of its own — only the copies its call sites
+# ask for — and nothing calls the entry point.
+fun main<T>() {
+  print(1);
+}

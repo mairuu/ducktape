@@ -1,7 +1,7 @@
 #! expect: lib.dt
 # type-checks; only --run rejects it, in the dependency rather than here.
-use lib::identity;
+use lib::first;
 
 fun main() {
-  print(identity(1));
+  print(first((1, 2)));
 }

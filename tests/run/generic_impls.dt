@@ -1,0 +1,97 @@
+# generic impls and dispatch through a trait bound — the two things that make
+# monomorphisation necessary rather than merely convenient: which body
+# `v.show()` runs is only decided once `T` is concrete.
+#> 3
+#> n=3
+#> ok
+#> Int(7)
+#> Bool(false)
+#> Point(1, 2)
+#> Int(9) / Int(9)
+#> Point(4, 5) / Point(4, 5)
+#> Int(42)
+
+trait Show {
+  fun show(self) -> String;
+}
+
+struct Point {
+  x: Int,
+  y: Int,
+}
+
+impl Show for Int {
+  fun show(self) -> String {
+    return "Int({self})";
+  }
+}
+
+impl Show for Bool {
+  fun show(self) -> String {
+    return "Bool({self})";
+  }
+}
+
+impl Show for Point {
+  fun show(self) -> String {
+    return "Point({self.x}, {self.y})";
+  }
+}
+
+fun describe<T: Show>(v: T) -> String {
+  return v.show();
+}
+
+# a bounded generic handing its own type parameter to another bounded generic:
+# which copy of `describe` this calls is only known once `describe_twice`
+# itself is instantiated
+fun describe_twice<T: Show>(v: T) -> String {
+  return "{describe(v)} / {describe(v)}";
+}
+
+struct Box<T> {
+  value: T,
+}
+
+impl<T> Box<T> {
+  fun new(value: T) -> Box<T> {
+    return Box { value: value };
+  }
+
+  fun get(self) -> T {
+    return self.value;
+  }
+
+  # a method with type params of its own, on top of the impl's
+  fun map<U>(self, f: fun(T) -> U) -> Box<U> {
+    return Box { value: f(self.value) };
+  }
+}
+
+# a method with no type params of its own, whose body still depends on the
+# impl's `T` — through a call the type argument selects
+impl<T: Show> Box<T> {
+  fun render(self) -> String {
+    return describe(self.value);
+  }
+}
+
+fun main() {
+  var a = Box::<Int>::new(3);
+  print(a.get());
+
+  var b = a.map(|x| => "n={x}");
+  print(b.get());
+
+  var c = Box::<Bool>::new(true);
+  print(c.map(|x| => "ok").get());
+
+  print(describe(7));
+  print(describe(false));
+  print(describe(Point { x: 1, y: 2 }));
+
+  print(describe_twice(9));
+  print(describe_twice(Point { x: 4, y: 5 }));
+
+  print(Box::<Int>::new(42).render());
+}

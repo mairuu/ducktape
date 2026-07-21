@@ -1,0 +1,28 @@
+# a generic definition in a dependency: it gets no slot at link time, and the
+# copies come from call sites in another module entirely.
+pub trait Label {
+  fun label(self) -> String;
+}
+
+pub struct Pair<T> {
+  a: T,
+  b: T,
+}
+
+impl<T> Pair<T> {
+  fun new(a: T, b: T) -> Pair<T> {
+    return Pair { a: a, b: b };
+  }
+
+  fun left(self) -> T {
+    return self.a;
+  }
+}
+
+pub fun swap<T>(p: Pair<T>) -> Pair<T> {
+  return Pair { a: p.b, b: p.a };
+}
+
+pub fun tag<T: Label>(v: T) -> String {
+  return "<{v.label()}>";
+}

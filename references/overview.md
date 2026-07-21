@@ -64,10 +64,11 @@ Driver: `compiler_run` in `src/compiler.c`. Phases, in order:
 
 With `--run`, `compiler_execute` (`src/compiler.c`) additionally runs:
 
-6. **link** — `exe_link` (`src/codegen.c`): flatten every module's funs,
-   methods, structs and enums into one program-wide slot space
+6. **link** — `exe_link` (`src/codegen.c`): flatten every module's non-generic
+   funs, methods, structs and enums into one program-wide slot space
 7. **codegen** — `src/codegen.c`: AST → bytecode `Chunk` per function, per
-   module
+   module, then one more per instantiation of each generic definition
+   (`Mono`, drained until it reaches a fixpoint)
 8. **vm** — `src/vm.c`: stack VM executes the root module's `main()`
 
 `--emit-bc` stops after 7 and serializes the linked program instead
@@ -84,12 +85,13 @@ phase aborts mid-file. Error recovery uses a poison type/expr convention (see
   types, match with guards, closures, ranges, arrays, casts, interpolation,
   `?` propagation, and programs spanning several files via `use`. See
   `language.md` for the precise rules and the not-yet-implemented list.
-- **Executes (`--run`):** Int/Float/Bool/unit/ranges/functions — arithmetic,
-  control flow, recursion, first-class function values, `print` — plus
-  GC-backed strings (interning, `+` concat, interpolation) and arrays
-  (literals, indexing, index assignment, `for x in arr`). Structs, enums,
-  match, and closures compile but are rejected by codegen with "not
-  supported by the VM yet" until the next runtime milestone. See
+- **Executes (`--run`):** nearly all of it — arithmetic, control flow,
+  recursion, first-class function values and closures with upvalues, `print`,
+  GC-backed strings and arrays, structs/enums/tuples with full match
+  compilation, methods and `?`, multi-module programs, and generic code via
+  monomorphisation (including dispatch through a trait bound). What is left
+  is listed in `language.md`'s not-yet-implemented table; the notable two are
+  destructuring `var` bindings and inherited default method bodies. See
   `runtime.md`.
 - **Showcase program:** `tests/pass/in_fixed.dt` exercises most of the checked
   language in one file.

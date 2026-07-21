@@ -6,7 +6,6 @@
 
 typedef struct Module Module;
 typedef struct ModuleRegistry ModuleRegistry;
-typedef struct Subst Subst;
 typedef struct InferCtx InferCtx;
 typedef struct TypeChecker TypeChecker;
 typedef struct ValueScope ValueScope;
@@ -17,16 +16,8 @@ typedef struct ResolveCtx ResolveCtx;
 typedef struct CheckCtx CheckCtx;
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Substitution
+// Substitution  (`struct Subst` itself lives in ast.h — AST nodes store one)
 // ═══════════════════════════════════════════════════════════════════════════════
-
-struct Subst {
-  StringView *params; // param names, e.g. ["T", "U", "V"]
-  Type **args;        // replacement types — parallel array, same length
-  int count;
-};
-
-static inline Subst subst_empty(void) { return (Subst){0}; }
 
 // build a substitution from two parallel arrays of equal length.
 void subst_init(Subst *s, StringView *params, Type **args, int count);
@@ -345,6 +336,13 @@ struct CheckCtx {
 
   // type inference
   InferCtx infer;
+
+  // instantiation records stashed on call nodes for the monomorphiser. Their
+  // type arguments are the call's fresh unknowns at the time they are
+  // recorded, so they are queued here and rewritten in place by
+  // cctx_solve_insts once inference has settled.
+  Subst **pending_insts;
+  int pending_inst_count, pending_inst_cap;
 
   ValueScope *vscope;
   TypeScope *tscope;

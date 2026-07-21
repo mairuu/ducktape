@@ -1,6 +1,8 @@
-# generic functions have no runtime representation yet. The diagnostic must
-# come from *this* file: codegen now walks every module, so it has to report
-# each one against its own source.
-pub fun identity<T>(v: T) -> T {
-  return v;
+# a generic function has no body of its own — it is compiled once per
+# instantiation, and those copies are compiled after every module has been
+# walked. The diagnostic must still come from *this* file, the one the body
+# was written in, not from the module that instantiated it.
+pub fun first<T>(pair: (T, T)) -> T {
+  var (a, b) = pair;
+  return a;
 }

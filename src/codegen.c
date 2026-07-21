@@ -46,9 +46,16 @@ typedef struct Cg {
   Module *m;       // the module being compiled (name lookups are module-local)
   Executable *exe; // the linked program (slot spaces, closure registry)
   Heap *heap;
+  Mono *mono; // the monomorphisation queue; generic callees are enqueued here
   Chunk *chunk;
   DiagBag *diags;
   Allocator *al;
+
+  // the instantiation this body is being compiled under: every type parameter
+  // in scope bound to a concrete type. Empty for a non-generic definition, in
+  // which case subst_apply is a no-op and nothing below pays for it.
+  Subst subst;
+  int inst_depth; // instantiations traversed to reach this body
 
   CgLocal locals[CG_MAX_LOCALS];
   int local_count;
@@ -74,7 +81,223 @@ static void cg_error(Cg *cg, Span span, const char *what) {
   cg->ok = false;
 }
 
-// ── emit helpers ─────────────────────────────────────────────────────────────
+// ── monomorphisation ─────────────────────────────────────────────────────────
+//
+// The runtime is uniform in type arguments: instance layouts are field slots
+// in declaration order, variant tags are per enum, and no opcode inspects a
+// static type — which is why `?` can propagate an `Err` without rebuilding it.
+// So a type argument changes exactly one thing about the code compiled from a
+// body: *which function a call resolves to*. Monomorphisation therefore
+// duplicates code and nothing else — one chunk per distinct tuple of type
+// arguments, keyed on the definition plus that tuple.
+//
+// The type arguments come from the checker, which recorded on every call node
+// the substitution it solved (`ExprPath.inst`, `ExprMethodCall.inst`). Those
+// are written in the *enclosing* definition's terms, so a call inside a
+// generic body is instantiated by pushing the caller's own bindings through
+// them — `cg->subst` — which is what makes the queue reach a fixpoint instead
+// of stopping one level down.
+
+static bool exe_add_global(Executable *exe, FunDef *fun);
+
+void mono_init(Mono *mono, Executable *exe, Heap *heap, ImplIndex *impls,
+               Allocator *al) {
+  *mono = (Mono){.exe = exe, .heap = heap, .impls = impls, .al = al};
+}
+
+// does `t` still mention a type parameter or an unsolved inference variable?
+// Such a type cannot key an instantiation: there would be no single body to
+// compile. It means either the checker already reported an uninferable type,
+// or a bound stayed abstract, so codegen refuses rather than picking a copy.
+static bool type_is_concrete(const Type *t) {
+  switch (t->kind) {
+  case TY_GENERIC:
+  case TY_UNKNOWN:
+  case TY_ASSOC:
+  case TY_TRAIT:
+    return false;
+  case TY_FUNCTION:
+    for (int i = 0; i < t->as.fun.param_count; i++) {
+      if (!type_is_concrete(t->as.fun.param_types[i])) {
+        return false;
+      }
+    }
+    return type_is_concrete(t->as.fun.return_type);
+  case TY_TUPLE:
+    for (int i = 0; i < t->as.tuple.elem_count; i++) {
+      if (!type_is_concrete(t->as.tuple.elem_types[i])) {
+        return false;
+      }
+    }
+    return true;
+  case TY_STRUCT:
+    for (int i = 0; i < t->as.struc.type_arg_count; i++) {
+      if (!type_is_concrete(t->as.struc.type_args[i])) {
+        return false;
+      }
+    }
+    return true;
+  case TY_ENUM:
+    for (int i = 0; i < t->as.enm.type_arg_count; i++) {
+      if (!type_is_concrete(t->as.enm.type_args[i])) {
+        return false;
+      }
+    }
+    return true;
+  case TY_ARRAY:
+    return type_is_concrete(t->as.array.elem_type);
+  default:
+    return true;
+  }
+}
+
+// two instantiations are the same iff they share an origin and every type
+// argument is the same type — pointer equality, since types are interned.
+static bool inst_matches(const Instance *it, const FunDef *origin,
+                         const Subst *s) {
+  if (it->origin != origin || it->subst.count != s->count) {
+    return false;
+  }
+  for (int i = 0; i < s->count; i++) {
+    if (it->subst.args[i] != s->args[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// find or create the copy of `origin` compiled under `s`, queueing it for
+// compilation on first request. `depth` is the requesting body's depth plus
+// one — only paid on a miss, since a repeat request (a recursive generic
+// calling itself at the same types) returns the copy already queued and so
+// never deepens. NULL if the program has run out of slots.
+static FunDef *mono_request(Mono *mono, FunDef *origin, Subst s, int depth) {
+  for (int i = 0; i < mono->count; i++) {
+    if (inst_matches(&mono->insts[i], origin, &s)) {
+      return mono->insts[i].instance;
+    }
+  }
+
+  FunDef *instance = al_alloc_zero_for(mono->al, FunDef);
+  *instance = *origin; // same body, params and name; its own slot and chunk
+  instance->chunk = NULL;
+  if (!exe_add_global(mono->exe, instance)) {
+    return NULL;
+  }
+
+  if (mono->count == mono->cap) {
+    int new_cap = mono->cap == 0 ? 8 : mono->cap * 2;
+    mono->insts =
+        al_realloc(mono->al, mono->insts, sizeof(Instance) * (size_t)mono->cap,
+                   sizeof(Instance) * (size_t)new_cap);
+    mono->cap = new_cap;
+  }
+  mono->insts[mono->count++] = (Instance){
+      .origin = origin, .instance = instance, .subst = s, .depth = depth};
+  return instance;
+}
+
+// what the call site instantiated one type parameter with, made concrete:
+// read from the recorded arguments (`primary` first, so a method's own type
+// param shadowing one of its impl's wins, exactly as in the checker), then
+// pushed through the instantiation the *caller* is being compiled under.
+// NULL when it cannot be pinned down, which needs a diagnostic from above.
+static Type *cg_bind_param(Cg *cg, StringView name, const Subst *primary,
+                           const Subst *fallback) {
+  Type *arg = subst_find(primary, name);
+  if (arg == NULL && fallback != NULL) {
+    arg = subst_find(fallback, name);
+  }
+  if (arg == NULL) {
+    return NULL;
+  }
+  arg = subst_apply(&cg->subst, arg, cg->al);
+  return type_is_concrete(arg) ? arg : NULL;
+}
+
+// The key an instantiation of `fun` is memoised and compiled under: every type
+// parameter in scope in its body — its impl's, then its own — bound to a
+// concrete type.
+static bool cg_inst_key(Cg *cg, FunDef *fun, const Subst *primary,
+                        const Subst *fallback, Span span, Subst *out) {
+  int impl_count = fun->impl != NULL ? fun->impl->type_param_count : 0;
+  int n = impl_count + fun->type_param_count;
+  StringView *names = al_alloc(cg->al, sizeof(StringView) * (size_t)n);
+  Type **args = al_alloc(cg->al, sizeof(Type *) * (size_t)n);
+  int k = 0;
+
+  for (int i = 0; i < impl_count; i++) {
+    StringView name = fun->impl->type_params[i]->as.generic.name;
+    bool shadowed = false;
+    for (int j = 0; j < fun->type_param_count; j++) {
+      shadowed |= sv_equal(fun->type_params[j]->as.generic.name, name);
+    }
+    if (shadowed) {
+      continue; // the method's own parameter of that name is bound below
+    }
+    names[k] = name;
+    args[k++] = cg_bind_param(cg, name, primary, fallback);
+  }
+  for (int i = 0; i < fun->type_param_count; i++) {
+    StringView name = fun->type_params[i]->as.generic.name;
+    names[k] = name;
+    args[k++] = cg_bind_param(cg, name, primary, fallback);
+  }
+
+  for (int i = 0; i < k; i++) {
+    if (args[i] == NULL) {
+      // Unreachable from a program that type-checked: an unsolved type
+      // argument is already a "cannot infer type" error, and compilation stops
+      // before codegen. Reported rather than asserted so a checker gap cannot
+      // silently pick the wrong copy.
+      diag_error(cg->diags, span,
+                 "cannot instantiate '" SV_FMT "': type argument '" SV_FMT
+                 "' is not known here",
+                 SV_ARG(fun->name), SV_ARG(names[i]));
+      cg->ok = false;
+      return false;
+    }
+  }
+
+  subst_init(out, names, args, k);
+  return true;
+}
+
+// the definition to emit a global slot for: `fun` itself when it is not
+// generic, otherwise the copy instantiated for this call site. NULL (with a
+// diagnostic already reported) when there is none to emit.
+static FunDef *cg_call_target(Cg *cg, FunDef *fun, const Subst *primary,
+                              const Subst *fallback, Span span) {
+  if (fun->is_builtin) {
+    // a *call* to `print` is lowered to OP_PRINT before ever getting here, so
+    // this is the builtin used as a value: there is no body to point a slot
+    // at, and nothing to monomorphise either.
+    cg_error(cg, span, "using a builtin as a value");
+    return NULL;
+  }
+  if (!fun_is_generic(fun)) {
+    assert(fun->slot != FUN_SLOT_NONE && "non-generic definition never linked");
+    return fun;
+  }
+
+  Subst key;
+  if (!cg_inst_key(cg, fun, primary, fallback, span, &key)) {
+    return NULL;
+  }
+  if (cg->inst_depth >= MONO_MAX_DEPTH) {
+    diag_error(cg->diags, span,
+               "generic instantiation is more than %d levels deep — '" SV_FMT
+               "' instantiates itself at an ever-growing type",
+               MONO_MAX_DEPTH, SV_ARG(fun->name));
+    cg->ok = false;
+    return NULL;
+  }
+  FunDef *target = mono_request(cg->mono, fun, key, cg->inst_depth + 1);
+  if (target == NULL) {
+    cg->ok = false; // slot space exhausted; exe_add_global reported it
+  }
+  return target;
+}
 
 static void emit(Cg *cg, uint8_t byte) { chunk_write(cg->chunk, byte); }
 
@@ -714,6 +937,18 @@ static void compile_for(Cg *cg, Expr *expr) {
   }
 }
 
+// push a call target's global slot, instantiating it if it is generic.
+static bool cg_emit_target(Cg *cg, FunDef *fun, const Subst *primary,
+                           const Subst *fallback, Span span) {
+  FunDef *target = cg_call_target(cg, fun, primary, fallback, span);
+  if (target == NULL) {
+    emit(cg, OP_UNIT);
+    return false;
+  }
+  emit2(cg, OP_GET_GLOBAL, (uint8_t)target->slot);
+  return true;
+}
+
 static void compile_call(Cg *cg, Expr *expr) {
   ExprCall *call = &expr->as.call;
   Expr *callee = call->callee;
@@ -748,20 +983,40 @@ static void compile_call(Cg *cg, Expr *expr) {
 // `mc->object` back in at that same position when pushing arguments.
 static void compile_method_call(Cg *cg, Expr *expr) {
   ExprMethodCall *mc = &expr->as.method_call;
-  if (mc->resolved_method == NULL) {
-    // the checker resolved this against a trait signature, not an impl method:
-    // either a call through a trait bound (unreachable today — the enclosing
-    // generic function is rejected first), or a default body the impl
-    // inherited, which has no chunk of its own until it can be monomorphised
-    // against the concrete self type.
-    cg_error(cg, expr->span,
-             mc->resolved_impl != NULL ? "calling an inherited default method"
-                                       : "a call through a trait bound");
+
+  FunDef *fun = NULL;
+  Subst impl_subst = subst_empty();
+
+  if (mc->resolved_method != NULL) {
+    fun = mc->resolved_method->fun;
+  } else if (mc->bound_trait != NULL) {
+    // dispatch through a trait bound. The checker only knew the receiver
+    // abstractly (`T: Show`); pushing it through this instantiation makes it
+    // concrete, and the impl index then names the body — which is the whole
+    // reason generic code has to be monomorphised rather than erased.
+    Type *self = subst_apply(&cg->subst, mc->bound_self, cg->al);
+    ImplMatch match;
+    MethodDef *method = impl_index_method(
+        cg->mono->impls, self, mc->method_name, &match,
+        /*infer=*/NULL, /*bare_path=*/false, expr->span, cg->al);
+    if (method == NULL) {
+      // an applicable impl exists (the checker enforced the bound) but does
+      // not define the method, so the body is the trait's default — which has
+      // no FunDef of its own yet.
+      cg_error(cg, expr->span, "calling an inherited default method");
+      return;
+    }
+    fun = method->fun;
+    impl_subst = match.subst;
+  } else {
+    // a default body the impl inherited, which has no chunk of its own.
+    cg_error(cg, expr->span, "calling an inherited default method");
     return;
   }
-  FunDef *fun = mc->resolved_method->fun;
 
-  emit2(cg, OP_GET_GLOBAL, (uint8_t)fun->slot);
+  if (!cg_emit_target(cg, fun, &mc->inst, &impl_subst, expr->span)) {
+    return;
+  }
   int k = 0;
   for (int i = 0; i < fun->param_count; i++) {
     if (fun->params[i].is_self) {
@@ -1179,7 +1434,7 @@ static void compile_expr(Cg *cg, Expr *expr) {
         emit(cg, OP_UNIT);
         break;
       }
-      emit2(cg, OP_GET_GLOBAL, (uint8_t)fun->slot);
+      cg_emit_target(cg, fun, &expr->as.path_expr.inst, NULL, expr->span);
       break;
     }
     StringView name = path->segments[0].name;
@@ -1202,7 +1457,7 @@ static void compile_expr(Cg *cg, Expr *expr) {
     // both cases.
     FunDef *fun = expr->as.path_expr.resolved_fun;
     if (fun != NULL) {
-      emit2(cg, OP_GET_GLOBAL, (uint8_t)fun->slot);
+      cg_emit_target(cg, fun, &expr->as.path_expr.inst, NULL, expr->span);
       break;
     }
 
@@ -1273,39 +1528,33 @@ static void compile_expr(Cg *cg, Expr *expr) {
 
 // ── entry ────────────────────────────────────────────────────────────────────
 
-// shared by top-level functions and impl methods: `fun` is the resolved
-// target (its `chunk` gets filled in), `body` and `span` come from whichever
-// Decl actually holds the AST (the top-level DeclFun, or an impl item's).
-static void compile_fun_body(Module *m, Executable *exe, Heap *heap,
-                             FunDef *fun, Expr *body, Span span, DiagBag *diags,
-                             Allocator *al, bool *ok) {
-  if (fun->type_param_count > 0) {
-    // generic functions/methods need monomorphisation or boxed generics;
-    // neither exists yet
-    diag_error(diags, span,
-               "generic functions are not supported by the VM yet");
-    *ok = false;
-    return;
-  }
-
-  Cg cg = {.m = m,
-           .exe = exe,
-           .heap = heap,
+// shared by top-level functions, impl methods and monomorphised instances.
+// `fun` owns the chunk being filled in; `body_of` owns the AST (the same
+// FunDef except for an instance, which shares its origin's body) and `subst`
+// binds the type params that body mentions.
+static void compile_fun_body(Mono *mono, FunDef *fun, FunDef *body_of,
+                             Subst subst, int depth, DiagBag *diags, bool *ok) {
+  Cg cg = {.m = body_of->module,
+           .exe = mono->exe,
+           .heap = mono->heap,
+           .mono = mono,
+           .subst = subst,
+           .inst_depth = depth,
            .diags = diags,
-           .al = al,
+           .al = mono->al,
            .ok = true,
            .self_slot = -1};
-  cg.chunk = al_alloc_zero_for(al, Chunk);
-  chunk_init(cg.chunk, al);
+  cg.chunk = al_alloc_zero_for(mono->al, Chunk);
+  chunk_init(cg.chunk, mono->al);
 
   for (int i = 0; i < fun->param_count; i++) {
-    int slot = cg_add_local(&cg, fun->params[i].name, span);
+    int slot = cg_add_local(&cg, fun->params[i].name, body_of->span);
     if (fun->params[i].is_self) {
       cg.self_slot = slot;
     }
   }
 
-  compile_expr(&cg, body);
+  compile_expr(&cg, body_of->body);
   emit(&cg, OP_RETURN);
 
   fun->chunk = cg.chunk;
@@ -1325,6 +1574,9 @@ static void compile_closure(Cg *cg, Expr *expr) {
   Cg child = {.m = cg->m,
               .exe = cg->exe,
               .heap = cg->heap,
+              .mono = cg->mono,
+              .subst = cg->subst, // a closure body sees the same type params
+              .inst_depth = cg->inst_depth,
               .diags = cg->diags,
               .al = cg->al,
               .ok = true,
@@ -1352,44 +1604,18 @@ static void compile_closure(Cg *cg, Expr *expr) {
   }
 }
 
-static void compile_fun(Module *m, Executable *exe, Heap *heap, Decl *decl,
-                        DiagBag *diags, Allocator *al, bool *ok) {
-  DeclFun *fun_decl = &decl->as.fun_decl;
-  compile_fun_body(m, exe, heap, fun_decl->def, fun_decl->body, decl->span,
-                   diags, al, ok);
+Module *mono_pending_module(Mono *mono) {
+  return mono->compiled < mono->count
+             ? mono->insts[mono->compiled].origin->module
+             : NULL;
 }
 
-// impl methods aren't linked back to a FunDef the way top-level DeclFuns are
-// (`item->fun_decl->as.fun_decl.def` is never set — resolve_impl_decl builds
-// the FunDef straight into `ImplDef.methods[]` instead) — so the target
-// FunDef is threaded through explicitly, paired up by iterating in the same
-// order resolve_impl_decl used to fill `impl_def->methods[]` (method items,
-// skipping assoc-type items).
-static void compile_impl(Module *m, Executable *exe, Heap *heap, Decl *decl,
-                         DiagBag *diags, Allocator *al, bool *ok) {
-  DeclImpl *impl_decl = &decl->as.impl_decl;
-  ImplDef *impl_def = impl_decl->def;
-
-  if (impl_def->type_param_count > 0) {
-    // a generic impl's methods reference the impl's own type params (in
-    // Self/param/return types); monomorphisation doesn't exist yet, same
-    // limitation as generic functions.
-    diag_error(diags, decl->span,
-               "methods of a generic impl are not supported by the VM yet");
-    *ok = false;
-    return;
-  }
-
-  for (int i = 0, method_idx = 0; i < impl_decl->item_count; i++) {
-    ImplItemNode *item = &impl_decl->items[i];
-    if (item->kind != IMPL_ITEM_METHOD) {
-      continue;
-    }
-    FunDef *fun = impl_def->methods[method_idx++].fun;
-    DeclFun *fun_decl = &item->fun_decl->as.fun_decl;
-    compile_fun_body(m, exe, heap, fun, fun_decl->body, item->span, diags, al,
-                     ok);
-  }
+bool mono_compile_next(Mono *mono, DiagBag *diags) {
+  Instance *it = &mono->insts[mono->compiled++];
+  bool ok = true;
+  compile_fun_body(mono, it->instance, it->origin, it->subst, it->depth, diags,
+                   &ok);
+  return ok;
 }
 
 // ── linking ──────────────────────────────────────────────────────────────────
@@ -1407,21 +1633,38 @@ static bool exe_too_many(const char *what, int count) {
   return false;
 }
 
+// append `fun` to the globals table and record the slot on it. The only
+// failure is outgrowing the one-byte operand space, which the monomorphiser
+// can hit too — it appends here for every instantiation it derives.
+static bool exe_add_global(Executable *exe, FunDef *fun) {
+  if (exe->global_count == exe->global_cap) {
+    return exe_too_many("functions and methods", exe->global_count + 1);
+  }
+  fun->slot = exe->global_count;
+  exe->globals[exe->global_count++] = fun;
+  return true;
+}
+
+// a generic definition has no single body, so it gets no slot: it is
+// addressed only through the instances the monomorphiser derives from it.
+static bool exe_slot_fun(Executable *exe, FunDef *fun) {
+  if (fun_is_generic(fun)) {
+    fun->slot = FUN_SLOT_NONE;
+    return true;
+  }
+  return exe_add_global(exe, fun);
+}
+
 bool exe_link(Executable *exe, ModuleRegistry *reg, Allocator *al) {
   // pass 1: size the tables. impl methods share the globals space with
-  // top-level funs, so OP_GET_GLOBAL addresses either with one operand.
-  int globals = 0, structs = 0, enums = 0;
+  // top-level funs, so OP_GET_GLOBAL addresses either with one operand. The
+  // globals table is sized to the whole operand space rather than to the
+  // count, since monomorphisation appends to it during codegen.
+  int structs = 0, enums = 0;
   for (int i = 0; i < reg->module_count; i++) {
     Module *m = reg->modules[i];
-    globals += m->fun_count;
-    for (int j = 0; j < m->impl_count; j++) {
-      globals += m->impls[j]->method_count;
-    }
     structs += m->struct_count;
     enums += m->enum_count;
-  }
-  if (globals > CG_MAX_SLOTS) {
-    return exe_too_many("functions and methods", globals);
   }
   if (structs > CG_MAX_SLOTS) {
     return exe_too_many("structs", structs);
@@ -1430,7 +1673,8 @@ bool exe_link(Executable *exe, ModuleRegistry *reg, Allocator *al) {
     return exe_too_many("enums", enums);
   }
 
-  exe->globals = al_alloc_zero(al, sizeof(FunDef *) * (size_t)globals);
+  exe->global_cap = CG_MAX_SLOTS;
+  exe->globals = al_alloc_zero(al, sizeof(FunDef *) * (size_t)CG_MAX_SLOTS);
   exe->structs = al_alloc_zero(al, sizeof(StructDef *) * (size_t)structs);
   exe->enums = al_alloc_zero(al, sizeof(EnumDef *) * (size_t)enums);
 
@@ -1441,15 +1685,16 @@ bool exe_link(Executable *exe, ModuleRegistry *reg, Allocator *al) {
     Module *m = modreg_topo(reg, i);
 
     for (int j = 0; j < m->fun_count; j++) {
-      m->funs[j]->slot = exe->global_count;
-      exe->globals[exe->global_count++] = m->funs[j];
+      if (!exe_slot_fun(exe, m->funs[j])) {
+        return false;
+      }
     }
     for (int j = 0; j < m->impl_count; j++) {
       ImplDef *impl = m->impls[j];
       for (int k = 0; k < impl->method_count; k++) {
-        FunDef *fun = impl->methods[k].fun;
-        fun->slot = exe->global_count;
-        exe->globals[exe->global_count++] = fun;
+        if (!exe_slot_fun(exe, impl->methods[k].fun)) {
+          return false;
+        }
       }
     }
 
@@ -1470,17 +1715,28 @@ bool exe_link(Executable *exe, ModuleRegistry *reg, Allocator *al) {
   return true;
 }
 
-bool codegen_module(Module *m, Executable *exe, Heap *heap, DiagBag *diags,
-                    Allocator *al) {
+// walks the module's definition tables rather than its AST: a FunDef carries
+// its own body and span now, and `ImplDef.methods[]` is the only place an impl
+// method's FunDef lives (the impl item's `DeclFun.def` is never set).
+bool codegen_module(Module *m, Mono *mono, DiagBag *diags) {
   bool ok = true;
-  for (int i = 0; i < m->ast->decl_count; i++) {
-    Decl *decl = m->ast->decls[i];
-    if (decl->kind == DECL_FUN) {
-      compile_fun(m, exe, heap, decl, diags, al, &ok);
-    } else if (decl->kind == DECL_IMPL) {
-      compile_impl(m, exe, heap, decl, diags, al, &ok);
+  for (int i = 0; i < m->fun_count; i++) {
+    FunDef *fun = m->funs[i];
+    if (!fun_is_generic(fun)) {
+      compile_fun_body(mono, fun, fun, subst_empty(), 0, diags, &ok);
     }
-    // structs/enums/traits: nothing executable of their own
+    // generic: no single body to compile — one copy per instantiation instead,
+    // enqueued on `mono` by whatever calls it, so an uncalled generic costs
+    // nothing and is not an error either.
+  }
+  for (int i = 0; i < m->impl_count; i++) {
+    ImplDef *impl = m->impls[i];
+    for (int j = 0; j < impl->method_count; j++) {
+      FunDef *fun = impl->methods[j].fun;
+      if (!fun_is_generic(fun)) {
+        compile_fun_body(mono, fun, fun, subst_empty(), 0, diags, &ok);
+      }
+    }
   }
   return ok;
 }

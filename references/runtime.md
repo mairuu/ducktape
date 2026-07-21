@@ -181,10 +181,11 @@ the stack in place, decrementing `sp` only after the result exists).
   below.
 - `?` (`compile_propagate`): see "Propagate (`?`)" below.
 - Closures (`compile_closure`): see "Closures & upvalues" below.
-- Anything outside the subset (generic functions/methods, destructuring `var`
-  bindings, and calls the checker resolved against a *trait* signature rather
-  than an impl method — a call through a bound, or a default method the impl
-  inherited, neither of which has a chunk) emits a source-anchored diagnostic
+- Generic functions, methods and impls (`compile_fun_body` under a `Subst`):
+  see "Monomorphisation" below.
+- Anything outside the subset (destructuring `var` bindings, a default method
+  the impl inherited — which has no `FunDef`, so no chunk — and `print` named
+  as a value rather than called) emits a source-anchored diagnostic
   `"... is not supported by the VM yet"` and fails codegen — it never
   crashes at runtime.
 
@@ -228,14 +229,16 @@ guarded can still fall through — this stays a real, reachable runtime error.
 Impl methods are ordinary `FunDef`s — `self` is just a regular `ParamDef`
 with `is_self` set, at whatever position it was declared (checked
 generically, not assumed to be first) — so they compile exactly like
-top-level functions (`compile_fun_body`, shared by both). The only wrinkle
-is *finding* the FunDef to compile: unlike a top-level `DeclFun`, an impl
-item's `Decl` is never linked back to the `FunDef` `resolve_impl_decl`
-builds into `ImplDef.methods[]` (`item->fun_decl->as.fun_decl.def` is never
-set). `compile_impl` bridges the two by iterating `impl_decl->items` and
-`impl_def->methods[]` in lockstep, exactly the order `resolve_impl_decl`
-filled them in (method items only, skipping assoc-type items) — the same
-implicit pairing the checker already relies on elsewhere.
+top-level functions (`compile_fun_body`, shared by both).
+
+`codegen_module` walks the module's *definition tables* (`Module.funs[]`,
+then each `ImplDef.methods[]`), not its AST. A `FunDef` carries its own body
+and span, which is what monomorphisation needs — a call site in another
+module reaches a generic definition through the `FunDef` alone and has no
+`Decl` to consult. It also removes the old lockstep pairing between
+`impl_decl->items` and `impl_def->methods[]`, which was needed only because
+an impl item's `Decl` is never linked back to its `FunDef`
+(`item->fun_decl->as.fun_decl.def` is never set).
 
 Methods and top-level functions share one `OP_GET_GLOBAL` slot space
 (`exe_link` numbers a module's methods right after its funs — see "Linking"),
@@ -254,12 +257,73 @@ so calling one needs no new opcode:
   on the path node itself (`resolved_fun`), and codegen's `EXPR_PATH` case
   just pushes it by slot like any other callable.
 
-A generic impl's methods are rejected the same way a generic function is
-(`impl_def->type_param_count > 0` — the impl's own type params can appear in
-`Self`/param/return types, so this needs the same monomorphisation this VM
-doesn't have yet); a generic method rejects itself via the same
-`type_param_count` check `compile_fun_body` already runs for top-level
-functions.
+### Monomorphisation
+
+The runtime is *uniform* in type arguments. An instance's fields are slots in
+declaration order, a variant's tag is per enum, and no opcode inspects a
+static type — which is exactly why `?` can propagate an `Err` without
+rebuilding it. So a type argument changes one thing and one thing only about
+the code compiled from a body: **which function a call resolves to.**
+
+```
+fun describe<T: Show>(v: T) -> String { v.show() }
+```
+
+`v.show()` is a different body for `T = Int` than for `T = Bool`, and the
+receiver is abstract until the call site says otherwise. That is the whole
+reason generic code cannot simply be erased, and it also bounds the job:
+monomorphisation duplicates *code*, never types. `StructDef`/`EnumDef` and
+their slots stay shared across every instantiation.
+
+An instantiation is a `(FunDef, type arguments)` pair; a `Mono` (`Instance[]`
+plus a cursor) memoises them and doubles as the worklist:
+
+- `exe_link` gives a generic definition **no slot** — there is no single body
+  to address — and `codegen_module` skips it. An uncalled generic therefore
+  costs nothing and is not an error.
+- A call site whose target is generic asks `mono_request` for the copy keyed
+  by its type arguments. First request allocates a `FunDef` clone (same body,
+  params and name; its own slot appended to `exe->globals`, its own chunk)
+  and queues it; later requests return the same one, which is what makes a
+  recursive generic terminate.
+- The queue is drained after every module has been walked. Draining can
+  enqueue more, so the driver loops on `mono_pending_module` until empty, and
+  reports each instance against the module its *body* was written in, not the
+  one that instantiated it.
+
+The type arguments come from the checker: `resolve_callee`,
+`resolve_method_call_expr` and `check_trait_method_call` each stash the
+`Subst` they solved onto the call node (`ExprPath.inst`,
+`ExprMethodCall.inst`), rewritten to concrete types by `cctx_solve_insts`
+once `infer_finalize` has run. Those arguments are in the *enclosing*
+definition's terms, so a call inside a generic body is instantiated by
+pushing the caller's own bindings (`Cg.subst`) through them — the step that
+lets `describe_twice<T>` reach `describe<Int>` reach `Int::show` rather than
+stopping one level down.
+
+Two call shapes need more than the recorded arguments:
+
+- **A method of a generic impl.** Its body mentions the impl's type params as
+  well as its own, so `cg_inst_key` binds both, impl's first, dropping any
+  the method's own shadow by name — the same rule `subst_exclude_shadowed`
+  applies in the checker, and for the same reason (`subst_apply` matches by
+  name and takes the first hit).
+- **A call through a trait bound.** The checker resolved `v.show()` against
+  the trait *signature*, so there is no `MethodDef` on the node — only
+  `bound_trait` and `bound_self`. Codegen substitutes `bound_self` into a
+  concrete type and re-runs `impl_index_method` to find the body. This is the
+  one place codegen consults the impl index, and it is why `Mono` holds one.
+
+`MONO_MAX_DEPTH` (32) bounds the chain. `fun grow<T>(v: T) { grow([v]) }`
+type-checks but names a *different* instantiation at every level, each keyed
+one array deeper than the last, so nothing converges. The one-byte slot space
+would stop it eventually, but only after interning a few hundred new types
+into a fixed-size intern table — so the limit lives where the divergence is.
+
+Still out of reach: a default method body the impl inherited. The trait's
+`TraitMethodDef.default_impl` is never built, so there is no `FunDef` to
+instantiate, and `Self` in a trait body is a `TY_TRAIT` rather than a
+`TY_GENERIC` — a name-keyed `Subst` cannot bind it.
 
 ### Propagate (`?`)
 
@@ -351,7 +415,7 @@ has to identify one function in the whole program.
 
 | Table | Contents | Operand of |
 |---|---|---|
-| `globals[]` | per module: its top-level funs, then its impl methods | `OP_GET_GLOBAL` |
+| `globals[]` | per module: its top-level funs, then its impl methods; then monomorphised instances | `OP_GET_GLOBAL` |
 | `structs[]` | every module's structs | `OP_STRUCT` |
 | `enums[]` | every module's enums (variant tags stay per enum) | `OP_ENUM` |
 | `closures[]` | nested closure `FunDef`s, appended during codegen | nothing — GC roots only |
@@ -362,6 +426,11 @@ from. Modules are numbered in topological order; that is cosmetic (every slot
 exists before the first chunk is compiled) but keeps a stack trace readable.
 More than 256 functions, structs, or enums exceeds the operand width and is
 reported as an error against the program rather than any one declaration.
+
+`globals[]` is the one table sized to the whole operand space rather than to
+its contents: generic definitions get `FUN_SLOT_NONE` here and their
+instances are appended during codegen (see "Monomorphisation"), so the count
+is not known until compilation is over.
 
 Two things must happen in this order, and both are why linking is a separate
 step rather than something `codegen_module` does on its way past:
@@ -376,10 +445,12 @@ step rather than something `codegen_module` does on its way past:
   would be swept.
 
 Codegen then runs per module (in topological order, purely so diagnostics
-come out dependency-first), each reporting against its own source file. A
-construct the VM doesn't support fails the whole program even in a module the
-root never calls into — codegen compiles everything, and generic functions
-still have no runtime representation.
+come out dependency-first), each reporting against its own source file, and
+the monomorphisation queue is drained afterwards. A construct the VM doesn't
+support fails the whole program even in a module the root never calls into —
+codegen compiles every non-generic definition whether or not it is reachable.
+A *generic* definition is the exception: it is only compiled where it is
+instantiated, so one nobody calls is never looked at.
 
 Name resolution stays module-local: a bare `foo()` is compiled from
 `ExprPath.resolved_fun`, the `FunDef` the *checker* picked, because the name

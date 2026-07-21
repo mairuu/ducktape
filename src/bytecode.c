@@ -591,6 +591,7 @@ bool bc_load(const char *path, Allocator *al, Executable *exe, Heap *heap,
   // string constant is interned. Same ordering exe_link imposes on codegen.
   exe->globals =
       al_alloc_zero(al, sizeof(FunDef *) * (size_t)exe->global_count);
+  exe->global_cap = exe->global_count; // an image is already monomorphised
   for (int i = 0; i < exe->global_count; i++) {
     exe->globals[i] = al_alloc_zero_for(al, FunDef);
     exe->globals[i]->slot = i;

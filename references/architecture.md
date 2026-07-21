@@ -155,6 +155,13 @@ instantiation goes through `infer_open_generics`, which builds a `Subst`
 (name → type) mapping type params to fresh unknowns or explicit args;
 `subst_apply` rewrites types under it.
 
+`Subst` itself lives in `ast.h`, not `sema.h`, because AST nodes store one:
+every call node records the substitution that instantiated its target
+(`ExprPath.inst`, `ExprMethodCall.inst`) for codegen to monomorphise from.
+They are recorded while still holding the call's fresh unknowns and rewritten
+in place by `cctx_solve_insts` after `infer_finalize` — see
+`runtime.md` "Monomorphisation" for what consumes them.
+
 ### Trait bounds
 
 `resolve_generic_param` builds each declaration's type parameter, merging the
@@ -196,8 +203,19 @@ The same checker serves an inherited default method: when
 `impl_index_method` misses, `impl_index_default_method` looks for an applicable
 trait impl whose trait declares the name with a default body, and the call is
 checked against the trait signature projected through *that* impl.
-`ExprMethodCall.resolved_method` stays NULL in both cases — codegen refuses
-them (neither has a chunk until monomorphisation exists).
+
+`ExprMethodCall.resolved_method` stays NULL in both cases, so the two are told
+apart by `bound_trait`: set for a bound call, along with `bound_self` (the
+abstract receiver type), which is what lets codegen redo the impl lookup once
+that receiver is concrete. An inherited default method has neither and is
+still refused — the trait's default body never gets a `FunDef`.
+
+A type parameter satisfies exactly the bounds it was declared with:
+`impl_index_implements` answers for a `TY_GENERIC` from `bounds` rather than
+from the index, which is what lets one bounded generic hand its parameter to
+another (`fun a<T: Show>(v: T) { b(v) }`). That is sound because the bound is
+re-checked against the concrete type wherever the outer function is
+instantiated.
 
 `impl_applies` is the one place that answers "does this impl apply to this
 receiver" (identity for a non-generic impl, `impl_type_match` binding the

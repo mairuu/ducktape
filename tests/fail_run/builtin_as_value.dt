@@ -1,0 +1,7 @@
+#! expect: using a builtin as a value
+# a call to `print` lowers to OP_PRINT, so the builtin has no body and no
+# global slot; naming it as a value has nothing to point at.
+fun main() {
+  var p: fun(Int) -> () = print;
+  p(1);
+}
