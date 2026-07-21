@@ -68,13 +68,16 @@ void impl_index_add(ImplIndex *idx, ImplDef *impl);
 // registered impl. on a match, *out_match is filled with the impl and the
 // substitution mapping the impl's type params to the concrete type args
 // inferred from `self_type` (empty subst if the impl isn't generic).
-// find a method for `self_type`. when `self_type` is a generic type's
-// canonical self (a bare path like `Point::new` with no type args) and
-// `infer` is non-NULL, the impl is selected by method name instead and its
-// type params are opened as fresh unknowns for the call site to solve.
+// find a method for `self_type`. when `bare_path` is set (the caller is
+// resolving a path like `Point::new`, not a method receiver), `self_type` is a
+// generic type's canonical self, and `infer` is non-NULL, the impl is selected
+// by method name instead and its type params are opened as fresh unknowns for
+// the call site to solve. Receivers must pass bare_path=false: TY_GENERIC is
+// interned, so a generic impl's `Self` is pointer-identical to the struct's
+// canonical self and the type alone can't distinguish the two cases.
 MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, StringView name,
-                             ImplMatch *out_match, InferCtx *infer, Span span,
-                             Allocator *al);
+                             ImplMatch *out_match, InferCtx *infer,
+                             bool bare_path, Span span, Allocator *al);
 
 // does `type` implement `trait`? true if some registered impl heads
 // `impl [<..>] trait for T` with a self type matching `type`.

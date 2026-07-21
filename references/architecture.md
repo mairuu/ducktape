@@ -102,8 +102,13 @@ judged once its parameter is solved. `infer_open_generics` stashes the source
 asks `impl_index_implements` (does any `impl Trait for T` head match — exact for
 a non-generic impl, `impl_type_match` for a generic one) and reports
 "type '%s' does not implement trait '%s'" at the unknown's introduction span.
-Explicit turbofish args skip the unknown entirely and so aren't checked, and
-`tc_check_impl` never finalizes, so bodies of impl methods aren't either.
+Both `tc_check_fun` and `tc_check_impl` run the finalize + bound-check pair.
+Explicit turbofish args skip the fresh unknown entirely, so they still aren't
+checked.
+
+`ty_generic` interns like every other `ty_*` constructor, canonicalising bound
+order first (`T: A + B` and `T: B + A` are one type) — the intern hash is
+order-sensitive, so sorting must happen *before* the probe.
 
 **Poison convention:** on error, emit one `diag_error` and return
 `t_poison`; poison operands propagate silently so one mistake produces one
@@ -129,8 +134,14 @@ against each impl's self type: exact `types_equal` for non-generic impls,
 generic ones. A *bare generic self* — the canonical `Point<T>` that a path
 like `Point::new` resolves to, detected by pointer identity with
 `def->self_type` — instead selects by method name and opens the impl's params
-as unknowns for the call site to solve. `impl_index_assoc_type` does the
-analogous lookup for `T.Assoc` in type position.
+as unknowns for the call site to solve. That branch is gated on the caller's
+`bare_path` flag: since `TY_GENERIC` is interned, a generic impl's `Self` is
+pointer-identical to the struct's canonical self, so the type alone can't tell
+a bare path from a method receiver. Receivers pass `bare_path=false` — without
+it, `self.m()` inside `impl<T> Point<T>` would select any impl defining `m`,
+including one for an unrelated concrete instantiation.
+`impl_index_assoc_type` does the analogous lookup for `T.Assoc` in type
+position.
 
 ## Memory (`src/allocator.c`, `src/arena.c`)
 

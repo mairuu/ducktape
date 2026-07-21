@@ -1,0 +1,35 @@
+#! expect: type 'Int' does not implement trait 'N'
+struct P {
+    x: Int,
+}
+
+trait N {
+    fun n(self) -> Int;
+}
+
+impl N for P {
+    fun n(self) -> Int {
+        self.x
+    }
+}
+
+fun need<T: N>(t: T) -> Int {
+    0
+}
+
+struct Q {
+    y: Int,
+}
+
+impl Q {
+    # bound violations inside an impl method body must be caught too --
+    # tc_check_impl finalizes its inference, not just tc_check_fun
+    fun bad(self) -> Int {
+        need(5)
+    }
+}
+
+fun main() {
+    var q = Q { y: 1 };
+    var r = q.bad();
+}

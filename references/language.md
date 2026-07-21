@@ -137,7 +137,6 @@ Registered in every module; the only builtin so far.
 | default method *bodies* | recognized (satisfy conformance) but not type-checked |
 | extra (non-trait) methods in a trait impl | tolerated as inherent methods (Rust rejects them) |
 | bounds via explicit turbofish `foo::<Int>()` | the arg bypasses the fresh unknown, so its bounds aren't checked (inferred instantiations are) |
-| bounds inside an impl method body | `tc_check_impl` doesn't finalize inference, so bound violations there go unchecked (top-level functions are checked) |
 | modules / imports | `use` is a no-op; single file only |
 | top-level `var` | parses, then aborts registration |
 | tuple-struct struct-patterns `var Pair { .. }` | diagnostic suggests tuple destructuring |

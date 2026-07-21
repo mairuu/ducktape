@@ -788,9 +788,15 @@ static void resolve_bound_refs(ResolveCtx *rctx, const TraitBound *bound,
         break;
       }
     }
-    if (!dup && *count < MAX_BOUNDS) {
-      out[(*count)++] = def;
+    if (dup) {
+      continue;
     }
+    if (*count >= MAX_BOUNDS) {
+      diag_error(rctx->diags, ref->span, "too many trait bounds (max %d)",
+                 MAX_BOUNDS);
+      return;
+    }
+    out[(*count)++] = def;
   }
 }
 
@@ -2106,7 +2112,7 @@ static Type *resolve_method_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   ImplMatch match;
   MethodDef *method =
       impl_index_method(&ctx->tc->impl_index, self_ty, mc->method_name, &match,
-                        &ctx->infer, expr->span, ctx->al);
+                        &ctx->infer, /*bare_path=*/false, expr->span, ctx->al);
   if (!method) {
     char self_buf[64];
     type_sprintf(self_ty, self_buf, sizeof(self_buf));
@@ -3482,6 +3488,9 @@ static void tc_check_impl(TypeChecker *tc, Decl *decl) {
 
   // end type scope
   cctx.tyres.tscope = tscope_pop(cctx.tyres.tscope);
+
+  infer_finalize(&cctx.infer, cctx.diags);
+  infer_check_bounds(&cctx.infer, &tc->impl_index, cctx.diags, cctx.al);
 }
 
 bool tc_check_module(TypeChecker *tc, Module *m) {
@@ -4006,8 +4015,8 @@ static bool type_same_nominal_def(Type *a, Type *b) {
 }
 
 MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, StringView name,
-                             ImplMatch *out_match, InferCtx *infer, Span span,
-                             Allocator *al) {
+                             ImplMatch *out_match, InferCtx *infer,
+                             bool bare_path, Span span, Allocator *al) {
   if (type_is_poison(self_type)) {
     return NULL;
   }
@@ -4016,7 +4025,11 @@ MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, StringView name,
   // params as fresh unknowns — argument unification at the call site pins
   // down the type arguments (e.g. `Point::new(10, 20)` selecting
   // `impl Point<Int>`). first name match wins.
-  if (infer != NULL && type_is_bare_generic_self(self_type)) {
+  // Only a bare path (`Point::new`) may select an impl by method name. A
+  // method-call receiver never may: since TY_GENERIC is interned, a generic
+  // impl's `Self` is pointer-identical to the struct's canonical self type,
+  // so type_is_bare_generic_self alone can no longer tell the two apart.
+  if (infer != NULL && bare_path && type_is_bare_generic_self(self_type)) {
     for (int i = 0; i < idx->count; i++) {
       ImplDef *impl = idx->all[i];
       if (impl->self_type == NULL || type_is_poison(impl->self_type) ||
@@ -4372,9 +4385,9 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
       }
 
       ImplMatch match;
-      MethodDef *method =
-          impl_index_method(&ctx->tyres->tc->impl_index, struct_ty, segment,
-                            &match, ctx->tyres->infer, path->span, ctx->al);
+      MethodDef *method = impl_index_method(
+          &ctx->tyres->tc->impl_index, struct_ty, segment, &match,
+          ctx->tyres->infer, /*bare_path=*/true, path->span, ctx->al);
       if (!method) {
         char ty_buf[64];
         type_sprintf(struct_ty, ty_buf, sizeof(ty_buf));

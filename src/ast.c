@@ -182,9 +182,9 @@ static Type *type_intern(Type *t) {
       assert(g_intern.count < TYPE_INTERN_CAP * 0.7 &&
              "intern table is too full");
 
-      if (t->kind == TY_GENERIC) {
-        sort_bounds(t->as.generic.bounds, t->as.generic.bound_count);
-      }
+      // NB: bound order must already be canonical here — sorting after
+      // type_hash ran would file the entry under a slot no later lookup
+      // computes. ty_generic sorts before probing, so there's nothing to do.
 
       g_intern.entries[slot] = t;
       g_intern.count++;
@@ -317,15 +317,35 @@ Type *ty_array(Type *elem, Allocator *al) {
 
 Type *ty_generic(StringView name, TraitDef **bounds, int bound_count,
                  Allocator *al) {
+  // Canonicalise bound order up front: `T: A + B` and `T: B + A` denote the
+  // same type, and both type_hash and the probe below are order-sensitive.
+  // (The caller's array is borrowed, so sort a copy.)
+  TraitDef **sorted = NULL;
+  if (bound_count > 0) {
+    sorted = al_alloc(al, bound_count * sizeof(TraitDef *));
+    for (int i = 0; i < bound_count; i++) {
+      sorted[i] = bounds[i];
+    }
+    sort_bounds(sorted, bound_count);
+  }
+
+  Type probe = {.kind = TY_GENERIC,
+                .as.generic = {
+                    .name = name,
+                    .bounds = sorted,
+                    .bound_count = bound_count,
+                }};
+  Type *interned = type_intern_lookup(&probe);
+  if (interned) {
+    return interned;
+  }
+
   Type *t = al_alloc_zero_for(al, Type);
   t->kind = TY_GENERIC;
   t->as.generic.name = name;
-  t->as.generic.bounds = al_alloc(al, bound_count * sizeof(TraitDef *));
-  for (int i = 0; i < bound_count; i++) {
-    t->as.generic.bounds[i] = bounds[i];
-  }
+  t->as.generic.bounds = sorted;
   t->as.generic.bound_count = bound_count;
-  return t;
+  return type_intern(t);
 }
 
 Type *ty_assoc(Type *base, StringView assoc_name, TraitDef *trait,
@@ -464,6 +484,20 @@ int type_name_sprintf(const Type *t, char *buf, size_t buf_size) {
   return 0;
 }
 
+// snprintf returns the length it *would* have written, so accumulating that
+// unclamped walks `buf + n` past the end and underflows `buf_size - n` (a
+// size_t) into a huge value — an out-of-bounds write for any type whose
+// rendering exceeds the caller's buffer (conventionally char[64]). Clamp after
+// every step so the running offset always leaves room for a NUL.
+static int sp_bump(int n, size_t buf_size, int written) {
+  if (written < 0) {
+    return n; // encoding error
+  }
+  n += written;
+  int limit = (int)buf_size - 1;
+  return n > limit ? limit : n;
+}
+
 int type_sprintf(const Type *t, char *buf, size_t buf_size) {
   if (!t) {
     return snprintf(buf, buf_size, "NULL_TYPE");
@@ -493,52 +527,68 @@ int type_sprintf(const Type *t, char *buf, size_t buf_size) {
     return snprintf(buf, buf_size, SV_FMT,
                     SV_ARG(t->as.generic.name)); // todo: include bounds
   case TY_FUNCTION: {
-    int n = snprintf(buf, buf_size, "fun(");
+    int n = sp_bump(0, buf_size, snprintf(buf, buf_size, "fun("));
     for (int i = 0; i < t->as.fun.param_count; i++) {
       if (i > 0)
-        n += snprintf(buf + n, buf_size - n, ", ");
-      n += type_sprintf(t->as.fun.param_types[i], buf + n, buf_size - n);
+        n = sp_bump(n, buf_size, snprintf(buf + n, buf_size - n, ", "));
+      n = sp_bump(
+          n, buf_size,
+          type_sprintf(t->as.fun.param_types[i], buf + n, buf_size - n));
     }
-    n += snprintf(buf + n, buf_size - n, "): ");
+    n = sp_bump(n, buf_size, snprintf(buf + n, buf_size - n, ") -> "));
+    n = sp_bump(n, buf_size,
+                type_sprintf(t->as.fun.return_type, buf + n, buf_size - n));
     return n;
   }
   case TY_TUPLE: {
-    int n = snprintf(buf, buf_size, "(");
+    int n = sp_bump(0, buf_size, snprintf(buf, buf_size, "("));
     for (int i = 0; i < t->as.tuple.elem_count; i++) {
       if (i > 0)
-        n += snprintf(buf + n, buf_size - n, ", ");
-      n += type_sprintf(t->as.tuple.elem_types[i], buf + n, buf_size - n);
+        n = sp_bump(n, buf_size, snprintf(buf + n, buf_size - n, ", "));
+      n = sp_bump(
+          n, buf_size,
+          type_sprintf(t->as.tuple.elem_types[i], buf + n, buf_size - n));
     }
-    n += snprintf(buf + n, buf_size - n, ")");
+    n = sp_bump(n, buf_size, snprintf(buf + n, buf_size - n, ")"));
     return n;
   }
   case TY_STRUCT: {
-    int n = snprintf(buf, buf_size, SV_FMT, SV_ARG(t->as.struc.def->name));
+    int n =
+        sp_bump(0, buf_size,
+                snprintf(buf, buf_size, SV_FMT, SV_ARG(t->as.struc.def->name)));
     if (t->as.struc.type_arg_count == 0) {
       return n;
     }
 
     bool is_tuple_struct = t->as.struc.def->is_tuple;
 
-    n += snprintf(buf + n, buf_size - n, is_tuple_struct ? "(" : "<");
+    n = sp_bump(n, buf_size,
+                snprintf(buf + n, buf_size - n, is_tuple_struct ? "(" : "<"));
     for (int i = 0; i < t->as.struc.type_arg_count; i++) {
       if (i > 0)
-        n += snprintf(buf + n, buf_size - n, ", ");
-      n += type_sprintf(t->as.struc.type_args[i], buf + n, buf_size - n);
+        n = sp_bump(n, buf_size, snprintf(buf + n, buf_size - n, ", "));
+      n = sp_bump(
+          n, buf_size,
+          type_sprintf(t->as.struc.type_args[i], buf + n, buf_size - n));
     }
-    n += snprintf(buf + n, buf_size - n, is_tuple_struct ? ")" : ">");
+    n = sp_bump(n, buf_size,
+                snprintf(buf + n, buf_size - n, is_tuple_struct ? ")" : ">"));
     return n;
   }
   case TY_ENUM: {
-    int n = snprintf(buf, buf_size, SV_FMT, SV_ARG(t->as.enm.def->name));
+    int n =
+        sp_bump(0, buf_size,
+                snprintf(buf, buf_size, SV_FMT, SV_ARG(t->as.enm.def->name)));
     if (t->as.enm.type_arg_count > 0) {
-      n += snprintf(buf + n, buf_size - n, "<");
+      n = sp_bump(n, buf_size, snprintf(buf + n, buf_size - n, "<"));
       for (int i = 0; i < t->as.enm.type_arg_count; i++) {
         if (i > 0)
-          n += snprintf(buf + n, buf_size - n, ", ");
-        n += type_sprintf(t->as.enm.type_args[i], buf + n, buf_size - n);
+          n = sp_bump(n, buf_size, snprintf(buf + n, buf_size - n, ", "));
+        n = sp_bump(
+            n, buf_size,
+            type_sprintf(t->as.enm.type_args[i], buf + n, buf_size - n));
       }
-      n += snprintf(buf + n, buf_size - n, ">");
+      n = sp_bump(n, buf_size, snprintf(buf + n, buf_size - n, ">"));
     }
     return n;
   }

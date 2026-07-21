@@ -123,6 +123,28 @@
   the unknown so they're unchecked, and `tc_check_impl` doesn't finalize
   inference so impl method bodies aren't checked either.
 
+- **Cleanup pass (post-6b)** — paid down frictions surfaced by 6a/6b:
+  - `ty_generic` now interns like every other `ty_*` constructor (bound order
+    canonicalised *before* the probe — `type_intern` used to sort *after*
+    hashing, filing entries under a slot no lookup would recompute). Generic
+    identity is pointer equality again, matching the documented invariant.
+  - That collapse exposed a real bug: `type_is_bare_generic_self` used pointer
+    identity to tell a bare path (`Point::new`) from a method receiver, so
+    `self.m()` inside `impl<T> Box<T>` selected *any* impl defining `m` —
+    including `impl Box<Int>`'s. `impl_index_method` now takes an explicit
+    `bare_path` flag; receivers pass false
+    (`tests/fail/generic_self_method_leak.dt`).
+  - `tc_check_impl` now runs `infer_finalize` + `infer_check_bounds`; unsolved
+    unknowns and bound violations inside impl method bodies were silently
+    accepted before (`tests/fail/bound_in_impl_method.dt`).
+  - `type_sprintf` printed `fun(Int): ` — it never emitted the return type at
+    all. Now `fun(Int) -> Bool`. Its `n += snprintf(...)` accumulation was also
+    an out-of-bounds write for any type rendering past the caller's `char[64]`
+    (snprintf returns the *would-be* length, underflowing `buf_size - n`);
+    every step is clamped through `sp_bump`.
+  - `resolve_bound_refs` reports "too many trait bounds" instead of silently
+    dropping past `MAX_BOUNDS`, matching the parser's caps.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -132,9 +154,9 @@ milestone (~900 lines).
    → `t.draw()` — resolve a method on a bounded `TY_GENERIC` receiver against
    its bounds' `TraitMethodDef`s), then default-method dispatch (calling a
    defaulted method an impl omitted — needs monomorphising the default body
-   against the concrete self) and checking default bodies. Closing the two
-   enforcement gaps above belongs here too. Unlocks `Try`-trait `?` and `as`
-   coercions.
+   against the concrete self) and checking default bodies. Enforcing bounds on
+   explicit turbofish args (the one remaining gap) belongs here too. Unlocks
+   `Try`-trait `?` and `as` coercions.
 2. **Module system** (~0.5×): real file discovery, `mod_link_imports`
    (stubbed at `src/compiler.c` phase_register), cross-module visibility,
    cycle detection.
