@@ -1,0 +1,5 @@
+use std::cmp::max;
+
+pub fun biggest(a: Int, b: Int) -> Int {
+    return max(a, b);
+}

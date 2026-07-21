@@ -1,0 +1,19 @@
+# std imported from two modules at once. `<std>/cmp.dt` is a registry key like
+# any other, and it does not depend on the importing module's base directory —
+# so the diamond dedups to one Module, registering `impl Ord for Int` once and
+# taking one set of slots, exactly as a shared user module would.
+#> 8
+#> 2
+#> 4
+#> 9
+
+use std::cmp::{min, max};
+use helper::biggest;
+
+fun main() {
+    print(biggest(2, 8));
+    print(min(2, 8));
+    print(max(1, 4));
+    # the instantiation `helper` created and the one here are the same copy
+    print(max(biggest(9, 3), 0));
+}

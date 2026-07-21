@@ -552,6 +552,52 @@
     clear/restore pair around a line that only assigned NULL — dead code that
     made the omission look deliberate.
 
+- **The standard library begins (milestone 14)** — `std::` names real modules
+  now, and the first one is `std::cmp`. Design: `architecture.md` "The embedded
+  standard library", `language.md` "The standard library".
+
+  The observation that makes this a small milestone rather than a large one:
+  **`impl Ord for Int` is legal.** A trait can be implemented for a primitive,
+  so the standard library is written *in ducktape* rather than bolted on in C —
+  which means milestone 13 finishing the trait machinery is what unlocked it,
+  and `std::cmp` needed no new builtins, no new opcodes and no language change
+  at all. The module was prototyped against the unmodified compiler first, and
+  every line of it ran.
+
+  `std::cmp` is `trait Ord { cmp; lt/gt/le/ge defaults }`, impls for `Int` and
+  `Float`, and `max`/`min`/`clamp` over `T: Ord`. It is deliberately *not*
+  object-safe (`other: Self`), which is the object-safety rule working as
+  designed: it is a bound, and only `dyn` asks for more.
+
+  The design decision worth recording is where the std/not-std distinction is
+  allowed to live:
+  - **A std module is an ordinary `Module` in the registry.** `use std::cmp`
+    goes through the same `modreg_add`, the same dependency-graph edge, the
+    same cycle detection, `pub` checking, linking and codegen as a user import.
+    Making it special anywhere else would have meant re-deriving all of that.
+  - **So the entire difference is one branch in `mod_parse`.** `Module.file_path`
+    is only ever a registry key, a diagnostic label, and an argument to
+    `read_file` — and only the third needs a real path. A `<std>/…` key reads
+    from the embedded table instead. Pointing that branch at a directory is all
+    it would take to make std filesystem-backed; nothing downstream can tell.
+  - **The `.dt` files stay the source of truth.** `scripts/embed_std.sh` mirrors
+    `std/*.dt` into `build/std_data.h` at build time, so std is editable and
+    directly runnable, `make format` never sees generated C, and the test suite
+    and `--emit-bc` images stay hermetic — no install path, no env var.
+
+  `<std>/<name>.dt` is the key; the angle brackets are what make collision
+  impossible, since a real module path is a base dir plus identifier segments
+  and an identifier cannot contain `<`. The key ignores `base_dir`, so two
+  modules importing std from different directories dedup to one entry
+  (`tests/run/mod_std/`).
+
+  `std::io` survives as the one `std::` path with no module behind it: `print`
+  is registered into every scope by `tc_register_builtins`, so a real `std::io`
+  exporting it would collide with the builtin already bound under that name.
+  Every *other* unknown `std::` name became a diagnostic listing the embedded
+  modules — it used to be a silent no-op that surfaced later, confusingly, as
+  "undefined variable".
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -562,16 +608,24 @@ Nothing on the main line is *blocked*: every construct the checker accepts in
 warts" section would promote first, in the order that pays off soonest — pick
 by appetite rather than by necessity.
 
-1. **Module-granular impls and `pub use`** — `ImplIndex` lives on the
+1. **`std::option`, and the unit-variant inference it needs** — the module the
+   library most obviously wants next, and it is *blocked on a wart*:
+   `Option::None` cannot infer its type argument, so `return Option::None;`
+   from a `-> Option<Int>` fails and only `Option::<Int>::None` works. A
+   standard type that needs a turbofish everywhere is a bad advert, so the
+   inference fix comes first and the module follows it. Fixing it also settles
+   the same question for a bare unit variant in argument position.
+2. **Module-granular impls and `pub use`** — `ImplIndex` lives on the
    `TypeChecker`, so an impl applies even where its module was never
    imported, and imports don't compose (no re-export, no glob, no qualified
-   paths). Fixing the first is a scoping change; the second is parser plus
-   `tc_link_imports`.
-2. **Wider slot spaces** — 256 functions/structs/enums program-wide, now
+   paths). Now also the reason a user's `impl Ord for Int` collides with
+   `std::cmp`'s. Fixing the first is a scoping change; the second is parser
+   plus `tc_link_imports`.
+3. **Wider slot spaces** — 256 functions/structs/enums program-wide, now
    reached by *use* of generics rather than by how many are written, and by
    trait-object vtables on top of that. A two-byte operand (or a
    wide-operand opcode pair) lifts it.
-3. **Object-safe traits with associated types** — the object-safety rule
+4. **Object-safe traits with associated types** — the object-safety rule
    rejects `Self.Item` outright. Allowing `dyn Iterator` with the associated
    type *named* at the coercion site (`dyn Iterator<Item = Int>`) is the
    natural follow-on, and needs `dyn` to carry type arguments at all.
@@ -605,7 +659,15 @@ via `Module.decl_base`) and is not part of the main line.
   `impl_index_assoc_type` is checker-side. Affects bounded generic functions
   and trait default bodies alike
 - trait impls are program-global: an impl applies even if its module was never
-  imported (`ImplIndex` lives on the `TypeChecker`, not the `Module`)
+  imported (`ImplIndex` lives on the `TypeChecker`, not the `Module`) — which
+  also means a user's `impl Ord for Int` silently loses to `std::cmp`'s once
+  that module is imported, first registration winning
+- `use std::io::print;` is a no-op with no module behind it, because `print` is
+  a builtin bound in every scope; it goes away when `print` becomes a real std
+  module
+- importing `std::cmp` spends two global slots on `Int::cmp`/`Float::cmp` even
+  if only one is used — non-generic definitions are linked whether called or
+  not, unlike the generics around them
 - a trait object cannot be made from the abstract `Self` of a default body:
   `check_coerce_dyn` refuses a `TY_TRAIT`, so `self` inside a default body
   can't be handed on as a `dyn Trait` even when the trait is object-safe

@@ -1,0 +1,10 @@
+#! expect: there is no standard library module 'std::nope'
+# `std` used to be a namespace that swallowed anything: an unknown std path was
+# a silent no-op, and the failure only showed up later as "undefined variable".
+# Now the embedded table decides, and the note lists what does exist.
+
+use std::nope::thing;
+
+fun main() {
+    print(thing(1));
+}

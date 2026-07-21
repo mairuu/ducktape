@@ -24,6 +24,15 @@ implemented, with the not-yet-implemented table), `architecture.md`
 subset, update the matching references/ file in the same change.** Old notes
 in `.vscode/ref/` are historical — do not trust them.
 
+## Standard library
+
+`std/*.dt` is the standard library, **written in ducktape**. Each file is an
+ordinary module (directly runnable: `./build/ducktape std/cmp.dt`) that
+`scripts/embed_std.sh` mirrors into `build/std_data.h` at build time, so
+`use std::cmp;` needs no install path and the test suite stays hermetic. Edit
+the `.dt`; never edit the generated header. Adding a file to `std/` is all it
+takes to make `use std::<name>;` resolve.
+
 ## Tests
 
 - `tests/pass/*.dt` — must compile: exit 0, empty stderr.

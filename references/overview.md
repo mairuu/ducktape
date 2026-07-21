@@ -2,9 +2,11 @@
 
 ducktape is a toy statically-typed, Rust-inspired language (`.dt` files). The
 compiler and VM are written in C23 and built with GNU Make. The frontend
-(scanner → parser → type checker) covers essentially the whole language; the
-backend (bytecode + stack VM) executes the value-type subset plus GC-backed
-strings and arrays, with structs/enums/closures still ahead (`roadmap.md`).
+(scanner → parser → type checker) covers essentially the whole language, and
+the backend (bytecode + stack VM) now runs all of it: GC-backed strings,
+arrays, structs, enums, closures, generics (monomorphised), trait objects and
+multi-module programs. A small standard library is written in ducktape itself
+and embedded in the binary (`std/`). See `roadmap.md` for what is left.
 
 Everything in `references/` is written against the actual code — when a claim
 names a file, that file is the source of truth. Historical design notes live in
@@ -19,7 +21,9 @@ names a file, that file is the source of truth. Historical design notes live in
 | `tests/fail/` | programs that must fail; first line `#! expect: <substring>` asserts on stderr |
 | `tests/run/` | programs executed with `--run`; `#> line` comments assert on stdout |
 | `tests/fail_run/` | like `tests/fail`, but invoked with `--run` — for programs that type-check yet the VM rejects |
+| `std/` | the standard library, written in ducktape; embedded into the binary at build time |
 | `scripts/run_tests.sh` | the test runner (invoked by `make test`) |
+| `scripts/embed_std.sh` | mirrors `std/*.dt` into `build/std_data.h` for `src/std_src.c` |
 | `references/` | these docs + `grammar.ebnf` |
 
 A multi-file test is a *subdirectory* of any of the `tests/` categories, with
@@ -52,7 +56,10 @@ Driver: `compiler_run` in `src/compiler.c`. Phases, in order:
    `include/ast.h`), resolve its `use` declarations to files, and continue into
    any module that just appeared. Discovery can't precede parsing, because a
    module's dependencies *are* its `use` declarations. Paths resolve against
-   the root file's directory, which is the one module search root.
+   the root file's directory, which is the one module search root — except
+   `use std::…`, which names a module embedded in the binary and takes its
+   source from there instead of the filesystem. It is an ordinary module in
+   every other respect.
 2. **dep graph** — tri-colour DFS over the import edges, post-order, so
    dependencies precede their dependents; a back edge is a cycle diagnostic
 3. **register** — `tc_register_module` (`src/sema.c`): create def stubs for

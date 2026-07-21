@@ -4,6 +4,7 @@
 #include "parser.h"
 #include "scanner.h"
 #include "sema.h"
+#include "std_src.h"
 #include "string_utils.h"
 
 #include <assert.h>
@@ -100,6 +101,30 @@ StringView mod_file_for_use(StringView base_dir, const Path *path,
   return (StringView){.chars = buf, .len = n};
 }
 
+// The registry key (and diagnostic label) of an embedded std module. The
+// angle brackets are what keep it distinct from every user path: a real one is
+// a base dir plus identifier segments, and an identifier cannot contain '<'.
+// So a user file literally named `std/cmp.dt` cannot collide with `std::cmp`.
+StringView std_mod_key(StringView name, Allocator *al) {
+  const char *prefix = "<std>/";
+  int prefix_len = 6;
+  int len = prefix_len + name.len + 3; // ".dt"
+
+  char *buf = al_alloc(al, sizeof(char) * (size_t)(len + 1));
+  memcpy(buf, prefix, (size_t)prefix_len);
+  memcpy(buf + prefix_len, name.chars, (size_t)name.len);
+  memcpy(buf + prefix_len + name.len, ".dt", 3);
+  buf[len] = '\0';
+
+  return (StringView){.chars = buf, .len = len};
+}
+
+// is this key one std_mod_key produced? `mod_parse` asks, to decide whether
+// the source comes from the embedded table or from the filesystem.
+static bool is_std_key(StringView path) {
+  return path.len > 6 && memcmp(path.chars, "<std>/", 6) == 0;
+}
+
 Module *mod_new(StringView file_path, Allocator *al) {
   Module *m = al_alloc_zero_for(al, Module);
   m->file_path = file_path;
@@ -188,9 +213,40 @@ bool mod_collect_imports(Module *m, ModuleRegistry *reg, StringView base_dir,
       continue;
     }
 
-    // `std` is a reserved namespace over the builtins: no file, no graph edge.
+    // `std` names the embedded standard library. A std module that exists is
+    // resolved into an ordinary registry entry — same dedup, same graph edge,
+    // same `pub` rules — and differs from a user module *only* in where
+    // mod_parse gets its bytes. Keeping it ordinary is what makes moving std
+    // to a real directory later a one-branch change.
     if (path->count > 0 && sv_equal_cstr(path->segments[0].name, "std")) {
-      imp->is_std = true;
+      StringView mod_name =
+          path->count > 1 ? path->segments[1].name : (StringView){0};
+
+      // `std::io` predates the embedded library: it is a no-op namespace over
+      // the builtins, because `print` is registered into every module's scope
+      // already and a real `std::io` would collide with it. Remove this case
+      // once `print` moves into an embedded module of its own.
+      if (sv_equal_cstr(mod_name, "io")) {
+        imp->is_std = true;
+        continue;
+      }
+
+      if (std_module_source(mod_name) == NULL) {
+        StringView mod_path = sprint_mod_path(path, al);
+        diag_error(diags, path->span,
+                   "there is no standard library module '" SV_FMT "'",
+                   SV_ARG(mod_path));
+        diag_note(diags, (Span){0}, "available: %s", std_module_names());
+        ok = false;
+        continue;
+      }
+
+      imp->file_path = std_mod_key(mod_name, al);
+      int dep = modreg_find(reg, imp->file_path);
+      if (dep < 0) {
+        dep = modreg_add(reg, mod_new(imp->file_path, al));
+      }
+      imp->module_index = dep;
       continue;
     }
 
@@ -216,7 +272,21 @@ bool mod_collect_imports(Module *m, ModuleRegistry *reg, StringView base_dir,
 }
 
 bool mod_parse(Module *m, DiagBag *diags, Allocator *al) {
-  m->source = read_file(m->file_path.chars, al);
+  // ── the one place a std module differs from any other ──────────────────────
+  // Everything downstream of here — scanning, parsing, the dependency graph,
+  // cycle detection, `pub`, linking, codegen, serialization — works off
+  // `m->source` and treats `file_path` as an opaque key and a diagnostic
+  // label. Pointing this branch at a directory instead of the embedded table
+  // is all it would take to make std filesystem-backed.
+  if (is_std_key(m->file_path)) {
+    StringView name = {.chars = m->file_path.chars + 6,
+                       .len = m->file_path.len - 6 - 3}; // "<std>/" .. ".dt"
+    const char *src = std_module_source(name);
+    assert(src != NULL && "std module registered without embedded source");
+    m->source = (String){.chars = (char *)src, .len = (int)strlen(src)};
+  } else {
+    m->source = read_file(m->file_path.chars, al);
+  }
   if (m->source.chars == NULL) {
     return false;
   }

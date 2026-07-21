@@ -10,7 +10,7 @@ TARGET  := ducktape
 CC      := cc
 CSTD    := -std=c23
 CFLAGS  := $(CSTD) -Wall -Wextra -Wpedantic $(DEFS)
-IFLAGS  := -Iinclude
+IFLAGS  := -Iinclude -Ibuild
 LDFLAGS :=
 LIBS    := -lm
 
@@ -31,6 +31,13 @@ DEPDIR   := $(BUILDDIR)/.deps
 SRCS     := $(wildcard $(SRCDIR)/*.c)
 OBJS     := $(SRCS:$(SRCDIR)/%.c=$(BUILDDIR)/%.o)
 DEPS     := $(SRCS:$(SRCDIR)/%.c=$(DEPDIR)/%.d)
+
+# the standard library: ducktape sources mirrored into the binary. The .dt
+# files are the source of truth and stay directly runnable; std_data.h is a
+# generated fragment src/std_src.c includes.
+STDDIR   := std
+STDSRCS  := $(wildcard $(STDDIR)/*.dt)
+STDDATA  := $(BUILDDIR)/std_data.h
 
 # compile_commands.json
 CCJSON   := compile_commands.json
@@ -68,6 +75,17 @@ $(BUILDDIR)/%.o: $(SRCDIR)/%.c $(CFLAGS_SENTINEL)
 	@mkdir -p $(BUILDDIR) $(DEPDIR)
 	$(CC) $(CFLAGS) $(IFLAGS) -MMD -MF $(DEPDIR)/$*.d -c $< -o $@
 	@echo "compiled $<"
+
+# regenerate the embedded std whenever a .dt changes. The script rewrites the
+# header only when the content differs, so an untouched std does not cascade a
+# rebuild. Stated explicitly because -MMD can only discover the dependency
+# after a build in which the header already existed.
+$(STDDATA): $(STDSRCS) scripts/embed_std.sh
+	@mkdir -p $(BUILDDIR)
+	@sh scripts/embed_std.sh $(STDDIR) $@
+	@echo "embedded std --> $@"
+
+$(BUILDDIR)/std_src.o: $(STDDATA)
 
 -include $(DEPS)
 

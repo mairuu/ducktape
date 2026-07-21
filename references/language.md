@@ -229,14 +229,57 @@ not the defining module was imported.
 A cycle in the import graph is an error, reported with the chain of modules
 involved.
 
-`std::` is a reserved namespace over the built-ins below; it never touches the
-filesystem, so a local `std.dt` is unreachable. Its intermediate segments are
-not modelled — `std::io::print` and `std::print` both name the same builtin.
+## The standard library
+
+`std::` names the standard library, which is **written in ducktape** — the
+`.dt` sources live in `std/` and are mirrored into the compiler binary, so
+`use std::cmp;` needs no install path, environment variable or search
+directory. `std::` never touches the filesystem, so a local `std.dt` is
+unreachable.
+
+```
+use std::cmp::{Ord, max, min, clamp};
+```
+
+A std module is an ordinary module in every other respect: it is deduplicated,
+takes part in the dependency graph, honours `pub`, and is loaded **only if
+some `use` names it** — a program that ignores std pays nothing. Naming a std
+module that does not exist is an error listing the ones that do.
+
+### `std::cmp`
+
+```
+pub trait Ord {
+    fun cmp(self, other: Self) -> Int;      # <0 before, 0 equal, >0 after
+    fun lt(self, other: Self) -> Bool       # defaults, derived from cmp
+    fun gt / le / ge
+}
+
+pub fun max<T: Ord>(a: T, b: T) -> T
+pub fun min<T: Ord>(a: T, b: T) -> T
+pub fun clamp<T: Ord>(v: T, lo: T, hi: T) -> T
+```
+
+`Ord` is implemented for `Int` and `Float`, which is the point worth noticing:
+**a trait can be implemented for a primitive**, so the standard library extends
+the built-in types with exactly the machinery user code uses. Your own types
+join the same trait and `max`/`min` work on them unchanged
+(`tests/run/std_cmp.dt`).
+
+`Ord` is deliberately *not* object-safe — `other: Self` means a caller must
+know the concrete type — so it is a bound, never a `dyn Ord`. That is the rule
+working as designed: object safety is only demanded where `dyn` is written.
 
 ## Built-ins
 
 `print<T>(value)` — prints any value followed by a newline, returns `()`.
-Registered in every module; the only builtin so far.
+Registered in every module; the only builtin so far, and the only thing that
+does not need importing.
+
+`use std::io::print;` is accepted and does nothing — it predates the embedded
+library and names a builtin that is already in scope. It is the one `std::`
+path with no module behind it, and goes away when `print` becomes a real std
+module.
 
 ## Not yet implemented
 

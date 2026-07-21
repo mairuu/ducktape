@@ -1,0 +1,47 @@
+# std::cmp — the first standard library module, and the first proof that std
+# is written in ducktape rather than bolted on in C. `impl Ord for Int` is what
+# makes it possible: a trait can extend a primitive.
+#> 9
+#> 3
+#> 10
+#> 0
+#> 1.5
+#> 0.5
+#> true
+#> false
+#> true
+#> true
+#> 7
+#> -4
+
+use std::cmp::{Ord, max, min, clamp};
+
+fun main() {
+    print(max(3, 9));
+    print(min(3, 9));
+    print(clamp(12, 0, 10));
+    print(clamp(0 - 5, 0, 10));
+
+    # a second instantiation of every generic, at Float
+    print(max(1.5, 0.5));
+    print(min(1.5, 0.5));
+
+    # the inherited default bodies, dispatched on a primitive receiver
+    print(3.lt(9));
+    print(3.gt(9));
+    print(9.ge(9));
+    print(9.le(9));
+
+    # a user type joins the same trait: std's `Ord` is an ordinary trait, and
+    # `max` monomorphises for it exactly as it did for Int
+    print(max(Money { cents: 7 }, Money { cents: 4 }).cents);
+    print(min(Money { cents: 0 - 4 }, Money { cents: 1 }).cents);
+}
+
+struct Money { cents: Int }
+
+impl Ord for Money {
+    fun cmp(self, other: Money) -> Int {
+        return self.cents.cmp(other.cents);
+    }
+}

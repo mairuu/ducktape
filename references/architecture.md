@@ -143,6 +143,39 @@ Trait impls are deliberately *not* module-scoped: `ImplIndex` lives on the
 `TypeChecker`, shared by every module, so an impl applies program-wide whether
 or not its module was imported.
 
+### The embedded standard library
+
+`std/*.dt` are ordinary ducktape sources, mirrored into the binary by
+`scripts/embed_std.sh` (one C string literal per line, concatenated by the
+compiler) into `build/std_data.h`, which `src/std_src.c` includes as its table.
+The `.dt` files stay the source of truth and remain directly runnable; the
+generated header lives in `build/`, so `make format` never touches it and
+`make clean` removes it.
+
+The design rule is that **a std module is an ordinary `Module`**. `use std::cmp`
+resolves to a registry entry exactly like a user import does, and therefore gets
+dedup, a dependency-graph edge, cycle detection, topological order, `pub`
+checking, linking and codegen for free. `Module.file_path` is used for only
+three things — the registry key (`modreg_find`/`modreg_add`), the diagnostic
+label (`diag_report`), and `read_file` — and only the third needs a real path.
+
+So the entire difference is **one branch in `mod_parse`**: a `<std>/…` key takes
+its source from `std_module_source`, anything else from `read_file`. Pointing
+that branch at a directory is all it would take to make std filesystem-backed;
+nothing else in the pipeline can tell the difference. `std_mod_key` builds the
+key as `<std>/<name>.dt`, and the angle brackets are what guarantee it cannot
+collide with a user path: a real one is a base dir plus identifier segments, and
+an identifier cannot contain `<`. The key also ignores `base_dir`, so two
+modules importing std from different directories dedup to one entry.
+
+`std::io` is the one `std::` path with no module behind it. `print` is
+registered into every module's scope by `tc_register_builtins`, so a real
+`std::io` exporting it would collide with the builtin already bound under that
+name — hence the surviving `is_std` no-op in `mod_collect_imports`,
+`compiler.c` and `tc_link_imports`. Every *other* unknown `std::` name is now a
+diagnostic listing the embedded modules, where it used to be a silent no-op
+that surfaced later as "undefined variable".
+
 ### Types and inference
 
 `Type` (`include/ast.h`) is a tagged union; structural types are interned so
