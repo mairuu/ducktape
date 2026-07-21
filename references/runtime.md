@@ -1,8 +1,8 @@
 # ducktape — runtime (codegen + VM)
 
 `./build/ducktape --run file.dt` compiles the checked AST to bytecode and
-executes `main()`. Entry: `compiler_execute` (`src/compiler.c`) →
-`codegen_module` (`src/codegen.c`) → `vm_run` (`src/vm.c`). `--gc-stress`
+executes `main()`. Entry: `compiler_execute` (`src/compiler.c`) → `exe_link`
+then `codegen_module` per module (`src/codegen.c`) → `vm_run` (`src/vm.c`). `--gc-stress`
 collects on every heap allocation instead of on the usual size threshold —
 useful for shaking out missed GC roots; not part of `make test` since it's
 too slow to run every time.
@@ -43,7 +43,7 @@ bytes + constant pool (≤256 consts, u8 index). Operands: u8 unless noted.
 | `OP_CONST` `OP_UNIT` `OP_TRUE` `OP_FALSE` | push |
 | `OP_POP` `OP_POPN n` `OP_SLIDE n` | SLIDE drops n values *beneath* the top — how a block discards its locals while keeping its tail value |
 | `OP_GET_LOCAL` `OP_SET_LOCAL` | frame-relative slot; SET peeks (assignment is an expression) |
-| `OP_GET_GLOBAL` | pushes `VAL_FUN` — top-level funs and impl methods share one slot space: `slot < fun_count` indexes `module->funs`, the rest indexes `module->methods[slot - fun_count]` |
+| `OP_GET_GLOBAL` | pushes `VAL_FUN` — one program-wide slot space over every module's top-level funs and impl methods: `exe->globals[slot]` (see "Linking") |
 | `OP_CLOSURE const, n` `, then n×(is_local, idx)` | reads the closure's `FunDef` from constant `const` (a `VAL_FUN`), builds an `ObjClosure` capturing `n` upvalues, pushes it — see "Closures & upvalues" |
 | `OP_GET_UPVALUE` `OP_SET_UPVALUE` | index into the running closure's upvalue array, reading/writing through the (open or closed) cell; SET peeks |
 | `OP_CLOSE_UPVALUE slot` | closes every open upvalue whose stack slot is at/above `base + slot`, right before those locals are popped |
@@ -104,12 +104,14 @@ runtime for `+` concat (`heap_concat`) and interpolation (`OP_INTERP`,
 **Collection** is mark-sweep, triggered from `heap_alloc` (the sole entry
 point that grows `bytes_allocated`) once it crosses `next_gc` (starts at
 1 MiB, doubles `bytes_allocated` after each cycle), or unconditionally under
-`--gc-stress`. Roots: every compiled function's *and method's* chunk
-constant pool (scanned directly off `Heap.module`'s `funs[]`, `methods[]`,
-*and* `closures[]`, so constants need no special "immortal" case — each has
-its own chunk with its own constants; nested closure `FunDef`s aren't
-addressable by `OP_GET_GLOBAL`, so codegen appends them to `module->closures`
-purely to keep their constant pools rooted) plus the VM's live value stack
+`--gc-stress`. Roots: every compiled chunk's constant pool, scanned directly
+off `Heap.exe`'s `globals[]` *and* `closures[]` (so constants need no special
+"immortal" case — each function has its own chunk with its own constants;
+nested closure `FunDef`s are in no slot space, so codegen appends them to
+`exe->closures` purely to keep their constant pools rooted). Because those
+tables are program-wide, a constant interned inside a *dependency* module's
+method is rooted just like the root module's — the whole point of linking
+before the first chunk is compiled. Plus the VM's live value stack
 *and its open-upvalue list*, reached through `Heap.mark_roots` — a
 function pointer `vm_run` installs on entry and clears on every return path
 (`VM_RETURN` macro), so a collection during codegen (no VM running yet) only
@@ -235,9 +237,8 @@ filled them in (method items only, skipping assoc-type items) — the same
 implicit pairing the checker already relies on elsewhere.
 
 Methods and top-level functions share one `OP_GET_GLOBAL` slot space
-(`codegen_module` assigns method slots right after `fun_count`, and
-populates `Module.methods` — see the bytecode table above), so calling one
-needs no new opcode:
+(`exe_link` numbers a module's methods right after its funs — see "Linking"),
+so calling one needs no new opcode:
 
 - `obj.method(args)` (`compile_method_call`): the checker elides `self` from
   `mc->args` (`mc->object` holds it instead) and validates arguments against
@@ -336,25 +337,57 @@ process exit 1. The checker guarantees operand kinds, so opcode handlers
 don't re-validate types (bounds are the one runtime-only check, since array
 lengths aren't static).
 
-## Multiple modules
+## Linking
 
-A program spanning more than one module is rejected in `compiler_execute`,
-before codegen, with the usual "... is not supported by the VM yet"
-diagnostic. The obstruction is slot numbering: `OP_GET_GLOBAL` takes a
-one-byte operand into *one* module's `funs[]`/`methods[]`, and `codegen_module`
-assigns those slots per module, so two modules both number their globals from
-zero. `Heap.module` is likewise a single module, so the GC's constant-pool root
-scan only covers that one.
+A program is every module reachable from the root file, and a chunk compiled
+from one module routinely names a definition from another — an imported
+function, a struct whose constructor it calls. But every slot operand is a
+single byte, so it cannot mean "index into my own module": `OP_GET_GLOBAL 3`
+has to identify one function in the whole program.
 
-Making it run needs a link step that flattens every module's
-`funs`/`methods`/`closures` into one program-wide slot space (and widens the
-GC roots to match) — the natural next runtime milestone. `use std::..` never
-creates a module, so single-file programs are unaffected by the restriction.
+`exe_link` (`src/codegen.c`) builds that flat namespace into an `Executable`
+(`include/object.h`) before any code is generated:
+
+| Table | Contents | Operand of |
+|---|---|---|
+| `globals[]` | per module: its top-level funs, then its impl methods | `OP_GET_GLOBAL` |
+| `structs[]` | every module's structs | `OP_STRUCT` |
+| `enums[]` | every module's enums (variant tags stay per enum) | `OP_ENUM` |
+| `closures[]` | nested closure `FunDef`s, appended during codegen | nothing — GC roots only |
+
+Each definition's assigned index is written back into its `slot`, so codegen
+only ever emits `def->slot` and never asks which module a definition came
+from. Modules are numbered in topological order; that is cosmetic (every slot
+exists before the first chunk is compiled) but keeps a stack trace readable.
+More than 256 functions, structs, or enums exceeds the operand width and is
+reported as an error against the program rather than any one declaration.
+
+Two things must happen in this order, and both are why linking is a separate
+step rather than something `codegen_module` does on its way past:
+
+- **All slots before any chunk.** Compiling module A can emit a slot for a
+  definition in module B, so B's numbers must already be final — a
+  compile-as-you-go scheme would need a patch-up pass over emitted bytecode.
+- **The heap roots off the linked tables.** Codegen interns string literals,
+  which can trigger a collection while most chunks are still empty. A `FunDef`
+  in the tables with a NULL chunk is a root with nothing to mark; one missing
+  from the tables is not a root at all, and its already-interned constants
+  would be swept.
+
+Codegen then runs per module (in topological order, purely so diagnostics
+come out dependency-first), each reporting against its own source file. A
+construct the VM doesn't support fails the whole program even in a module the
+root never calls into — codegen compiles everything, and generic functions
+still have no runtime representation.
+
+Name resolution stays module-local: a bare `foo()` is compiled from
+`ExprPath.resolved_fun`, the `FunDef` the *checker* picked, because the name
+may be an alias (`use lib::helper as h;`) or belong to another module
+entirely — a search over the enclosing module's own `funs[]` would find
+neither.
 
 ## Future (design intent, not implemented)
 
-- **Runtime module linking:** flatten the per-module slot spaces as above, so
-  a multi-module program can execute.
 - **Bytecode serialization** (the module system now exists): flat binary —
   magic/version, string table, recursive chunk records (name, arity, code,
   tagged constants, nested functions). Keep the constant pool free of raw

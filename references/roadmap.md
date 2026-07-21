@@ -240,16 +240,49 @@
     path resolves by its last segment"; a qualified trait bound is now an error
     pointing at `use`, matching what `resolve_path` already did for types.
 
+- **Runtime module linking (milestone 8)** — a multi-module program now runs.
+  Every slot operand is one byte, so it cannot mean "index into my own
+  module": `exe_link` (`src/codegen.c`) flattens every module's funs, impl
+  methods, structs and enums into one program-wide `Executable`
+  (`include/object.h`) and writes each definition's index back into its
+  `slot`, so codegen only ever emits `def->slot`. `Module.methods`/`closures`
+  and `Heap.module` are gone — the heap roots off `exe->globals`/`closures`,
+  and `vm_run` takes the `Executable` instead of a `Module`. Design:
+  `runtime.md` "Linking".
+
+  The ordering constraints are the whole design:
+  - **Linking is a separate step, before codegen, not something codegen does
+    on the way past.** Compiling module A can emit a slot for a definition in
+    module B, so B's numbering must be final first; the alternative is a
+    patch-up pass over already-emitted bytecode.
+  - **The heap must root off the linked tables, not the module being
+    compiled.** Codegen interns string literals, so a collection can happen
+    with most chunks still empty. A `FunDef` in the tables with a NULL chunk
+    is a root with nothing to mark — harmless; one *missing* from the tables
+    is not a root at all, and its already-interned constants get swept. This
+    is the same class of bug as the 5c-ii one where `heap_collect` never
+    walked `module->methods[]`, one level up.
+  - Codegen still runs per module so each diagnostic is reported against its
+    own source (`tests/fail_run/mod_unsupported`).
+
+  One checker change was required, and it fixed a latent hole rather than
+  adding a feature: codegen resolved a bare `foo()` by searching the enclosing
+  module's `funs[]` by name, which finds neither an imported function nor an
+  alias (`use lib::helper as h`). Single-segment `EXPR_PATH` resolution now
+  records the `FunDef` it picked in `ExprPath.resolved_fun` — the same field
+  `resolve_callee` already filled for qualified paths — and codegen reads that
+  instead of searching. The name search survives only as the guard that
+  decides whether a local `print` shadows the builtin.
+
+  Also: `scripts/run_tests.sh` never globbed `tests/run/*/main.dt`, so a
+  multi-file test could only ever be a compile-only one.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
 milestone (~900 lines).
 
-1. **Runtime module linking**: flatten every module's `funs`/`methods`/
-   `closures` into one program-wide slot space (`OP_GET_GLOBAL` is a one-byte
-   index into a single module today) and widen the GC roots to match, so a
-   multi-module program can actually `--run`. Sketch in `runtime.md`.
-2. **Bytecode serialization + REPL** — format sketch in `runtime.md`.
+1. **Bytecode serialization + REPL** — format sketch in `runtime.md`.
 
 ## Known warts to clean up opportunistically
 
@@ -261,7 +294,9 @@ milestone (~900 lines).
 - `EXPR_ASSOCIATED_CALL` is dead AST — remove or wire up (bare associated
   calls now work without it, via `ExprPath.resolved_fun` — see 5c-ii above)
 - codegen rejects *any* generic function/method/impl, even uncalled ones,
-  under `--run` (needs monomorphisation or boxed generics eventually)
+  under `--run` (needs monomorphisation or boxed generics eventually) — now
+  program-wide, so one generic function in a dependency fails a program that
+  never calls it
 - trait impls are program-global: an impl applies even if its module was never
   imported (`ImplIndex` lives on the `TypeChecker`, not the `Module`)
 - no `pub use` re-export, no glob `use a::*`, no module-qualified paths
@@ -269,3 +304,5 @@ milestone (~900 lines).
   per-item at module granularity only
 - module dedup is lexical, so one file reached by two different spellings
   (a symlink, say) would load twice and collide
+- the linked slot spaces are one byte wide, so 256 functions/structs/enums is
+  a hard program-wide ceiling (reported, not silently truncated)

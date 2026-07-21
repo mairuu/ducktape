@@ -243,18 +243,34 @@ bool compiler_run(Compiler *c, const char *path) {
   return true;
 }
 
-// compile the checked root module to bytecode and run its `main`.
+// compile every checked module to bytecode and run the root module's `main`.
 // requires a successful compiler_run first.
 bool compiler_execute(Compiler *c, bool gc_stress) {
   Module *m = c->root_module;
 
-  Heap heap;
-  heap_init(&heap, m, gc_stress);
+  // linking precedes codegen, not the other way round: a chunk can name a
+  // definition from any module, so every slot must exist before the first
+  // instruction is emitted — and the heap roots off the linked tables, since
+  // codegen interns strings as it goes and may collect mid-compile.
+  Executable exe = {0};
+  if (!exe_link(&exe, &c->mod_reg, &c->al)) {
+    fprintf(stderr, "compilation failed during linking.\n");
+    return false;
+  }
 
-  diag_clear(&c->diags);
-  bool ok = codegen_module(m, &heap, &c->diags, &c->al);
-  if (diag_has_diags(&c->diags)) {
-    diag_report(&c->diags, m->file_path.chars, m->source.chars, stderr);
+  Heap heap;
+  heap_init(&heap, &exe, gc_stress);
+
+  bool ok = true;
+  for (int i = 0; i < c->mod_reg.module_count; i++) {
+    Module *mod = modreg_topo(&c->mod_reg, i);
+    diag_clear(&c->diags);
+
+    ok &= codegen_module(mod, &exe, &heap, &c->diags, &c->al);
+    // per module, so a diagnostic is reported against its own source.
+    if (diag_has_diags(&c->diags)) {
+      diag_report(&c->diags, mod->file_path.chars, mod->source.chars, stderr);
+    }
   }
   if (!ok) {
     fprintf(stderr, "compilation failed during code generation.\n");
@@ -275,7 +291,7 @@ bool compiler_execute(Compiler *c, bool gc_stress) {
     return false;
   }
 
-  ok = vm_run(m, &heap, main_fn);
+  ok = vm_run(&exe, &heap, main_fn);
   heap_destroy(&heap);
   return ok;
 }

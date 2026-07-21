@@ -59,18 +59,6 @@ struct Module {
   FunDef **funs;
   int fun_count, fun_cap;
 
-  // impl methods, flattened; populated by codegen_module. Slots for
-  // OP_GET_GLOBAL continue past `funs` (fun_count..fun_count+method_count-1)
-  // so both share one callable-value slot space.
-  FunDef **methods;
-  int method_count;
-
-  // nested closure functions, collected by codegen. not addressable by
-  // OP_GET_GLOBAL (they're built at runtime via OP_CLOSURE), but their chunks'
-  // constant pools still need to be GC roots like every other compiled chunk.
-  FunDef **closures;
-  int closure_count, closure_cap;
-
   StructDef **structs;
   int struct_count, struct_cap;
 

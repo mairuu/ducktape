@@ -1,8 +1,0 @@
-#! expect: is not supported by the VM yet
-# type-checks cleanly; only --run rejects it, because codegen numbers globals
-# per module and there is no program-wide slot space yet.
-use lib::answer;
-
-fun main() {
-  print(answer());
-}

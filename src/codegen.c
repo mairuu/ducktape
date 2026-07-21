@@ -7,6 +7,7 @@
 #include "value.h"
 
 #include <assert.h>
+#include <stdio.h>
 #include <string.h>
 
 #define CG_MAX_LOCALS 256
@@ -42,7 +43,8 @@ typedef struct CgLoop {
 } CgLoop;
 
 typedef struct Cg {
-  Module *m;
+  Module *m;       // the module being compiled (name lookups are module-local)
+  Executable *exe; // the linked program (slot spaces, closure registry)
   Heap *heap;
   Chunk *chunk;
   DiagBag *diags;
@@ -207,19 +209,23 @@ static void cg_close_scope(Cg *cg, int from_slot) {
 }
 
 // register a nested closure's FunDef so heap_collect keeps its chunk constants
-// rooted (closures aren't in m->funs/m->methods).
+// rooted (closures are in no slot space, so exe->globals never names them).
 static void cg_register_closure(Cg *cg, FunDef *fun) {
-  Module *m = cg->m;
-  if (m->closure_count >= m->closure_cap) {
-    int new_cap = m->closure_cap == 0 ? 4 : m->closure_cap * 2;
-    m->closures = al_realloc(cg->al, m->closures,
-                             sizeof(FunDef *) * (size_t)m->closure_cap,
-                             sizeof(FunDef *) * (size_t)new_cap);
-    m->closure_cap = new_cap;
+  Executable *exe = cg->exe;
+  if (exe->closure_count >= exe->closure_cap) {
+    int new_cap = exe->closure_cap == 0 ? 4 : exe->closure_cap * 2;
+    exe->closures = al_realloc(cg->al, exe->closures,
+                               sizeof(FunDef *) * (size_t)exe->closure_cap,
+                               sizeof(FunDef *) * (size_t)new_cap);
+    exe->closure_cap = new_cap;
   }
-  m->closures[m->closure_count++] = fun;
+  exe->closures[exe->closure_count++] = fun;
 }
 
+// does this module declare a top-level `name` of its own? Only the print
+// shadow guard asks — a *reference* to a function compiles from the FunDef
+// the checker resolved (`ExprPath.resolved_fun`), which a name search here
+// could not reproduce for an import or an alias.
 static FunDef *cg_find_module_fun(Cg *cg, StringView name) {
   for (int i = 0; i < cg->m->fun_count; i++) {
     if (sv_equal(cg->m->funs[i]->name, name)) {
@@ -1190,7 +1196,11 @@ static void compile_expr(Cg *cg, Expr *expr) {
       break;
     }
 
-    FunDef *fun = cg_find_module_fun(cg, name);
+    // not a local: a first-class reference to a function, which may live in
+    // another module (`use lib::helper; helper()`), possibly under an alias.
+    // The checker's answer is on the node — a name search here would miss
+    // both cases.
+    FunDef *fun = expr->as.path_expr.resolved_fun;
     if (fun != NULL) {
       emit2(cg, OP_GET_GLOBAL, (uint8_t)fun->slot);
       break;
@@ -1266,9 +1276,9 @@ static void compile_expr(Cg *cg, Expr *expr) {
 // shared by top-level functions and impl methods: `fun` is the resolved
 // target (its `chunk` gets filled in), `body` and `span` come from whichever
 // Decl actually holds the AST (the top-level DeclFun, or an impl item's).
-static void compile_fun_body(Module *m, Heap *heap, FunDef *fun, Expr *body,
-                             Span span, DiagBag *diags, Allocator *al,
-                             bool *ok) {
+static void compile_fun_body(Module *m, Executable *exe, Heap *heap,
+                             FunDef *fun, Expr *body, Span span, DiagBag *diags,
+                             Allocator *al, bool *ok) {
   if (fun->type_param_count > 0) {
     // generic functions/methods need monomorphisation or boxed generics;
     // neither exists yet
@@ -1279,6 +1289,7 @@ static void compile_fun_body(Module *m, Heap *heap, FunDef *fun, Expr *body,
   }
 
   Cg cg = {.m = m,
+           .exe = exe,
            .heap = heap,
            .diags = diags,
            .al = al,
@@ -1312,6 +1323,7 @@ static void compile_closure(Cg *cg, Expr *expr) {
   assert(fun != NULL && "closure not resolved before codegen");
 
   Cg child = {.m = cg->m,
+              .exe = cg->exe,
               .heap = cg->heap,
               .diags = cg->diags,
               .al = cg->al,
@@ -1340,11 +1352,11 @@ static void compile_closure(Cg *cg, Expr *expr) {
   }
 }
 
-static void compile_fun(Module *m, Heap *heap, Decl *decl, DiagBag *diags,
-                        Allocator *al, bool *ok) {
+static void compile_fun(Module *m, Executable *exe, Heap *heap, Decl *decl,
+                        DiagBag *diags, Allocator *al, bool *ok) {
   DeclFun *fun_decl = &decl->as.fun_decl;
-  compile_fun_body(m, heap, fun_decl->def, fun_decl->body, decl->span, diags,
-                   al, ok);
+  compile_fun_body(m, exe, heap, fun_decl->def, fun_decl->body, decl->span,
+                   diags, al, ok);
 }
 
 // impl methods aren't linked back to a FunDef the way top-level DeclFuns are
@@ -1353,8 +1365,8 @@ static void compile_fun(Module *m, Heap *heap, Decl *decl, DiagBag *diags,
 // FunDef is threaded through explicitly, paired up by iterating in the same
 // order resolve_impl_decl used to fill `impl_def->methods[]` (method items,
 // skipping assoc-type items).
-static void compile_impl(Module *m, Heap *heap, Decl *decl, DiagBag *diags,
-                         Allocator *al, bool *ok) {
+static void compile_impl(Module *m, Executable *exe, Heap *heap, Decl *decl,
+                         DiagBag *diags, Allocator *al, bool *ok) {
   DeclImpl *impl_decl = &decl->as.impl_decl;
   ImplDef *impl_def = impl_decl->def;
 
@@ -1375,63 +1387,98 @@ static void compile_impl(Module *m, Heap *heap, Decl *decl, DiagBag *diags,
     }
     FunDef *fun = impl_def->methods[method_idx++].fun;
     DeclFun *fun_decl = &item->fun_decl->as.fun_decl;
-    compile_fun_body(m, heap, fun, fun_decl->body, item->span, diags, al, ok);
+    compile_fun_body(m, exe, heap, fun, fun_decl->body, item->span, diags, al,
+                     ok);
   }
 }
 
-bool codegen_module(Module *m, Heap *heap, DiagBag *diags, Allocator *al) {
-  // globals are numbered per module below, so a program built from several
-  // modules has no single slot space to run in. `use std::..` never creates a
-  // module, so single-file programs never trip this.
-  if (m->import_count > 0) {
-    for (int i = 0; i < m->import_count; i++) {
-      if (m->imports[i].is_std) {
-        continue;
+// ── linking ──────────────────────────────────────────────────────────────────
+
+#define CG_MAX_SLOTS 256 // every slot operand is one byte
+
+// one shared complaint for the three slot spaces. No span: outgrowing the
+// operand width is a property of the whole program, not of any one
+// declaration, so there is nothing honest to point at.
+static bool exe_too_many(const char *what, int count) {
+  fprintf(stderr,
+          "error: the program has %d %s; the VM addresses at most %d "
+          "(one operand byte)\n",
+          count, what, CG_MAX_SLOTS);
+  return false;
+}
+
+bool exe_link(Executable *exe, ModuleRegistry *reg, Allocator *al) {
+  // pass 1: size the tables. impl methods share the globals space with
+  // top-level funs, so OP_GET_GLOBAL addresses either with one operand.
+  int globals = 0, structs = 0, enums = 0;
+  for (int i = 0; i < reg->module_count; i++) {
+    Module *m = reg->modules[i];
+    globals += m->fun_count;
+    for (int j = 0; j < m->impl_count; j++) {
+      globals += m->impls[j]->method_count;
+    }
+    structs += m->struct_count;
+    enums += m->enum_count;
+  }
+  if (globals > CG_MAX_SLOTS) {
+    return exe_too_many("functions and methods", globals);
+  }
+  if (structs > CG_MAX_SLOTS) {
+    return exe_too_many("structs", structs);
+  }
+  if (enums > CG_MAX_SLOTS) {
+    return exe_too_many("enums", enums);
+  }
+
+  exe->globals = al_alloc_zero(al, sizeof(FunDef *) * (size_t)globals);
+  exe->structs = al_alloc_zero(al, sizeof(StructDef *) * (size_t)structs);
+  exe->enums = al_alloc_zero(al, sizeof(EnumDef *) * (size_t)enums);
+
+  // pass 2: hand out the slots, in topological order — a dependency is
+  // numbered before anything that imports it, which is only cosmetic (all
+  // slots exist before any chunk is compiled) but keeps a trace readable.
+  for (int i = 0; i < reg->module_count; i++) {
+    Module *m = modreg_topo(reg, i);
+
+    for (int j = 0; j < m->fun_count; j++) {
+      m->funs[j]->slot = exe->global_count;
+      exe->globals[exe->global_count++] = m->funs[j];
+    }
+    for (int j = 0; j < m->impl_count; j++) {
+      ImplDef *impl = m->impls[j];
+      for (int k = 0; k < impl->method_count; k++) {
+        FunDef *fun = impl->methods[k].fun;
+        fun->slot = exe->global_count;
+        exe->globals[exe->global_count++] = fun;
       }
-      cg_unsupported(diags, m->imports[i].decl->as.use_decl.path.span,
-                     "a program spanning multiple modules");
-      return false;
+    }
+
+    for (int j = 0; j < m->struct_count; j++) {
+      m->structs[j]->slot = exe->struct_count;
+      exe->structs[exe->struct_count++] = m->structs[j];
+    }
+    for (int j = 0; j < m->enum_count; j++) {
+      EnumDef *def = m->enums[j];
+      def->slot = exe->enum_count;
+      exe->enums[exe->enum_count++] = def;
+      for (int k = 0; k < def->variant_count; k++) {
+        def->variants[k].tag = (uint8_t)k; // tags are per enum, not global
+      }
     }
   }
 
-  for (int i = 0; i < m->fun_count; i++) {
-    m->funs[i]->slot = i;
-  }
-  for (int i = 0; i < m->struct_count; i++) {
-    m->structs[i]->slot = i;
-  }
-  for (int i = 0; i < m->enum_count; i++) {
-    m->enums[i]->slot = i;
-    for (int j = 0; j < m->enums[i]->variant_count; j++) {
-      m->enums[i]->variants[j].tag = (uint8_t)j;
-    }
-  }
+  return true;
+}
 
-  // impl methods continue the funs' slot space so OP_GET_GLOBAL can address
-  // either with one operand byte (see vm.c).
-  int method_count = 0;
-  for (int i = 0; i < m->impl_count; i++) {
-    method_count += m->impls[i]->method_count;
-  }
-  m->methods = al_alloc_zero(al, sizeof(FunDef *) * (size_t)method_count);
-  m->method_count = method_count;
-  int slot = m->fun_count, method_slot = 0;
-  for (int i = 0; i < m->impl_count; i++) {
-    ImplDef *impl = m->impls[i];
-    for (int j = 0; j < impl->method_count; j++) {
-      FunDef *fun = impl->methods[j].fun;
-      fun->slot = slot++;
-      m->methods[method_slot++] = fun;
-    }
-  }
-
+bool codegen_module(Module *m, Executable *exe, Heap *heap, DiagBag *diags,
+                    Allocator *al) {
   bool ok = true;
   for (int i = 0; i < m->ast->decl_count; i++) {
     Decl *decl = m->ast->decls[i];
     if (decl->kind == DECL_FUN) {
-      compile_fun(m, heap, decl, diags, al, &ok);
+      compile_fun(m, exe, heap, decl, diags, al, &ok);
     } else if (decl->kind == DECL_IMPL) {
-      compile_impl(m, heap, decl, diags, al, &ok);
+      compile_impl(m, exe, heap, decl, diags, al, &ok);
     }
     // structs/enums/traits: nothing executable of their own
   }

@@ -92,7 +92,7 @@ check_run() {
     pass=$((pass + 1))
 }
 
-for f in "$ROOT"/tests/run/*.dt; do
+for f in "$ROOT"/tests/run/*.dt "$ROOT"/tests/run/*/main.dt; do
     [ -e "$f" ] || continue
     check_run "$f"
 done

@@ -1,0 +1,6 @@
+# generic functions have no runtime representation yet. The diagnostic must
+# come from *this* file: codegen now walks every module, so it has to report
+# each one against its own source.
+pub fun identity<T>(v: T) -> T {
+  return v;
+}

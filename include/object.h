@@ -6,11 +6,41 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-typedef struct Module Module;
 typedef struct Heap Heap;
 typedef struct StructDef StructDef;
 typedef struct EnumDef EnumDef;
 typedef struct VariantDef VariantDef;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Executable — the linked program: every module's definitions in one slot space
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// OP_GET_GLOBAL/OP_STRUCT/OP_ENUM each carry a single operand byte, and a
+// chunk compiled from one module routinely names a definition from another
+// (an imported function, a struct built by its constructor), so the operand
+// cannot mean "index into my module". `exe_link` flattens every module's
+// definitions into these program-wide tables — in topological order, so a
+// dependency's slots are stable before anything that uses them compiles —
+// and writes the assigned index back into each def's `slot`. Codegen then
+// only ever emits `def->slot`, whichever module the def came from.
+typedef struct {
+  // OP_GET_GLOBAL operand space: each module's top-level funs, then its impl
+  // methods, then the next module's.
+  FunDef **globals;
+  int global_count;
+
+  StructDef **structs; // OP_STRUCT operand space
+  int struct_count;
+
+  EnumDef **enums; // OP_ENUM operand space
+  int enum_count;
+
+  // nested closure functions, appended by codegen. Not addressable by any
+  // opcode (they're built at runtime via OP_CLOSURE, from a chunk constant),
+  // but their chunks' constant pools still need to be GC roots.
+  FunDef **closures;
+  int closure_count, closure_cap;
+} Executable;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Heap objects
@@ -121,7 +151,7 @@ static inline ObjEnum *val_as_enum(Value v) { return (ObjEnum *)v.as.obj; }
 // Heap — owns every runtime object; mark-sweep collected
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// extra roots beyond the module's chunk constants (the VM registers its
+// extra roots beyond the program's chunk constants (the VM registers its
 // value stack here while running).
 typedef void (*HeapMarkRootsFn)(void *ctx);
 
@@ -138,12 +168,17 @@ struct Heap {
   size_t next_gc;
   bool stress; // collect before every allocation (--gc-stress)
 
-  Module *module;             // compiled chunks' constant pools are roots
+  Executable *exe;            // compiled chunks' constant pools are roots
   HeapMarkRootsFn mark_roots; // NULL while no VM is running — allocation
   void *mark_roots_ctx;       // never triggers a collection then
 };
 
-void heap_init(Heap *h, Module *module, bool stress);
+// `exe` must already be linked (its tables sized and filled) when the heap is
+// created: codegen interns strings as it compiles, so a collection can happen
+// with only some chunks filled in — a FunDef whose chunk is still NULL is a
+// root with nothing to mark, but one missing from the tables is not a root at
+// all.
+void heap_init(Heap *h, Executable *exe, bool stress);
 void heap_destroy(Heap *h);
 
 // each constructor may trigger a collection *before* the new object exists,

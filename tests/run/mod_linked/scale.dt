@@ -1,0 +1,14 @@
+# a non-root module that imports one of its own, and whose function returns a
+# closure — the closure's FunDef is registered in the program's closure list,
+# not this module's.
+use shapes::rect::Rect;
+
+pub fun doubler() -> fun(Int) -> Int {
+  var factor = 2;
+  return |n| => n * factor;
+}
+
+pub fun grow(r: Rect) -> Rect {
+  var f = doubler();
+  return Rect::new(f(r.w), f(r.h));
+}

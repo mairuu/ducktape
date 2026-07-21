@@ -182,7 +182,6 @@ Registered in every module; the only builtin so far.
 | calling an inherited default method under `--run` | type-checks, but the VM has no chunk for it (the body would need monomorphising against the concrete self) — "calling an inherited default method is not supported by the VM yet" |
 | extra (non-trait) methods in a trait impl | tolerated as inherent methods (Rust rejects them) |
 | trait objects (`dyn Trait` values) | a trait names a type only in bound / `Self` position; there is no dynamic dispatch |
-| a multi-module program under `--run` | type-checks, but globals are numbered per module so there is no program-wide slot space — "a program spanning multiple modules is not supported by the VM yet" (`runtime.md`) |
 | `mod` declarations | no such keyword; `use` is what pulls a file in |
 | `pub use` re-export | imports are not transitive; a third module can't reach through an importer |
 | glob imports (`use a::*`) | not parsed; name each item |

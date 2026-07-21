@@ -1,0 +1,36 @@
+# a dependency with everything that needs a program-wide slot or a GC root of
+# its own: a struct, an enum, impl methods, and string constants living in
+# *this* module's chunks (interpolation text segments).
+
+pub struct Rect {
+  w: Int,
+  h: Int,
+}
+
+pub enum Kind {
+  Square,
+  Oblong,
+}
+
+impl Rect {
+  fun new(w: Int, h: Int) -> Rect {
+    return Rect { w: w, h: h };
+  }
+
+  fun area(self) -> Int {
+    return self.w * self.h;
+  }
+
+  # the interpolation's text segments are constants of this method's chunk;
+  # the GC only reaches them through the linked globals table.
+  fun label(self) -> String {
+    return "rect {self.w}x{self.h}";
+  }
+
+  fun kind(self) -> Kind {
+    if self.w == self.h {
+      return Kind::Square;
+    }
+    return Kind::Oblong;
+  }
+}

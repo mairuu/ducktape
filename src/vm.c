@@ -21,7 +21,7 @@ typedef struct {
 } Frame;
 
 typedef struct {
-  Module *m;
+  Executable *exe;
   Heap *heap;
 
   Value stack[STACK_MAX];
@@ -128,7 +128,7 @@ static ObjString *stringify(Heap *heap, Value v) {
   return heap_intern(heap, buf, len);
 }
 
-bool vm_run(Module *m, Heap *heap, FunDef *entry) {
+bool vm_run(Executable *exe, Heap *heap, FunDef *entry) {
   assert(entry->chunk && "entry function was not compiled");
   if (entry->param_count != 0) {
     fprintf(stderr, "error: '" SV_FMT "' must take no parameters to be run\n",
@@ -136,7 +136,7 @@ bool vm_run(Module *m, Heap *heap, FunDef *entry) {
     return false;
   }
 
-  Vm vm = {.m = m,
+  Vm vm = {.exe = exe,
            .heap = heap,
            .sp = NULL,
            .frame_count = 0,
@@ -201,13 +201,9 @@ bool vm_run(Module *m, Heap *heap, FunDef *entry) {
       frame->base[READ_BYTE()] = peek(&vm, 0);
       break;
     case OP_GET_GLOBAL: {
-      uint8_t slot = READ_BYTE();
-      // top-level funs occupy [0, fun_count); impl methods continue the same
-      // slot space right after, in [fun_count, fun_count + method_count).
-      FunDef *fun = slot < vm.m->fun_count
-                        ? vm.m->funs[slot]
-                        : vm.m->methods[slot - vm.m->fun_count];
-      push(&vm, val_fun(fun));
+      // one program-wide slot space over every module's funs and impl
+      // methods, handed out by exe_link.
+      push(&vm, val_fun(vm.exe->globals[READ_BYTE()]));
       break;
     }
 
@@ -554,7 +550,7 @@ bool vm_run(Module *m, Heap *heap, FunDef *entry) {
     }
 
     case OP_STRUCT: {
-      StructDef *def = vm.m->structs[READ_BYTE()];
+      StructDef *def = vm.exe->structs[READ_BYTE()];
       Value *elems = vm.sp - def->field_count; // still-live roots
       ObjStruct *s = heap_struct(vm.heap, def);
       for (int i = 0; i < def->field_count; i++) {
@@ -568,7 +564,7 @@ bool vm_run(Module *m, Heap *heap, FunDef *entry) {
     case OP_ENUM: {
       uint8_t enum_slot = READ_BYTE();
       uint8_t tag = READ_BYTE();
-      VariantDef *variant = &vm.m->enums[enum_slot]->variants[tag];
+      VariantDef *variant = &vm.exe->enums[enum_slot]->variants[tag];
       Value *elems = vm.sp - variant->field_count; // still-live roots
       ObjEnum *e = heap_enum(vm.heap, variant);
       for (int i = 0; i < variant->field_count; i++) {

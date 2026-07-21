@@ -1,0 +1,35 @@
+# a linked multi-module program exercising every slot space at once: globals
+# (imported funs, methods of an impl in another module), structs, and enums —
+# all reached from chunks compiled in a different module than the definition.
+# `shapes::rect` is a diamond (main and scale both reach it).
+#> 6
+#> rect 2x3
+#> oblong
+#> 24
+#> square
+#> 12
+use shapes::rect::{Rect, Kind};
+use scale::grow;
+use scale::doubler as twice;
+
+fun describe(k: Kind) -> String {
+  return match k {
+    Kind::Square => "square",
+    Kind::Oblong => "oblong",
+  };
+}
+
+fun main() {
+  var r = Rect::new(2, 3);
+  print(r.area());
+  print(r.label());
+  print(describe(r.kind()));
+
+  # the closure comes back across a module boundary and is called here
+  var big = grow(r);
+  print(big.area());
+  print(describe(Rect::new(4, 4).kind()));
+
+  var f = twice();
+  print(f(6));
+}

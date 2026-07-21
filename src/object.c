@@ -1,7 +1,6 @@
 #include "object.h"
 #include "ast.h"
 #include "chunk.h"
-#include "module.h"
 
 #include <assert.h>
 #include <string.h>
@@ -353,15 +352,12 @@ static void mark_fun_consts(FunDef *fun) {
 
 void heap_collect(Heap *h) {
   // roots: every compiled chunk's constants, plus the VM stack if running
-  if (h->module != NULL) {
-    for (int i = 0; i < h->module->fun_count; i++) {
-      mark_fun_consts(h->module->funs[i]);
+  if (h->exe != NULL) {
+    for (int i = 0; i < h->exe->global_count; i++) {
+      mark_fun_consts(h->exe->globals[i]);
     }
-    for (int i = 0; i < h->module->method_count; i++) {
-      mark_fun_consts(h->module->methods[i]);
-    }
-    for (int i = 0; i < h->module->closure_count; i++) {
-      mark_fun_consts(h->module->closures[i]);
+    for (int i = 0; i < h->exe->closure_count; i++) {
+      mark_fun_consts(h->exe->closures[i]);
     }
   }
   if (h->mark_roots != NULL) {
@@ -402,12 +398,12 @@ void heap_collect(Heap *h) {
 
 // ── lifecycle ────────────────────────────────────────────────────────────────
 
-void heap_init(Heap *h, Module *module, bool stress) {
+void heap_init(Heap *h, Executable *exe, bool stress) {
   *h = (Heap){
       .al = heap_allocator_create(),
       .next_gc = HEAP_FIRST_GC,
       .stress = stress,
-      .module = module,
+      .exe = exe,
   };
 }
 

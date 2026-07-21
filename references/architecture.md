@@ -37,8 +37,8 @@ Notables:
 AST (`include/ast.h`): `Decl`/`Stmt`/`Expr`/`Pattern`/`TypeNode` tagged
 unions, plus semantic def tables (`FunDef`, `StructDef`, `EnumDef`,
 `TraitDef`, `ImplDef`) that later passes fill in. `Expr.resolved_type` and
-`TypeNode.resolved` are stamped by the checker; `FunDef.chunk` and the `slot`
-fields are filled by codegen. `EXPR_ASSOCIATED_CALL` is dead — the parser
+`TypeNode.resolved` are stamped by the checker; `FunDef.chunk` is filled by
+codegen and the `slot` fields by `exe_link` before it (`runtime.md`). `EXPR_ASSOCIATED_CALL` is dead — the parser
 never produces it.
 
 ## Semantic analysis (`src/sema.c`, `include/sema.h`)
@@ -225,9 +225,11 @@ for codegen, capture is flagged when `vscope_lookup` crosses a function
 boundary) and `TypeScope` (types; `TypeEntry` carries the def pointer).
 Neither `*_define` detects duplicates and both lookups return the *first*
 match, so anything that can collide has to check first — see "Modules".
-An imported entry is a copy of the dependency's, so its `VarEntry.slot` names
-a binding in the importer while the callable lives in the dependency's slot
-space; that mismatch is inert only because multi-module `--run` is rejected.
+`VarEntry.slot` is meaningless for a module-level binding, imported or not:
+the runtime slot lives on the `FunDef` (assigned program-wide by `exe_link`)
+and travels with the copied `ve->as`, which is also what codegen reads back
+off `ExprPath.resolved_fun` — a name may be an alias for a function in
+another module.
 Path resolution (`resolve_path` / `cctx_resolve_path`) walks segments through
 type scope contexts (struct → associated fn, enum → variant). In
 `resolve_callee`, a single-segment path naming a local/value binding is

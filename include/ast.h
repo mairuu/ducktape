@@ -574,11 +574,11 @@ typedef struct {
   Path path;
   // TypeNode **type_args;
   // int type_arg_count;
-  // the callee a path resolved to, set by resolve_callee. NULL until
-  // resolved, and for a single-segment path naming a *non-generic* value
-  // binding — those short-circuit to a first-class function value before path
-  // resolution runs. A generic one (`print`, or an alias of it) does reach
-  // path resolution and so is recorded here.
+  // the function this path names, cached for codegen (which emits its global
+  // slot). Set both by resolve_callee, for a multi-segment path, and by
+  // EXPR_PATH resolution, for a single-segment one. NULL until resolved, and
+  // for a name bound to a local of function type — a closure or parameter
+  // lives in a stack slot, not a global one.
   FunDef *resolved_fun;
 } ExprPath;
 

@@ -915,9 +915,9 @@ static void link_copy_entry(TypeChecker *tc, Module *dst, Module *src,
   VarEntry *src_ve = vscope_lookup(&src->vscope, name, NULL);
   if (src_ve != NULL) {
     VarEntry *ve = NULL;
-    // todo (runtime linking milestone): the slot vscope_define assigns here is
-    // meaningless — it numbers a binding in the importer, but the callable
-    // lives in src's slot space. inert while multi-module `--run` is rejected.
+    // VarEntry.slot is meaningless for a module-level binding (it numbers a
+    // binding in the importer, not a callable): the runtime slot lives on the
+    // FunDef, assigned program-wide by exe_link, and travels with `ve->as`.
     vscope_define(&dst->vscope, alias, src_ve->type, tc->diags, span, &ve);
     ve->as = src_ve->as;
   }
@@ -3011,6 +3011,11 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
 
     if (ty->kind == TY_FUNCTION) {
       FunDef *def = ve->as.fun;
+      // record which function the name meant, for codegen: the binding may
+      // come from another module, or from an alias, so a name search over the
+      // enclosing module's own funs would not find it. NULL for a local of
+      // function type (a closure, a parameter) — those are stack slots.
+      expr->as.path_expr.resolved_fun = def;
 
       if (def == NULL || def->type_param_count == 0) {
         return ty;

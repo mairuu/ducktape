@@ -60,12 +60,11 @@ Driver: `compiler_run` in `src/compiler.c`. Phases, in order:
 
 With `--run`, `compiler_execute` (`src/compiler.c`) additionally runs:
 
-6. **codegen** — `src/codegen.c`: AST → bytecode `Chunk` per function
-7. **vm** — `src/vm.c`: stack VM executes `main()`
-
-A program spanning more than one module is rejected before codegen — globals
-are numbered per module, so there is no program-wide slot space to run in yet
-(`runtime.md`).
+6. **link** — `exe_link` (`src/codegen.c`): flatten every module's funs,
+   methods, structs and enums into one program-wide slot space
+7. **codegen** — `src/codegen.c`: AST → bytecode `Chunk` per function, per
+   module
+8. **vm** — `src/vm.c`: stack VM executes the root module's `main()`
 
 Diagnostics accumulate in a `DiagBag` (`src/diag.c`) shared by all phases; no
 phase aborts mid-file. Error recovery uses a poison type/expr convention (see
