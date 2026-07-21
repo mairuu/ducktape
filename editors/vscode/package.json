@@ -1,0 +1,26 @@
+{
+  "name": "ducktape",
+  "displayName": "ducktape",
+  "description": "Syntax highlighting for the ducktape language (.dt)",
+  "version": "0.0.1",
+  "publisher": "ducktape",
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "ducktape",
+        "aliases": ["ducktape", "dt"],
+        "extensions": [".dt"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "ducktape",
+        "scopeName": "source.ducktape",
+        "path": "./syntaxes/ducktape.tmLanguage.json"
+      }
+    ]
+  }
+}

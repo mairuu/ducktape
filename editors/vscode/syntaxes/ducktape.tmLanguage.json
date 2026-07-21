@@ -1,0 +1,119 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "ducktape",
+  "scopeName": "source.ducktape",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#string" },
+    { "include": "#number" },
+    { "include": "#keyword" },
+    { "include": "#declaration" },
+    { "include": "#type" },
+    { "include": "#call" },
+    { "include": "#operator" }
+  ],
+  "repository": {
+    "comment": {
+      "name": "comment.line.number-sign.ducktape",
+      "match": "#.*$"
+    },
+
+    "string": {
+      "name": "string.quoted.double.ducktape",
+      "begin": "\"",
+      "end": "\"",
+      "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.ducktape" } },
+      "endCaptures": { "0": { "name": "punctuation.definition.string.end.ducktape" } },
+      "patterns": [
+        {
+          "name": "constant.character.escape.ducktape",
+          "match": "\\\\[ntr\"\\\\{]"
+        },
+        {
+          "name": "meta.embedded.interpolation.ducktape",
+          "begin": "\\{",
+          "end": "\\}",
+          "beginCaptures": { "0": { "name": "punctuation.section.interpolation.begin.ducktape" } },
+          "endCaptures": { "0": { "name": "punctuation.section.interpolation.end.ducktape" } },
+          "patterns": [{ "include": "$self" }]
+        }
+      ]
+    },
+
+    "number": {
+      "patterns": [
+        { "name": "constant.numeric.float.ducktape", "match": "\\b[0-9]+\\.[0-9]+\\b" },
+        { "name": "constant.numeric.integer.ducktape", "match": "\\b[0-9]+\\b" }
+      ]
+    },
+
+    "keyword": {
+      "patterns": [
+        {
+          "name": "keyword.control.ducktape",
+          "match": "\\b(if|else|match|while|for|in|break|continue|return)\\b"
+        },
+        {
+          "name": "keyword.other.ducktape",
+          "match": "\\b(use|pub|where|as|dyn|type)\\b"
+        },
+        {
+          "name": "keyword.operator.word.ducktape",
+          "match": "\\b(and|or|not)\\b"
+        },
+        {
+          "name": "constant.language.boolean.ducktape",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "variable.language.self.ducktape",
+          "match": "\\b(self|Self)\\b"
+        }
+      ]
+    },
+
+    "declaration": {
+      "patterns": [
+        {
+          "match": "\\b(fun)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.function.ducktape" },
+            "2": { "name": "entity.name.function.ducktape" }
+          }
+        },
+        {
+          "match": "\\b(struct|enum|trait)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.ducktape" },
+            "2": { "name": "entity.name.type.ducktape" }
+          }
+        },
+        {
+          "name": "storage.type.ducktape",
+          "match": "\\b(fun|var|struct|enum|trait|impl)\\b"
+        }
+      ]
+    },
+
+    "type": {
+      "name": "entity.name.type.ducktape",
+      "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+    },
+
+    "call": {
+      "match": "\\b([a-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+      "captures": { "1": { "name": "entity.name.function.call.ducktape" } }
+    },
+
+    "operator": {
+      "patterns": [
+        { "name": "keyword.operator.assignment.ducktape", "match": "(\\+|-|\\*|/)?=" },
+        { "name": "keyword.operator.comparison.ducktape", "match": "==|!=|<=|>=|<|>" },
+        { "name": "keyword.operator.range.ducktape", "match": "\\.\\.=?" },
+        { "name": "keyword.operator.arrow.ducktape", "match": "->|=>" },
+        { "name": "keyword.operator.arithmetic.ducktape", "match": "\\+|-|\\*|/|%" },
+        { "name": "keyword.operator.other.ducktape", "match": "\\?|::|\\|" }
+      ]
+    }
+  }
+}

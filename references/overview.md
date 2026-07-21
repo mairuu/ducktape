@@ -24,12 +24,17 @@ names a file, that file is the source of truth. Historical design notes live in
 | `std/` | the standard library, written in ducktape; embedded into the binary at build time |
 | `scripts/run_tests.sh` | the test runner (invoked by `make test`) |
 | `scripts/embed_std.sh` | mirrors `std/*.dt` into `build/std_data.h` for `src/std_src.c` |
+| `editors/vscode/` | a VS Code extension: TextMate grammar + language config for `.dt` (highlighting only, no language server) |
 | `references/` | these docs + `grammar.ebnf` |
 
 A multi-file test is a *subdirectory* of any of the `tests/` categories, with
 `main.dt` as the entry point and its imported modules alongside. The flat
 `*.dt` globs are non-recursive, so those siblings are never collected as tests
 in their own right.
+
+`editors/vscode/syntaxes/ducktape.tmLanguage.json` duplicates the keyword
+tables of `src/scanner.c` — a new keyword has to be added in both places, or it
+simply renders as an identifier.
 
 ## Build, test, run
 
