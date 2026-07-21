@@ -488,13 +488,12 @@ typedef enum {
   EXPR_RANGE,  // a..b, a..=b
 
   // ── Postfix (pass 1+) ─────────────────────────────────
-  EXPR_CALL,            // f(a, b)
-  EXPR_INDEX,           // arr[i]
-  EXPR_FIELD,           // obj.field
-  EXPR_METHOD_CALL,     // obj.method(args)
-  EXPR_ASSOCIATED_CALL, // T::method(args)
-  EXPR_CAST,            // expr as Type
-  EXPR_PROPAGATE,       // expr?              — Result propagation
+  EXPR_CALL,        // f(a, b)
+  EXPR_INDEX,       // arr[i]
+  EXPR_FIELD,       // obj.field
+  EXPR_METHOD_CALL, // obj.method(args)
+  EXPR_CAST,        // expr as Type
+  EXPR_PROPAGATE,   // expr?              — Result propagation
 
   // ── Structural (pass 2+) ──────────────────────────────
   EXPR_BLOCK, // { stmts... expr? }
@@ -635,16 +634,6 @@ typedef struct {
 } ExprMethodCall;
 
 typedef struct {
-  Expr **args;
-  int arg_count;
-  TypeNode **type_args;
-  int type_arg_count;
-  MethodDef *resolved_method;
-  ImplDef *resolved_impl;
-  Expr *caller;
-} ExprAssocCall;
-
-typedef struct {
   Expr *operand;
   TypeNode *target_type;
 } ExprCast;
@@ -751,8 +740,6 @@ struct Expr {
     ExprField field;
 
     ExprMethodCall method_call;
-
-    ExprAssocCall assoc_call;
 
     ExprCast cast;
 

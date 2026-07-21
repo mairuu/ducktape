@@ -1,0 +1,17 @@
+#! expect: match is not exhaustive: 'Shape::Point' is not covered
+enum Shape {
+    Circle(Float),
+    Rect { w: Float, h: Float },
+    Point,
+}
+
+fun name(s: Shape) -> String {
+    return match s {
+        Shape::Circle(_) => "circle",
+        Shape::Rect { w: _, h: _ } => "rect",
+    };
+}
+
+fun main() {
+    print(name(Shape::Point));
+}

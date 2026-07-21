@@ -66,7 +66,7 @@ bytes + constant pool (≤256 consts, u8 index). Operands: u8 unless noted.
 | `OP_ENUM enum_slot tag` | pops that variant's `field_count` elems (declaration order), pushes an enum instance |
 | `OP_FIELD_GET index` | pops a tuple/struct/enum instance, pushes its `index`-th field — no bounds check, since the index is always a compile-time-valid constant |
 | `OP_TAG` | pops an enum instance, pushes its variant tag as `Int` |
-| `OP_MATCH_FAIL` | runtime error "no match arm matched" — reachable because the checker doesn't enforce match exhaustiveness yet |
+| `OP_MATCH_FAIL` | runtime error "no match arm matched" — a backstop; the checker enforces exhaustiveness, but guards can still fail every arm |
 
 `OP_ADD` additionally handles `String + String` (interned concat) alongside
 its numeric cases; the checker guarantees operand kinds so no other opcode
@@ -218,9 +218,10 @@ to the next arm through a *second* jump list (`next_arm_jumps`) that lands
 *after* the shared fail-list `OP_POP` — a guard failure's stack is already
 clean, unlike a failed test's.
 
-Falling past every arm hits `OP_MATCH_FAIL`: the checker doesn't enforce
-match exhaustiveness yet (see `roadmap.md`), so this is a real, reachable
-runtime error rather than a should-never-happen case.
+Falling past every arm hits `OP_MATCH_FAIL`. The checker now enforces
+exhaustiveness (`architecture.md` "Match exhaustiveness"), but a guarded arm
+cannot count towards coverage, so a match whose only applicable arms are
+guarded can still fall through — this stays a real, reachable runtime error.
 
 ### Methods
 

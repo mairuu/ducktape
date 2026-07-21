@@ -795,7 +795,52 @@ static void tc_register_trait(TypeChecker *tc, Module *m, Decl *decl) {
   def->module = m;
 }
 
+// the name a top-level decl introduces into the module's scopes, if any.
+// impls are anonymous; `use` names are checked by tc_link_imports instead.
+static bool decl_item_name(Decl *decl, StringView *out) {
+  switch (decl->kind) {
+  case DECL_FUN:
+    *out = decl->as.fun_decl.name;
+    return true;
+  case DECL_STRUCT:
+    *out = decl->as.struct_decl.name;
+    return true;
+  case DECL_ENUM:
+    *out = decl->as.enum_decl.name;
+    return true;
+  case DECL_TRAIT:
+    *out = decl->as.trait_decl.name;
+    return true;
+  default:
+    return false;
+  }
+}
+
+// neither vscope_define nor tscope_define detects collisions, and both lookups
+// return the *first* match — so a redeclaration would silently lose to the
+// original with no diagnostic. Catch it here, before anything is registered.
+static void tc_check_duplicate_decls(TypeChecker *tc, Module *m) {
+  for (int i = 0; i < m->ast->decl_count; i++) {
+    StringView name;
+    if (!decl_item_name(m->ast->decls[i], &name)) {
+      continue;
+    }
+
+    for (int j = 0; j < i; j++) {
+      StringView prev;
+      if (decl_item_name(m->ast->decls[j], &prev) && sv_equal(prev, name)) {
+        diag_error(tc->diags, m->ast->decls[i]->span,
+                   "the name '%.*s' is defined multiple times in this module",
+                   SV_ARG(name));
+        break;
+      }
+    }
+  }
+}
+
 void tc_register_module(TypeChecker *tc, Module *m) {
+  tc_check_duplicate_decls(tc, m);
+
   // counts
   for (int i = 0; i < m->ast->decl_count; i++) {
     switch (m->ast->decls[i]->kind) {
@@ -813,9 +858,9 @@ void tc_register_module(TypeChecker *tc, Module *m) {
       break;
     case DECL_TRAIT:
     case DECL_USE:
+    case DECL_VAR:
+    case DECL_POISON:
       break;
-    default:
-      assert(false && "unhandled decl kind in tc_register_module");
     }
   }
 
@@ -848,8 +893,14 @@ void tc_register_module(TypeChecker *tc, Module *m) {
       // imports are linked in tc_link_imports, which must run after the
       // dependency has been *resolved* — see its comment in sema.h.
       break;
-    default:
-      assert(false && "unhandled decl kind in tc_register_module");
+    case DECL_VAR:
+      // globals have no runtime representation: every slot space the linker
+      // builds is a *definition* table, and the VM's globals are functions.
+      diag_error(tc->diags, decl->span,
+                 "top-level 'var' is not supported; move it into a function");
+      break;
+    case DECL_POISON:
+      break; // the parser already reported it
     }
   }
 
@@ -872,29 +923,9 @@ void tc_register_module(TypeChecker *tc, Module *m) {
 static Decl *mod_find_own_decl(Module *m, StringView name) {
   for (int i = 0; i < m->ast->decl_count; i++) {
     Decl *decl = m->ast->decls[i];
-    switch (decl->kind) {
-    case DECL_FUN:
-      if (sv_equal(decl->as.fun_decl.name, name)) {
-        return decl;
-      }
-      break;
-    case DECL_STRUCT:
-      if (sv_equal(decl->as.struct_decl.name, name)) {
-        return decl;
-      }
-      break;
-    case DECL_ENUM:
-      if (sv_equal(decl->as.enum_decl.name, name)) {
-        return decl;
-      }
-      break;
-    case DECL_TRAIT:
-      if (sv_equal(decl->as.trait_decl.name, name)) {
-        return decl;
-      }
-      break;
-    default:
-      break;
+    StringView own;
+    if (decl_item_name(decl, &own) && sv_equal(own, name)) {
+      return decl;
     }
   }
   return NULL;
@@ -1482,9 +1513,9 @@ static void resolve_decl(ResolveCtx *rctx, Decl *decl) {
     resolve_trait_decl(rctx, decl);
     break;
   case DECL_USE:
-    break;
-  default:
-    assert(false && "unhandled decl kind in resolve_decl");
+  case DECL_VAR:
+  case DECL_POISON:
+    break; // already diagnosed during registration
   }
 }
 
@@ -2305,6 +2336,364 @@ static bool check_pattern(CheckCtx *ctx, Pattern *pattern, Type *expected_ty) {
   return true;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Match exhaustiveness
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// Maranget's usefulness algorithm, specialised to the single question we ask of
+// a match: is the all-wildcard row still useful against the arms' patterns? If
+// it is, some value reaches no arm. The matrix holds one row per arm, one
+// column per value still to be discriminated; a NULL column is a wildcard — a
+// `_`, a binding, or a field the pattern simply omitted.
+//
+// The answer is deliberately tri-state. A column whose type inference has not
+// pinned down (an unsolved unknown, a generic) has an unknowable domain, so
+// rather than guess we report nothing: a false "not exhaustive" would reject a
+// correct program, which is worse than the OP_MATCH_FAIL backstop the VM
+// already has.
+
+// the widest signature we enumerate: an enum with more variants than this is
+// treated as unenumerable, so it needs a `_` arm rather than a wrong answer.
+#define MAX_SIGNATURE 256
+
+typedef enum { EXH_YES, EXH_NO, EXH_UNKNOWN } Exhaustive;
+
+typedef enum {
+  CT_NONE,    // irrefutable: `_` or a binding
+  CT_BOOL,    // a `true` / `false` literal
+  CT_LIT,     // any other literal — one point of an unenumerable domain
+  CT_VARIANT, // one variant of an enum
+  CT_SINGLE,  // the sole constructor of a struct or tuple
+  CT_OPAQUE,  // resolved to nothing we can reason about
+} CtorKind;
+
+typedef struct {
+  CtorKind kind;
+  int arity;
+  VariantDef *variant; // CT_VARIANT
+  bool bool_value;     // CT_BOOL
+} Ctor;
+
+typedef struct {
+  Pattern **cols;
+} PatRow;
+
+typedef struct {
+  PatRow *rows;
+  int row_count;
+  int width;
+} PatMatrix;
+
+// the constructor a pattern tests for. A variant pattern that lists no fields
+// (`Opt::Some`) still names its variant — it is refutable, it just constrains
+// none of the payload.
+static Ctor pat_ctor(Pattern *p) {
+  if (p == NULL) {
+    return (Ctor){.kind = CT_NONE};
+  }
+
+  switch (p->kind) {
+  case PAT_WILDCARD:
+  case PAT_BIND:
+    return (Ctor){.kind = CT_NONE};
+  case PAT_LITERAL:
+    if (p->as.literal_expr->kind == EXPR_BOOL) {
+      return (Ctor){.kind = CT_BOOL,
+                    .bool_value = p->as.literal_expr->as.bool_val};
+    }
+    return (Ctor){.kind = CT_LIT};
+  case PAT_VARIANT: {
+    VariantDef *v = p->as.variant.resolved_variant;
+    if (v == NULL) {
+      return (Ctor){.kind = CT_OPAQUE};
+    }
+    return (Ctor){.kind = CT_VARIANT, .arity = v->field_count, .variant = v};
+  }
+  case PAT_STRUCT: {
+    StructDef *s = p->as.struc.resolved_struct;
+    if (s == NULL) {
+      return (Ctor){.kind = CT_OPAQUE};
+    }
+    return (Ctor){.kind = CT_SINGLE, .arity = s->field_count};
+  }
+  case PAT_TUPLE:
+    return (Ctor){.kind = CT_SINGLE, .arity = p->as.tuple.count};
+  }
+  return (Ctor){.kind = CT_OPAQUE};
+}
+
+static bool ctor_matches(Ctor a, Ctor b) {
+  if (a.kind != b.kind) {
+    return false;
+  }
+  switch (a.kind) {
+  case CT_BOOL:
+    return a.bool_value == b.bool_value;
+  case CT_VARIANT:
+    return a.variant == b.variant;
+  case CT_SINGLE:
+    return true;
+  default:
+    return false; // CT_LIT values are compared by nothing we can see here
+  }
+}
+
+// the sub-pattern for field `k` of a struct/variant constructor: patterns may
+// list fields out of order, omit them entirely, or use the `{ x }` shorthand —
+// all of which are wildcards at position k.
+static Pattern *field_pat_at(FieldPat *fields, int field_count,
+                             const FieldDef *defs, bool is_tuple, int k) {
+  for (int i = 0; i < field_count; i++) {
+    bool hit = is_tuple ? fields[i].ident.index == k
+                        : sv_equal(fields[i].ident.name, defs[k].ident.name);
+    if (hit) {
+      return fields[i].sub_pattern; // NULL for shorthand, i.e. a binding
+    }
+  }
+  return NULL;
+}
+
+// write `ctor`'s sub-patterns of `p` into `out[0..arity)`.
+static void ctor_sub_patterns(Pattern *p, Ctor ctor, Pattern **out) {
+  switch (p->kind) {
+  case PAT_TUPLE:
+    for (int i = 0; i < ctor.arity; i++) {
+      out[i] = p->as.tuple.elems[i];
+    }
+    return;
+  case PAT_STRUCT: {
+    StructDef *s = p->as.struc.resolved_struct;
+    for (int i = 0; i < ctor.arity; i++) {
+      out[i] = field_pat_at(p->as.struc.fields, p->as.struc.field_count,
+                            s->fields, s->is_tuple, i);
+    }
+    return;
+  }
+  case PAT_VARIANT: {
+    VariantDef *v = p->as.variant.resolved_variant;
+    for (int i = 0; i < ctor.arity; i++) {
+      out[i] = field_pat_at(p->as.variant.fields, p->as.variant.field_count,
+                            v->fields, v->is_tuple, i);
+    }
+    return;
+  }
+  default:
+    return; // arity 0
+  }
+}
+
+// S(ctor, m): rows whose head is `ctor` (payload spread over `arity` new
+// columns) or a wildcard (`arity` fresh wildcards), with column 0 consumed.
+static PatMatrix matrix_specialize(const PatMatrix *m, Ctor ctor,
+                                   Allocator *al) {
+  PatMatrix out = {.width = ctor.arity + m->width - 1};
+  out.rows = al_alloc_zero(al, sizeof(PatRow) * m->row_count);
+
+  for (int i = 0; i < m->row_count; i++) {
+    Pattern *head = m->rows[i].cols[0];
+    Ctor head_ctor = pat_ctor(head);
+    if (head_ctor.kind != CT_NONE && !ctor_matches(head_ctor, ctor)) {
+      continue;
+    }
+
+    Pattern **cols =
+        al_alloc_zero(al, sizeof(Pattern *) * (out.width > 0 ? out.width : 1));
+    if (head_ctor.kind != CT_NONE) {
+      ctor_sub_patterns(head, ctor, cols);
+    }
+    for (int c = 1; c < m->width; c++) {
+      cols[ctor.arity + c - 1] = m->rows[i].cols[c];
+    }
+    out.rows[out.row_count++] = (PatRow){.cols = cols};
+  }
+  return out;
+}
+
+// D(m): rows whose head is a wildcard, with column 0 dropped.
+static PatMatrix matrix_default(const PatMatrix *m, Allocator *al) {
+  PatMatrix out = {.width = m->width - 1};
+  out.rows = al_alloc_zero(al, sizeof(PatRow) * m->row_count);
+
+  for (int i = 0; i < m->row_count; i++) {
+    if (pat_ctor(m->rows[i].cols[0]).kind != CT_NONE) {
+      continue;
+    }
+    out.rows[out.row_count++] = (PatRow){.cols = m->rows[i].cols + 1};
+  }
+  return out;
+}
+
+// the type of column 0, taken from the first row that constrains it. A column
+// nothing constrains needs no type: every row is a wildcard there, so the
+// default matrix is the whole matrix and the domain never matters.
+static Type *column_type(CheckCtx *ctx, const PatMatrix *m) {
+  for (int i = 0; i < m->row_count; i++) {
+    Pattern *p = m->rows[i].cols[0];
+    if (p != NULL && p->resolved_type != NULL) {
+      return infer_apply(&ctx->infer, p->resolved_type, ctx->al);
+    }
+  }
+  return NULL;
+}
+
+// the constructors that between them cover every value of `ty`, or false if the
+// domain is unenumerable (Int, String, ...) or unknown.
+static bool type_signature(Type *ty, Ctor *sig, int *count) {
+  if (ty == NULL) {
+    return false;
+  }
+
+  switch (ty->kind) {
+  case TY_BOOL:
+    sig[0] = (Ctor){.kind = CT_BOOL, .bool_value = false};
+    sig[1] = (Ctor){.kind = CT_BOOL, .bool_value = true};
+    *count = 2;
+    return true;
+  case TY_ENUM: {
+    EnumDef *def = ty->as.enm.def;
+    if (def->variant_count > MAX_SIGNATURE) {
+      return false;
+    }
+    for (int i = 0; i < def->variant_count; i++) {
+      sig[i] = (Ctor){.kind = CT_VARIANT,
+                      .arity = def->variants[i].field_count,
+                      .variant = &def->variants[i]};
+    }
+    *count = def->variant_count;
+    return true;
+  }
+  case TY_STRUCT:
+    sig[0] = (Ctor){.kind = CT_SINGLE, .arity = ty->as.struc.def->field_count};
+    *count = 1;
+    return true;
+  case TY_TUPLE:
+    sig[0] = (Ctor){.kind = CT_SINGLE, .arity = ty->as.tuple.elem_count};
+    *count = 1;
+    return true;
+  default:
+    return false;
+  }
+}
+
+// a type whose domain we cannot enumerate is still *certain* if we know we
+// cannot: Int has infinitely many values, so a wildcard is genuinely required.
+// An unsolved unknown is a different thing — we simply do not know yet.
+static bool type_domain_is_certain(Type *ty) {
+  if (ty == NULL) {
+    return true; // nothing constrains the column; a wildcard is required
+  }
+  switch (ty->kind) {
+  case TY_UNKNOWN:
+  case TY_GENERIC:
+  case TY_ASSOC:
+  case TY_TRAIT:
+  case TY_POISON:
+    return false;
+  default:
+    return true;
+  }
+}
+
+static Exhaustive matrix_covers(CheckCtx *ctx, const PatMatrix *m) {
+  if (m->width == 0) {
+    return m->row_count > 0 ? EXH_YES : EXH_NO;
+  }
+
+  Type *ty = column_type(ctx, m);
+
+  Ctor sig[MAX_SIGNATURE];
+  int sig_count = 0;
+  if (type_signature(ty, sig, &sig_count)) {
+    // the signature is only usable if the arms actually mention every one of
+    // its constructors; otherwise the missing ones fall through to D(m).
+    bool complete = true;
+    for (int c = 0; c < sig_count && complete; c++) {
+      complete = false;
+      for (int i = 0; i < m->row_count && !complete; i++) {
+        complete = ctor_matches(pat_ctor(m->rows[i].cols[0]), sig[c]);
+      }
+    }
+
+    if (complete) {
+      for (int c = 0; c < sig_count; c++) {
+        PatMatrix s = matrix_specialize(m, sig[c], ctx->al);
+        Exhaustive r = matrix_covers(ctx, &s);
+        if (r != EXH_YES) {
+          return r;
+        }
+      }
+      return EXH_YES;
+    }
+  }
+
+  PatMatrix d = matrix_default(m, ctx->al);
+  if (d.row_count == 0) {
+    return type_domain_is_certain(ty) ? EXH_NO : EXH_UNKNOWN;
+  }
+  return matrix_covers(ctx, &d);
+}
+
+// name a top-level constructor no arm mentions, for the diagnostic. Only the
+// first column can be described this cheaply; deeper gaps get the generic
+// message, which is still true.
+static bool missing_top_ctor(const PatMatrix *m, Type *ty, char *buf,
+                             size_t buf_size) {
+  if (ty == NULL || ty->kind != TY_ENUM) {
+    return false;
+  }
+
+  EnumDef *def = ty->as.enm.def;
+  for (int v = 0; v < def->variant_count; v++) {
+    Ctor want = {.kind = CT_VARIANT, .variant = &def->variants[v]};
+    bool seen = false;
+    for (int i = 0; i < m->row_count && !seen; i++) {
+      Ctor head = pat_ctor(m->rows[i].cols[0]);
+      seen = head.kind == CT_NONE || ctor_matches(head, want);
+    }
+    if (!seen) {
+      snprintf(buf, buf_size, SV_FMT "::" SV_FMT, SV_ARG(def->name),
+               SV_ARG(def->variants[v].name));
+      return true;
+    }
+  }
+  return false;
+}
+
+// a guarded arm is not counted: whether it matches is a runtime question, so it
+// can never be what makes a match exhaustive.
+static void check_match_exhaustive(CheckCtx *ctx, Expr *expr,
+                                   Type *subject_ty) {
+  int arm_count = expr->as.match.arm_count;
+
+  PatMatrix m = {.width = 1};
+  m.rows =
+      al_alloc_zero(ctx->al, sizeof(PatRow) * (arm_count > 0 ? arm_count : 1));
+  for (int i = 0; i < arm_count; i++) {
+    MatchArm *arm = &expr->as.match.arms[i];
+    if (arm->guard != NULL) {
+      continue;
+    }
+    Pattern **cols = al_alloc_zero(ctx->al, sizeof(Pattern *));
+    cols[0] = arm->pattern;
+    m.rows[m.row_count++] = (PatRow){.cols = cols};
+  }
+
+  if (matrix_covers(ctx, &m) != EXH_NO) {
+    return;
+  }
+
+  char ctor[128];
+  if (missing_top_ctor(&m, infer_apply(&ctx->infer, subject_ty, ctx->al), ctor,
+                       sizeof(ctor))) {
+    diag_error(ctx->diags, expr->span,
+               "match is not exhaustive: '%s' is not covered", ctor);
+  } else {
+    diag_error(ctx->diags, expr->span,
+               "match is not exhaustive: add a '_' arm to cover the "
+               "remaining cases");
+  }
+}
+
 static Type *resolve_match_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   Type *subject_ty = resolve_expr(ctx, expr->as.match.subject, NULL);
   Type *result_ty = hint;
@@ -2347,6 +2736,10 @@ static Type *resolve_match_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   if (had_error) {
     return ctx->tc->t_poison;
   }
+
+  // only once every pattern checked: exhaustiveness reads resolved_type and the
+  // resolved struct/variant defs off the patterns.
+  check_match_exhaustive(ctx, expr, subject_ty);
 
   return result_ty ? result_ty : ctx->tc->t_unit;
 }
@@ -3983,6 +4376,8 @@ bool tc_check_module(TypeChecker *tc, Module *m) {
     case DECL_STRUCT:
     case DECL_ENUM:
     case DECL_USE:
+    case DECL_VAR:
+    case DECL_POISON:
       break;
     case DECL_TRAIT:
       tc_check_trait(tc, decl);
@@ -3990,8 +4385,6 @@ bool tc_check_module(TypeChecker *tc, Module *m) {
     case DECL_IMPL:
       tc_check_impl(tc, decl);
       break;
-    default:
-      assert(false && "unhandled decl kind in tc_check_module");
     }
   }
 

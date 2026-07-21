@@ -38,17 +38,20 @@ AST (`include/ast.h`): `Decl`/`Stmt`/`Expr`/`Pattern`/`TypeNode` tagged
 unions, plus semantic def tables (`FunDef`, `StructDef`, `EnumDef`,
 `TraitDef`, `ImplDef`) that later passes fill in. `Expr.resolved_type` and
 `TypeNode.resolved` are stamped by the checker; `FunDef.chunk` is filled by
-codegen and the `slot` fields by `exe_link` before it (`runtime.md`). `EXPR_ASSOCIATED_CALL` is dead — the parser
-never produces it.
+codegen and the `slot` fields by `exe_link` before it (`runtime.md`).
 
 ## Semantic analysis (`src/sema.c`, `include/sema.h`)
 
 Three passes over each module, mirroring compiler phases:
 
-1. **register** — `tc_register_module`: allocate def stubs for
-   fun/struct/enum/impl/trait, count-then-populate; `tc_register_builtins`
-   adds `print<T>`. `use` is a no-op here — imports are linked in pass 2, see
-   "Modules". (Top-level `var` hits the default assert — known gap.)
+1. **register** — `tc_register_module`: `tc_check_duplicate_decls` first (a
+   scope define never detects a collision and a scope lookup returns the
+   *first* match, so a redeclaration would silently lose to the original),
+   then allocate def stubs for fun/struct/enum/impl/trait,
+   count-then-populate; `tc_register_builtins` adds `print<T>`. `use` is a
+   no-op here — imports are linked in pass 2, see "Modules". Top-level `var`
+   is diagnosed here: every slot space the linker builds is a definition
+   table, so a global has nowhere to live.
 2. **resolve** — `tc_link_imports` first (see "Modules"), then
    `tc_resolve_module`: resolve signatures and types into
    interned `Type`s; define names in the module's scopes (so declaration
@@ -224,7 +227,8 @@ same reason.
 for codegen, capture is flagged when `vscope_lookup` crosses a function
 boundary) and `TypeScope` (types; `TypeEntry` carries the def pointer).
 Neither `*_define` detects duplicates and both lookups return the *first*
-match, so anything that can collide has to check first — see "Modules".
+match, so anything that can collide has to check first — see "Modules" and
+`tc_check_duplicate_decls`.
 `VarEntry.slot` is meaningless for a module-level binding, imported or not:
 the runtime slot lives on the `FunDef` (assigned program-wide by `exe_link`)
 and travels with the copied `ve->as`, which is also what codegen reads back
@@ -235,6 +239,40 @@ type scope contexts (struct → associated fn, enum → variant). In
 `resolve_callee`, a single-segment path naming a local/value binding is
 resolved as a first-class function value; generic functions go through path
 resolution so their params are opened into the call's `Subst`.
+
+### Match exhaustiveness
+
+`check_match_exhaustive` (`src/sema.c`) runs at the end of
+`resolve_match_expr`, once every pattern has been checked — it reads the
+`resolved_type` and the resolved struct/variant defs the pattern check stamped
+onto the patterns.
+
+It is Maranget's usefulness algorithm narrowed to the one question a match
+asks: is the all-wildcard row still useful against the arms? The matrix holds
+one row per arm and one column per value left to discriminate; a NULL column
+is a wildcard — a `_`, a binding, or a field the pattern simply omitted. For
+column 0 the checker takes the type from the first row that constrains it and
+asks for that type's *signature*: both `Bool` literals, every variant of an
+enum, the sole constructor of a struct or tuple. If the arms mention every
+constructor in the signature, it specialises (`S`) by each in turn and
+recurses; otherwise it drops to the default matrix (`D`) and recurses on the
+remaining columns, which is exhaustive only if some row was a wildcard there.
+
+Two decisions are load-bearing:
+
+- **The column type comes off the pattern, not the field declaration.** A
+  field declared `T` is concrete at the match site — `Opt<Bool>`'s payload has
+  two values, not an unenumerable domain. Reading `FieldDef.type` would report
+  a correct `Opt::Some(true) | Opt::Some(false) | Opt::None` as a gap.
+- **The answer is tri-state** (`EXH_YES` / `EXH_NO` / `EXH_UNKNOWN`). A column
+  whose type inference has not pinned down (an unsolved unknown, a generic, a
+  projection) has an unknowable domain, so nothing is reported: a false "not
+  exhaustive" rejects a correct program, which is worse than the
+  `OP_MATCH_FAIL` backstop the VM already has.
+
+A guarded arm contributes no row at all — whether it matches is a runtime
+question, so it can never be what makes a match exhaustive. That is also why
+`OP_MATCH_FAIL` stays reachable (`runtime.md`).
 
 ### Impls and method lookup
 

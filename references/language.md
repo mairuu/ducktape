@@ -120,7 +120,13 @@ var m = match p {
 
 Patterns: literals, `_`, bindings, tuples `(a, b)`, variants
 `Result::Ok(v)` / `Status::Active`, structs `Point { x, y }` (including
-literal sub-patterns `x: 10`). Exhaustiveness is **not** checked.
+literal sub-patterns `x: 10`).
+
+Matches must be **exhaustive**; a gap is a compile error naming the missing
+enum variant where it can (`match is not exhaustive: 'Shape::Point' is not
+covered`). A guarded arm never counts towards coverage — whether it matches is
+a runtime question. Types with no enumerable domain (`Int`, `Float`, `String`)
+therefore always need a `_` or a binding arm.
 
 ### `?` propagation
 
@@ -189,9 +195,9 @@ Registered in every module; the only builtin so far.
 | `pub` on impls, methods, and fields | parsed and ignored — a public type's fields and methods are all visible |
 | visibility below module granularity (`pub(crate)` &c.) | `pub` is the only modifier |
 | two spellings of one file (symlinks, unusual paths) | dedup is lexical, so the file would load twice and collide |
-| top-level `var` | parses, then aborts registration |
+| top-level `var` (globals) | parses, then a registration diagnostic: move it into a function |
 | tuple-struct struct-patterns `var Pair { .. }` | diagnostic suggests tuple destructuring |
-| match exhaustiveness, variable shadowing diags | silently accepted at check time; a non-exhaustive match that falls through every arm at runtime is a `--run` runtime error, not a compile error (`runtime.md`) |
+| variable shadowing diagnostics | a `var` may silently shadow an earlier one in the same scope (top-level *item* names do collide — that is an error) |
 | overlapping method names across impls of one type | bare paths pick the first registered impl |
 | capturing a `for` loop variable in a closure | runs, but the closure sees the loop variable's *final* value (one shared cell), not a per-iteration copy — `runtime.md` "Closures & upvalues" |
 | generic functions/methods/impls at runtime | compile-only; any generic function or method anywhere in the file fails the whole `--run` build (needs monomorphisation or boxed generics — `runtime.md`) |

@@ -277,6 +277,35 @@
   Also: `scripts/run_tests.sh` never globbed `tests/run/*/main.dt`, so a
   multi-file test could only ever be a compile-only one.
 
+- **Hygiene diagnostics (post-8)** — four warts that each let a wrong program
+  through silently, or crashed on one:
+  - **top-level `var`** hit `tc_register_module`'s `default: assert(false)` —
+    an abort, not a diagnostic. Now reported ("move it into a function"), and
+    `DECL_VAR`/`DECL_POISON` are explicit cases in all three decl switches so
+    the compiler cannot be aborted by a parse the checker forgot about.
+  - **duplicate top-level names** were silently accepted: neither
+    `vscope_define` nor `tscope_define` detects a collision and both lookups
+    return the *first* match, so a redeclaration lost to the original with no
+    diagnostic. `tc_check_duplicate_decls` runs before registration; the name
+    scan it needs already existed inside `mod_find_own_decl`, so both now
+    share `decl_item_name`.
+  - **match exhaustiveness** is enforced (`check_match_exhaustive`) —
+    Maranget's usefulness algorithm over a pattern matrix, tri-state so an
+    unsolved column type reports nothing rather than guessing. Design:
+    `architecture.md` "Match exhaustiveness". `OP_MATCH_FAIL` stays: a guarded
+    arm can't count towards coverage, so falling past every arm is still
+    reachable at runtime.
+  - **`EXPR_ASSOCIATED_CALL`** and its `ExprAssocCall` payload are gone; the
+    parser never produced either (see 5c-ii).
+
+  Writing the exhaustiveness checker turned up the design trap worth recording:
+  the obvious column type for a variant payload is the `FieldDef.type` off the
+  definition, which is the *generic* `T`. Reading it there makes a correct
+  `Opt::Some(true) | Opt::Some(false) | Opt::None` look like a gap, because `T`
+  has no enumerable domain. The instantiated type is already on the pattern —
+  `check_pattern` stamps `resolved_type` after substitution — so the matrix
+  reads it from the first row that constrains the column.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -286,13 +315,14 @@ milestone (~900 lines).
 
 ## Known warts to clean up opportunistically
 
-- top-level `var` aborts registration (should be a diagnostic or a feature)
-- no shadowing diagnostics (`vscope_define` todo), no match exhaustiveness
+- no shadowing diagnostics for `var` (`vscope_define` todo); top-level item
+  names do collide, but a `var` may silently shadow one in the same scope
+- a bare unit variant of a generic enum can't be instantiated without a
+  turbofish (`Opt::<Bool>::None`) — neither an annotation nor the argument
+  position infers it
 - overlapping method names across impls: bare generic paths take the first
   registered impl
 - `Point::new` vs `Point::<Int>::new`: expression paths require turbofish
-- `EXPR_ASSOCIATED_CALL` is dead AST — remove or wire up (bare associated
-  calls now work without it, via `ExprPath.resolved_fun` — see 5c-ii above)
 - codegen rejects *any* generic function/method/impl, even uncalled ones,
   under `--run` (needs monomorphisation or boxed generics eventually) — now
   program-wide, so one generic function in a dependency fails a program that

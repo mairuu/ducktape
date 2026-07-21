@@ -1,0 +1,69 @@
+# exhaustiveness accepts coverage the checker has to reason about structurally:
+# both Bool constructors, a payload covered through a generic instantiation,
+# nested struct/tuple columns, and a variant pattern that names no fields.
+#> 1
+#> 2
+#> 3
+#> 2
+#> 1
+#> 7
+struct Pair {
+    x: Bool,
+    y: Bool,
+}
+
+enum Opt<T> {
+    Some(T),
+    None,
+}
+
+fun flag(b: Bool) -> Int {
+    return match b {
+        true => 1,
+        false => 0,
+    };
+}
+
+# the payload type is `T` on the definition, `Bool` at this call — coverage has
+# to read the instantiated type off the pattern, not the field declaration.
+fun pick(o: Opt<Bool>) -> Int {
+    return match o {
+        Opt::Some(true) => 1,
+        Opt::Some(false) => 2,
+        Opt::None => 3,
+    };
+}
+
+fun corner(p: Pair) -> Int {
+    return match p {
+        Pair { x: true, y: true } => 1,
+        Pair { x: true, y: false } => 2,
+        Pair { x: false, y } => 3,
+    };
+}
+
+fun tup(t: (Bool, Bool)) -> Int {
+    return match t {
+        (true, _) => 1,
+        (false, true) => 2,
+        (false, false) => 3,
+    };
+}
+
+# `Opt::Some` binds nothing but still names its variant, so with None it covers.
+fun tally(o: Opt<Int>) -> Int {
+    return match o {
+        Opt::Some => 1,
+        Opt::None => 0,
+    };
+}
+
+fun main() {
+    print(pick(Opt::Some(true)));
+    print(pick(Opt::Some(false)));
+    var none = Opt::<Bool>::None;
+    print(pick(none));
+    print(corner(Pair { x: true, y: false }));
+    print(tup((true, true)));
+    print(flag(true) + tally(Opt::Some(9)) * 6);
+}

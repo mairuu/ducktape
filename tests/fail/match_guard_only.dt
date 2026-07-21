@@ -1,0 +1,13 @@
+#! expect: match is not exhaustive
+# a guarded arm never counts towards coverage: whether it matches is a runtime
+# question, so `false` is unreachable at compile time.
+fun pick(b: Bool) -> Int {
+    return match b {
+        true => 1,
+        x if x == false => 0,
+    };
+}
+
+fun main() {
+    print(pick(false));
+}

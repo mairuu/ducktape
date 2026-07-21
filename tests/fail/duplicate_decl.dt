@@ -1,0 +1,8 @@
+#! expect: the name 'Thing' is defined multiple times
+struct Thing {
+    x: Int,
+}
+
+fun Thing() {}
+
+fun main() {}

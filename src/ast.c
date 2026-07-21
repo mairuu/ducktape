@@ -1006,9 +1006,6 @@ void dump_expr(const Expr *e, int indent) {
       dump_expr(e->as.method_call.args[i], indent + 2);
     }
     break;
-  case EXPR_ASSOCIATED_CALL:
-    fprintf(stdout, "AssociatedCall: \n");
-    break;
   case EXPR_BLOCK:
     fprintf(stdout, "Block\n");
     for (int i = 0; i < e->as.block.stmt_count; i++) {

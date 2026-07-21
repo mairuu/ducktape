@@ -1,0 +1,6 @@
+#! expect: top-level 'var' is not supported
+var counter: Int = 0;
+
+fun main() {
+    print(counter);
+}

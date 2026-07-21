@@ -1,0 +1,17 @@
+#! expect: match is not exhaustive
+# the outer enum is fully covered; the gap is one level down, inside Some.
+enum Opt<T> {
+    Some(T),
+    None,
+}
+
+fun pick(o: Opt<Bool>) -> Int {
+    return match o {
+        Opt::Some(true) => 1,
+        Opt::None => 0,
+    };
+}
+
+fun main() {
+    print(pick(Opt::Some(false)));
+}
