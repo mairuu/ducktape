@@ -185,9 +185,10 @@ the stack in place, decrementing `sp` only after the result exists).
   see "Monomorphisation" below.
 - Destructuring `var` bindings (`compile_destructure`): see "Match
   compilation" below.
-- Anything outside the subset (a default method the impl inherited — which
-  has no `FunDef`, so no chunk — and `print` named as a value rather than
-  called) emits a source-anchored diagnostic
+- Trait default bodies the impl inherited (`compile_method_call` again, via
+  `TraitMethodDef.default_impl`): see "Monomorphisation" below.
+- Anything outside the subset (`print` named as a value rather than called,
+  say) emits a source-anchored diagnostic
   `"... is not supported by the VM yet"` and fails codegen — it never
   crashes at runtime.
 
@@ -331,19 +332,37 @@ Two call shapes need more than the recorded arguments:
 - **A call through a trait bound.** The checker resolved `v.show()` against
   the trait *signature*, so there is no `MethodDef` on the node — only
   `bound_trait` and `bound_self`. Codegen substitutes `bound_self` into a
-  concrete type and re-runs `impl_index_method` to find the body. This is the
-  one place codegen consults the impl index, and it is why `Mono` holds one.
+  concrete type and re-runs `impl_index_method` to find the body, falling back
+  to `impl_index_default_method` when the impl inherited it. This is the one
+  place codegen consults the impl index, and it is why `Mono` holds one.
+
+**Inherited default bodies** ride the same machinery. A trait method's default
+body gets a `FunDef` of its own at resolve time
+(`resolve_trait_default_impl` → `TraitMethodDef.default_impl`) whose *first
+type parameter is `Self`*, bounded by the trait:
+
+```
+trait Show { fun twice(self) -> Int { self.show() + self.show() } }
+⇒            fun twice<Self: Show>(self: Self) -> Int { ... }
+```
+
+The trait's own `method_type` keeps stating `Self` as the trait type — that is
+what impl conformance and call sites are checked against — but a `Subst` is
+keyed by *name*, so a `TY_TRAIT` could never be bound by one. Projecting the
+signature onto a real `TY_GENERIC` once (`trait_project`) makes the body an
+ordinary generic function: `self.show()` inside it dispatches through `Self`'s
+bound exactly as it would in a `<T: Show>` function, and one copy is compiled
+per receiver type. Every call routed through a trait — a bound, or an impl
+that omitted the method — records `Self` in its `ExprMethodCall.inst`
+alongside the method's own type arguments, which is the whole key
+`cg_inst_key` needs. An impl method has no parameter of that name, so on the
+calls that land on one the extra binding is simply unused.
 
 `MONO_MAX_DEPTH` (32) bounds the chain. `fun grow<T>(v: T) { grow([v]) }`
 type-checks but names a *different* instantiation at every level, each keyed
 one array deeper than the last, so nothing converges. The one-byte slot space
 would stop it eventually, but only after interning a few hundred new types
 into a fixed-size intern table — so the limit lives where the divergence is.
-
-Still out of reach: a default method body the impl inherited. The trait's
-`TraitMethodDef.default_impl` is never built, so there is no `FunDef` to
-instantiate, and `Self` in a trait body is a `TY_TRAIT` rather than a
-`TY_GENERIC` — a name-keyed `Subst` cannot bind it.
 
 ### Propagate (`?`)
 
@@ -378,6 +397,13 @@ closure's upvalue array. `cg_add_upvalue` de-duplicates, so two references to
 the same captured variable share one runtime cell. Assignment to a captured
 variable is symmetric (`OP_SET_UPVALUE`), which is what makes a mutable shared
 cell (two closures over one `var`) behave.
+
+`self` is one of those names: `compile_fun_body` registers the receiver as a
+local *called* `"self"` (the parser leaves the parameter nameless, and `self`
+is a keyword, so nothing else can claim the slot), so a closure inside a
+method captures it like any other local — `EXPR_SELF` reads `Cg.self_slot`
+when it is this frame's, and falls back to `cg_resolve_upvalue` when it is an
+enclosing one's.
 
 **Upvalues are open then closed.** While the defining frame is alive an
 `ObjUpvalue`'s `location` points straight at the variable's stack slot — reads

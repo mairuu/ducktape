@@ -1,12 +1,8 @@
 #! expect: lib.dt
 # type-checks; only --run rejects it, in the dependency rather than here.
-use lib::{Show, show_twice};
+use lib::show_twice;
 
 struct S(Int)
-
-impl Show for S {
-  fun show(self) -> Int { return self.0; }
-}
 
 fun main() {
   print(show_twice(S(21)));

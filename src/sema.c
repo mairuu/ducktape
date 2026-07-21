@@ -317,6 +317,27 @@ static Subst subst_concat(Subst outer, Subst inner, Allocator *al) {
   return s;
 }
 
+// bind `Self` to the receiver's type, on top of a method's own type args. A
+// trait's default body is generic over `Self` (see resolve_trait_default_impl),
+// so this is the substitution that instantiates it. Appended last: a method
+// type parameter could not be named `Self`, but subst_apply takes the first
+// match and the method's own args must win at every other name.
+static Subst subst_with_self(Subst method_args, Type *self_ty, Allocator *al) {
+  int n = method_args.count + 1;
+  StringView *names = al_alloc(al, sizeof(StringView) * (size_t)n);
+  Type **args = al_alloc(al, sizeof(Type *) * (size_t)n);
+  for (int i = 0; i < method_args.count; i++) {
+    names[i] = method_args.params[i];
+    args[i] = method_args.args[i];
+  }
+  names[method_args.count] = sv_from_cstr("Self");
+  args[method_args.count] = self_ty;
+
+  Subst s;
+  subst_init(&s, names, args, n);
+  return s;
+}
+
 // ── instantiation records ────────────────────────────────────────────────────
 
 // Stash on a call node the substitution that instantiated its target, so
@@ -1504,6 +1525,70 @@ static void resolve_impl_decl(ResolveCtx *rctx, Decl *decl) {
   rctx->tyres.tscope = tscope_pop(rctx->tyres.tscope);
 }
 
+static Type *trait_project(Type *t, TraitDef *trait, Type *self_to,
+                           ImplDef *impl, Allocator *al);
+
+// The `Self` a trait's default *bodies* are written against: a real type
+// parameter bounded by the trait, not the abstract trait type. Interned like
+// any other generic, so every mention of it — the body's signature, the type
+// scope it is checked under, the key an instantiation is compiled under — is
+// the same type.
+static Type *trait_self_param(TraitDef *trait, Allocator *al) {
+  TraitDef *bounds[1] = {trait};
+  return ty_generic(sv_from_cstr("Self"), bounds, 1, al);
+}
+
+// Give a default body a definition of its own, so it can be compiled like the
+// generic function it effectively is:
+//
+//     trait Show { fun twice(self) -> Int { self.show() + self.show() } }
+//     ⇒  fun twice<Self: Show>(self: Self) -> Int { ... }
+//
+// The trait's `method_type` states `Self` as the trait type, which a name-keyed
+// `Subst` cannot bind — so the signature is projected onto the type parameter
+// once, here. Calls on `self` inside the body then dispatch through the bound
+// exactly as they do in a `<T: Show>` function, which is machinery codegen
+// already has.
+static FunDef *resolve_trait_default_impl(ResolveCtx *rctx, TraitDef *trait_def,
+                                          TraitMethodDef *method_def,
+                                          TraitItemNode *item) {
+  Type *self_param = trait_self_param(trait_def, rctx->al);
+
+  FunDef *fun = al_alloc_zero_for(rctx->al, FunDef);
+  fun->name = item->name;
+  fun->module = trait_def->module;
+  fun->body = item->default_body;
+  fun->span = item->span;
+  fun->slot = FUN_SLOT_NONE;
+
+  // `Self` first, then the method's own parameters — the order cg_inst_key
+  // walks them in does not matter (the key is name-addressed), but a body can
+  // mention both.
+  fun->type_param_count = method_def->type_param_count + 1;
+  fun->type_params =
+      al_alloc(rctx->al, sizeof(Type *) * (size_t)fun->type_param_count);
+  fun->type_params[0] = self_param;
+  for (int i = 0; i < method_def->type_param_count; i++) {
+    fun->type_params[i + 1] = method_def->type_params[i];
+  }
+
+  Type *fun_ty = trait_project(method_def->method_type, trait_def, self_param,
+                               /*impl=*/NULL, rctx->al);
+  fun->fun_type = fun_ty;
+  fun->return_type = fun_ty->as.fun.return_type;
+
+  fun->param_count = item->param_count;
+  fun->params =
+      al_alloc_zero(rctx->al, sizeof(ParamDef) * (size_t)item->param_count);
+  for (int i = 0; i < item->param_count; i++) {
+    fun->params[i].name =
+        item->params[i].is_self ? sv_from_cstr("self") : item->params[i].name;
+    fun->params[i].is_self = item->params[i].is_self;
+    fun->params[i].param_type = fun_ty->as.fun.param_types[i];
+  }
+  return fun;
+}
+
 static void resolve_trait_decl(ResolveCtx *rctx, Decl *decl) {
   assert(decl->kind == DECL_TRAIT && "expected trait decl");
   DeclTrait *trait_decl = &decl->as.trait_decl;
@@ -1561,7 +1646,6 @@ static void resolve_trait_decl(ResolveCtx *rctx, Decl *decl) {
     TraitMethodDef *method_def = &trait_def->methods[method_idx++];
     method_def->name = item->name;
     method_def->has_default = item->default_body != NULL;
-    method_def->default_impl = NULL; // default bodies compiled/checked later
 
     // method type parameters
     method_def->type_param_count = item->type_param_count;
@@ -1602,6 +1686,13 @@ static void resolve_trait_decl(ResolveCtx *rctx, Decl *decl) {
 
     method_def->method_type =
         ty_fun(param_types.ptr, param_types.count, return_type, rctx->al);
+
+    // a default body is a definition of its own; its *body* is checked in
+    // pass 3 (tc_check_trait), like any other function's.
+    if (item->default_body != NULL) {
+      method_def->default_impl =
+          resolve_trait_default_impl(rctx, trait_def, method_def, item);
+    }
   }
 
   // end; trait level type scope
@@ -2865,11 +2956,17 @@ static Type *check_trait_method_call(CheckCtx *ctx, Expr *expr, TraitDef *trait,
   if (impl == NULL) {
     // dispatch through a bound: which impl supplies the body depends on what
     // `self_ty` is instantiated with, so codegen redoes the lookup once it
-    // knows. Only the method's own type args can be recorded here.
+    // knows — and it may land on an impl method or on the trait's default.
     mc->bound_trait = trait;
     mc->bound_self = self_ty;
-    cctx_record_inst(ctx, &mc->inst, subst);
   }
+
+  // record `Self` alongside the method's own type args: it is the first type
+  // parameter of the default body, the one definition a call can reach whose
+  // signature is written in terms of the receiver rather than of an impl. An
+  // impl method has no parameter of that name, so the extra binding is simply
+  // unused when the call lands on one.
+  cctx_record_inst(ctx, &mc->inst, subst_with_self(subst, self_ty, ctx->al));
 
   Type *fun_ty = subst_apply(&subst, tm->method_type, ctx->al);
   fun_ty = trait_project(fun_ty, trait, self_ty, impl, ctx->al);
@@ -2989,6 +3086,7 @@ static Type *resolve_method_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
         &via_subst, ctx->al);
     if (inherited != NULL) {
       mc->resolved_impl = via_impl;
+      mc->resolved_default = inherited->default_impl;
       return check_trait_method_call(ctx, expr, via_trait, inherited, self_ty,
                                      via_impl, via_subst);
     }
@@ -4375,11 +4473,11 @@ static void tc_check_impl(TypeChecker *tc, Decl *decl) {
   cctx_solve_insts(&cctx);
 }
 
-// Check the bodies of a trait's default methods, once, against the abstract
-// `Self` — not once per impl. `self` has the trait type, so `self.other()`
-// dispatches through the trait's own signatures (resolve_bound_method_call)
-// and `Self.Assoc` stays an unbound projection: a body that checks here is
-// valid for every impl that could inherit it.
+// Check the bodies of a trait's default methods, once — not once per impl.
+// `self` has the body's own `Self` type parameter, bounded by the trait, so
+// `self.other()` dispatches through the trait's own signatures
+// (resolve_bound_method_call) and `Self.Assoc` stays an unbound projection: a
+// body that checks here is valid for every impl that could inherit it.
 static void tc_check_trait(TypeChecker *tc, Decl *decl) {
   assert(decl->kind == DECL_TRAIT && "expected trait decl");
   DeclTrait *trait_decl = &decl->as.trait_decl;
@@ -4388,10 +4486,13 @@ static void tc_check_trait(TypeChecker *tc, Decl *decl) {
   CheckCtx cctx;
   cctx_init(&cctx, tc, trait_def->module, tc->diags, tc->al);
 
-  // begin trait type scope
+  // begin trait type scope. Only bodies are checked here, and a body is
+  // written against the `Self` type parameter its own definition introduced —
+  // the abstract trait type never appears in one.
   cctx.tyres.tscope = tscope_push(cctx.tyres.tscope, cctx.al);
-  tscope_define(cctx.tyres.tscope, sv_from_cstr("Self"), trait_def->self_type,
-                cctx.diags, decl->span, NULL);
+  tscope_define(cctx.tyres.tscope, sv_from_cstr("Self"),
+                trait_self_param(trait_def, cctx.al), cctx.diags, decl->span,
+                NULL);
 
   for (int i = 0, method_idx = 0; i < trait_decl->item_count; i++) {
     TraitItemNode *item = &trait_decl->items[i];
@@ -4399,31 +4500,31 @@ static void tc_check_trait(TypeChecker *tc, Decl *decl) {
       continue;
     }
     TraitMethodDef *method_def = &trait_def->methods[method_idx++];
-    if (item->default_body == NULL) {
+    FunDef *fun = method_def->default_impl;
+    if (fun == NULL) {
       continue; // required method: a signature only
     }
 
-    Type *method_ty = method_def->method_type;
-    cctx.return_type = method_ty->as.fun.return_type;
+    cctx.fun = fun;
+    cctx.return_type = fun->return_type;
 
-    // begin method type scope
+    // begin method type scope. `Self` is fun->type_params[0], already in scope
+    // from the trait level; the method's own follow it.
     cctx.tyres.tscope = tscope_push(cctx.tyres.tscope, cctx.al);
     for (int j = 0; j < item->type_param_count; j++) {
       tscope_define(cctx.tyres.tscope, item->type_params[j].name,
-                    method_def->type_params[j], cctx.diags,
+                    fun->type_params[j + 1], cctx.diags,
                     item->type_params[j].span, NULL);
     }
 
     // begin method var scope
     cctx.vscope = vscope_push(cctx.vscope, true, false, cctx.al);
-    for (int j = 0; j < item->param_count; j++) {
-      StringView param_name =
-          item->params[j].is_self ? sv_from_cstr("self") : item->params[j].name;
-      vscope_define(cctx.vscope, param_name, method_ty->as.fun.param_types[j],
+    for (int j = 0; j < fun->param_count; j++) {
+      vscope_define(cctx.vscope, fun->params[j].name, fun->params[j].param_type,
                     cctx.diags, item->params[j].span, NULL);
     }
 
-    resolve_expr_coerced(&cctx, item->default_body, cctx.return_type);
+    resolve_expr_coerced(&cctx, fun->body, cctx.return_type);
 
     // end method var scope
     cctx.vscope = vscope_pop(cctx.vscope);

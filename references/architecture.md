@@ -62,7 +62,8 @@ Three passes over each module, mirroring compiler phases:
    `Self` bound to the abstract trait type (`ty_trait`): each `TraitMethodDef`
    gets a `method_type` (with `self_index` recording where `self` sits, typed
    as the trait) and a `has_default` flag; a `type Assoc;` becomes an `AssocTypeDef` with a NULL
-   type. `Self.Assoc` in a trait signature is left abstract — `TYNODE_ASSOC`
+   type. A method that *has* a default body also gets a `default_impl`: a
+   `FunDef` of its own, generic over `Self` (see "Trait default bodies"). `Self.Assoc` in a trait signature is left abstract — `TYNODE_ASSOC`
    sees a `TY_TRAIT` base and yields a `ty_assoc` projection instead of going
    through the impl index.
 3. **check** — `tc_check_module`: `resolve_expr`/`resolve_stmt` walk bodies.
@@ -74,8 +75,8 @@ Three passes over each module, mirroring compiler phases:
    signature into the impl's terms via `trait_project` (abstract `Self` →
    impl self type, `Self.Assoc` → the impl's concrete bound) and compares with
    `types_equal`. `tc_check_trait` then checks each default method *body* —
-   once, against the abstract `Self`, not per impl. Extra inherent methods in a
-   trait impl are tolerated.
+   once, against that method's `default_impl`, not per impl. Extra inherent
+   methods in a trait impl are tolerated.
 
 ### Modules
 
@@ -205,10 +206,34 @@ trait impl whose trait declares the name with a default body, and the call is
 checked against the trait signature projected through *that* impl.
 
 `ExprMethodCall.resolved_method` stays NULL in both cases, so the two are told
-apart by `bound_trait`: set for a bound call, along with `bound_self` (the
+apart on the node: a bound call sets `bound_trait` and `bound_self` (the
 abstract receiver type), which is what lets codegen redo the impl lookup once
-that receiver is concrete. An inherited default method has neither and is
-still refused — the trait's default body never gets a `FunDef`.
+that receiver is concrete; an inherited default sets `resolved_default`, the
+`FunDef` of the body it will run. Either way the recorded `inst` binds `Self`
+to the receiver's type — see "Trait default bodies".
+
+### Trait default bodies
+
+A default body is checked and compiled *once per receiver type*, like the
+generic function it effectively is:
+
+```
+trait Show { fun twice(self) -> Int { self.show() + self.show() } }
+⇒            fun twice<Self: Show>(self: Self) -> Int { ... }
+```
+
+`resolve_trait_default_impl` builds that `FunDef` at resolve time: its type
+params are `Self` — `ty_generic("Self", bounds=[the trait])` — followed by the
+method's own, and its signature is `method_type` run through `trait_project`
+onto that parameter. The trait's `method_type` itself keeps the abstract
+`TY_TRAIT` `Self`, since impl conformance and call sites are checked against
+it; only the *body* needs a `Self` that a `Subst` — which is keyed by name —
+can bind, which is what the milestone turned on.
+
+Everything downstream then falls out of machinery that already existed:
+`tc_check_trait` checks the body with `Self` in scope as that type parameter,
+so `self.other()` inside it is an ordinary call through a bound, and codegen
+instantiates it like any other generic definition.
 
 A type parameter satisfies exactly the bounds it was declared with:
 `impl_index_implements` answers for a `TY_GENERIC` from `bounds` rather than

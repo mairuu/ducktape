@@ -95,7 +95,11 @@ ending in `return` has type `!` (never), which unifies with anything.
   impls define the same name).
 - Method calls: `p.draw()`, `p.x`, tuple access `t.0`. A method an impl
   omitted but whose trait gives a default body is inherited: the call checks
-  against the trait's signature, projected into the impl's terms.
+  against the trait's signature, projected into the impl's terms, and runs a
+  copy of the body compiled for that receiver type. Inside such a body `Self`
+  is a type parameter bounded by the trait — usable in annotations, argument
+  and return position — so calls on `self` see exactly the trait's own
+  methods, whichever impl ends up inheriting it.
 - Trait bounds on type parameters are written inline (`fun f<T: A + B>(..)`),
   in a `where` clause (`fun f<T>(..) -> R where T: B`), or both — they merge.
   A bound must name a trait. Bounds are *enforced*: instantiating a bounded
@@ -199,7 +203,6 @@ Registered in every module; the only builtin so far.
 
 | Gap | Behavior today |
 |---|---|
-| calling an inherited default method under `--run` | type-checks, but the VM has no chunk for it (the body would need monomorphising against the concrete self) — "calling an inherited default method is not supported by the VM yet" |
 | extra (non-trait) methods in a trait impl | tolerated as inherent methods (Rust rejects them) |
 | trait objects (`dyn Trait` values) | a trait names a type only in bound / `Self` position; there is no dynamic dispatch |
 | `mod` declarations | no such keyword; `use` is what pulls a file in |

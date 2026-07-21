@@ -440,19 +440,67 @@
   is rejected outright, a tuple struct could not be matched at all
   (`tests/run/match.dt`). Both rewrites now carry the type across.
 
+- **Inherited default method bodies (milestone 12)** — the last construct
+  `tests/pass/in_fixed.dt` reached that the VM refused, so the showcase now
+  compiles *and* runs (it prints nothing, so it stays a `tests/pass` entry;
+  `tests/run/trait_default.dt` is what exercises the feature). Design:
+  `architecture.md` "Trait default bodies", `runtime.md` "Monomorphisation".
+
+  The observation the milestone turns on: **a default body is a generic
+  function whose first type parameter is `Self`.**
+
+      trait Show { fun twice(self) -> Int { self.show() + self.show() } }
+      ⇒            fun twice<Self: Show>(self: Self) -> Int { ... }
+
+  What blocked it was that a `Subst` is keyed by *name*, and the trait's
+  `Self` was a `TY_TRAIT` — nothing a substitution could bind, so there was
+  no way to say "this copy, at this receiver type". Projecting the signature
+  onto a real `ty_generic("Self", bounds=[trait])` once, in
+  `resolve_trait_default_impl`, gives the body a `FunDef` like any other and
+  the rest is machinery that already existed: `tc_check_trait` checks the
+  body with `Self` in scope as that parameter, so `self.other()` is an
+  ordinary call through a bound; `check_trait_method_call` records `Self`
+  in the call's `inst` next to the method's own type arguments; codegen
+  instantiates it exactly as it does a `<T: Show>` function. The trait's
+  `method_type` keeps the abstract `Self`, because conformance and call
+  sites are still checked against the trait, not against the copy.
+
+  Net: ~120 lines added, no new concept in the backend — the diff is mostly
+  one constructor and the two call paths (`resolved_default` on a concrete
+  receiver, the `impl_index_default_method` fallback under a bound) learning
+  to name a definition they previously had to refuse.
+
+  Also fixed a pre-existing bug found while writing the tests, unrelated to
+  traits but on the same code path: a closure capturing `self` (in *any*
+  method) hit `compile_expr`'s `assert(cg->self_slot >= 0)` and **aborted
+  the compiler**, because the parser leaves the receiver parameter nameless
+  so `cg_resolve_upvalue` had nothing to find. `compile_fun_body` now
+  registers it as a local called `"self"` — a keyword, so no user local can
+  collide — and `EXPR_SELF` falls back to an upvalue
+  (`tests/run/closures.dt`).
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
 milestone (~900 lines).
 
-1. **Inherited default method bodies** — the last construct in `in_fixed.dt`
-   the VM refuses. `TraitMethodDef.default_impl` is never built, so there is
-   no `FunDef` to instantiate, and `Self` in a trait body is a `TY_TRAIT`
-   rather than a `TY_GENERIC` — a name-keyed `Subst` cannot bind it, so this
-   needs `Self` to become a real type parameter of the default body. It is now
-   the *only* construct `tests/pass/in_fixed.dt` still hits under `--run`
-   (`tests/fail_run/mod_unsupported` is written against it for the same
-   reason).
+Nothing on the main line is *blocked*: every construct the checker accepts in
+`tests/pass/in_fixed.dt` now also runs. The list below is what the "known
+warts" section would promote first, in the order that pays off soonest — pick
+by appetite rather than by necessity.
+
+1. **Trait objects (`dyn Trait`)** — the one language feature whose absence
+   shapes the rest: a trait names a type only in bound / `Self` position
+   today, and every dispatch is static. It needs a vtable representation, a
+   fat value, and a rule for which traits are object-safe.
+2. **Module-granular impls and `pub use`** — `ImplIndex` lives on the
+   `TypeChecker`, so an impl applies even where its module was never
+   imported, and imports don't compose (no re-export, no glob, no qualified
+   paths). Fixing the first is a scoping change; the second is parser plus
+   `tc_link_imports`.
+3. **Wider slot spaces** — 256 functions/structs/enums program-wide, now
+   reached by *use* of generics rather than by how many are written. A
+   two-byte operand (or a wide-operand opcode pair) lifts it.
 
 Not on the roadmap: the **REPL** is a side feature, not a milestone — it lives
 on the `feature/repl` branch (`--repl`, incremental compilation over one module
@@ -475,6 +523,13 @@ via `Module.decl_base`) and is not part of the main line.
   reached by *use* of generics, not just by how many are written
 - a generic definition's diagnostics are only seen where it is instantiated,
   so an unsupported construct inside an uncalled generic goes unreported
+- an associated-type projection cannot key an instantiation: handing a
+  `T.Item` / `Self.Item` value to another generic (`id(v.item())`) reports
+  "cannot instantiate 'id': type argument 'T' is not known here", because
+  codegen has no `infer_apply` to collapse the projection once the base is
+  concrete — `subst_apply` passes `TY_ASSOC` through untouched and
+  `impl_index_assoc_type` is checker-side. Affects bounded generic functions
+  and trait default bodies alike
 - trait impls are program-global: an impl applies even if its module was never
   imported (`ImplIndex` lives on the `TypeChecker`, not the `Module`)
 - no `pub use` re-export, no glob `use a::*`, no module-qualified paths

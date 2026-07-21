@@ -6,7 +6,9 @@
 #> b
 #> <int 7>
 #> <bool true>
-use util::{Pair, swap, tag, Label};
+#> int 7!
+#> bool true!
+use util::{Pair, swap, tag, loud, Label};
 
 impl Label for Int {
   fun label(self) -> String {
@@ -30,4 +32,9 @@ fun main() {
 
   print(tag(7));
   print(tag(true));
+
+  # `shout` has a default body no impl here overrides
+  var n = 7;
+  print(n.shout());
+  print(loud(true));
 }

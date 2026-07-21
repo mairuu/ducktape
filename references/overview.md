@@ -89,10 +89,10 @@ phase aborts mid-file. Error recovery uses a poison type/expr convention (see
   recursion, first-class function values and closures with upvalues, `print`,
   GC-backed strings and arrays, structs/enums/tuples with full match
   compilation, methods and `?`, multi-module programs, and generic code via
-  monomorphisation (including dispatch through a trait bound). What is left
-  is listed in `language.md`'s not-yet-implemented table; the notable two are
-  destructuring `var` bindings and inherited default method bodies. See
-  `runtime.md`.
+  monomorphisation (including dispatch through a trait bound and inherited
+  trait default bodies). What is left is listed in `language.md`'s
+  not-yet-implemented table — nothing on it is a construct
+  `tests/pass/in_fixed.dt` reaches. See `runtime.md`.
 - **Showcase program:** `tests/pass/in_fixed.dt` exercises most of the checked
   language in one file.
 - **Roadmap:** `roadmap.md`.

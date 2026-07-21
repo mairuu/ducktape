@@ -2,6 +2,12 @@
 # copies come from call sites in another module entirely.
 pub trait Label {
   fun label(self) -> String;
+
+  # a default body: written here, but instantiated only at the receiver types
+  # the importer's impls introduce — its copies come from another module too.
+  fun shout(self) -> String {
+    return "{self.label()}!";
+  }
 }
 
 pub struct Pair<T> {
@@ -25,4 +31,10 @@ pub fun swap<T>(p: Pair<T>) -> Pair<T> {
 
 pub fun tag<T: Label>(v: T) -> String {
   return "<{v.label()}>";
+}
+
+# through a bound, the body a call reaches may be an impl's method or the
+# trait's default — only the instantiated `T` decides which
+pub fun loud<T: Label>(v: T) -> String {
+  return v.shout();
 }

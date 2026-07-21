@@ -1,0 +1,30 @@
+#! expect: type 'Self' does not implement trait 'Other'
+# a default body's `Self` satisfies exactly the bounds its own trait gives it,
+# and that is checked once here — not per impl, and not at the call site.
+trait Show {
+    fun show(self) -> Int;
+
+    fun via(self) -> Int {
+        return needs_other(self);
+    }
+}
+
+trait Other {
+    fun o(self) -> Int;
+}
+
+fun needs_other<T: Other>(v: T) -> Int {
+    return v.o();
+}
+
+struct S(Int)
+
+impl Show for S {
+    fun show(self) -> Int {
+        return self.0;
+    }
+}
+
+fun main() {
+    var n = S(4).show();
+}

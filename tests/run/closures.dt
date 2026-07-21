@@ -14,6 +14,7 @@
 #> 10
 #> 20
 #> 20
+#> 12
 
 # captures a parameter; the returned closure outlives make_adder's frame
 fun make_adder(n: Int) -> fun(Int) -> Int {
@@ -32,6 +33,20 @@ fun make_counter() -> fun() -> Int {
 # three-level upvalue chain: the innermost closure reads `a` two frames out
 fun make_adder3(a: Int) -> fun(Int) -> fun(Int) -> Int {
     return |b: Int| => |c: Int| => a + b + c;
+}
+
+struct Counter(Int)
+
+impl Counter {
+    fun get(self) -> Int {
+        return self.0;
+    }
+
+    # `self` is a local of this frame like any other, so a closure captures it
+    fun plus(self, n: Int) -> Int {
+        var f = |m: Int| => self.get() + m;
+        return f(n);
+    }
 }
 
 fun main() {
@@ -72,4 +87,6 @@ fun main() {
     print(inc());            # 10
     print(inc());            # 20
     print(get());            # 20
+
+    print(Counter(2).plus(10));
 }

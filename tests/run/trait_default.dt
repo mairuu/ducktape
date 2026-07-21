@@ -1,0 +1,131 @@
+# a default method body is compiled like the generic function it is:
+# `fun twice<Self: Show>(self: Self)`. One copy per receiver type, selected
+# the same way any other instantiation is.
+#> 42
+#> 84
+#> count
+#> true
+#> 10
+#> 14
+#> 50
+#> 0
+#> 126
+#> 10
+#> 21
+#> 8
+#> 42
+#> 14
+fun pair_up<T>(a: T, b: T) -> (T, T) {
+    return (a, b);
+}
+
+trait Show {
+    type Label;
+
+    fun show(self) -> Int;
+    fun label(self) -> Self.Label;
+
+    # calls a required method through `Self`'s own bound
+    fun twice(self) -> Int {
+        return self.show() + self.show();
+    }
+
+    # one default calling another
+    fun quad(self) -> Int {
+        return self.twice() + self.twice();
+    }
+
+    # the projection stays abstract until an impl binds it
+    fun describe(self) -> Self.Label {
+        return self.label();
+    }
+
+    # a default with a type parameter of its own, alongside `Self`
+    fun tagged<T>(self, tag: T) -> T {
+        var n = self.show();
+        return tag;
+    }
+
+    # `Self` as a type argument: which copy of `pair_up` this reaches is
+    # decided per receiver type, from inside a body that is itself a copy
+    fun doubled(self) -> Int {
+        var (x, y) = pair_up(self, self);
+        return x.show() + y.show();
+    }
+
+    # `Self` in argument and return position, and captured by a closure
+    fun bigger(self, other: Self) -> Self {
+        var pick: fun() -> Bool = || => self.show() >= other.show();
+        if pick() {
+            return self;
+        }
+        return other;
+    }
+}
+
+struct Count(Int)
+
+impl Show for Count {
+    type Label = String;
+
+    fun show(self) -> Int {
+        return self.0;
+    }
+
+    fun label(self) -> String {
+        return "count";
+    }
+}
+
+struct Boxed<T> {
+    item: T,
+    size: Int,
+}
+
+# a generic impl: one instantiation of the default body per type argument
+impl<T> Show for Boxed<T> {
+    type Label = Int;
+
+    fun show(self) -> Int {
+        return self.size;
+    }
+
+    fun label(self) -> Int {
+        return self.size * 10;
+    }
+
+    # an impl that writes the method itself wins over the default
+    fun quad(self) -> Int {
+        return 0;
+    }
+}
+
+# dispatch through a bound: which body runs is only known once T is concrete,
+# and it may be an impl's method or the trait's default
+fun sum_twice<T: Show>(a: T, b: T) -> Int {
+    return a.twice() + b.quad();
+}
+
+fun main() {
+    var c = Count(21);
+    print(c.twice());
+    print(c.quad());
+    print(c.describe());
+    print(c.tagged(true));
+
+    var bi = Boxed { item: 3, size: 5 };
+    var bs = Boxed { item: "x", size: 7 };
+    print(bi.twice());
+    print(bs.twice());
+    print(bi.describe());
+    print(bi.quad());
+
+    print(sum_twice(c, c));
+    print(sum_twice(bi, bi));
+
+    print(c.bigger(Count(4)).show());
+    print(bi.bigger(Boxed { item: 9, size: 8 }).show());
+
+    print(c.doubled());
+    print(bs.doubled());
+}

@@ -2,13 +2,9 @@
 # instantiation, and those copies are compiled after every module has been
 # walked. The diagnostic must still come from *this* file, the one the body
 # was written in, not from the module that instantiated it.
-pub trait Show {
-  fun show(self) -> Int;
-  fun twice(self) -> Int { return self.show() + self.show(); }
-}
-
-pub fun show_twice<T: Show>(v: T) -> Int {
-  # an inherited default body has no FunDef to instantiate — the last
-  # construct the VM still refuses.
-  return v.twice();
+pub fun show_twice<T>(v: T) -> Int {
+  # a call to `print` lowers to an opcode, so the builtin has no body and no
+  # global slot: naming it as a value is a construct the VM refuses.
+  var p: fun(Int) -> () = print;
+  return 1;
 }

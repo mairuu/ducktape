@@ -1007,18 +1007,31 @@ static void compile_method_call(Cg *cg, Expr *expr) {
     MethodDef *method = impl_index_method(
         cg->mono->impls, self, mc->method_name, &match,
         /*infer=*/NULL, /*bare_path=*/false, expr->span, cg->al);
-    if (method == NULL) {
+    if (method != NULL) {
+      fun = method->fun;
+      impl_subst = match.subst;
+    } else {
       // an applicable impl exists (the checker enforced the bound) but does
-      // not define the method, so the body is the trait's default — which has
-      // no FunDef of its own yet.
-      cg_error(cg, expr->span, "calling an inherited default method");
-      return;
+      // not define the method, so the body is the trait's default. It is
+      // instantiated on `Self`, which mc->inst carries.
+      ImplDef *via_impl = NULL;
+      TraitDef *via_trait = NULL;
+      Subst via_subst = subst_empty();
+      TraitMethodDef *inherited =
+          impl_index_default_method(cg->mono->impls, self, mc->method_name,
+                                    &via_impl, &via_trait, &via_subst, cg->al);
+      if (inherited == NULL || inherited->default_impl == NULL) {
+        cg_error(cg, expr->span, "this method call");
+        return;
+      }
+      fun = inherited->default_impl;
     }
-    fun = method->fun;
-    impl_subst = match.subst;
+  } else if (mc->resolved_default != NULL) {
+    // the receiver's impl omitted the method: the body is the trait's default,
+    // compiled once per receiver type like any other generic definition.
+    fun = mc->resolved_default;
   } else {
-    // a default body the impl inherited, which has no chunk of its own.
-    cg_error(cg, expr->span, "calling an inherited default method");
+    cg_error(cg, expr->span, "this method call");
     return;
   }
 
@@ -1439,11 +1452,25 @@ static void compile_expr(Cg *cg, Expr *expr) {
     compile_propagate(cg, expr);
     break;
 
-  case EXPR_SELF:
-    assert(cg->self_slot >= 0 &&
-           "'self' outside a method got past the checker");
-    emit2(cg, OP_GET_LOCAL, (uint8_t)cg->self_slot);
+  case EXPR_SELF: {
+    if (cg->self_slot >= 0) {
+      emit2(cg, OP_GET_LOCAL, (uint8_t)cg->self_slot);
+      break;
+    }
+    // inside a closure the receiver belongs to the enclosing method's frame,
+    // so it is captured like any other local it mentions.
+    int upvalue = cg_resolve_upvalue(cg, sv_from_cstr("self"), expr->span);
+    if (upvalue < 0) {
+      // `self` outside a method is a checker error, so this is unreachable
+      // from a program that got here — reported rather than asserted, since a
+      // crash is the one thing codegen must not do.
+      cg_error(cg, expr->span, "this name");
+      emit(cg, OP_UNIT);
+      break;
+    }
+    emit2(cg, OP_GET_UPVALUE, (uint8_t)upvalue);
     break;
+  }
 
   case EXPR_MATCH:
     compile_match(cg, expr);
@@ -1580,8 +1607,13 @@ static void compile_fun_body(Mono *mono, FunDef *fun, FunDef *body_of,
   chunk_init(cg.chunk, mono->al);
 
   for (int i = 0; i < fun->param_count; i++) {
-    int slot = cg_add_local(&cg, fun->params[i].name, body_of->span);
-    if (fun->params[i].is_self) {
+    // the receiver is named, not anonymous: a closure in the body captures it
+    // by that name like any other local (the parser leaves `self` nameless,
+    // and `self` is a keyword, so nothing else can claim the slot).
+    bool is_self = fun->params[i].is_self;
+    StringView name = is_self ? sv_from_cstr("self") : fun->params[i].name;
+    int slot = cg_add_local(&cg, name, body_of->span);
+    if (is_self) {
       cg.self_slot = slot;
     }
   }

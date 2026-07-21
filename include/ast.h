@@ -254,7 +254,13 @@ typedef struct {
   int type_param_count;
   int self_index; // position of `self` in method_type, -1 => assoc function
   bool has_default;
-  FunDef *default_impl; // NULL if required
+
+  // the default body as a definition of its own: a generic function whose
+  // first type parameter is `Self`, bounded by this trait. NULL if required.
+  // `method_type` keeps the abstract `Self` (a TY_TRAIT) — it is what impl
+  // conformance and call sites check against; only the *body* needs a `Self`
+  // a substitution can bind, so it is compiled once per concrete receiver.
+  FunDef *default_impl;
 } TraitMethodDef;
 
 typedef struct {
@@ -688,9 +694,16 @@ typedef struct {
   MethodDef *resolved_method;
   ImplDef *resolved_impl;
 
+  // set instead of `resolved_method` when the receiver's impl omitted the
+  // method and inherited the trait's default body: that body is its own
+  // definition, generic over `Self` (see TraitMethodDef.default_impl).
+  FunDef *resolved_default;
+
   // the type arguments this call instantiates the target with (impl params
   // then the method's own), in the enclosing definition's terms — see
-  // ExprPath.inst.
+  // ExprPath.inst. A call routed through a trait (a bound, or an inherited
+  // default) also binds `Self` to the receiver's type, since that is the
+  // default body's own first type parameter.
   Subst inst;
 
   // set instead of `resolved_method` when the receiver is abstract and the
