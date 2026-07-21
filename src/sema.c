@@ -755,6 +755,7 @@ static void tc_register_builtins(TypeChecker *tc, Module *m) {
   FunDef *def = al_alloc_zero_for(tc->al, FunDef);
   def->name = sv_from_cstr("print");
   def->module = m;
+  def->is_builtin = true;
 
   def->type_param_count = 1;
   def->type_params = al_alloc_zero(tc->al, sizeof(Type *));
@@ -899,47 +900,27 @@ static Decl *mod_find_own_decl(Module *m, StringView name) {
   return NULL;
 }
 
-// copy one resolved entry from `dep`'s scopes into `m`'s under `alias`.
+// copy one resolved entry from `src`'s scopes into `dst`'s under `alias`.
 // a fun lives in both scopes, a struct/enum/trait only in the type scope.
-static void link_copy_entry(TypeChecker *tc, Module *m, Module *dep,
+// `src == dst` is the std case: giving a builtin a second name in place.
+static void link_copy_entry(TypeChecker *tc, Module *dst, Module *src,
                             StringView name, StringView alias, Span span) {
-  TypeEntry *src_te = tscope_lookup(&dep->tscope, name);
+  TypeEntry *src_te = tscope_lookup(&src->tscope, name);
   if (src_te != NULL) {
     TypeEntry *te = NULL;
-    tscope_define(&m->tscope, alias, src_te->type, tc->diags, span, &te);
+    tscope_define(&dst->tscope, alias, src_te->type, tc->diags, span, &te);
     te->as = src_te->as;
   }
 
-  VarEntry *src_ve = vscope_lookup(&dep->vscope, name, NULL);
+  VarEntry *src_ve = vscope_lookup(&src->vscope, name, NULL);
   if (src_ve != NULL) {
     VarEntry *ve = NULL;
     // todo (runtime linking milestone): the slot vscope_define assigns here is
     // meaningless — it numbers a binding in the importer, but the callable
-    // lives in dep's slot space. inert while multi-module `--run` is rejected.
-    vscope_define(&m->vscope, alias, src_ve->type, tc->diags, span, &ve);
+    // lives in src's slot space. inert while multi-module `--run` is rejected.
+    vscope_define(&dst->vscope, alias, src_ve->type, tc->diags, span, &ve);
     ve->as = src_ve->as;
   }
-}
-
-// `use std::..` resolves against the builtins tc_register_builtins already put
-// in this module's scopes. no file is ever consulted, and intermediate
-// segments are not modelled — the final segment is the whole namespace.
-static void link_std_import(TypeChecker *tc, Module *m, const UseAlias *a) {
-  TypeEntry *te = tscope_lookup(&m->tscope, a->name);
-  if (te == NULL) {
-    diag_error(tc->diags, a->span, "unknown item '" SV_FMT "' in 'std'",
-               SV_ARG(a->name));
-    return;
-  }
-
-  // `use std::io::print;` — the name is already bound to exactly this entry.
-  // must short-circuit before any conflict check, or the plain form would
-  // report a collision with the builtin it names.
-  if (sv_equal(a->name, a->alias)) {
-    return;
-  }
-
-  link_copy_entry(tc, m, m, a->name, a->alias, a->span);
 }
 
 // return true if `alias` is already taken in m, reporting why.
@@ -962,44 +943,61 @@ static bool link_name_taken(TypeChecker *tc, Module *m, const UseAlias *a) {
   return false;
 }
 
+// bring one `use`d item into `m` under its alias. the two import kinds differ
+// only in where the item comes from and how it is vetted — `dep == m` means
+// `std`, whose items are the builtins already sitting in m's own scopes.
+static void link_import_item(TypeChecker *tc, Module *m, Module *dep,
+                             const UseAlias *a) {
+  if (dep == m) {
+    // std: no file is consulted, and intermediate segments aren't modelled —
+    // the final segment is the whole namespace.
+    if (tscope_lookup(&m->tscope, a->name) == NULL) {
+      diag_error(tc->diags, a->span, "unknown item '" SV_FMT "' in 'std'",
+                 SV_ARG(a->name));
+      return;
+    }
+    // `use std::io::print;` names what is already bound — nothing to add, and
+    // the conflict check below would flag the builtin against itself.
+    if (sv_equal(a->name, a->alias)) {
+      return;
+    }
+  } else {
+    Decl *d = mod_find_own_decl(dep, a->name);
+    if (d == NULL) {
+      diag_error(tc->diags, a->span,
+                 "module '" SV_FMT "' has no item named '" SV_FMT "'",
+                 SV_ARG(dep->file_path), SV_ARG(a->name));
+      return;
+    }
+    if (!d->is_pub) {
+      diag_error(tc->diags, a->span,
+                 "'" SV_FMT "' is private in module '" SV_FMT "'",
+                 SV_ARG(a->name), SV_ARG(dep->file_path));
+      diag_note(tc->diags, (Span){0}, "add 'pub' to its declaration");
+      return;
+    }
+  }
+
+  if (link_name_taken(tc, m, a)) {
+    return;
+  }
+
+  // dep is resolved (topological order), so its scopes carry real types.
+  // if they don't, resolving dep poisoned the decl — stay quiet.
+  link_copy_entry(tc, m, dep, a->name, a->alias, a->span);
+}
+
 void tc_link_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
   for (int i = 0; i < m->import_count; i++) {
     ModImport *imp = &m->imports[i];
+    if (!imp->is_std && imp->module_index < 0) {
+      continue; // discovery already diagnosed it; stay quiet
+    }
+    Module *dep = imp->is_std ? m : reg->modules[imp->module_index];
+
     UseTarget *target = &imp->decl->as.use_decl.target;
-
     for (int j = 0; j < target->count; j++) {
-      UseAlias *a = &target->aliases[j];
-
-      if (imp->is_std) {
-        link_std_import(tc, m, a);
-        continue;
-      }
-      if (imp->module_index < 0) {
-        continue; // discovery already diagnosed it; stay quiet
-      }
-
-      Module *dep = reg->modules[imp->module_index];
-      Decl *d = mod_find_own_decl(dep, a->name);
-      if (d == NULL) {
-        diag_error(tc->diags, a->span,
-                   "module '" SV_FMT "' has no item named '" SV_FMT "'",
-                   SV_ARG(dep->file_path), SV_ARG(a->name));
-        continue;
-      }
-      if (!d->is_pub) {
-        diag_error(tc->diags, a->span,
-                   "'" SV_FMT "' is private in module '" SV_FMT "'",
-                   SV_ARG(a->name), SV_ARG(dep->file_path));
-        diag_note(tc->diags, (Span){0}, "add 'pub' to its declaration");
-        continue;
-      }
-      if (link_name_taken(tc, m, a)) {
-        continue;
-      }
-
-      // dep is resolved (topological order), so its scopes carry real types.
-      // if they don't, resolving dep poisoned the decl — stay quiet.
-      link_copy_entry(tc, m, dep, a->name, a->alias, a->span);
+      link_import_item(tc, m, dep, &target->aliases[j]);
     }
   }
 }

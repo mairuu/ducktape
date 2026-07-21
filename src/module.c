@@ -95,10 +95,9 @@ StringView mod_file_for_use(StringView base_dir, const Path *path,
   n += 3;
   buf[n] = '\0';
 
-  StringView joined = {.chars = buf, .len = n};
-  StringView result = path_normalise(joined, al);
-  al_free(al, buf, sizeof(char) * (size_t)(len + 1));
-  return result;
+  // already normalised by construction: base_dir is a prefix of a normalised
+  // path, and the segments are identifiers, so no "." or ".." can appear.
+  return (StringView){.chars = buf, .len = n};
 }
 
 Module *mod_new(StringView file_path, Allocator *al) {
@@ -125,35 +124,44 @@ static bool file_exists(const char *path) {
   return true;
 }
 
-// render a use path back as `a::b` for diagnostics.
-static void sprint_mod_path(char *buf, int cap, const Path *path) {
+// render a use path back as `a::b` for diagnostics. exact-sized, so there is
+// no bound to juggle and nothing truncates.
+static StringView sprint_mod_path(const Path *path, Allocator *al) {
+  int len = 0;
+  for (int i = 0; i < path->count; i++) {
+    len += path->segments[i].name.len + (i > 0 ? 2 : 0);
+  }
+
+  char *buf = al_alloc(al, sizeof(char) * (size_t)(len + 1));
   int n = 0;
-  for (int i = 0; i < path->count && n < cap - 1; i++) {
-    if (i > 0 && n < cap - 3) {
+  for (int i = 0; i < path->count; i++) {
+    if (i > 0) {
       buf[n++] = ':';
       buf[n++] = ':';
     }
     StringView seg = path->segments[i].name;
-    for (int j = 0; j < seg.len && n < cap - 1; j++) {
-      buf[n++] = seg.chars[j];
-    }
+    memcpy(buf + n, seg.chars, (size_t)seg.len);
+    n += seg.len;
   }
   buf[n] = '\0';
+  return (StringView){.chars = buf, .len = n};
 }
 
 bool mod_collect_imports(Module *m, ModuleRegistry *reg, StringView base_dir,
                          DiagBag *diags, Allocator *al) {
   assert(m->ast != NULL);
 
+  // exact-sized: nothing appends to m->imports after this.
+  int use_count = 0;
   for (int i = 0; i < m->ast->decl_count; i++) {
     if (m->ast->decls[i]->kind == DECL_USE) {
-      m->import_cap++;
+      use_count++;
     }
   }
-  if (m->import_cap == 0) {
+  if (use_count == 0) {
     return true;
   }
-  m->imports = al_alloc_zero(al, sizeof(ModImport) * m->import_cap);
+  m->imports = al_alloc_zero(al, sizeof(ModImport) * use_count);
 
   bool ok = true;
   for (int i = 0; i < m->ast->decl_count; i++) {
@@ -170,10 +178,8 @@ bool mod_collect_imports(Module *m, ModuleRegistry *reg, StringView base_dir,
     // `parse_path` in PATH_USE mode accepts turbofish segments; a module
     // prefix can't have type arguments.
     bool bad_args = false;
-    for (int j = 0; j < path->count; j++) {
-      if (path->segments[j].type_arg_count != 0) {
-        bad_args = true;
-      }
+    for (int j = 0; j < path->count && !bad_args; j++) {
+      bad_args = path->segments[j].type_arg_count != 0;
     }
     if (bad_args) {
       diag_error(diags, path->span,
@@ -190,21 +196,20 @@ bool mod_collect_imports(Module *m, ModuleRegistry *reg, StringView base_dir,
 
     imp->file_path = mod_file_for_use(base_dir, path, al);
 
-    Module *dep = modreg_find(reg, imp->file_path);
-    if (dep == NULL) {
+    int dep = modreg_find(reg, imp->file_path);
+    if (dep < 0) {
       if (!file_exists(imp->file_path.chars)) {
-        char buf[128];
-        sprint_mod_path(buf, sizeof(buf), path);
-        diag_error(diags, path->span, "cannot find module '%s'", buf);
+        StringView mod_path = sprint_mod_path(path, al);
+        diag_error(diags, path->span, "cannot find module '" SV_FMT "'",
+                   SV_ARG(mod_path));
         diag_note(diags, (Span){0}, "expected file '" SV_FMT "'",
                   SV_ARG(imp->file_path));
         ok = false;
         continue;
       }
-      dep = mod_new(imp->file_path, al);
-      modreg_add(reg, dep);
+      dep = modreg_add(reg, mod_new(imp->file_path, al));
     }
-    imp->module_index = modreg_index_of(reg, dep);
+    imp->module_index = dep;
   }
 
   return ok;
@@ -283,27 +288,19 @@ void modreg_destroy(ModuleRegistry *reg) {
   al_free(reg->al, reg->modules, sizeof(Module *) * reg->module_cap);
 }
 
-Module *modreg_find(ModuleRegistry *reg, StringView path) {
+int modreg_find(ModuleRegistry *reg, StringView path) {
   for (int i = 0; i < reg->module_count; i++) {
     if (sv_equal(reg->modules[i]->file_path, path)) {
-      return reg->modules[i];
-    }
-  }
-  return NULL;
-}
-
-int modreg_index_of(ModuleRegistry *reg, Module *m) {
-  for (int i = 0; i < reg->module_count; i++) {
-    if (reg->modules[i] == m) {
       return i;
     }
   }
   return -1;
 }
 
-bool modreg_add(ModuleRegistry *reg, Module *m) {
-  if (modreg_find(reg, m->file_path) != NULL) {
-    return false;
+int modreg_add(ModuleRegistry *reg, Module *m) {
+  int existing = modreg_find(reg, m->file_path);
+  if (existing >= 0) {
+    return existing;
   }
 
   // grow the array if needed
@@ -315,6 +312,6 @@ bool modreg_add(ModuleRegistry *reg, Module *m) {
     reg->module_cap = new_cap;
   }
 
-  reg->modules[reg->module_count++] = m;
-  return true;
+  reg->modules[reg->module_count] = m;
+  return reg->module_count++;
 }

@@ -283,6 +283,7 @@ typedef struct {
 struct FunDef {
   Module *module;
   bool is_pub;
+  bool is_builtin; // no body; codegen lowers calls to a dedicated opcode
 
   StringView name;
   bool is_closure;
@@ -573,8 +574,12 @@ typedef struct {
   Path path;
   // TypeNode **type_args;
   // int type_arg_count;
-  FunDef *resolved_fun; // multi-segment paths only (e.g. `Point::new`); NULL
-                        // until resolved, and for single-segment paths
+  // the callee a path resolved to, set by resolve_callee. NULL until
+  // resolved, and for a single-segment path naming a *non-generic* value
+  // binding — those short-circuit to a first-class function value before path
+  // resolution runs. A generic one (`print`, or an alias of it) does reach
+  // path resolution and so is recorded here.
+  FunDef *resolved_fun;
 } ExprPath;
 
 typedef struct {

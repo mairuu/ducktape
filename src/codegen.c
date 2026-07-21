@@ -62,8 +62,13 @@ typedef struct Cg {
   int self_slot; // -1 outside a method; the frame slot holding `self`
 } Cg;
 
+// the one wording for every VM limitation. `what` names the construct.
+static void cg_unsupported(DiagBag *diags, Span span, const char *what) {
+  diag_error(diags, span, "%s is not supported by the VM yet", what);
+}
+
 static void cg_error(Cg *cg, Span span, const char *what) {
-  diag_error(cg->diags, span, "%s is not supported by the VM yet", what);
+  cg_unsupported(cg->diags, span, what);
   cg->ok = false;
 }
 
@@ -703,39 +708,19 @@ static void compile_for(Cg *cg, Expr *expr) {
   }
 }
 
-// does `name` denote the builtin `print` here? either written directly, or
-// bound by a `use std::..::print as name;` — tc_link_imports copies the
-// builtin's scope entry under the alias, and this is codegen's side of that.
-static bool cg_names_builtin_print(Cg *cg, StringView name) {
-  if (sv_equal_cstr(name, "print")) {
-    return true;
-  }
-  Module *m = cg->m;
-  for (int i = 0; i < m->import_count; i++) {
-    ModImport *imp = &m->imports[i];
-    if (!imp->is_std) {
-      continue;
-    }
-    UseTarget *target = &imp->decl->as.use_decl.target;
-    for (int j = 0; j < target->count; j++) {
-      if (sv_equal(target->aliases[j].alias, name) &&
-          sv_equal_cstr(target->aliases[j].name, "print")) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 static void compile_call(Cg *cg, Expr *expr) {
   ExprCall *call = &expr->as.call;
   Expr *callee = call->callee;
 
-  // builtin print: lowered to OP_PRINT when the name isn't shadowed
+  // builtin print: lowered to OP_PRINT when the name isn't shadowed.
+  // which FunDef the callee names is the checker's answer, already on the
+  // node — including when a `use std::..::print as p;` bound it to another
+  // name, since tc_link_imports copies the builtin's entry under the alias.
   if (callee->kind == EXPR_PATH && callee->as.path_expr.path.count == 1) {
     StringView name = callee->as.path_expr.path.segments[0].name;
-    if (cg_names_builtin_print(cg, name) && cg_find_local(cg, name) < 0 &&
-        cg_find_module_fun(cg, name) == NULL) {
+    FunDef *resolved = callee->as.path_expr.resolved_fun;
+    if (resolved != NULL && resolved->is_builtin &&
+        cg_find_local(cg, name) < 0 && cg_find_module_fun(cg, name) == NULL) {
       assert(call->arg_count == 1 && "print arity got past the checker");
       compile_expr(cg, call->args[0]);
       emit(cg, OP_PRINT);
@@ -1395,6 +1380,20 @@ static void compile_impl(Module *m, Heap *heap, Decl *decl, DiagBag *diags,
 }
 
 bool codegen_module(Module *m, Heap *heap, DiagBag *diags, Allocator *al) {
+  // globals are numbered per module below, so a program built from several
+  // modules has no single slot space to run in. `use std::..` never creates a
+  // module, so single-file programs never trip this.
+  if (m->import_count > 0) {
+    for (int i = 0; i < m->import_count; i++) {
+      if (m->imports[i].is_std) {
+        continue;
+      }
+      cg_unsupported(diags, m->imports[i].decl->as.use_decl.path.span,
+                     "a program spanning multiple modules");
+      return false;
+    }
+  }
+
   for (int i = 0; i < m->fun_count; i++) {
     m->funs[i]->slot = i;
   }

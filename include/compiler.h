@@ -21,8 +21,8 @@ void compiler_init(Compiler *c, Allocator *al);
 
 void compiler_destroy(Compiler *c, Allocator *al);
 
-// run the full compilation pipeline
-// only single file for now
+// run the full compilation pipeline over `path` and every module reachable
+// from it through `use`. `path`'s directory is the module search root.
 // returns false if any phase failed
 bool compiler_run(Compiler *c, const char *path);
 

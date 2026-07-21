@@ -76,7 +76,9 @@ static bool compiler_phase_discover(Compiler *c, const char *root_path) {
 // per edge rather than a chain built into a fixed buffer — that accumulation
 // pattern is what produced the type_sprintf overflow fixed after 6b.
 static void report_cycle(Compiler *c, const int *stack, int sp, int back_to,
-                         Module *closer, ModImport *imp) {
+                         ModImport *imp) {
+  // the module holding `imp` is the one on top of the path stack.
+  Module *closer = c->mod_reg.modules[stack[sp - 1]];
   diag_error(&c->diags, imp->decl->as.use_decl.path.span,
              "circular module dependency");
 
@@ -111,7 +113,7 @@ static bool topo_visit(Compiler *c, int idx, unsigned char *colour, int *stack,
     int dep = imp->module_index;
 
     if (colour[dep] == 1) { // back edge onto the current path
-      report_cycle(c, stack, *sp, dep, m, imp);
+      report_cycle(c, stack, *sp, dep, imp);
       return false;
     }
     if (colour[dep] == 0 && !topo_visit(c, dep, colour, stack, sp)) {
@@ -245,25 +247,6 @@ bool compiler_run(Compiler *c, const char *path) {
 // requires a successful compiler_run first.
 bool compiler_execute(Compiler *c, bool gc_stress) {
   Module *m = c->root_module;
-
-  // codegen numbers globals per module, so a program built from several
-  // modules has no single slot space to run in yet. `use std::..` never
-  // creates a module, so single-file programs are unaffected.
-  if (c->mod_reg.module_count > 1) {
-    diag_clear(&c->diags);
-    Span span = (Span){0};
-    for (int i = 0; i < m->import_count; i++) {
-      if (!m->imports[i].is_std) {
-        span = m->imports[i].decl->as.use_decl.path.span;
-        break;
-      }
-    }
-    diag_error(&c->diags, span, "%s is not supported by the VM yet",
-               "a program spanning multiple modules");
-    diag_report(&c->diags, m->file_path.chars, m->source.chars, stderr);
-    fprintf(stderr, "compilation failed during code generation.\n");
-    return false;
-  }
 
   Heap heap;
   heap_init(&heap, m, gc_stress);

@@ -13,12 +13,14 @@ typedef struct ModuleRegistry ModuleRegistry;
 
 // Path handling is deliberately lexical: the build is -std=c23, which defines
 // __STRICT_ANSI__ and so hides realpath/getcwd/PATH_MAX behind glibc's feature
-// macros — and an implicit declaration is a hard error in C23. Every module
-// path is a fixed base dir plus identifier segments, which can never contain
-// '.' or '..', so lexical normalisation makes two spellings of one file
+// macros — and an implicit declaration is a hard error in C23. A module path
+// is a fixed base dir plus identifier segments, which can never contain '.' or
+// '..', so lexical normalisation makes two spellings of one file
 // byte-identical. It also works for files that don't exist, which is what lets
 // a missing-module diagnostic name the path it looked for.
-// Not deduped: symlinks, and paths differing before the base dir.
+// The "."/".." folding is not dead: the root path comes from argv and may
+// contain either. Not deduped: symlinks, and paths differing before the base
+// dir.
 
 // everything up to and including the last '/'; empty when there is none.
 StringView path_dir_of(StringView path);
@@ -52,7 +54,7 @@ struct Module {
   Program *ast;
 
   ModImport *imports;
-  int import_count, import_cap;
+  int import_count;
 
   FunDef **funs;
   int fun_count, fun_cap;
@@ -114,15 +116,13 @@ void modreg_init(ModuleRegistry *reg, Allocator *al);
 
 void modreg_destroy(ModuleRegistry *reg);
 
-// add a module. returns false without inserting if one with the same path is
-// already registered — that dedup is what makes a diamond import one Module.
-bool modreg_add(ModuleRegistry *reg, Module *m);
+// add a module, returning its index. if one with the same path is already
+// registered, nothing is inserted and *that* module's index comes back — the
+// dedup that makes a diamond import one Module.
+int modreg_add(ModuleRegistry *reg, Module *m);
 
-// exact (normalised) path match; null when absent.
-Module *modreg_find(ModuleRegistry *reg, StringView path);
-
-// index of `m` in `reg`, or -1.
-int modreg_index_of(ModuleRegistry *reg, Module *m);
+// index of the module with this exact (normalised) path, or -1.
+int modreg_find(ModuleRegistry *reg, StringView path);
 
 static inline Module *modreg_topo(ModuleRegistry *reg, int idx) {
   return reg->modules[reg->topo_order[idx]];
