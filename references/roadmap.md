@@ -110,16 +110,31 @@
   *calling* a defaulted-but-omitted method isn't dispatched yet, and extra
   inherent methods in a trait impl are tolerated — all noted as gaps.
 
+- **Trait bounds (milestone 6b)** — type parameters now carry real bounds.
+  `resolve_generic_param` merges inline `<T: A + B>` bounds with matching
+  `where T: C` predicates (`resolve_bound_refs` resolves each ref through the
+  type scope, rejecting non-traits) into the `TY_GENERIC`'s `bounds`, replacing
+  the six "inline bounds are not supported" diagnostics. Bounds are enforced
+  once inference settles: `infer_open_generics` stashes the source `TY_GENERIC`
+  in each fresh unknown's `.bound`, and `infer_check_bounds` (run after
+  `infer_finalize`) asks `impl_index_implements` whether the solved type has a
+  matching `impl Trait for T`, reporting at the call site. Design:
+  `architecture.md` "Trait bounds". Known gaps: explicit turbofish args bypass
+  the unknown so they're unchecked, and `tc_check_impl` doesn't finalize
+  inference so impl method bodies aren't checked either.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
 milestone (~900 lines).
 
-1. **Trait completion, part 2** (~0.5×): default-method dispatch (call a
+1. **Trait completion, part 3** (~0.5×): calls through bounds (`T: Drawable`
+   → `t.draw()` — resolve a method on a bounded `TY_GENERIC` receiver against
+   its bounds' `TraitMethodDef`s), then default-method dispatch (calling a
    defaulted method an impl omitted — needs monomorphising the default body
-   against the concrete self), then calls through bounds (`T: Drawable` →
-   `t.draw()`), inline bounds `<T: Display>` and `where` enforcement. Unlocks
-   `Try`-trait `?` and `as` coercions.
+   against the concrete self) and checking default bodies. Closing the two
+   enforcement gaps above belongs here too. Unlocks `Try`-trait `?` and `as`
+   coercions.
 2. **Module system** (~0.5×): real file discovery, `mod_link_imports`
    (stubbed at `src/compiler.c` phase_register), cross-module visibility,
    cycle detection.

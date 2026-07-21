@@ -1,0 +1,22 @@
+#! expect: type 'Int' does not implement trait 'Named'
+struct Point {
+    x: Int,
+}
+
+trait Named {
+    fun name(self) -> Int;
+}
+
+impl Named for Point {
+    fun name(self) -> Int {
+        self.x
+    }
+}
+
+fun label<T: Named>(t: T) -> Int {
+    0
+}
+
+fun main() {
+    var bad = label(5);
+}

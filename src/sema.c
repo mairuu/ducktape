@@ -200,10 +200,12 @@ Subst infer_open_generics(InferCtx *ctx, Type **params,
   for (int i = 0; i < count; i++) {
     assert(params[i]->kind == TY_GENERIC);
     names[i] = params[i]->as.generic.name;
+    // a bounded param carries its source TY_GENERIC as the unknown's `bound`,
+    // so infer_check_bounds can enforce the trait bounds once it's solved.
+    Type *bound = params[i]->as.generic.bound_count > 0 ? params[i] : NULL;
     args[i] = concretes && concretes[i]
                   ? concretes[i]
-                  : infer_fresh(ctx, params[i]->as.generic.name, NULL,
-                                span); // TODO: pass bound from generic.bounds
+                  : infer_fresh(ctx, params[i]->as.generic.name, bound, span);
   }
   Subst s;
   subst_init(&s, names, args, count);
@@ -491,6 +493,39 @@ void infer_finalize(InferCtx *ctx, DiagBag *diags) {
   }
 }
 
+// After inference is solved, enforce that every bounded type parameter was
+// instantiated with a type implementing each of its trait bounds. A bounded
+// unknown carries its source TY_GENERIC in `.bound` (see infer_open_generics);
+// unsolved unknowns are left to infer_finalize.
+void infer_check_bounds(InferCtx *ctx, ImplIndex *idx, DiagBag *diags,
+                        Allocator *al) {
+  for (uint32_t id = 0; id < ctx->next_id; id++) {
+    Type *node = ctx->nodes[id];
+    Type *g = node->as.unknown.bound;
+    if (g == NULL || g->kind != TY_GENERIC || g->as.generic.bound_count == 0) {
+      continue;
+    }
+    Type *sol = ctx->solutions[id] ? infer_find(ctx, ctx->solutions[id]) : NULL;
+    if (sol == NULL || sol->kind == TY_UNKNOWN) {
+      continue; // free variable — infer_finalize reports it
+    }
+    sol = infer_apply(ctx, sol, al);
+    if (type_is_poison(sol)) {
+      continue;
+    }
+    for (int b = 0; b < g->as.generic.bound_count; b++) {
+      TraitDef *trait = g->as.generic.bounds[b];
+      if (!impl_index_implements(idx, sol, trait, al)) {
+        char buf[64];
+        type_sprintf(sol, buf, sizeof(buf));
+        diag_error(diags, node->as.unknown.intro_span,
+                   "type '%s' does not implement trait '" SV_FMT "'", buf,
+                   SV_ARG(trait->name));
+      }
+    }
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // TypeChecker
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -728,18 +763,73 @@ void tc_register_module(TypeChecker *tc, Module *m) {
   tc_register_builtins(tc, m);
 }
 
+#define MAX_BOUNDS 16
+
+// Resolve a trait bound (one or more `+`-joined trait refs) to TraitDefs,
+// appending de-duplicated into `out`. A ref must name a trait in scope;
+// anything else is diagnosed and skipped. Modules aren't implemented, so a
+// qualified path resolves by its last segment.
+static void resolve_bound_refs(ResolveCtx *rctx, const TraitBound *bound,
+                               TraitDef **out, int *count) {
+  for (int i = 0; i < bound->ref_count; i++) {
+    const TraitRef *ref = &bound->refs[i];
+    StringView name = ref->path.segments[ref->path.count - 1].name;
+    TypeEntry *te = tscope_lookup(rctx->tyres.tscope, name);
+    if (te == NULL || te->type == NULL || te->type->kind != TY_TRAIT) {
+      diag_error(rctx->diags, ref->span, "'" SV_FMT "' is not a trait",
+                 SV_ARG(name));
+      continue;
+    }
+    TraitDef *def = te->as.trait_def;
+    bool dup = false;
+    for (int j = 0; j < *count; j++) {
+      if (out[j] == def) {
+        dup = true;
+        break;
+      }
+    }
+    if (!dup && *count < MAX_BOUNDS) {
+      out[(*count)++] = def;
+    }
+  }
+}
+
+// Build the TY_GENERIC for a declaration's type parameter, gathering bounds
+// from both its inline `<T: A + B>` position and any `where T: C` predicate
+// naming it. Associated-type predicates (`where T::Item: C`) are not supported.
+static Type *resolve_generic_param(ResolveCtx *rctx, const TypeParamNode *param,
+                                   const WhereClause *where) {
+  TraitDef *bounds[MAX_BOUNDS];
+  int count = 0;
+
+  if (param->inline_bound.ref_count > 0) {
+    resolve_bound_refs(rctx, &param->inline_bound, bounds, &count);
+  }
+  if (where != NULL) {
+    for (int i = 0; i < where->pred_count; i++) {
+      const WherePred *pred = &where->preds[i];
+      if (pred->lhs.segment_count != 1) {
+        diag_error(
+            rctx->diags, pred->lhs.span,
+            "associated-type bounds in `where` clauses are not supported");
+        continue;
+      }
+      if (sv_equal(pred->lhs.segments[0], param->name)) {
+        resolve_bound_refs(rctx, &pred->bound, bounds, &count);
+      }
+    }
+  }
+  return ty_generic(param->name, bounds, count, rctx->al);
+}
+
 static void resolve_fun_decl(ResolveCtx *rctx, Decl *decl) {
   assert(decl->kind == DECL_FUN && "expected fun decl");
   DeclFun *fun_decl = &decl->as.fun_decl;
   FunDef *fun_def = fun_decl->def;
 
   for (int i = 0; i < fun_decl->type_param_count; i++) {
-    if (fun_decl->type_params[i].inline_bound.refs != NULL) {
-      diag_error(rctx->diags, fun_decl->type_params[i].span,
-                 "inline bounds on function type parameters are not supported");
-    }
-    fun_def->type_params[i] =
-        ty_generic(fun_decl->type_params[i].name, NULL, 0, rctx->al);
+    fun_def->type_params[i] = resolve_generic_param(
+        rctx, &fun_decl->type_params[i], fun_decl->where_clause);
   }
 
   // begin fun local type scope
@@ -792,12 +882,8 @@ static void resolve_struct_decl(ResolveCtx *rctx, Decl *decl) {
   StructDef *struct_def = struct_decl->def;
 
   for (int i = 0; i < struct_decl->type_param_count; i++) {
-    if (struct_decl->type_params[i].inline_bound.refs != NULL) {
-      diag_error(rctx->diags, struct_decl->type_params[i].span,
-                 "inline bounds on struct type parameters are not supported");
-    }
-    struct_def->type_params[i] =
-        ty_generic(struct_decl->type_params[i].name, NULL, 0, rctx->al);
+    struct_def->type_params[i] = resolve_generic_param(
+        rctx, &struct_decl->type_params[i], struct_decl->where_clause);
   }
 
   // begin struct local type scope
@@ -841,12 +927,8 @@ static void resolve_enum_decl(ResolveCtx *rctx, Decl *decl) {
   EnumDef *enum_def = enum_decl->def;
 
   for (int i = 0; i < enum_decl->type_param_count; i++) {
-    if (enum_decl->type_params[i].inline_bound.refs != NULL) {
-      diag_error(rctx->diags, enum_decl->type_params[i].span,
-                 "inline bounds on enum type parameters are not supported");
-    }
-    enum_def->type_params[i] =
-        ty_generic(enum_decl->type_params[i].name, NULL, 0, rctx->al);
+    enum_def->type_params[i] = resolve_generic_param(
+        rctx, &enum_decl->type_params[i], enum_decl->where_clause);
   }
 
   // begin type scope
@@ -900,12 +982,8 @@ static void resolve_impl_decl(ResolveCtx *rctx, Decl *decl) {
   ImplDef *impl_def = impl_decl->def;
 
   for (int i = 0; i < impl_decl->type_param_count; i++) {
-    if (impl_decl->type_params[i].inline_bound.refs != NULL) {
-      diag_error(rctx->diags, impl_decl->type_params[i].span,
-                 "inline bounds on impl type parameters are not supported");
-    }
-    impl_def->type_params[i] =
-        ty_generic(impl_decl->type_params[i].name, NULL, 0, rctx->al);
+    impl_def->type_params[i] = resolve_generic_param(
+        rctx, &impl_decl->type_params[i], impl_decl->where_clause);
   }
 
   // begin; impl level type scope
@@ -979,13 +1057,8 @@ static void resolve_impl_decl(ResolveCtx *rctx, Decl *decl) {
       fun_def->type_params = al_alloc_zero(
           rctx->al, sizeof(StringView) * fun_decl->type_param_count);
       for (int j = 0; j < fun_def->type_param_count; j++) {
-        if (fun_decl->type_params[j].inline_bound.refs != NULL) {
-          diag_error(
-              rctx->diags, fun_decl->type_params[j].span,
-              "inline bounds on method type parameters are not supported");
-        }
-        fun_def->type_params[j] =
-            ty_generic(fun_decl->type_params[j].name, NULL, 0, rctx->al);
+        fun_def->type_params[j] = resolve_generic_param(
+            rctx, &fun_decl->type_params[j], fun_decl->where_clause);
       }
 
       // begin; method level type scope
@@ -1100,12 +1173,8 @@ static void resolve_trait_decl(ResolveCtx *rctx, Decl *decl) {
     method_def->type_params =
         al_alloc_zero(rctx->al, sizeof(Type *) * item->type_param_count);
     for (int j = 0; j < item->type_param_count; j++) {
-      if (item->type_params[j].inline_bound.refs != NULL) {
-        diag_error(rctx->diags, item->type_params[j].span,
-                   "inline bounds on method type parameters are not supported");
-      }
       method_def->type_params[j] =
-          ty_generic(item->type_params[j].name, NULL, 0, rctx->al);
+          resolve_generic_param(rctx, &item->type_params[j], NULL);
     }
 
     // begin; method level type scope
@@ -3207,6 +3276,7 @@ static void tc_check_fun(TypeChecker *tc, Decl *decl) {
   cctx.tyres.tscope = tscope_pop(cctx.tyres.tscope);
 
   infer_finalize(&cctx.infer, cctx.diags);
+  infer_check_bounds(&cctx.infer, &tc->impl_index, cctx.diags, cctx.al);
 }
 
 // Rewrite a trait method's signature type into the terms of a concrete impl:
@@ -4020,6 +4090,46 @@ MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, StringView name,
   }
 
   return NULL;
+}
+
+// Does `type` implement `trait`? True if any registered impl heads
+// `impl [<..>] trait for T` with a self type matching `type` — exact for a
+// non-generic impl, structural (binding the impl's params) for a generic one.
+bool impl_index_implements(ImplIndex *idx, Type *type, TraitDef *trait,
+                           Allocator *al) {
+  if (type_is_poison(type)) {
+    return true; // already diagnosed; don't pile on
+  }
+  for (int i = 0; i < idx->count; i++) {
+    ImplDef *impl = idx->all[i];
+    if (impl->trait_type == NULL || impl->trait_type->kind != TY_TRAIT ||
+        impl->trait_type->as.trait.def != trait || impl->self_type == NULL ||
+        type_is_poison(impl->self_type)) {
+      continue;
+    }
+    if (impl->type_param_count == 0) {
+      if (types_equal(impl->self_type, type)) {
+        return true;
+      }
+      continue;
+    }
+    int n = impl->type_param_count;
+    StringView *names = al_alloc(al, sizeof(StringView) * n);
+    Type **args = al_alloc(al, sizeof(Type *) * n);
+    bool *bound = al_alloc_zero(al, sizeof(bool) * n);
+    for (int j = 0; j < n; j++) {
+      names[j] = impl->type_params[j]->as.generic.name;
+    }
+    bool matched =
+        impl_type_match(impl->self_type, type, names, n, args, bound);
+    for (int j = 0; matched && j < n; j++) {
+      matched = bound[j];
+    }
+    if (matched) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

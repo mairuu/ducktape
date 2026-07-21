@@ -1,0 +1,45 @@
+# trait bounds on generic params: inline `<T: A + B>`, `where T: C`, and
+# multiple bounds are resolved and enforced at instantiation. A concrete type
+# passed to a bounded generic must implement every bound.
+struct Point {
+    x: Int,
+}
+
+trait A {
+    fun a(self) -> Int;
+}
+
+trait B {
+    fun b(self) -> Int;
+}
+
+impl A for Point {
+    fun a(self) -> Int {
+        self.x
+    }
+}
+
+impl B for Point {
+    fun b(self) -> Int {
+        self.x
+    }
+}
+
+fun need_a<T: A>(t: T) -> Int {
+    0
+}
+
+fun need_both<T: A + B>(t: T) -> Int {
+    0
+}
+
+fun need_where<T>(t: T) -> Int where T: B {
+    0
+}
+
+fun main() {
+    var p = Point { x: 5 };
+    var r1 = need_a(p);
+    var r2 = need_both(p);
+    var r3 = need_where(p);
+}

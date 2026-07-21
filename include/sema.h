@@ -76,6 +76,11 @@ MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, StringView name,
                              ImplMatch *out_match, InferCtx *infer, Span span,
                              Allocator *al);
 
+// does `type` implement `trait`? true if some registered impl heads
+// `impl [<..>] trait for T` with a self type matching `type`.
+bool impl_index_implements(ImplIndex *idx, Type *type, TraitDef *trait,
+                           Allocator *al);
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Inference
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -116,6 +121,11 @@ Type *infer_apply(InferCtx *ctx, Type *ty, Allocator *al);
 // After checking a function body: ensure every TY_UNKNOWN is solved.
 // emits "type annotation needed" for any that remain free.
 void infer_finalize(InferCtx *ctx, DiagBag *diags);
+
+// After infer_finalize: ensure every solved type parameter that carried trait
+// bounds was instantiated with a type implementing them.
+void infer_check_bounds(InferCtx *ctx, ImplIndex *idx, DiagBag *diags,
+                        Allocator *al);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TypeChecker

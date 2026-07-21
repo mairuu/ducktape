@@ -1,0 +1,11 @@
+#! expect: 'Point' is not a trait
+struct Point {
+    x: Int,
+}
+
+# a bound must name a trait, not a struct
+fun oops<T: Point>(t: T) -> Int {
+    0
+}
+
+fun main() {}

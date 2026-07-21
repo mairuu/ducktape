@@ -93,6 +93,13 @@ ending in `return` has type `!` (never), which unifies with anything.
   infers the type arguments from the call (first name match wins if several
   impls define the same name).
 - Method calls: `p.draw()`, `p.x`, tuple access `t.0`.
+- Trait bounds on type parameters are written inline (`fun f<T: A + B>(..)`),
+  in a `where` clause (`fun f<T>(..) -> R where T: B`), or both — they merge.
+  A bound must name a trait. Bounds are *enforced*: instantiating a bounded
+  parameter with a type that has no `impl Trait for T` is an error
+  ("type 'Int' does not implement trait 'Named'"), reported at the call site
+  once inference has solved the parameter. Inside the generic body the bound
+  does not yet grant access to the trait's methods (see the gap table).
 
 ### match
 
@@ -126,10 +133,11 @@ Registered in every module; the only builtin so far.
 | Gap | Behavior today |
 |---|---|
 | calling a *defaulted* trait method | conformance lets an impl omit it, but the checker/VM can't yet dispatch a call to the trait's default body — the method must come from an impl to be callable |
-| trait method calls via bounds `T: Drawable` → `t.draw()` | a call still resolves through a concrete impl, not a bound |
+| trait method calls via bounds `T: Drawable` → `t.draw()` | inside a generic body a bounded param's methods aren't resolved through the bound yet — a call still needs a concrete impl |
 | default method *bodies* | recognized (satisfy conformance) but not type-checked |
 | extra (non-trait) methods in a trait impl | tolerated as inherent methods (Rust rejects them) |
-| inline bounds `<T: Display>` | parse + "not supported" error; `where` clauses parse, bounds unenforced |
+| bounds via explicit turbofish `foo::<Int>()` | the arg bypasses the fresh unknown, so its bounds aren't checked (inferred instantiations are) |
+| bounds inside an impl method body | `tc_check_impl` doesn't finalize inference, so bound violations there go unchecked (top-level functions are checked) |
 | modules / imports | `use` is a no-op; single file only |
 | top-level `var` | parses, then aborts registration |
 | tuple-struct struct-patterns `var Pair { .. }` | diagnostic suggests tuple destructuring |

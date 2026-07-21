@@ -87,6 +87,24 @@ instantiation goes through `infer_open_generics`, which builds a `Subst`
 (name → type) mapping type params to fresh unknowns or explicit args;
 `subst_apply` rewrites types under it.
 
+### Trait bounds
+
+`resolve_generic_param` builds each declaration's type parameter, merging the
+bounds written inline (`<T: A + B>`) with any `where T: C` predicate naming it;
+`resolve_bound_refs` resolves each trait ref through the type scope (a ref that
+isn't a trait is diagnosed) and de-duplicates. The result is a `TY_GENERIC`
+carrying `bounds`/`bound_count`.
+
+Enforcement is deferred to the end of inference, because a bound can only be
+judged once its parameter is solved. `infer_open_generics` stashes the source
+`TY_GENERIC` in each fresh unknown's `.bound`; after `infer_finalize`,
+`infer_check_bounds` walks the unknowns, and for every solved one with bounds
+asks `impl_index_implements` (does any `impl Trait for T` head match — exact for
+a non-generic impl, `impl_type_match` for a generic one) and reports
+"type '%s' does not implement trait '%s'" at the unknown's introduction span.
+Explicit turbofish args skip the unknown entirely and so aren't checked, and
+`tc_check_impl` never finalizes, so bodies of impl methods aren't either.
+
 **Poison convention:** on error, emit one `diag_error` and return
 `t_poison`; poison operands propagate silently so one mistake produces one
 diagnostic. Patterns bind their names as poison on bad scrutinees for the
