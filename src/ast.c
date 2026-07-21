@@ -1218,6 +1218,12 @@ void dump_decl(const Decl *d, int indent) {
   switch (d->kind) {
   case DECL_FUN:
     fprintf(stdout, "FunDecl: " SV_FMT "\n", SV_ARG(d->as.fun_decl.name));
+    if (d->as.fun_decl.attr.kind != ATTR_NONE) {
+      ind(indent + 1);
+      fprintf(stdout, "%s: " SV_FMT "\n",
+              d->as.fun_decl.attr.kind == ATTR_NATIVE ? "Native" : "Intrinsic",
+              SV_ARG(d->as.fun_decl.attr.name));
+    }
     for (int i = 0; i < d->as.fun_decl.type_param_count; i++) {
       ind(indent + 1);
       fprintf(stdout, "TypeParam: " SV_FMT "\n",

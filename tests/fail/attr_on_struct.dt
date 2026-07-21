@@ -1,0 +1,5 @@
+#! expect: only a function can be '@native' or '@intrinsic'
+@native("io_print")
+struct S { x: Int }
+
+fun main() {}

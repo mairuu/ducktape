@@ -17,6 +17,8 @@
 #> 12
 
 # captures a parameter; the returned closure outlives make_adder's frame
+use std::io::print;
+
 fun make_adder(n: Int) -> fun(Int) -> Int {
     return |x: Int| => x + n;
 }

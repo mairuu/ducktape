@@ -640,6 +640,78 @@
   A bare unit variant with *no* expected type is now a "cannot infer type"
   error rather than a silently abstract type.
 
+- **Native functions (milestone 16)** — a std function may have its body in C.
+  `@native("io_print") pub fun print<T>(value: T);` is a bodyless declaration
+  whose attribute names an entry in a registry `src/native.c` fills in. Design:
+  `runtime.md` "Native functions", `language.md` "Native functions".
+
+  The observation the milestone turns on: **the signature is the only part that
+  has to be in ducktape.** Write it in the `.dt` file and the checker needs no
+  special path at all — a native is an ordinary `FunDef` that happens to have a
+  C body, so it obeys `pub`, imports by name or alias, takes an ordinary global
+  slot, and is first-class for free (passable, storable, capturable, usable as
+  a vtable entry) because `OP_GET_GLOBAL` does not care what is behind a slot.
+  Compare the old builtin, which was a hand-built `FunDef`, a dedicated opcode,
+  an alias-chasing helper, and a diagnostic explaining why it could not be a
+  value.
+
+  Three things follow, and they are the whole milestone:
+  - **The GC calling convention is the one real rule.** A native that allocates
+    can trigger a collection, and the VM stack is the root set — so `OP_CALL`
+    leaves the arguments on the stack across the call, hands the native a
+    `Value *` into it, and only pops them once the result exists.
+    `OP_MAKE_DYN` already did exactly this for `heap_dyn`. Getting it wrong
+    reproduces the 5c-ii bug where `heap_collect` never walked
+    `module->methods[]`: something reachable-looking the collector cannot see.
+  - **A generic native is never monomorphised.** The runtime is uniform in type
+    arguments, so one C body serves every `T`; `cg_call_target` returns the
+    `FunDef` itself and `exe_slot_fun` gives it a slot in spite of
+    `fun_is_generic`. `print<T>` is the entire case, and it is milestone 10's
+    observation read from the other side.
+  - **An image carries a native by name.** A C function pointer is not
+    serialisable and an image has no compiler behind it, so a fun record grew a
+    *body kind*: chunk, native-by-name, or none. `bc_load` re-binds each name
+    against the running binary, which makes a mismatched native ABI an error at
+    load rather than a wrong call later — so no registry hash in the header is
+    needed after all. An `@intrinsic` never appears in an image at all.
+
+  `@intrinsic` is the second tier: the call lowers to an opcode inline, no
+  frame, no slot. It is what finally lets a program *name* `OP_LEN`
+  (`std::array::len`), until now reachable only from the `for` desugaring. The
+  price is that an opcode is not addressable, so unlike an `@native` it can
+  only be called, never used as a value — the one thing the two tiers do not
+  share.
+
+  **`print` stopped being ambient.** It is `std::io::print`, imported like
+  anything else; there is no prelude, and 48 test files gained a `use` line.
+  That deleted `OP_PRINT`, `cg_names_builtin_print`, `tc_register_builtins`,
+  the "using a builtin as a value" diagnostic, the `ModImport.is_std` flag and
+  its three readers, and the `std::io` no-op in
+  `mod_collect_imports`/`tc_link_imports`. Two diagnostics got better for free:
+  naming `print` as a value is now the ordinary "cannot infer type for 'T'"
+  every generic function value gets, and an unresolved single-segment path says
+  "cannot find 'x' in this scope" instead of "unknown type 'x' in path" —
+  which, now that a missing `use std::io::print;` is a thing that happens, is
+  the message most programs will meet first.
+
+  **The design's own falsification test failed, and that is worth recording.**
+  `runtime.md` predicted the milestone would be net-*negative* in compiler
+  lines and said "if it is not net-negative, the design is wrong". It came out
+  +193 across existing files (335 added, 142 removed) plus 187 new lines of
+  registry. The design was not wrong; the *prediction* counted the deletions
+  and forgot that three new surfaces come with them — an attribute grammar in
+  the parser (+79), a serialization tier (+56), and the registry itself. What
+  the deletions actually bought is not size but *uniformity*: `print` stopped
+  being a case in five unrelated switches. The lesson is that "deletes five
+  special cases" and "is smaller" are different claims, and only the first was
+  ever the point.
+
+  New std modules: `std::io` (`print`), `std::array` (`len`, the intrinsic),
+  `std::string` (`len`, `slice`). `slice` allocates, so it is what exercises
+  the calling convention, and it is also the first std function that can
+  *fail*: a native sets `ctx->error` and the VM raises it at the call site —
+  the closest thing to a panic until there is one.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -650,26 +722,26 @@ Nothing on the main line is *blocked*: every construct the checker accepts in
 warts" section would promote first, in the order that pays off soonest — pick
 by appetite rather than by necessity.
 
-1. **`std::result`, and a way to fail** — `?` already recognises a
+1. **`std::result`, and a real panic** — `?` already recognises a
    "Result-like" enum structurally, so the type it is named after should be in
-   the library next to `Option`. It runs into the reason `Option` has no
-   `unwrap`: there is no way for a program to *stop*. A panic (or the native
-   functions of item 3, whichever lands first) is what unblocks `unwrap`,
-   `expect` and an honest `std::result`.
+   the library next to `Option`. Natives unblocked half of it: a native can now
+   fail by setting `ctx->error`, which is enough for `unwrap`/`expect` to abort
+   with a message. What is still missing is a *language-level* panic — an
+   unwinding story, a message carrying the value, and a decision about whether
+   a ducktape function can raise one at all, or only C can.
 2. **Module-granular impls and `pub use`** — `ImplIndex` lives on the
    `TypeChecker`, so an impl applies even where its module was never
    imported, and imports don't compose (no re-export, no glob, no qualified
    paths). Now also the reason a user's `impl Ord for Int` collides with
    `std::cmp`'s. Fixing the first is a scoping change; the second is parser
    plus `tc_link_imports`.
-3. **Native functions** — the standard library cannot grow past what the
-   language can already express: there is no array length in source, no push,
-   no string length/index/compare, and `print` is still the only builtin. The
-   design is settled and written up in `runtime.md` "Future → Native
-   functions" — a `NativeFn` on `FunDef` called through the existing
-   `OP_CALL`, declared as bodyless `@native`/`@intrinsic` signatures in std
-   modules. It should come out *net-negative* in compiler lines, since porting
-   `print` deletes three separate special cases.
+3. **Growing std on top of the natives** — the mechanism landed in milestone
+   16 with a deliberately small registry (`print`, array `len`, string
+   `len`/`slice`). What it does not yet reach is anything that *mutates* or
+   *grows* a heap object: `push` needs `ObjArray` to stop being fixed-size,
+   which is a real allocator question rather than another table entry. String
+   comparison, `to_string` with a width or a precision, and a `Char` type are
+   each one entry plus a decision about the type they need.
 4. **Wider slot spaces** — 256 functions/structs/enums program-wide, now
    reached by *use* of generics rather than by how many are written, by
    trait-object vtables on top of that, and by natives once they take slots
@@ -700,7 +772,7 @@ via `Module.decl_base`) and is not part of the main line.
 - a `Float` still has no user-facing formatting control: `value_format_float`
   picks the shortest round-tripping decimal and that is all there is. A
   `to_string` with a precision or a width needs a real formatting story
-  (`runtime.md` "Values")
+  (`runtime.md` "Values") — now a native away, but still needing the story
 - a unit struct's name cannot be bound as a variable any more: `var Marker =
   7;` is a struct pattern against an `Int`, and the diagnostic ("expected
   struct type in struct pattern") describes the rewrite rather than the
@@ -731,9 +803,17 @@ via `Module.decl_base`) and is not part of the main line.
   imported (`ImplIndex` lives on the `TypeChecker`, not the `Module`) — which
   also means a user's `impl Ord for Int` silently loses to `std::cmp`'s once
   that module is imported, first registration winning
-- `use std::io::print;` is a no-op with no module behind it, because `print` is
-  a builtin bound in every scope; it goes away when `print` becomes a real std
-  module
+- an `@intrinsic` cannot be used as a value (it is an opcode, so there is no
+  body for a global slot to address) — reported at codegen, unlike the
+  `@native` beside it which is fully first-class
+- `@native`/`@intrinsic` are only accepted on a top-level `fun`: an impl method
+  or a trait method cannot be native, so a primitive's operations have to be
+  free functions (`string::len(s)`, not `s.len()`)
+- a native's C signature is not checked against its ducktape one — the registry
+  knows only "n values in, one out", so a mismatch is a std bug that the
+  checker cannot catch
+- `ObjArray` is fixed-size, so `std::array` has `len` and nothing that grows or
+  mutates
 - importing `std::cmp` spends two global slots on `Int::cmp`/`Float::cmp` even
   if only one is used — non-generic definitions are linked whether called or
   not, unlike the generics around them

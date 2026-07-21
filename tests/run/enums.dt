@@ -6,6 +6,8 @@
 #> true
 #> false
 #> false
+use std::io::print;
+
 enum Shape {
     Circle(Float),
     Rect { w: Float, h: Float },

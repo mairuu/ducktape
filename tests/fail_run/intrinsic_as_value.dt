@@ -1,0 +1,8 @@
+#! expect: is an intrinsic and can only be called directly
+# an intrinsic *is* an opcode: there is no body for a global slot to address,
+# so unlike a @native it cannot be named as a value.
+use std::array::len;
+
+fun main() {
+  var f = len::<Int>;
+}

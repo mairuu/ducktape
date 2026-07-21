@@ -10,6 +10,8 @@
 #> 24
 #> 303
 #> 15s
+use std::io::print;
+
 struct Point { x: Int, y: Int }
 struct Pair(Int, Int)
 struct Wrap { inner: Point, tag: String }

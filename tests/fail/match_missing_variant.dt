@@ -1,4 +1,6 @@
 #! expect: match is not exhaustive: 'Shape::Point' is not covered
+use std::io::print;
+
 enum Shape {
     Circle(Float),
     Rect { w: Float, h: Float },

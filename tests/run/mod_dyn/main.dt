@@ -5,6 +5,7 @@
 #> area 6
 #> 15
 
+use std::io::print;
 use shapes::{Shape, Sq};
 
 struct Rect { w: Int, h: Int }

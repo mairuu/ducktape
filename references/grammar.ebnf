@@ -8,8 +8,15 @@ program        = decl* ;
 (* ── declarations ─────────────────────────────────────────────────────── *)
 
 decl           = useDecl
-               | "pub"? ( varDecl | funDecl | structDecl | enumDecl
-                        | traitDecl | implDecl ) ;
+               | attribute? "pub"? ( varDecl | funDecl | structDecl | enumDecl
+                                   | traitDecl | implDecl ) ;
+                 (* an attribute is only accepted on a funDecl — parsed here
+                    and rejected on anything else, so the mistake is reported
+                    rather than reparsed *)
+
+attribute      = "@" ( "native" | "intrinsic" ) "(" STRING ")" ;
+                 (* the string is a key into C's registry — language.md
+                    "Native functions" *)
 
 useDecl        = "use" usePath ";" ;
 usePath        = path ( "::" "{" useItem ( "," useItem )* ","? "}" )? ;
@@ -23,7 +30,9 @@ varDecl        = "var" pattern ( ":" type )? "=" expr ";" ;
 
 funDecl        = "fun" IDENT typeParams? "(" paramList? ")"
                  ( "->" type )? whereClause?
-                 ( "=>" expr | block ) ;
+                 ( "=>" expr | block | ";" ) ;
+                 (* the ";" form requires an attribute and the other two
+                    forbid one: the attribute *is* the body *)
 paramList      = param ( "," param )* ;
 param          = "self" | IDENT ":" type ;   (* self only in impl methods *)
 

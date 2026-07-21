@@ -1,5 +1,7 @@
-# `use std::..` is a reserved namespace over the builtins: no file is read, no
-# module is created, so single-file --run is unaffected.
+# `use std::..` names an embedded module: same registry, same dependency
+# graph, same `pub` rules as a user import — only the bytes come from the
+# binary rather than the filesystem. An alias works because the import is
+# ordinary all the way down.
 use std::io::print as show;
 
 fun main() {

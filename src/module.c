@@ -222,15 +222,6 @@ bool mod_collect_imports(Module *m, ModuleRegistry *reg, StringView base_dir,
       StringView mod_name =
           path->count > 1 ? path->segments[1].name : (StringView){0};
 
-      // `std::io` predates the embedded library: it is a no-op namespace over
-      // the builtins, because `print` is registered into every module's scope
-      // already and a real `std::io` would collide with it. Remove this case
-      // once `print` moves into an embedded module of its own.
-      if (sv_equal_cstr(mod_name, "io")) {
-        imp->is_std = true;
-        continue;
-      }
-
       if (std_module_source(mod_name) == NULL) {
         StringView mod_path = sprint_mod_path(path, al);
         diag_error(diags, path->span,

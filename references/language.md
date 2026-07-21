@@ -11,7 +11,7 @@ stdout in `tests/run` files) — the language itself treats them as comments.
 ## Declarations
 
 ```
-use std::io::print;                  # `std::` is the builtin namespace
+use std::io::print;                  # `std::` is the embedded library
 use geometry::Point;                 # loads geometry.dt — see "Modules"
 
 fun add(a: Int, b: Int) -> Int {     # return type via ->, omitted = ()
@@ -251,7 +251,11 @@ involved.
 `.dt` sources live in `std/` and are mirrored into the compiler binary, so
 `use std::cmp;` needs no install path, environment variable or search
 directory. `std::` never touches the filesystem, so a local `std.dt` is
-unreachable.
+unreachable. Where ducktape cannot express the operation, a module declares a
+bodyless function bound to C (see "Native functions" below); `std::cmp` and
+`std::option` need none, `std::io` is nothing but.
+
+**There is no prelude.** Every std name, `print` included, has to be imported.
 
 ```
 use std::cmp::{Ord, max, min, clamp};
@@ -320,22 +324,73 @@ closure-taking form, which does not exist yet.
 another — it is an ordinary `use std::cmp::Ord;`, and the registry deduplicates
 it against a program's own import of `std::cmp` (`tests/run/std_option.dt`).
 
-## Built-ins
+### Native functions
 
-`print<T>(value)` — prints any value followed by a newline, returns `()`.
-Registered in every module; the only builtin so far, and the only thing that
-does not need importing.
+The standard library cannot be written entirely in ducktape: `print` has to
+reach `value_print`, and no expression in the language does that. So a std
+module may declare a function **bodyless**, with an attribute naming the C
+implementation:
+
+```
+@native("io_print")     pub fun print<T>(value: T);
+@intrinsic("array_len") pub fun len<T>(xs: [T]) -> Int;
+```
+
+The *signature* is ordinary ducktape and goes through the ordinary checker;
+the attribute supplies the body. The two are exclusive in both directions — an
+attributed function ends at the `;` and has no block, and a function without an
+attribute must have one — so there is never a question of which body wins.
+
+The name in the parentheses is a key into a registry C fills in, not a symbol
+name: an unknown key is a compile error pointing at the attribute, listing what
+is available.
+
+Two tiers:
+
+| | `@native` | `@intrinsic` |
+|---|---|---|
+| what it is | a C function | a bytecode opcode |
+| how a call compiles | `OP_CALL` into C, no frame opened | the opcode, inline |
+| usable as a value | yes — it takes an ordinary global slot | no: an opcode is not something a slot can address |
+| in a bytecode image | written by name, re-bound at load | never appears; the opcode is already in the code |
+
+Nothing else about a native is special. It obeys `pub`, is imported by name or
+alias like anything else, and a *generic* native is never monomorphised — the
+runtime is uniform in type arguments, so one C body serves every `T`, which is
+why `print<T>` works at all.
+
+Attributes are only accepted on a top-level `fun`. An impl method or a trait
+method cannot be native.
+
+Nothing restricts them to `std/` — a user module may declare a native too. The
+registry is closed, so the only names available are the ones the binary already
+provides, and the *decision* about what C exposes stays in C. Restricting the
+attribute by module would add a rule without adding a guarantee.
+
+### `std::io`, `std::array`, `std::string`
+
+```
+std::io      print<T>(value: T)                     # @native
+
+std::array   len<T>(xs: [T]) -> Int                 # @intrinsic (OP_LEN)
+
+std::string  len(s: String) -> Int                  # @native
+             slice(s: String, from: Int, to: Int) -> String
+```
+
+**`print` is not a builtin and is not in scope by default** — `use
+std::io::print;` is a real import of a real module, and forgetting it is an
+ordinary "cannot find 'print' in this scope" error. There is no prelude.
+
+`std::string::slice` is the one std function that can fail: a native reports a
+runtime error by setting `ctx->error`, and the VM raises it at the call site.
+It is the closest thing the language has to a panic.
 
 A `Float` prints — and interpolates — as the shortest decimal that reads back
 as the same double, always carrying a `.` or an exponent so it is never
 mistaken for an `Int`: `1.0`, `0.3333333333333333`, `300.0`, `1e+18`, `1e-07`,
 `-0.0`, `inf`, `-inf`, `NaN`. Exponent form takes over below `1e-5` and at
 `1e17`; every form printed is also a literal the scanner accepts.
-
-`use std::io::print;` is accepted and does nothing — it predates the embedded
-library and names a builtin that is already in scope. It is the one `std::`
-path with no module behind it, and goes away when `print` becomes a real std
-module.
 
 ## Not yet implemented
 
@@ -360,5 +415,7 @@ module.
 | capturing a `for` loop variable in a closure | runs, but the closure sees the loop variable's *final* value (one shared cell), not a per-iteration copy — `runtime.md` "Closures & upvalues" |
 | infinitely deep generic instantiation | `fun grow<T>(v: T) { grow([v]) }` type-checks but names a new instantiation at every level; codegen stops at 32 and reports it (`runtime.md` "Monomorphisation") |
 | more than 256 functions, counting one per instantiation | each instantiation takes a global slot, so a heavily generic program can outgrow the one-byte operand space |
-| `print` named as a value (`var p = print;`) | a call lowers to `OP_PRINT`, so the builtin has no body to point a slot at — "using a builtin as a value is not supported by the VM yet" |
+| an `@intrinsic` named as a value (`var f = len::<Int>;`) | an intrinsic is an opcode, so there is no body for a global slot to address — "is an intrinsic and can only be called directly" (an `@native` *can* be a value) |
+| a generic function named as a value (`var p = print;`) | its type arguments have nothing to solve them — "cannot infer type for 'T'"; call it, or use a non-generic one |
+| `@native` on an impl or trait method | attributes are only accepted on a top-level `fun` |
 | generic `main` | nothing calls the entry point, so no instance is ever made — "'main' must not be generic" |

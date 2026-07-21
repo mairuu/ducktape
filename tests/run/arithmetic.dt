@@ -9,6 +9,8 @@
 #> true
 #> false
 #> ()
+use std::io::print;
+
 fun main() {
     print(3 + 4);
     print(3 - 2);

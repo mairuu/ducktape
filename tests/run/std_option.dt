@@ -15,6 +15,7 @@
 #> false
 #> -1
 
+use std::io::print;
 use std::option::Option;
 use std::cmp::{Ord, min};
 

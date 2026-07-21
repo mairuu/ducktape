@@ -17,9 +17,18 @@
 //   enums    [u32 name, u16 variant_count,
 //               [u32 name, u8 is_tuple, u16 field_count, u32 field_name*]*]
 //   vtables  [u16 method_count, u16 fun_index*]*
-//   funs     [u32 name, u16 param_count, u8 has_chunk,
-//               u32 code_len, code_len bytes,
-//               u16 const_count, const*]*  — globals first, then closures
+//   funs     [u32 name, u16 param_count, u8 body_kind,
+//               body_kind == BC_BODY_CHUNK:  u32 code_len, code_len bytes,
+//                                            u16 const_count, const*
+//               body_kind == BC_BODY_NATIVE: u32 registry name]*
+//                                            — globals first, then closures
+//
+// A native is written by *name*: a C function pointer is not a thing an image
+// can carry, and an image is the runtime projection of the program with no
+// compiler behind it. `bc_load` re-binds each name against the running
+// binary's registry, so a mismatched native ABI is a clean error at load
+// rather than a wrong call later. An @intrinsic never appears at all — it is
+// an opcode, lowered inline, with no definition to write.
 //
 // A vtable is written as bare function indices: which trait and which self
 // type it was built for is compile-time bookkeeping the VM never consults, so
@@ -32,6 +41,13 @@
 //
 // Struct/enum slots need no such treatment: OP_STRUCT/OP_ENUM already carry a
 // slot the VM resolves through `exe`, and the tables are written in slot order.
+
+// what a fun record carries in place of a body.
+typedef enum {
+  BC_BODY_NONE,   // no body: calling it is the VM's existing runtime error
+  BC_BODY_CHUNK,  // compiled ducktape
+  BC_BODY_NATIVE, // a registry name to re-bind at load
+} BcBodyKind;
 
 typedef enum {
   BC_C_INT,
@@ -209,8 +225,14 @@ static void w_fun(BcWriter *w, const FunDef *fun) {
   w_str(w, fun->name);
   w_u16(w, (uint16_t)fun->param_count);
 
+  if (fun->native_kind == ATTR_NATIVE) {
+    w_u8(w, BC_BODY_NATIVE);
+    w_str(w, fun->native_name);
+    return;
+  }
+
   const Chunk *chunk = fun->chunk;
-  w_u8(w, chunk != NULL ? 1 : 0);
+  w_u8(w, chunk != NULL ? BC_BODY_CHUNK : BC_BODY_NONE);
   if (chunk == NULL) {
     return;
   }
@@ -254,6 +276,10 @@ static void collect_strings(BcWriter *w) {
                             ? w->exe->globals[i]
                             : w->exe->closures[i - w->exe->global_count];
     strtab_add(&w->strings, fun->name);
+    if (fun->native_kind == ATTR_NATIVE) {
+      strtab_add(&w->strings, fun->native_name);
+      continue;
+    }
     if (fun->chunk == NULL) {
       continue;
     }
@@ -497,8 +523,32 @@ static FieldDef *r_fields(BcReader *r, int *count_out, bool *is_tuple_out) {
 static void r_fun(BcReader *r, FunDef *fun) {
   fun->name = r_str(r);
   fun->param_count = r_u16(r);
-  if (r_u8(r) == 0) {
-    return; // no body; calling it is the VM's existing runtime error
+
+  BcBodyKind body_kind = (BcBodyKind)r_u8(r);
+  if (body_kind == BC_BODY_NONE) {
+    return; // calling it is the VM's existing runtime error
+  }
+  if (body_kind == BC_BODY_NATIVE) {
+    // re-bind against *this* binary's registry. A name it no longer knows is
+    // an image built against a different native ABI, which is worth refusing
+    // at load rather than discovering at the first call.
+    StringView name = r_str(r);
+    NativeFn fn = native_lookup(name);
+    if (fn == NULL) {
+      r->ok = bc_error("image needs a native named '" SV_FMT
+                       "', which this build does not provide",
+                       SV_ARG(name));
+      return;
+    }
+    fun->native_kind = ATTR_NATIVE;
+    fun->native = fn;
+    fun->native_name = name;
+    return;
+  }
+  if (body_kind != BC_BODY_CHUNK) {
+    r->ok = bc_error("malformed image: unknown function body kind %d",
+                     (int)body_kind);
+    return;
   }
 
   Chunk *chunk = al_alloc_zero_for(r->al, Chunk);

@@ -9,6 +9,8 @@
 #> true
 #> false
 #> 2
+use std::io::print;
+
 struct Point {
     x: Int,
     y: Int,

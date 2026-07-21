@@ -11,6 +11,8 @@
 #> Point(4, 5) / Point(4, 5)
 #> Int(42)
 
+use std::io::print;
+
 trait Show {
   fun show(self) -> String;
 }

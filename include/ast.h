@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "allocator.h"
+#include "native.h"
 #include "scanner.h"
 #include "string_utils.h"
 
@@ -329,10 +330,25 @@ typedef struct {
   bool is_self; // implicit "self"
 } ParamDef;
 
+// `@native("io_print")` / `@intrinsic("array_len")` on a bodyless `fun`. The
+// attribute *is* the body — a declaration carrying one has no block, and one
+// without an attribute must have a block, so there is never a question of
+// which wins.
+typedef enum {
+  ATTR_NONE = 0,
+  ATTR_NATIVE,    // a C function, called through the ordinary OP_CALL
+  ATTR_INTRINSIC, // an opcode the call lowers to inline
+} AttrKind;
+
+typedef struct {
+  AttrKind kind;
+  StringView name; // the registry key inside the parentheses
+  Span span;
+} AttrNode;
+
 struct FunDef {
   Module *module;
   bool is_pub;
-  bool is_builtin; // no body; codegen lowers calls to a dedicated opcode
 
   StringView name;
   bool is_closure;
@@ -347,10 +363,11 @@ struct FunDef {
   ImplDef *impl;
 
   // the body codegen compiles, and the span to report against. NULL/zero for
-  // builtins (no body at all) and for definitions decoded from a bytecode
-  // image (which carries chunks, not ASTs). A generic definition is compiled
-  // once per instantiation, so codegen needs to reach the body from the
-  // FunDef alone — a call site in another module has nothing else.
+  // a native or intrinsic (whose body is in C) and for definitions decoded
+  // from a bytecode image (which carries chunks, not ASTs). A generic
+  // definition is compiled once per instantiation, so codegen needs to reach
+  // the body from the FunDef alone — a call site in another module has
+  // nothing else.
   Expr *body;
   Span span;
 
@@ -358,9 +375,26 @@ struct FunDef {
   int param_count;
   Type *return_type;
 
-  struct Chunk *chunk; // filled by codegen; NULL until then
-  int slot;            // FUN_SLOT_NONE until exe_link (or never, if generic)
+  // where the body actually is. `chunk` for a function written in ducktape
+  // (filled by codegen, NULL until then); otherwise `native_kind` says which
+  // of the two C tiers this is. `native_name` is the registry key, kept
+  // because a bytecode image writes a native by *name* — a C function pointer
+  // cannot be serialised, so `bc_load` re-binds it against the running binary.
+  struct Chunk *chunk;
+  AttrKind native_kind;
+  NativeFn native;      // ATTR_NATIVE: the C function OP_CALL invokes
+  uint8_t intrinsic_op; // ATTR_INTRINSIC: the OpCode a call lowers to
+  StringView native_name;
+
+  int slot; // FUN_SLOT_NONE until exe_link (or never, if generic)
 };
+
+// a function whose body is in C rather than in ducktape. Never monomorphised
+// (the runtime is uniform in type arguments, so one C body serves every `T`)
+// and never compiled to a chunk.
+static inline bool fun_is_native(const FunDef *f) {
+  return f->native_kind != ATTR_NONE;
+}
 
 #define FUN_SLOT_NONE (-1)
 
@@ -1056,7 +1090,9 @@ typedef struct {
   TypeNode *return_type;     // NULL -> unit
   WhereClause *where_clause; // NULL if no where clause
   bool shorthand;            // => expr; form
-  Expr *body;                // EXPR_BLOCK or shorthand
+  Expr *body;                // EXPR_BLOCK or shorthand; NULL when `attr` binds
+                             // the body to C instead
+  AttrNode attr;
   // resolved:
   FunDef *def;
 } DeclFun;

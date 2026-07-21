@@ -41,9 +41,8 @@ StringView mod_file_for_use(StringView base_dir, const Path *path,
 // one resolved `use` declaration.
 typedef struct {
   Decl *decl;           // the DECL_USE node (path + aliases + spans)
-  StringView file_path; // dependency file; empty when is_std
-  bool is_std;          // `use std::..` — the builtins, never the filesystem
-  int module_index;     // index into ModuleRegistry; -1 for std / unresolved
+  StringView file_path; // dependency file (a `<std>/…` key for std modules)
+  int module_index;     // index into ModuleRegistry; -1 if unresolved
 } ModImport;
 
 struct Module {

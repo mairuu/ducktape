@@ -50,7 +50,10 @@ Three passes over each module, mirroring compiler phases:
    scope define never detects a collision and a scope lookup returns the
    *first* match, so a redeclaration would silently lose to the original),
    then allocate def stubs for fun/struct/enum/impl/trait,
-   count-then-populate; `tc_register_builtins` adds `print<T>`. `use` is a
+   count-then-populate. A `fun` carrying `@native`/`@intrinsic` is bound to
+   C's registry here by `tc_bind_native` — the attribute still has a span, so
+   an unknown name reports against it (`runtime.md` "Native functions"). There
+   are no builtins: `print` is an ordinary import of `std::io`. `use` is a
    no-op here — imports are linked in pass 2, see "Modules". Top-level `var`
    is diagnosed here: every slot space the linker builds is a definition
    table, so a global has nowhere to live.
@@ -126,7 +129,7 @@ Linking finds the item by **scanning the dependency's own top-level decls**
 entry out of the scopes. Scanning the AST is what makes `Decl.is_pub`
 readable — visibility is checked here and nowhere else, off the `Decl` rather
 than the `*Def` copies — and it is also what stops re-export: a dependency's
-scopes also hold *its* imports and the builtins, so a bare `tscope_lookup`
+scopes also hold *its* imports, so a bare `tscope_lookup`
 would silently give `use b::X` the meaning of `pub use`. The alternative,
 tagging every `VarEntry`/`TypeEntry` with visibility, would have touched 30+
 define sites.
@@ -134,10 +137,9 @@ define sites.
 `tc_link_imports` also does its **own conflict checking**, because
 `vscope_define`/`tscope_define` don't detect duplicates and both lookups return
 the first match — an unchecked collision would resolve backwards, letting an
-import silently win over the module's own declaration. The `std` case must
-short-circuit before that check: `use std::io::print;` names a builtin already
-in scope under that exact name, so it is a no-op, and checking it for conflicts
-would reject it.
+import silently win over the module's own declaration. There is only one import
+kind to check: a std module is an ordinary registry entry, vetted by the same
+`pub` rule as any dependency.
 
 Trait impls are deliberately *not* module-scoped: `ImplIndex` lives on the
 `TypeChecker`, shared by every module, so an impl applies program-wide whether
@@ -168,13 +170,11 @@ collide with a user path: a real one is a base dir plus identifier segments, and
 an identifier cannot contain `<`. The key also ignores `base_dir`, so two
 modules importing std from different directories dedup to one entry.
 
-`std::io` is the one `std::` path with no module behind it. `print` is
-registered into every module's scope by `tc_register_builtins`, so a real
-`std::io` exporting it would collide with the builtin already bound under that
-name — hence the surviving `is_std` no-op in `mod_collect_imports`,
-`compiler.c` and `tc_link_imports`. Every *other* unknown `std::` name is now a
-diagnostic listing the embedded modules, where it used to be a silent no-op
-that surfaced later as "undefined variable".
+Every `std::` name resolves to a module or is a diagnostic listing the embedded
+ones. `std::io` used to be the exception — a no-op namespace over the builtin
+`print`, carried by an `is_std` flag through `mod_collect_imports`,
+`compiler.c` and `tc_link_imports` — and it is now a real module like the rest,
+so the flag and all three of its readers are gone.
 
 ### Types and inference
 

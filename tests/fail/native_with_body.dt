@@ -1,0 +1,6 @@
+#! expect: an attributed function has no body
+# the attribute *is* the body, so there is never a question of which wins.
+@native("io_print")
+fun p<T>(value: T) { }
+
+fun main() {}

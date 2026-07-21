@@ -10,6 +10,8 @@
 #> pi is roughly 3.14 and true
 #> ab
 #> ab
+use std::io::print;
+
 fun main() {
     var s = "hello";
     var t = "hello";

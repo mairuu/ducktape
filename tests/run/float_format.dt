@@ -18,6 +18,8 @@
 #> true
 #> 300.0
 
+use std::io::print;
+
 struct Pair { a: Float, b: Float }
 
 fun main() {

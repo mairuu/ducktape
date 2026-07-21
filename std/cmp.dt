@@ -2,7 +2,7 @@
 #
 # Written in ducktape, not in C: `impl Ord for Int` is legal, so the standard
 # library can extend the primitives with the same trait machinery user code
-# uses. Nothing here needs a builtin.
+# uses. Nothing here needs a native.
 #
 # `Ord` is deliberately *not* object-safe — `other: Self` means a caller has to
 # know the concrete type — so it is a bound, never a `dyn Ord`. That is the

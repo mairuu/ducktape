@@ -4,6 +4,8 @@
 #> 0
 #> 600030000
 #> 20000
+use std::io::print;
+
 fun main() {
     var kept = "sentinel";
     var i = 0;

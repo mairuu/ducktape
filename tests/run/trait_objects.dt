@@ -17,6 +17,8 @@
 #> 9
 #> 16
 
+use std::io::print;
+
 trait Shape {
     fun area(self) -> Int;
     fun name(self) -> String;

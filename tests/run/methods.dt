@@ -8,6 +8,8 @@
 #> 7
 #> 12.56
 #> area=12.56
+use std::io::print;
+
 struct Point {
     x: Int,
     y: Int,

@@ -1,4 +1,6 @@
 #! expect: top-level 'var' is not supported
+use std::io::print;
+
 var counter: Int = 0;
 
 fun main() {

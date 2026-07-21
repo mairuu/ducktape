@@ -1,4 +1,5 @@
 #! expect: circular module dependency
+use std::io::print;
 use b::f;
 
 pub fun g() -> Int {

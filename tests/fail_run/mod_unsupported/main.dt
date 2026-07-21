@@ -1,5 +1,6 @@
 #! expect: lib.dt
 # type-checks; only --run rejects it, in the dependency rather than here.
+use std::io::print;
 use lib::show_twice;
 
 struct S(Int)

@@ -3,6 +3,8 @@
 # the coercion to a trait object throws away. Checked where `dyn` is written,
 # not at the trait: the trait itself is perfectly usable as a bound.
 
+use std::io::print;
+
 trait Pick {
     fun area(self) -> Int;
     fun bigger(self, other: Self) -> Self;

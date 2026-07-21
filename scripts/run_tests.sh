@@ -170,5 +170,18 @@ else
     rm -f "$bad"
 fi
 
+# a native is written by name and re-bound at load, so an image naming one this
+# build does not provide must be refused there rather than at the first call.
+bad=$(mktemp)
+seed=$ROOT/tests/run/native.dt
+if [ -e "$seed" ] && "$BIN" --emit-bc "$bad" "$seed" >/dev/null 2>&1; then
+    # same length, so every offset in the image stays valid
+    sed 's/io_print/io_prinX/' < "$bad" > "$bad.mangled"
+    mv "$bad.mangled" "$bad"
+    check_bad_image "image naming an unknown native" "$bad"
+else
+    rm -f "$bad"
+fi
+
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

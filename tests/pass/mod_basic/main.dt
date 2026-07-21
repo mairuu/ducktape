@@ -1,5 +1,6 @@
 # a pub struct and a pub fun imported from a sibling file
 
+use std::io::print;
 use geometry::Point;
 use geometry::origin;
 

@@ -434,6 +434,23 @@ bool vm_run(Executable *exe, Heap *heap, FunDef *entry) {
         VM_RETURN(runtime_error(&vm, "can only call functions"));
       }
       assert(fun->param_count == argc && "arity got past the checker");
+
+      if (fun->native != NULL) {
+        // no frame: the C function runs to completion in place. Its arguments
+        // stay on the stack across the call — they are the root set, so an
+        // allocating native cannot have them collected out from under it —
+        // and only afterwards are they replaced by the result. Same
+        // discipline OP_MAKE_DYN follows for heap_dyn.
+        NativeCtx ctx = {.heap = vm.heap, .error = NULL};
+        Value result = fun->native(&ctx, vm.sp - argc, argc);
+        if (ctx.error != NULL) {
+          VM_RETURN(runtime_error(&vm, "%s", ctx.error));
+        }
+        vm.sp -= argc + 1; // the args, and the callee beneath them
+        push(&vm, result);
+        break;
+      }
+
       if (fun->chunk == NULL) {
         VM_RETURN(runtime_error(&vm, "call to uncompiled function '" SV_FMT "'",
                                 SV_ARG(fun->name)));
@@ -451,13 +468,6 @@ bool vm_run(Executable *exe, Heap *heap, FunDef *entry) {
           .base = vm.sp - argc,
       };
       frame = &vm.frames[vm.frame_count - 1];
-      break;
-    }
-
-    case OP_PRINT: {
-      value_print(pop(&vm), stdout);
-      fputc('\n', stdout);
-      push(&vm, val_unit());
       break;
     }
 

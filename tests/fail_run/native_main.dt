@@ -1,0 +1,4 @@
+#! expect: 'main' must not be native
+# the VM enters a frame over main's chunk, and a native has none.
+@native("io_print")
+fun main(v: Int);

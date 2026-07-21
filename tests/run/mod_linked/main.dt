@@ -8,6 +8,7 @@
 #> 24
 #> square
 #> 12
+use std::io::print;
 use shapes::rect::{Rect, Kind};
 use scale::grow;
 use scale::doubler as twice;

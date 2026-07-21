@@ -51,8 +51,9 @@ typedef enum {
   OP_JUMP_IF_FALSE, // u16 forward offset (does not pop the condition)
   OP_LOOP,          // u16 backward offset
 
-  OP_CALL,  // u8 argc — callee value sits beneath the args
-  OP_PRINT, // pops a value, prints it, pushes unit
+  OP_CALL, // u8 argc — callee value sits beneath the args; the callee may be
+           // a ducktape function (opens a frame) or a native (runs C and
+           // pushes its result, no frame)
   OP_RETURN,
 
   OP_ARRAY,     // u8 count — pop count elems (left-to-right), push array

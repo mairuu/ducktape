@@ -21,7 +21,7 @@ names a file, that file is the source of truth. Historical design notes live in
 | `tests/fail/` | programs that must fail; first line `#! expect: <substring>` asserts on stderr |
 | `tests/run/` | programs executed with `--run`; `#> line` comments assert on stdout |
 | `tests/fail_run/` | like `tests/fail`, but invoked with `--run` — for programs that type-check yet the VM rejects |
-| `std/` | the standard library, written in ducktape; embedded into the binary at build time |
+| `std/` | the standard library, written in ducktape; embedded into the binary at build time. The bodies that cannot be (`print`, array/string primitives) are bodyless declarations bound to `src/native.c` |
 | `scripts/run_tests.sh` | the test runner (invoked by `make test`) |
 | `scripts/embed_std.sh` | mirrors `std/*.dt` into `build/std_data.h` for `src/std_src.c` |
 | `editors/vscode/` | a VS Code extension: TextMate grammar + language config for `.dt` (highlighting only, no language server) |
@@ -68,7 +68,8 @@ Driver: `compiler_run` in `src/compiler.c`. Phases, in order:
 2. **dep graph** — tri-colour DFS over the import edges, post-order, so
    dependencies precede their dependents; a back edge is a cycle diagnostic
 3. **register** — `tc_register_module` (`src/sema.c`): create def stubs for
-   top-level declarations, register builtins
+   top-level declarations, and bind each `@native`/`@intrinsic` declaration to
+   C's registry (`src/native.c`)
 4. **link imports + resolve** — per module in topological order:
    `tc_link_imports` copies each `use`d item into the module's scopes, then
    `tc_resolve_module` resolves signatures, types, impls
@@ -98,7 +99,8 @@ phase aborts mid-file. Error recovery uses a poison type/expr convention (see
   `?` propagation, and programs spanning several files via `use`. See
   `language.md` for the precise rules and the not-yet-implemented list.
 - **Executes (`--run`):** nearly all of it — arithmetic, control flow,
-  recursion, first-class function values and closures with upvalues, `print`,
+  recursion, first-class function values and closures with upvalues, native
+  functions (`std::io::print`, `std::array::len`, `std::string`),
   GC-backed strings and arrays, structs/enums/tuples with full match
   compilation, methods and `?`, multi-module programs, and generic code via
   monomorphisation (including dispatch through a trait bound and inherited

@@ -1,4 +1,6 @@
-#! expect: unknown item 'println' in 'std'
+#! expect: has no item named 'println'
+# std::io is an ordinary module now, so a name it does not export is reported
+# by the same check any other module's missing item gets.
 use std::io::println;
 
 fun main() {}

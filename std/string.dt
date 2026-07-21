@@ -1,0 +1,19 @@
+# std::string — operations on `String`.
+#
+# A `String` is an interned, immutable heap object, so `slice` allocates: it
+# is the module that exercises the native calling convention's one real rule,
+# that arguments stay on the VM stack across the call and so remain rooted
+# through any collection the native triggers.
+#
+# `slice` is also the one native here that can *fail*. A native reports a
+# runtime error by setting `ctx->error`, which the VM turns into an error at
+# the call site — the closest thing the language has to a panic until there is
+# a real one (roadmap: `std::result`).
+
+@native("string_len")
+pub fun len(s: String) -> Int;
+
+# `s[from..to)`, indexed in bytes. A runtime error if the range is not within
+# the string.
+@native("string_slice")
+pub fun slice(s: String, from: Int, to: Int) -> String;

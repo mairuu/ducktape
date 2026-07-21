@@ -3,6 +3,8 @@
 # impl witnesses the trait for it. Same question a bound asks — a trait object
 # is a bound whose witness travels with the value.
 
+use std::io::print;
+
 trait Shape {
     fun area(self) -> Int;
 }

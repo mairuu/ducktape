@@ -3,6 +3,8 @@
 #> 55
 #> 120
 #> 42
+use std::io::print;
+
 fun add(a: Int, b: Int) -> Int {
     a + b
 }

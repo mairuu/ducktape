@@ -5,6 +5,8 @@
 #> 3.5
 #> true
 #> false
+use std::io::print;
+
 fun main() {
     var t = (1, "two", 3.5);
     print(t);

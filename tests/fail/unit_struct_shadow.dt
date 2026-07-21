@@ -3,6 +3,8 @@
 # the name can no longer be bound as a variable, since `Marker` here is a
 # pattern that tests for the struct rather than a fresh binding.
 
+use std::io::print;
+
 struct Marker;
 
 fun main() {

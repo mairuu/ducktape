@@ -9,6 +9,8 @@
 #> [None, Some(2)]
 #> (None, Empty)
 
+use std::io::print;
+
 enum Opt<T> {
     Some(T),
     None,

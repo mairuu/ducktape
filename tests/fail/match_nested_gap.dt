@@ -1,5 +1,7 @@
 #! expect: match is not exhaustive
 # the outer enum is fully covered; the gap is one level down, inside Some.
+use std::io::print;
+
 enum Opt<T> {
     Some(T),
     None,

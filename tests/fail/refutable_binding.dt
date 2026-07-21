@@ -1,6 +1,8 @@
 #! expect: refutable pattern in a 'var' binding
 # a binding is a one-arm match, so it must cover every value: Opt::None
 # reaches no arm.
+use std::io::print;
+
 enum Opt {
     Some(Int),
     None,

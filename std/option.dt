@@ -5,9 +5,10 @@
 # impl, and the combinators take ordinary closures.
 #
 # `unwrap` is deliberately missing. A method that aborts the program on `None`
-# needs a way to *fail* at runtime, and the language has none — no panic, no
-# native functions yet (roadmap item 3). Every accessor here therefore names
-# what to do instead: `unwrap_or`, `unwrap_or_else`.
+# needs a way to *fail* at runtime. Natives brought half of one — a native can
+# set `ctx->error` — but a `panic` that a ducktape function can raise, carrying
+# a message, is still unbuilt. Every accessor here therefore names what to do
+# instead: `unwrap_or`, `unwrap_or_else`.
 
 use std::cmp::Ord;
 

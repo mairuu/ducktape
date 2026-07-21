@@ -2,6 +2,8 @@
 # the rest of the function on the first Err.
 #> Ok(2)
 #> Err(odd: 3)
+use std::io::print;
+
 enum Result<T, E> {
     Ok(T),
     Err(E),

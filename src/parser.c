@@ -2096,7 +2096,48 @@ static bool parse_param_list(Parser *p, ParamDeclNode *out, int *count,
   return !had_error;
 }
 
-static Decl *parse_fun_decl(Parser *p, bool is_pub) {
+// `@native("io_print")` / `@intrinsic("array_len")`, already past the '@'.
+// Only these two names exist, and both take exactly one string: the attribute
+// surface is a registry key and nothing more, so there is no attribute
+// *grammar* to grow here — a third tier would be a third name in this switch.
+static AttrNode parse_attr(Parser *p) {
+  Token at_tok = *previous_tok(p);
+  AttrNode attr = {.kind = ATTR_NONE, .span = token_span(&at_tok)};
+
+  if (!consume_tok(p, TOKEN_IDENT, "expected attribute name after '@'")) {
+    return attr;
+  }
+  Token name_tok = *previous_tok(p);
+  AttrKind kind = ATTR_NONE;
+  if (sv_equal_cstr(name_tok.lexeme, "native")) {
+    kind = ATTR_NATIVE;
+  } else if (sv_equal_cstr(name_tok.lexeme, "intrinsic")) {
+    kind = ATTR_INTRINSIC;
+  } else {
+    error_at(p, token_span(&name_tok),
+             "unknown attribute; expected '@native' or '@intrinsic'");
+    return attr;
+  }
+
+  if (!consume_tok(p, TOKEN_LPAREN, "expected '(' after attribute name") ||
+      !consume_tok(p, TOKEN_STRING,
+                   "expected a name string in the attribute")) {
+    return attr;
+  }
+  Token key_tok = *previous_tok(p);
+  if (!consume_tok(p, TOKEN_RPAREN, "expected ')'")) {
+    return attr;
+  }
+
+  attr.kind = kind;
+  // the lexeme keeps its quotes; the key is what sits between them.
+  attr.name = (StringView){.chars = key_tok.lexeme.chars + 1,
+                           .len = key_tok.lexeme.len - 2};
+  attr.span = span_merge(token_span(&at_tok), previous_tok_span(p));
+  return attr;
+}
+
+static Decl *parse_fun_decl(Parser *p, bool is_pub, AttrNode attr) {
   if (!consume_tok(p, TOKEN_FUN, "expected 'fun'")) {
     return ast_decl(DECL_POISON, current_tok_span(p), p->al);
   }
@@ -2156,8 +2197,21 @@ static Decl *parse_fun_decl(Parser *p, bool is_pub) {
     }
   }
 
+  // an attribute *is* the body, so the two are exclusive in both directions:
+  // a `@native` fun ends at the semicolon, and any other one must have a
+  // block. Reporting both ways is what keeps "which one wins?" from being a
+  // question the language has to answer.
   Expr *body = NULL;
-  if (match_tok(p, TOKEN_FAT_ARROW)) {
+  if (attr.kind != ATTR_NONE) {
+    if (!consume_tok(p, TOKEN_SEMICOLON,
+                     "expected ';' — an attributed function has no body")) {
+      had_error = true;
+    }
+  } else if (match_tok(p, TOKEN_SEMICOLON)) {
+    error_at(p, previous_tok_span(p),
+             "a function without '@native' or '@intrinsic' needs a body");
+    had_error = true;
+  } else if (match_tok(p, TOKEN_FAT_ARROW)) {
     body = parse_expr(p);
     assert(body && "function body should not be NULL");
     if (body->kind == EXPR_POISON) {
@@ -2188,7 +2242,8 @@ static Decl *parse_fun_decl(Parser *p, bool is_pub) {
       .param_count = param_count,
       .params = al_alloc(p->al, sizeof(ParamDeclNode) * param_count),
       .where_clause = where_clause,
-      .shorthand = body->kind != EXPR_BLOCK,
+      .shorthand = body != NULL && body->kind != EXPR_BLOCK,
+      .attr = attr,
       .type_param_count = type_param_count,
       .type_params = type_params,
   };
@@ -2830,7 +2885,10 @@ static Decl *parse_impl_decl(Parser *p, bool is_pub) {
         items[item_count].span = span_merge(start_span, ty->span);
         item_count++;
       } else if (check_tok(p, TOKEN_FUN)) {
-        Decl *fun_decl = parse_fun_decl(p, false);
+        // no attribute: an impl method cannot be native yet, so there is
+        // nowhere for one to be written.
+        Decl *fun_decl =
+            parse_fun_decl(p, false, (AttrNode){.kind = ATTR_NONE});
         if (fun_decl->kind == DECL_POISON) {
           had_error = true;
         } else {
@@ -2876,6 +2934,17 @@ static Decl *parse_impl_decl(Parser *p, bool is_pub) {
 static Decl *parse_decl(Parser *p) {
   Decl *decl = NULL;
 
+  // an attribute precedes `pub`, and only a `fun` can carry one — everything
+  // else has a body the language can see.
+  AttrNode attr = {.kind = ATTR_NONE};
+  if (match_tok(p, TOKEN_AT)) {
+    attr = parse_attr(p);
+    if (attr.kind == ATTR_NONE) {
+      sync_to_decl(p);
+      return ast_decl(DECL_POISON, previous_tok_span(p), p->al);
+    }
+  }
+
   if (check_tok(p, TOKEN_USE)) {
     decl = parse_use_decl(p);
   } else {
@@ -2883,7 +2952,7 @@ static Decl *parse_decl(Parser *p) {
     if (check_tok(p, TOKEN_VAR)) {
       decl = parse_var_decl(p, is_pub);
     } else if (check_tok(p, TOKEN_FUN)) {
-      decl = parse_fun_decl(p, is_pub);
+      decl = parse_fun_decl(p, is_pub, attr);
     } else if (check_tok(p, TOKEN_STRUCT)) {
       decl = parse_struct_decl(p, is_pub);
     } else if (check_tok(p, TOKEN_ENUM)) {
@@ -2897,6 +2966,11 @@ static Decl *parse_decl(Parser *p) {
       error_at(p, previous_tok_span(p), "expected declaration");
       decl = ast_decl(DECL_POISON, previous_tok_span(p), p->al);
     }
+  }
+
+  if (attr.kind != ATTR_NONE && decl->kind != DECL_FUN &&
+      decl->kind != DECL_POISON) {
+    error_at(p, attr.span, "only a function can be '@native' or '@intrinsic'");
   }
 
   if (p->panic_mode) {

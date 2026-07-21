@@ -1,0 +1,6 @@
+#! expect: cannot find 'print' in this scope
+# `print` is an ordinary std function now, not a name bound into every scope,
+# so forgetting the `use` is an ordinary undefined-name error.
+fun main() {
+  print(1);
+}

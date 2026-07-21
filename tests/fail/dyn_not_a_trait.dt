@@ -2,6 +2,8 @@
 # `dyn` names a trait and nothing else — a struct already has one
 # representation, so there is no vtable to attach.
 
+use std::io::print;
+
 struct Sq { s: Int }
 
 fun use_it(x: dyn Sq) -> Int {

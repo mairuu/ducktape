@@ -1,5 +1,7 @@
 #! expect: refutable pattern in a 'var' binding
 # a literal is refutable even nested inside an otherwise irrefutable shape.
+use std::io::print;
+
 fun main() {
     var (a, 2) = (1, 2);
     print(a);

@@ -11,6 +11,8 @@
 #> 3
 #> 3
 #> 9
+use std::io::print;
+
 fun main() {
     var arr = [1, 2, 3];
     print(arr);

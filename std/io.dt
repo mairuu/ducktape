@@ -1,0 +1,14 @@
+# std::io — output.
+#
+# The first module whose bodies are *not* written in ducktape. `print` cannot
+# be: it has to reach `value_print`, and no expression in the language does
+# that. So the declaration is bodyless and an attribute names the C function
+# to call — the signature stays ducktape, and the checker treats this like any
+# other generic function.
+#
+# `print<T>` is generic and yet is never monomorphised: the runtime is uniform
+# in type arguments, so one C body serves every `T`. That is the same
+# observation monomorphisation itself rests on, read from the other side.
+
+@native("io_print")
+pub fun print<T>(value: T);

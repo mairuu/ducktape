@@ -4,6 +4,7 @@
   "scopeName": "source.ducktape",
   "patterns": [
     { "include": "#comment" },
+    { "include": "#attribute" },
     { "include": "#string" },
     { "include": "#number" },
     { "include": "#keyword" },
@@ -16,6 +17,17 @@
     "comment": {
       "name": "comment.line.number-sign.ducktape",
       "match": "#.*$"
+    },
+
+    "attribute": {
+      "name": "meta.attribute.ducktape",
+      "match": "(@(?:native|intrinsic))\\s*(\\()\\s*(\"[^\"]*\")\\s*(\\))",
+      "captures": {
+        "1": { "name": "storage.modifier.attribute.ducktape" },
+        "2": { "name": "punctuation.definition.parameters.begin.ducktape" },
+        "3": { "name": "string.quoted.double.ducktape" },
+        "4": { "name": "punctuation.definition.parameters.end.ducktape" }
+      }
     },
 
     "string": {

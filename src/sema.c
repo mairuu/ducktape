@@ -772,6 +772,43 @@ void tc_init(TypeChecker *tc, DiagBag *diags, Allocator *al) {
 
 void tc_destroy(TypeChecker *tc) { (void)tc; }
 
+// bind `@native("io_print")` / `@intrinsic("array_len")` to what C registered
+// under that name. This is the whole of the "resolved at link time" half of
+// the design: the *signature* went through the ordinary checker, so all that
+// is left is a name lookup — and doing it here rather than in codegen is what
+// gives an unknown name a real span to report against, which a hand-built
+// builtin never had.
+static void tc_bind_native(TypeChecker *tc, FunDef *def, const AttrNode *attr) {
+  def->native_kind = attr->kind;
+  def->native_name = attr->name;
+
+  switch (attr->kind) {
+  case ATTR_NONE:
+    return;
+  case ATTR_NATIVE:
+    def->native = native_lookup(attr->name);
+    if (def->native == NULL) {
+      diag_error(tc->diags, attr->span, "no native named '" SV_FMT "'",
+                 SV_ARG(attr->name));
+      diag_note(tc->diags, (Span){0}, "available: %s", native_names());
+      def->native_kind = ATTR_NONE;
+    }
+    return;
+  case ATTR_INTRINSIC: {
+    int op = intrinsic_lookup(attr->name);
+    if (op < 0) {
+      diag_error(tc->diags, attr->span, "no intrinsic named '" SV_FMT "'",
+                 SV_ARG(attr->name));
+      diag_note(tc->diags, (Span){0}, "available: %s", intrinsic_names());
+      def->native_kind = ATTR_NONE;
+      return;
+    }
+    def->intrinsic_op = (uint8_t)op;
+    return;
+  }
+  }
+}
+
 static void tc_register_fun(TypeChecker *tc, Module *m, Decl *decl) {
   assert(decl->kind == DECL_FUN && "expected fun decl");
 
@@ -779,6 +816,7 @@ static void tc_register_fun(TypeChecker *tc, Module *m, Decl *decl) {
   assert(m->fun_cap > m->fun_count && "fun capacity exceeded");
 
   FunDef *def = al_alloc_zero_for(tc->al, FunDef);
+  tc_bind_native(tc, def, &fun_decl->attr);
   // stub
   def->is_pub = decl->is_pub;
   def->name = fun_decl->name;
@@ -879,39 +917,6 @@ static void tc_register_impl(TypeChecker *tc, Module *m, Decl *decl) {
   // set backpointers
   decl->as.impl_decl.def = def;
   def->module = m;
-}
-
-// builtins available in every module. for now just `print`:
-//   fun print<T>(value: T) -> ()
-// codegen lowers calls to it to OP_PRINT.
-static void tc_register_builtins(TypeChecker *tc, Module *m) {
-  FunDef *def = al_alloc_zero_for(tc->al, FunDef);
-  def->name = sv_from_cstr("print");
-  def->module = m;
-  def->is_builtin = true;
-  def->slot = FUN_SLOT_NONE;
-
-  def->type_param_count = 1;
-  def->type_params = al_alloc_zero(tc->al, sizeof(Type *));
-  def->type_params[0] = ty_generic(sv_from_cstr("T"), NULL, 0, tc->al);
-
-  def->param_count = 1;
-  def->params = al_alloc_zero(tc->al, sizeof(ParamDef));
-  def->params[0].name = sv_from_cstr("value");
-  def->params[0].param_type = def->type_params[0];
-
-  def->return_type = tc->t_unit;
-  def->fun_type = ty_fun(&def->type_params[0], 1, tc->t_unit, tc->al);
-
-  VarEntry *ve = NULL;
-  vscope_define(&m->vscope, def->name, def->fun_type, tc->diags, (Span){0},
-                &ve);
-  ve->as.fun = def;
-
-  TypeEntry *te = NULL;
-  tscope_define(&m->tscope, def->name, def->fun_type, tc->diags, (Span){0},
-                &te);
-  te->as.fun_def = def;
 }
 
 static void tc_register_trait(TypeChecker *tc, Module *m, Decl *decl) {
@@ -1039,8 +1044,6 @@ void tc_register_module(TypeChecker *tc, Module *m) {
   }
 
   assert(m->fun_count == m->fun_cap && "fun count mismatch after registration");
-
-  tc_register_builtins(tc, m);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1108,39 +1111,24 @@ static bool link_name_taken(TypeChecker *tc, Module *m, const UseAlias *a) {
   return false;
 }
 
-// bring one `use`d item into `m` under its alias. the two import kinds differ
-// only in where the item comes from and how it is vetted — `dep == m` means
-// `std`, whose items are the builtins already sitting in m's own scopes.
+// bring one `use`d item into `m` under its alias. There is one import kind:
+// a std module is an ordinary registry entry, vetted by the same `pub` rule
+// as any other dependency.
 static void link_import_item(TypeChecker *tc, Module *m, Module *dep,
                              const UseAlias *a) {
-  if (dep == m) {
-    // std: no file is consulted, and intermediate segments aren't modelled —
-    // the final segment is the whole namespace.
-    if (tscope_lookup(&m->tscope, a->name) == NULL) {
-      diag_error(tc->diags, a->span, "unknown item '" SV_FMT "' in 'std'",
-                 SV_ARG(a->name));
-      return;
-    }
-    // `use std::io::print;` names what is already bound — nothing to add, and
-    // the conflict check below would flag the builtin against itself.
-    if (sv_equal(a->name, a->alias)) {
-      return;
-    }
-  } else {
-    Decl *d = mod_find_own_decl(dep, a->name);
-    if (d == NULL) {
-      diag_error(tc->diags, a->span,
-                 "module '" SV_FMT "' has no item named '" SV_FMT "'",
-                 SV_ARG(dep->file_path), SV_ARG(a->name));
-      return;
-    }
-    if (!d->is_pub) {
-      diag_error(tc->diags, a->span,
-                 "'" SV_FMT "' is private in module '" SV_FMT "'",
-                 SV_ARG(a->name), SV_ARG(dep->file_path));
-      diag_note(tc->diags, (Span){0}, "add 'pub' to its declaration");
-      return;
-    }
+  Decl *d = mod_find_own_decl(dep, a->name);
+  if (d == NULL) {
+    diag_error(tc->diags, a->span,
+               "module '" SV_FMT "' has no item named '" SV_FMT "'",
+               SV_ARG(dep->file_path), SV_ARG(a->name));
+    return;
+  }
+  if (!d->is_pub) {
+    diag_error(tc->diags, a->span,
+               "'" SV_FMT "' is private in module '" SV_FMT "'",
+               SV_ARG(a->name), SV_ARG(dep->file_path));
+    diag_note(tc->diags, (Span){0}, "add 'pub' to its declaration");
+    return;
   }
 
   if (link_name_taken(tc, m, a)) {
@@ -1155,10 +1143,10 @@ static void link_import_item(TypeChecker *tc, Module *m, Module *dep,
 void tc_link_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
   for (int i = 0; i < m->import_count; i++) {
     ModImport *imp = &m->imports[i];
-    if (!imp->is_std && imp->module_index < 0) {
+    if (imp->module_index < 0) {
       continue; // discovery already diagnosed it; stay quiet
     }
-    Module *dep = imp->is_std ? m : reg->modules[imp->module_index];
+    Module *dep = reg->modules[imp->module_index];
 
     UseTarget *target = &imp->decl->as.use_decl.target;
     for (int j = 0; j < target->count; j++) {
@@ -4419,6 +4407,13 @@ static void tc_check_fun(TypeChecker *tc, Decl *decl) {
   DeclFun *fun_decl = &decl->as.fun_decl;
   FunDef *fun_def = fun_decl->def;
 
+  // a native's body is in C, so its signature is the whole declaration and
+  // there is nothing here to check. (A malformed `@native` already reported
+  // at registration and left `body` NULL too.)
+  if (fun_decl->body == NULL) {
+    return;
+  }
+
   CheckCtx cctx;
   cctx_init(&cctx, tc, fun_def->module, tc->diags, tc->al);
 
@@ -5642,6 +5637,15 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
     case PATHRES_CTX_SCOPE: {
       TypeEntry *te = tscope_lookup(ctx->tscope, segment);
       if (!te) {
+        // a lone segment is a plain name (a function, a unit variant), not a
+        // type — and since `print` stopped being ambient this is the message
+        // a missing `use` produces, so it should describe the mistake rather
+        // than the resolver's internals.
+        if (path->count == 1) {
+          diag_error(ctx->diags, path->span,
+                     "cannot find '" SV_FMT "' in this scope", SV_ARG(segment));
+          return false;
+        }
         diag_error(ctx->diags, path->span, "unknown type '" SV_FMT "' in path",
                    SV_ARG(segment));
         if (i == 0 && path->count > 1) {

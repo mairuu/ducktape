@@ -63,7 +63,6 @@ bytes + constant pool (≤256 consts, u8 index). Operands: u8 unless noted.
 | `OP_RANGE incl` `OP_RANGE_START` `OP_RANGE_TEST` | build range from end/start; TEST pops i+range, pushes `i < end` (or `<=`) |
 | `OP_JUMP u16` `OP_JUMP_IF_FALSE u16` `OP_LOOP u16` | JUMP_IF_FALSE does *not* pop the condition |
 | `OP_CALL argc` | callee value sits beneath the args |
-| `OP_PRINT` | pops, prints + newline, pushes unit |
 | `OP_RETURN` | pops result, tears down the frame (incl. callee slot), pushes result for the caller |
 | `OP_ARRAY count` | pops `count` elems (left-to-right order), pushes a new array |
 | `OP_INDEX_GET` | pops index, array; pushes `array[index]` (bounds-checked) |
@@ -166,7 +165,9 @@ the stack in place, decrementing `sp` only after the result exists).
   recorded local base (continue keeps the hidden iter locals, break does
   not) before jumping; forward continue targets the increment.
 - Calls: push callee (`OP_GET_GLOBAL` or a local), args left-to-right,
-  `OP_CALL`. A call to the unshadowed name `print` lowers to `OP_PRINT`.
+  `OP_CALL`, whose callee may be a ducktape function (opens a frame), a
+  closure, or a native (runs C in place). A call to an `@intrinsic` is not a
+  call at all: it lowers to that opcode inline.
 - Strings: literals intern directly to a constant (`cg_decode_string`);
   `EXPR_INTERPOLATED` pushes each segment (text segments as string
   constants, expr segments compiled normally) then one `OP_INTERP`.
@@ -200,7 +201,8 @@ the stack in place, decrementing `sp` only after the result exists).
   compilation" below.
 - Trait default bodies the impl inherited (`compile_method_call` again, via
   `TraitMethodDef.default_impl`): see "Monomorphisation" below.
-- Anything outside the subset (`print` named as a value rather than called,
+- Anything outside the subset (an `@intrinsic` named as a value rather than
+  called,
   say) emits a source-anchored diagnostic
   `"... is not supported by the VM yet"` and fails codegen — it never
   crashes at runtime.
@@ -627,76 +629,73 @@ image is rejected rather than executed. `tests/run` doubles as the round-trip
 suite: `scripts/run_tests.sh` emits an image for every runnable program and
 re-runs it, so a construct the format forgets shows up as an output diff.
 
+## Native functions (`src/native.c`, `include/native.h`)
+
+A function whose body is in C, declared bodyless in an ordinary std module
+with an attribute naming it (`language.md` "Native functions"). The mechanism
+is one field on `FunDef` and one branch in `OP_CALL`.
+
+**Registry.** `src/native.c` is two tables mapping a name to either a C
+function (`@native`) or an `OpCode` (`@intrinsic`). Nothing in it knows about
+types: the signature lives in the `.dt` file and is the checker's business, so
+a native's contract with C is only "this many values in, one value out".
+`tc_bind_native` does the lookup during registration — in the checker rather
+than in codegen, because that is where the attribute still has a span to
+report an unknown name against, which a hand-built builtin never had.
+
+**`@native` is an ordinary global.** It takes a slot in `exe->globals` like
+any other definition, so `OP_GET_GLOBAL` reaches it and it is first-class for
+free: passable, storable in an array, capturable by a closure, usable as a
+vtable entry. `OP_CALL` opens no frame for it — it runs the C function in
+place and pushes the result:
+
+```
+if (fun->native != NULL) {
+    NativeCtx ctx = { .heap = vm.heap, .error = NULL };
+    Value result = fun->native(&ctx, vm.sp - argc, argc);   // args stay put
+    ...
+    vm.sp -= argc + 1;                                      // args + callee
+    push(&vm, result);
+}
+```
+
+The **calling convention is a GC rule**: the arguments stay on the value stack
+across the call and are only popped once the result exists. The stack is the
+root set, so an allocating native (`string_slice` interns) cannot have its own
+arguments swept out from under it. `OP_MAKE_DYN` already followed exactly this
+discipline for `heap_dyn`; getting it wrong reproduces the 5c-ii class of bug,
+something reachable-looking the collector cannot see. A native fails by
+setting `ctx->error` to a static string, which becomes a runtime error at the
+call site.
+
+**A generic native is never monomorphised.** The runtime is uniform in type
+arguments, so one C body serves every `T` — `cg_call_target` returns the
+`FunDef` itself rather than keying an instance, and `exe_slot_fun` gives it a
+slot despite `fun_is_generic`. `print<T>` is the whole of that case, and it is
+the monomorphisation observation paying out once more.
+
+**`@intrinsic` is not addressable.** It *is* an opcode, so it gets no slot;
+`compile_call` recognises the callee's `FunDef` (from `ExprPath.resolved_fun`,
+so an alias works) and emits the opcode inline with no callee value and no
+frame. Anything that would need a value — naming it, passing it — reaches
+`cg_call_target` and is a diagnostic. This is what finally exposes `OP_LEN`,
+until now reachable only from the `for` desugaring.
+
+**Serialization.** A C function pointer cannot go in an image, so a fun record
+carries a *body kind*: `BC_BODY_CHUNK` writes the chunk as before,
+`BC_BODY_NATIVE` writes the registry name, and `bc_load` re-binds it against
+the running binary. A name this build does not know is an error at load rather
+than a wrong call later, which is why the image needs no separate registry
+hash. An `@intrinsic` never appears in an image at all — its opcode is already
+in the emitted code.
+
+Porting `print` to this deleted `OP_PRINT`, `cg_names_builtin_print`,
+`tc_register_builtins`, the "using a builtin as a value" diagnostic, and the
+`std::io` no-op in `mod_collect_imports`/`tc_link_imports`. `print` is now
+imported like anything else; there is no prelude.
+
+
 ## Future (design intent, not implemented)
 
 - **REPL:** does not exist; would re-run the pipeline per line with a fresh
   arena, keeping the GC heap alive across lines.
-
-### Native functions
-
-`print` is currently special in three unrelated ways: `tc_register_builtins`
-hand-builds its `FunDef` in C, codegen pattern-matches the call into a
-dedicated `OP_PRINT`, and `cg_names_builtin_print` exists only to chase
-`use std::io::print as p;` aliases. None of that scales — an opcode per native
-spends a one-byte opcode space, and `print` still cannot be used as a value
-(`cg_call_target` refuses it: a builtin has no body to point a slot at).
-
-The intended replacement is one field and one branch.
-
-**Mechanism.** `FunDef` gains a `NativeFn native`, with exactly one of
-`chunk`/`native` non-NULL. `OP_CALL` gets a branch where it currently rejects
-a NULL chunk, calling the C function and pushing its result without opening a
-frame. Natives take **ordinary global slots**, so `OP_GET_GLOBAL` works on them
-and they are first-class for free: passable as values, storable in arrays,
-capturable by closures, and usable as vtable entries — `OP_DYN_METHOD` pushes
-a `FunDef *` and `OP_CALL` does not care what is behind it.
-
-**Surface.** A *bodyless* declaration in an ordinary std module, so the
-signature is written in ducktape and the checker needs no special path at all:
-
-```
-@native("dt_sqrt")   pub fun sqrt(x: Float) -> Float;
-@intrinsic("len")    pub fun len<T>(xs: [T]) -> Int;
-```
-
-C supplies only a name → function-pointer registry, resolved at link time; an
-unknown name is a compile error with a real span, which a hand-built builtin
-can never have. A body next to a native binding would read as "which one
-wins?", so there is none — the attribute *is* the body.
-
-Three tiers, one declaration surface: **`@intrinsic`** lowers inline to an
-opcode (this is what would finally expose `OP_LEN`, today reachable only from
-the `for` desugaring), **`@native`** becomes a call, and everything expressible
-stays plain ducktape, where `std::cmp` already sits.
-
-**A generic native needs no monomorphisation.** The runtime is uniform in type
-arguments, so `print<T>` has one body for every `T`; `cg_call_target` returns it
-directly rather than keying a copy. This is the monomorphisation observation
-paying out one more time.
-
-Two parts need designing rather than assuming:
-
-- **GC calling convention.** A native that allocates can trigger a collection,
-  and the VM stack is the root set — so arguments must stay on the stack across
-  the call, with the native receiving a `Value *` into it and the result pushed
-  only afterwards. `OP_MAKE_DYN` already follows exactly this discipline for
-  `heap_dyn`; copy it rather than reinvent it. Getting it wrong reproduces the
-  5c-ii class of bug: something reachable-looking the collector cannot see.
-- **Serialization.** A C function pointer cannot go in an image, and an image
-  is the runtime projection of the program with no compiler behind it. So a
-  native is written **by name** and `bc_load` re-binds it against the running
-  binary's registry. That couples an image to a native ABI rather than to
-  `BC_VERSION` alone — an unknown name at load is a clean error, but the header
-  probably wants a registry hash so it fails at load instead of at first call.
-
-The milestone should be **net-negative lines in the compiler**. Porting `print`
-to it deletes `OP_PRINT`, `cg_names_builtin_print`, the hand-built `FunDef` in
-`tc_register_builtins`, the "using a builtin as a value" diagnostic, and the
-`std::io` no-op special case in `mod_collect_imports`/`tc_link_imports`. If it
-is not net-negative, the design is wrong.
-
-Rejected, with reasons: **inline C in `.dt` files** (needs a compiler at runtime
-or a per-program build step, which destroys the hermetic embedded std);
-**a separate `OP_NATIVE` index space** (dodges slot pressure but costs
-first-class-ness); **variadics** (the VM asserts `param_count == argc`, and
-relaxing it touches frame setup for a feature only `print`-alikes want).

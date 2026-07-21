@@ -1,0 +1,6 @@
+#! expect: needs a body
+# the mirror of native_with_body: bodyless is only meaningful with an
+# attribute to supply the body instead.
+fun orphan(x: Int) -> Int;
+
+fun main() {}

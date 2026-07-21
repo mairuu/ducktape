@@ -8,6 +8,7 @@
 #> <bool true>
 #> int 7!
 #> bool true!
+use std::io::print;
 use util::{Pair, swap, tag, loud, Label};
 
 impl Label for Int {

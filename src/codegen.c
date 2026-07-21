@@ -274,12 +274,23 @@ static bool cg_inst_key(Cg *cg, FunDef *fun, const Subst *primary,
 // diagnostic already reported) when there is none to emit.
 static FunDef *cg_call_target(Cg *cg, FunDef *fun, const Subst *primary,
                               const Subst *fallback, Span span) {
-  if (fun->is_builtin) {
-    // a *call* to `print` is lowered to OP_PRINT before ever getting here, so
-    // this is the builtin used as a value: there is no body to point a slot
-    // at, and nothing to monomorphise either.
-    cg_error(cg, span, "using a builtin as a value");
-    return NULL;
+  if (fun_is_native(fun)) {
+    // A native needs no monomorphisation even when its signature is generic:
+    // the runtime is uniform in type arguments, so one C body serves every
+    // `T`. `print<T>` is the whole of that case.
+    if (fun->native_kind == ATTR_INTRINSIC) {
+      // ... but an intrinsic has no body at all — it *is* an opcode, which a
+      // global slot cannot address. A direct call is lowered inline by
+      // compile_call; anything else reaches here.
+      diag_error(cg->diags, span,
+                 "'" SV_FMT "' is an intrinsic and can only be called "
+                 "directly, not used as a value",
+                 SV_ARG(fun->name));
+      cg->ok = false;
+      return NULL;
+    }
+    assert(fun->slot != FUN_SLOT_NONE && "native never linked");
+    return fun;
   }
   if (!fun_is_generic(fun)) {
     assert(fun->slot != FUN_SLOT_NONE && "non-generic definition never linked");
@@ -449,19 +460,6 @@ static void cg_register_closure(Cg *cg, FunDef *fun) {
     exe->closure_cap = new_cap;
   }
   exe->closures[exe->closure_count++] = fun;
-}
-
-// does this module declare a top-level `name` of its own? Only the print
-// shadow guard asks — a *reference* to a function compiles from the FunDef
-// the checker resolved (`ExprPath.resolved_fun`), which a name search here
-// could not reproduce for an import or an alias.
-static FunDef *cg_find_module_fun(Cg *cg, StringView name) {
-  for (int i = 0; i < cg->m->fun_count; i++) {
-    if (sv_equal(cg->m->funs[i]->name, name)) {
-      return cg->m->funs[i];
-    }
-  }
-  return NULL;
 }
 
 // ── struct/enum field lookups ────────────────────────────────────────────────
@@ -967,20 +965,18 @@ static void compile_call(Cg *cg, Expr *expr) {
   ExprCall *call = &expr->as.call;
   Expr *callee = call->callee;
 
-  // builtin print: lowered to OP_PRINT when the name isn't shadowed.
-  // which FunDef the callee names is the checker's answer, already on the
-  // node — including when a `use std::..::print as p;` bound it to another
-  // name, since tc_link_imports copies the builtin's entry under the alias.
-  if (callee->kind == EXPR_PATH && callee->as.path_expr.path.count == 1) {
-    StringView name = callee->as.path_expr.path.segments[0].name;
-    FunDef *resolved = callee->as.path_expr.resolved_fun;
-    if (resolved != NULL && resolved->is_builtin &&
-        cg_find_local(cg, name) < 0 && cg_find_module_fun(cg, name) == NULL) {
-      assert(call->arg_count == 1 && "print arity got past the checker");
-      compile_expr(cg, call->args[0]);
-      emit(cg, OP_PRINT);
-      return;
+  // an @intrinsic call *is* its opcode: push the arguments and emit it, with
+  // no callee value and no frame. Which FunDef the callee names is the
+  // checker's answer, already on the node — including through an alias
+  // (`use std::array::len as size;`), which a name match here could not see.
+  FunDef *direct =
+      callee->kind == EXPR_PATH ? callee->as.path_expr.resolved_fun : NULL;
+  if (direct != NULL && direct->native_kind == ATTR_INTRINSIC) {
+    for (int i = 0; i < call->arg_count; i++) {
+      compile_expr(cg, call->args[i]);
     }
+    emit(cg, (OpCode)direct->intrinsic_op);
+    return;
   }
 
   compile_expr(cg, callee);
@@ -1881,6 +1877,17 @@ static bool exe_add_global(Executable *exe, FunDef *fun) {
 // a generic definition has no single body, so it gets no slot: it is
 // addressed only through the instances the monomorphiser derives from it.
 static bool exe_slot_fun(Executable *exe, FunDef *fun) {
+  if (fun->native_kind == ATTR_INTRINSIC) {
+    // an opcode is not addressable; there is nothing to point a slot at.
+    fun->slot = FUN_SLOT_NONE;
+    return true;
+  }
+  // a native takes an ordinary slot even when generic — one C body serves
+  // every instantiation — which is what makes it first-class for free:
+  // OP_GET_GLOBAL works on it, so it can be passed, stored and captured.
+  if (fun->native_kind == ATTR_NATIVE) {
+    return exe_add_global(exe, fun);
+  }
   if (fun_is_generic(fun)) {
     fun->slot = FUN_SLOT_NONE;
     return true;
@@ -1959,6 +1966,9 @@ bool codegen_module(Module *m, Mono *mono, DiagBag *diags) {
   bool ok = true;
   for (int i = 0; i < m->fun_count; i++) {
     FunDef *fun = m->funs[i];
+    if (fun_is_native(fun)) {
+      continue; // the body is in C; there is nothing to compile
+    }
     if (!fun_is_generic(fun)) {
       compile_fun_body(mono, fun, fun, subst_empty(), 0, diags, &ok);
     }

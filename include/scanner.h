@@ -81,6 +81,7 @@ typedef enum {
   TOKEN_GTEQ,
   TOKEN_QUESTION, // ?
   TOKEN_PIPE,     // |  (closure parameter delimiter)
+  TOKEN_AT,       // @  (attribute introducer)
 
   // control
   TOKEN_EOF,

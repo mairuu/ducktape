@@ -14,6 +14,8 @@
 #> Rect area
 #> unit
 #> tuple struct 7 8
+use std::io::print;
+
 struct Point {
     x: Int,
     y: Int,

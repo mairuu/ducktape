@@ -108,7 +108,7 @@ static bool topo_visit(Compiler *c, int idx, unsigned char *colour, int *stack,
   Module *m = c->mod_reg.modules[idx];
   for (int i = 0; i < m->import_count; i++) {
     ModImport *imp = &m->imports[i];
-    if (imp->is_std || imp->module_index < 0) {
+    if (imp->module_index < 0) {
       continue;
     }
     int dep = imp->module_index;
@@ -302,6 +302,14 @@ static bool compiler_codegen(Compiler *c, Executable *exe, Heap *heap,
   }
   if (main_fn == NULL) {
     fprintf(stderr, "error: no 'main' function to run\n");
+    heap_destroy(heap);
+    return false;
+  }
+  if (fun_is_native(main_fn)) {
+    // the VM enters a frame over `main`'s chunk, and a native has none. Worth
+    // its own message rather than the generic one below: an @intrinsic main
+    // also has no slot, but "must not be generic" would be a lie.
+    fprintf(stderr, "error: 'main' must not be native\n");
     heap_destroy(heap);
     return false;
   }

@@ -1,0 +1,8 @@
+#! expect: string slice is out of bounds
+# a native reports a runtime error by setting ctx->error; the VM turns it into
+# an error at the call site.
+use std::string::slice;
+
+fun main() {
+  var s = slice("ab", 0, 9);
+}

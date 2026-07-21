@@ -1,0 +1,5 @@
+#! expect: expected '@native' or '@intrinsic'
+@inline("io_print")
+fun f(x: Int) -> Int;
+
+fun main() {}

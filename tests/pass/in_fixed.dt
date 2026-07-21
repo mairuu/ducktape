@@ -4,6 +4,8 @@
 #   for w < 10      ->  while w < 10
 #   inline trait bounds (T: Drawable) are enforced at instantiation
 use std::io::print;
+use std::array::len;
+use std::string::slice;
 
 enum Result<T, E> {
     Ok(T),
@@ -172,4 +174,7 @@ fun main() {
     var r = process_data(1);
     # coercion at a call site, mixing two concrete types in one array
     var w = total_weight([Brick { kg: 20 }, Feather { grams: 1 }, Brick { kg: 3 }]);
+    # natives: an @intrinsic lowered to an opcode, an @native called into C
+    var n = len([1, 2, 3]);
+    var s = slice("showcase", 0, 4);
 }

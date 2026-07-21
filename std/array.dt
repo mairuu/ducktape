@@ -1,0 +1,13 @@
+# std::array — operations on `[T]`.
+#
+# `len` is an `@intrinsic` rather than an `@native`: it lowers to OP_LEN
+# inline, so a call costs one opcode and no frame. The opcode already existed
+# — the `for x in xs` desugaring emits it — but nothing could *name* it until
+# there was a declaration surface to hang it on.
+#
+# The price of that tier is that an intrinsic has no body for a global slot to
+# address, so it can only be called directly, never passed as a value. An
+# `@native` can be either.
+
+@intrinsic("array_len")
+pub fun len<T>(xs: [T]) -> Int;
