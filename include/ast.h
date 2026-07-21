@@ -862,6 +862,7 @@ typedef enum {
 typedef struct {
   StringView name;
   StringView alias; // nullable (length == 0)
+  Span span;        // the item as written, for per-item import diagnostics
 } UseAlias;
 
 typedef struct {

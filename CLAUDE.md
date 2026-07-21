@@ -29,6 +29,11 @@ in `.vscode/ref/` are historical — do not trust them.
   matched against stderr.
 - `tests/run/*.dt` — executed with `--run`; `#> line` comments are the
   expected stdout, in order.
+- `tests/fail_run/*.dt` — like `tests/fail`, but invoked with `--run`; for
+  programs that type-check yet the VM rejects.
+- A multi-file test is a *subdirectory* of any of those, entry point
+  `main.dt`, imported modules alongside it. The flat globs are non-recursive,
+  so the siblings are never collected as tests themselves.
 - Add a test with every feature or fix. `tests/pass/in_fixed.dt` is the
   full-language showcase.
 

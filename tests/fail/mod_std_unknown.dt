@@ -1,0 +1,4 @@
+#! expect: unknown item 'println' in 'std'
+use std::io::println;
+
+fun main() {}

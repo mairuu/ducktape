@@ -47,9 +47,10 @@ Three passes over each module, mirroring compiler phases:
 
 1. **register** — `tc_register_module`: allocate def stubs for
    fun/struct/enum/impl/trait, count-then-populate; `tc_register_builtins`
-   adds `print<T>`. `use` is a no-op. (Top-level `var` hits the default
-   assert — known gap.)
-2. **resolve** — `tc_resolve_module`: resolve signatures and types into
+   adds `print<T>`. `use` is a no-op here — imports are linked in pass 2, see
+   "Modules". (Top-level `var` hits the default assert — known gap.)
+2. **resolve** — `tc_link_imports` first (see "Modules"), then
+   `tc_resolve_module`: resolve signatures and types into
    interned `Type`s; define names in the module's scopes (so declaration
    order matters). Impls resolve self/trait heads, then associated types in a
    pre-pass, then method signatures; `impl_index_add` runs before item
@@ -72,6 +73,69 @@ Three passes over each module, mirroring compiler phases:
    `types_equal`. `tc_check_trait` then checks each default method *body* —
    once, against the abstract `Self`, not per impl. Extra inherent methods in a
    trait impl are tolerated.
+
+### Modules
+
+**Discovery is fused with parsing** (`compiler_phase_discover`, `src/compiler.c`).
+It has to be: a module's dependencies are its `use` declarations, which only
+exist once it has an AST. So the phase is a worklist — parse a module, run
+`mod_collect_imports` to turn each `use` into a `ModImport` (registering any
+file not seen before), and keep going into whatever was just appended. The
+loop's bound is `mod_reg.module_count`, re-read each iteration, so those
+appends extend it. Two traps worth knowing: `reg->modules` is `al_realloc`'d as
+it grows, so the array must never be cached across iterations; and `mod_parse`
+calls `diag_clear` on entry, so a module's diagnostics must be reported before
+the next one is parsed.
+
+Path handling (`path_dir_of`, `path_normalise`, `mod_file_for_use` in
+`src/module.c`) is **lexical, ISO-C only**. The build is `-std=c23`, which
+defines `__STRICT_ANSI__` and so hides `realpath`/`getcwd`/`PATH_MAX` behind
+glibc's feature macros — and an implicit declaration is a hard error in C23.
+Lexical normalisation is sufficient anyway: every module path is a fixed base
+dir plus identifier segments, which can't contain `.` or `..`, so two spellings
+of one file normalise to identical bytes and `modreg_find` dedups them exactly.
+It also works for files that don't exist, which is what lets the missing-module
+diagnostic name the path it looked for.
+
+**Cycle detection** (`compiler_phase_dep_graph`) is a tri-colour DFS over the
+`ModImport.module_index` edges, appending on post-order so `topo_order` puts
+dependencies before dependents. A back edge onto a grey node is a cycle;
+`report_cycle` anchors the error at the import that closes it and emits one
+`diag_note` per edge rather than building a chain into a fixed buffer — that
+accumulation pattern is what produced the `type_sprintf` overflow fixed after
+6b. Notes render span-free, so naming modules from several files is safe.
+
+**`tc_link_imports` must run per module in topological order, immediately
+before `tc_resolve_module` for that module** — not as a standalone pass, and
+not in the register phase where the original stub put it. The derivation:
+module-level names are only defined into `m->tscope`/`m->vscope` during
+*resolve*, so a dependency has no exports to offer until it has been resolved;
+meanwhile the importer's own signatures resolve `Point` through
+`tscope_lookup(&m->tscope, ...)`, so its imports must already be in place. The
+two constraints only have a solution on a DAG, which is why cycle detection is
+a prerequisite rather than a nicety.
+
+Linking finds the item by **scanning the dependency's own top-level decls**
+(`mod_find_own_decl`), not by looking in its scopes, then copies the resolved
+entry out of the scopes. Scanning the AST is what makes `Decl.is_pub`
+readable — visibility is checked here and nowhere else, off the `Decl` rather
+than the `*Def` copies — and it is also what stops re-export: a dependency's
+scopes also hold *its* imports and the builtins, so a bare `tscope_lookup`
+would silently give `use b::X` the meaning of `pub use`. The alternative,
+tagging every `VarEntry`/`TypeEntry` with visibility, would have touched 30+
+define sites.
+
+`tc_link_imports` also does its **own conflict checking**, because
+`vscope_define`/`tscope_define` don't detect duplicates and both lookups return
+the first match — an unchecked collision would resolve backwards, letting an
+import silently win over the module's own declaration. The `std` case must
+short-circuit before that check: `use std::io::print;` names a builtin already
+in scope under that exact name, so it is a no-op, and checking it for conflicts
+would reject it.
+
+Trait impls are deliberately *not* module-scoped: `ImplIndex` lives on the
+`TypeChecker`, shared by every module, so an impl applies program-wide whether
+or not its module was imported.
 
 ### Types and inference
 
@@ -159,6 +223,11 @@ same reason.
 `ValueScope` (variables/functions; `VarEntry.slot` and `.is_captured` exist
 for codegen, capture is flagged when `vscope_lookup` crosses a function
 boundary) and `TypeScope` (types; `TypeEntry` carries the def pointer).
+Neither `*_define` detects duplicates and both lookups return the *first*
+match, so anything that can collide has to check first — see "Modules".
+An imported entry is a copy of the dependency's, so its `VarEntry.slot` names
+a binding in the importer while the callable lives in the dependency's slot
+space; that mismatch is inert only because multi-module `--run` is rejected.
 Path resolution (`resolve_path` / `cctx_resolve_path`) walks segments through
 type scope contexts (struct → associated fn, enum → variant). In
 `resolve_callee`, a single-segment path naming a local/value binding is

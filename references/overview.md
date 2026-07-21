@@ -18,8 +18,14 @@ names a file, that file is the source of truth. Historical design notes live in
 | `tests/pass/` | programs that must compile cleanly (exit 0, empty stderr) |
 | `tests/fail/` | programs that must fail; first line `#! expect: <substring>` asserts on stderr |
 | `tests/run/` | programs executed with `--run`; `#> line` comments assert on stdout |
+| `tests/fail_run/` | like `tests/fail`, but invoked with `--run` — for programs that type-check yet the VM rejects |
 | `scripts/run_tests.sh` | the test runner (invoked by `make test`) |
 | `references/` | these docs + `grammar.ebnf` |
+
+A multi-file test is a *subdirectory* of any of the `tests/` categories, with
+`main.dt` as the entry point and its imported modules alongside. The flat
+`*.dt` globs are non-recursive, so those siblings are never collected as tests
+in their own right.
 
 ## Build, test, run
 
@@ -37,18 +43,29 @@ make test          # build + run the whole test suite
 
 Driver: `compiler_run` in `src/compiler.c`. Phases, in order:
 
-1. **discover** — collect source files (currently: exactly the one file given)
-2. **parse** — `src/scanner.c` + `src/parser.c` → AST (`include/ast.h`)
-3. **dep graph** — placeholder topological order (single module)
-4. **register** — `tc_register_module` (`src/sema.c`): create def stubs for
+1. **discover & parse** — a worklist rooted at the file given on the command
+   line: parse a module (`src/scanner.c` + `src/parser.c` → AST,
+   `include/ast.h`), resolve its `use` declarations to files, and continue into
+   any module that just appeared. Discovery can't precede parsing, because a
+   module's dependencies *are* its `use` declarations. Paths resolve against
+   the root file's directory, which is the one module search root.
+2. **dep graph** — tri-colour DFS over the import edges, post-order, so
+   dependencies precede their dependents; a back edge is a cycle diagnostic
+3. **register** — `tc_register_module` (`src/sema.c`): create def stubs for
    top-level declarations, register builtins
-5. **resolve** — `tc_resolve_module`: resolve signatures, types, impls
-6. **check** — `tc_check_module`: type-check function bodies with inference
+4. **link imports + resolve** — per module in topological order:
+   `tc_link_imports` copies each `use`d item into the module's scopes, then
+   `tc_resolve_module` resolves signatures, types, impls
+5. **check** — `tc_check_module`: type-check function bodies with inference
 
 With `--run`, `compiler_execute` (`src/compiler.c`) additionally runs:
 
-7. **codegen** — `src/codegen.c`: AST → bytecode `Chunk` per function
-8. **vm** — `src/vm.c`: stack VM executes `main()`
+6. **codegen** — `src/codegen.c`: AST → bytecode `Chunk` per function
+7. **vm** — `src/vm.c`: stack VM executes `main()`
+
+A program spanning more than one module is rejected before codegen — globals
+are numbered per module, so there is no program-wide slot space to run in yet
+(`runtime.md`).
 
 Diagnostics accumulate in a `DiagBag` (`src/diag.c`) shared by all phases; no
 phase aborts mid-file. Error recovery uses a poison type/expr convention (see
@@ -58,8 +75,8 @@ phase aborts mid-file. Error recovery uses a poison type/expr convention (see
 
 - **Type-checks:** the full grammar — generics, traits/impls with associated
   types, match with guards, closures, ranges, arrays, casts, interpolation,
-  `?` propagation. See `language.md` for the precise rules and the
-  not-yet-implemented list.
+  `?` propagation, and programs spanning several files via `use`. See
+  `language.md` for the precise rules and the not-yet-implemented list.
 - **Executes (`--run`):** Int/Float/Bool/unit/ranges/functions — arithmetic,
   control flow, recursion, first-class function values, `print` — plus
   GC-backed strings (interning, `+` concat, interpolation) and arrays

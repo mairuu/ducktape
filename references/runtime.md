@@ -336,9 +336,26 @@ process exit 1. The checker guarantees operand kinds, so opcode handlers
 don't re-validate types (bounds are the one runtime-only check, since array
 lengths aren't static).
 
+## Multiple modules
+
+A program spanning more than one module is rejected in `compiler_execute`,
+before codegen, with the usual "... is not supported by the VM yet"
+diagnostic. The obstruction is slot numbering: `OP_GET_GLOBAL` takes a
+one-byte operand into *one* module's `funs[]`/`methods[]`, and `codegen_module`
+assigns those slots per module, so two modules both number their globals from
+zero. `Heap.module` is likewise a single module, so the GC's constant-pool root
+scan only covers that one.
+
+Making it run needs a link step that flattens every module's
+`funs`/`methods`/`closures` into one program-wide slot space (and widens the
+GC roots to match) — the natural next runtime milestone. `use std::..` never
+creates a module, so single-file programs are unaffected by the restriction.
+
 ## Future (design intent, not implemented)
 
-- **Bytecode serialization** (after a module system exists): flat binary —
+- **Runtime module linking:** flatten the per-module slot spaces as above, so
+  a multi-module program can execute.
+- **Bytecode serialization** (the module system now exists): flat binary —
   magic/version, string table, recursive chunk records (name, arity, code,
   tagged constants, nested functions). Keep the constant pool free of raw
   pointers (string-table indices instead) so this stays a straight loop.

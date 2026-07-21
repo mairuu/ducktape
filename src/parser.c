@@ -2602,14 +2602,17 @@ static Decl *parse_use_decl(Parser *p) {
           return ast_decl(DECL_POISON, token_span(&use_tok), p->al);
         }
         aliases[alias_count].name = previous_tok(p)->lexeme;
+        Span item_span = previous_tok_span(p);
         if (match_tok(p, TOKEN_AS)) {
           if (!consume_tok(p, TOKEN_IDENT, "expected identifier after 'as'")) {
             return ast_decl(DECL_POISON, token_span(&use_tok), p->al);
           }
           aliases[alias_count].alias = previous_tok(p)->lexeme;
+          item_span = span_merge(item_span, previous_tok_span(p));
         } else {
           aliases[alias_count].alias = aliases[alias_count].name;
         }
+        aliases[alias_count].span = item_span;
         alias_count++;
       } while (match_tok(p, TOKEN_COMMA));
     }
@@ -2623,16 +2626,19 @@ static Decl *parse_use_decl(Parser *p) {
     target.count = alias_count;
   } else {
     StringView alias_name = path.segments[path.count - 1].name;
+    Span item_span = path.span;
     if (match_tok(p, TOKEN_AS)) {
       if (!consume_tok(p, TOKEN_IDENT, "expected identifier after 'as'")) {
         return ast_decl(DECL_POISON, token_span(&use_tok), p->al);
       }
       alias_name = previous_tok(p)->lexeme;
+      item_span = span_merge(item_span, previous_tok_span(p));
     }
 
     target.aliases = al_alloc(p->al, sizeof(UseAlias));
     target.aliases[0].name = path.segments[path.count - 1].name;
     target.aliases[0].alias = alias_name;
+    target.aliases[0].span = item_span;
     target.count = 1;
     path.count--;
 

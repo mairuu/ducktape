@@ -1,10 +1,16 @@
 #!/bin/sh
 # run .dt test files against the compiler.
-#   tests/pass/*.dt  must exit 0 with empty stderr
-#   tests/fail/*.dt  must exit non-zero; if the first line is
-#                    `#! expect: <substring>` stderr must contain it
-#   tests/run/*.dt   executed with --run; must exit 0 with empty stderr and
-#                    stdout equal to the `#> ` comment lines in the file
+#   tests/pass/*.dt      must exit 0 with empty stderr
+#   tests/fail/*.dt      must exit non-zero; if the first line is
+#                        `#! expect: <substring>` stderr must contain it
+#   tests/run/*.dt       executed with --run; must exit 0 with empty stderr and
+#                        stdout equal to the `#> ` comment lines in the file
+#   tests/fail_run/*.dt  like tests/fail, but invoked with --run — for things
+#                        that type-check yet the VM rejects
+#
+# multi-file tests live in a subdirectory of any of the above, entry point
+# `main.dt`, imported modules alongside it. The flat globs are non-recursive,
+# so those siblings are never picked up as tests in their own right.
 set -u
 
 BIN=${1:-build/ducktape}
@@ -25,9 +31,10 @@ check_pass() {
     fi
 }
 
-check_fail() {
+check_fail() {          # $1 = file, $2... = extra flags for the compiler
     f=$1
-    err=$("$BIN" "$f" 2>&1 >/dev/null)
+    shift
+    err=$("$BIN" "$@" "$f" 2>&1 >/dev/null)
     code=$?
     if [ "$code" -eq 0 ]; then
         fail=$((fail + 1))
@@ -45,14 +52,19 @@ check_fail() {
     pass=$((pass + 1))
 }
 
-for f in "$ROOT"/tests/pass/*.dt; do
+for f in "$ROOT"/tests/pass/*.dt "$ROOT"/tests/pass/*/main.dt; do
     [ -e "$f" ] || continue
     check_pass "$f"
 done
 
-for f in "$ROOT"/tests/fail/*.dt; do
+for f in "$ROOT"/tests/fail/*.dt "$ROOT"/tests/fail/*/main.dt; do
     [ -e "$f" ] || continue
     check_fail "$f"
+done
+
+for f in "$ROOT"/tests/fail_run/*.dt "$ROOT"/tests/fail_run/*/main.dt; do
+    [ -e "$f" ] || continue
+    check_fail "$f" --run
 done
 
 check_run() {

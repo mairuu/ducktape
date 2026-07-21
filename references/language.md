@@ -11,13 +11,14 @@ stdout in `tests/run` files) — the language itself treats them as comments.
 ## Declarations
 
 ```
-use std::io::print;                  # parsed; imports are a no-op for now
+use std::io::print;                  # `std::` is the builtin namespace
+use geometry::Point;                 # loads geometry.dt — see "Modules"
 
 fun add(a: Int, b: Int) -> Int {     # return type via ->, omitted = ()
     a + b                            # last expression is the return value
 }
 
-pub struct Point<T> { x: T, y: T, }  # named struct; pub is parsed
+pub struct Point<T> { x: T, y: T, }  # named struct; pub = visible to importers
 struct Pair(Int, Int)                # tuple struct
 struct Unit;                         # unit struct
 
@@ -130,6 +131,45 @@ The result is the `Ok` payload. There is no built-in `Result` — declare your
 own (`tests/pass/propagate.dt`). This rule will move to a `Try` trait once
 traits are fully checked.
 
+## Modules
+
+A program is one root `.dt` file plus every file reachable from it through
+`use`. There is no `mod` keyword: `use` is what pulls a file in.
+
+```
+use geometry::Point;                 # <root_dir>/geometry.dt
+use geo::point::{Point, Line};       # <root_dir>/geo/point.dt, two items
+use util::Maybe as Opt;              # imported under a different name
+```
+
+The leading segments name the *file*; the final segment (or the brace group)
+names the *items*. Paths are relative to the directory of the root file — the
+one search root — for every module, including modules that are not the root.
+A file reached by two different importers is loaded once.
+
+Items are **private by default**; `pub` makes one importable:
+
+```
+pub struct Point { x: Int, y: Int }  # importable
+fun helper() -> Int { 1 }            # private: `use m::helper;` is an error
+```
+
+Imports are **not** transitive. If `b.dt` does `use a::X;`, that does not
+re-export `X` — `use b::X;` from a third module is an error. There is no
+`pub use`.
+
+A path is never module-qualified: once imported, an item is named directly
+(`Point`, not `geometry::Point`). Trait `impl`s are the exception to all of
+this — they are program-wide and apply wherever their type is used, whether or
+not the defining module was imported.
+
+A cycle in the import graph is an error, reported with the chain of modules
+involved.
+
+`std::` is a reserved namespace over the built-ins below; it never touches the
+filesystem, so a local `std.dt` is unreachable. Its intermediate segments are
+not modelled — `std::io::print` and `std::print` both name the same builtin.
+
 ## Built-ins
 
 `print<T>(value)` — prints any value followed by a newline, returns `()`.
@@ -142,7 +182,14 @@ Registered in every module; the only builtin so far.
 | calling an inherited default method under `--run` | type-checks, but the VM has no chunk for it (the body would need monomorphising against the concrete self) — "calling an inherited default method is not supported by the VM yet" |
 | extra (non-trait) methods in a trait impl | tolerated as inherent methods (Rust rejects them) |
 | trait objects (`dyn Trait` values) | a trait names a type only in bound / `Self` position; there is no dynamic dispatch |
-| modules / imports | `use` is a no-op; single file only |
+| a multi-module program under `--run` | type-checks, but globals are numbered per module so there is no program-wide slot space — "a program spanning multiple modules is not supported by the VM yet" (`runtime.md`) |
+| `mod` declarations | no such keyword; `use` is what pulls a file in |
+| `pub use` re-export | imports are not transitive; a third module can't reach through an importer |
+| glob imports (`use a::*`) | not parsed; name each item |
+| module-qualified paths (`geometry::Point`) | import the item and name it directly; the diagnostic says so |
+| `pub` on impls, methods, and fields | parsed and ignored — a public type's fields and methods are all visible |
+| visibility below module granularity (`pub(crate)` &c.) | `pub` is the only modifier |
+| two spellings of one file (symlinks, unusual paths) | dedup is lexical, so the file would load twice and collide |
 | top-level `var` | parses, then aborts registration |
 | tuple-struct struct-patterns `var Pair { .. }` | diagnostic suggests tuple destructuring |
 | match exhaustiveness, variable shadowing diags | silently accepted at check time; a non-exhaustive match that falls through every arm at runtime is a `--run` runtime error, not a compile error (`runtime.md`) |

@@ -844,7 +844,8 @@ void tc_register_module(TypeChecker *tc, Module *m) {
       tc_register_trait(tc, m, decl);
       break;
     case DECL_USE:
-      // todo: import linking (see compiler_phase_register)
+      // imports are linked in tc_link_imports, which must run after the
+      // dependency has been *resolved* — see its comment in sema.h.
       break;
     default:
       assert(false && "unhandled decl kind in tc_register_module");
@@ -856,16 +857,169 @@ void tc_register_module(TypeChecker *tc, Module *m) {
   tc_register_builtins(tc, m);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Import linking
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// find `name` among m's *own* top-level declarations.
+//
+// deliberately an AST scan rather than a scope lookup. m's scopes also hold
+// m's own imports and the builtins, so looking there would silently give
+// `use b::X` the meaning of Rust's `pub use` (re-export). Scanning the decls
+// also puts `Decl.is_pub` in reach, which is what makes visibility checkable
+// without adding a flag to every scope entry.
+static Decl *mod_find_own_decl(Module *m, StringView name) {
+  for (int i = 0; i < m->ast->decl_count; i++) {
+    Decl *decl = m->ast->decls[i];
+    switch (decl->kind) {
+    case DECL_FUN:
+      if (sv_equal(decl->as.fun_decl.name, name)) {
+        return decl;
+      }
+      break;
+    case DECL_STRUCT:
+      if (sv_equal(decl->as.struct_decl.name, name)) {
+        return decl;
+      }
+      break;
+    case DECL_ENUM:
+      if (sv_equal(decl->as.enum_decl.name, name)) {
+        return decl;
+      }
+      break;
+    case DECL_TRAIT:
+      if (sv_equal(decl->as.trait_decl.name, name)) {
+        return decl;
+      }
+      break;
+    default:
+      break;
+    }
+  }
+  return NULL;
+}
+
+// copy one resolved entry from `dep`'s scopes into `m`'s under `alias`.
+// a fun lives in both scopes, a struct/enum/trait only in the type scope.
+static void link_copy_entry(TypeChecker *tc, Module *m, Module *dep,
+                            StringView name, StringView alias, Span span) {
+  TypeEntry *src_te = tscope_lookup(&dep->tscope, name);
+  if (src_te != NULL) {
+    TypeEntry *te = NULL;
+    tscope_define(&m->tscope, alias, src_te->type, tc->diags, span, &te);
+    te->as = src_te->as;
+  }
+
+  VarEntry *src_ve = vscope_lookup(&dep->vscope, name, NULL);
+  if (src_ve != NULL) {
+    VarEntry *ve = NULL;
+    // todo (runtime linking milestone): the slot vscope_define assigns here is
+    // meaningless — it numbers a binding in the importer, but the callable
+    // lives in dep's slot space. inert while multi-module `--run` is rejected.
+    vscope_define(&m->vscope, alias, src_ve->type, tc->diags, span, &ve);
+    ve->as = src_ve->as;
+  }
+}
+
+// `use std::..` resolves against the builtins tc_register_builtins already put
+// in this module's scopes. no file is ever consulted, and intermediate
+// segments are not modelled — the final segment is the whole namespace.
+static void link_std_import(TypeChecker *tc, Module *m, const UseAlias *a) {
+  TypeEntry *te = tscope_lookup(&m->tscope, a->name);
+  if (te == NULL) {
+    diag_error(tc->diags, a->span, "unknown item '" SV_FMT "' in 'std'",
+               SV_ARG(a->name));
+    return;
+  }
+
+  // `use std::io::print;` — the name is already bound to exactly this entry.
+  // must short-circuit before any conflict check, or the plain form would
+  // report a collision with the builtin it names.
+  if (sv_equal(a->name, a->alias)) {
+    return;
+  }
+
+  link_copy_entry(tc, m, m, a->name, a->alias, a->span);
+}
+
+// return true if `alias` is already taken in m, reporting why.
+static bool link_name_taken(TypeChecker *tc, Module *m, const UseAlias *a) {
+  if (mod_find_own_decl(m, a->alias) != NULL) {
+    diag_error(tc->diags, a->span,
+               "'" SV_FMT "' is already declared in this module",
+               SV_ARG(a->alias));
+    return true;
+  }
+  // vscope_define/tscope_define don't detect duplicates and both lookups
+  // return the first match, so an unchecked collision would silently let the
+  // import win over whatever was defined later. Check here or not at all.
+  if (tscope_lookup(&m->tscope, a->alias) != NULL ||
+      vscope_lookup(&m->vscope, a->alias, NULL) != NULL) {
+    diag_error(tc->diags, a->span, "'" SV_FMT "' is already imported",
+               SV_ARG(a->alias));
+    return true;
+  }
+  return false;
+}
+
+void tc_link_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
+  for (int i = 0; i < m->import_count; i++) {
+    ModImport *imp = &m->imports[i];
+    UseTarget *target = &imp->decl->as.use_decl.target;
+
+    for (int j = 0; j < target->count; j++) {
+      UseAlias *a = &target->aliases[j];
+
+      if (imp->is_std) {
+        link_std_import(tc, m, a);
+        continue;
+      }
+      if (imp->module_index < 0) {
+        continue; // discovery already diagnosed it; stay quiet
+      }
+
+      Module *dep = reg->modules[imp->module_index];
+      Decl *d = mod_find_own_decl(dep, a->name);
+      if (d == NULL) {
+        diag_error(tc->diags, a->span,
+                   "module '" SV_FMT "' has no item named '" SV_FMT "'",
+                   SV_ARG(dep->file_path), SV_ARG(a->name));
+        continue;
+      }
+      if (!d->is_pub) {
+        diag_error(tc->diags, a->span,
+                   "'" SV_FMT "' is private in module '" SV_FMT "'",
+                   SV_ARG(a->name), SV_ARG(dep->file_path));
+        diag_note(tc->diags, (Span){0}, "add 'pub' to its declaration");
+        continue;
+      }
+      if (link_name_taken(tc, m, a)) {
+        continue;
+      }
+
+      // dep is resolved (topological order), so its scopes carry real types.
+      // if they don't, resolving dep poisoned the decl — stay quiet.
+      link_copy_entry(tc, m, dep, a->name, a->alias, a->span);
+    }
+  }
+}
+
 #define MAX_BOUNDS 16
 
 // Resolve a trait bound (one or more `+`-joined trait refs) to TraitDefs,
 // appending de-duplicated into `out`. A ref must name a trait in scope;
-// anything else is diagnosed and skipped. Modules aren't implemented, so a
-// qualified path resolves by its last segment.
+// anything else is diagnosed and skipped. A bound is never module-qualified —
+// an imported trait is in scope under its alias, so the ref is a bare name.
 static void resolve_bound_refs(ResolveCtx *rctx, const TraitBound *bound,
                                TraitDef **out, int *count) {
   for (int i = 0; i < bound->ref_count; i++) {
     const TraitRef *ref = &bound->refs[i];
+    if (ref->path.count > 1) {
+      diag_error(rctx->diags, ref->span,
+                 "a trait bound is not qualified by module; import the trait "
+                 "with 'use' and name it directly");
+      continue;
+    }
     StringView name = ref->path.segments[ref->path.count - 1].name;
     TypeEntry *te = tscope_lookup(rctx->tyres.tscope, name);
     if (te == NULL || te->type == NULL || te->type->kind != TY_TRAIT) {
@@ -4578,6 +4732,13 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
       if (!te) {
         diag_error(ctx->diags, path->span, "unknown type '" SV_FMT "' in path",
                    SV_ARG(segment));
+        if (i == 0 && path->count > 1) {
+          // the shape of a module-qualified path, which isn't supported —
+          // items are named directly once imported.
+          diag_note(ctx->diags, (Span){0},
+                    "paths are not qualified by module; import the item with "
+                    "'use' and name it directly");
+        }
         return false;
       }
       switch (te->type->kind) {

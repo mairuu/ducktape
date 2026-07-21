@@ -1,0 +1,7 @@
+# a non-root module with imports of its own: `util` resolves against the
+# *root* file's directory, not this file's.
+use util::twice;
+
+pub fun quad(n: Int) -> Int {
+  return twice(twice(n));
+}

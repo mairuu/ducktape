@@ -1,0 +1,31 @@
+# nested paths, brace groups, `as` aliases, a generic enum across a module
+# boundary, and a diamond (main + helper both reach util.dt).
+
+use shapes::circle::{Circle, Area};
+use util::Maybe as Opt;
+use util::twice;
+use helper::quad;
+
+fun describe(c: Circle) -> Float {
+  # the impl lives in another module and is never imported: ImplIndex is
+  # program-wide, so the method still resolves.
+  return c.area();
+}
+
+fun wrap(n: Int) -> Opt<Int> {
+  return Opt::Some(n);
+}
+
+fun main() {
+  var c = Circle { r: 2.0 };
+  print(describe(c));
+  print(twice(3));
+  print(quad(3));
+
+  var m: Opt<Int> = wrap(7);
+  var got = match m {
+    Opt::Some(v) => v,
+    Opt::None => 0,
+  };
+  print(got);
+}

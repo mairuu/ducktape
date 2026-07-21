@@ -30,48 +30,126 @@ void compiler_destroy(Compiler *c, Allocator *al) {
   tc_destroy(&c->tc);
 }
 
-// phase 0: discover all source files and create module stubs.
-static bool compiler_phase_discover(Compiler *c, const char *root_dir) {
-  StringView file_paths[] = {
-      sv_from_cstr(root_dir),
-  };
-  int file_count = sizeof(file_paths) / sizeof(file_paths[0]);
+// phase 0: discover and parse every source file reachable from the root.
+//
+// discovery can't precede parsing — a module's dependencies are its `use`
+// declarations, which only exist once it has an AST. So this is a worklist:
+// parse a module, collect its imports (registering any file not seen before),
+// and continue into the modules that just appeared.
+static bool compiler_phase_discover(Compiler *c, const char *root_path) {
+  StringView root = path_normalise(sv_from_cstr(root_path), &c->al);
+  StringView base_dir = path_dir_of(root);
 
-  for (int i = 0; i < file_count; i++) {
-    StringView path = file_paths[i];
+  Module *root_mod = mod_new(root, &c->al);
+  modreg_add(&c->mod_reg, root_mod);
+  c->root_module = root_mod;
 
-    Module *root = mod_new(path, &c->al);
-    assert(modreg_add(&c->mod_reg, root));
-  }
-
-  // for now just a single file
-  c->root_module = c->mod_reg.modules[0];
-  return true;
-}
-
-// phase 0: parse every module's source file.
-static bool compiler_phase_parse(Compiler *c) {
   bool had_errors = false;
+
+  // the bound is re-read each iteration: mod_collect_imports appends to the
+  // registry, and those appends are what extend the loop. reg->modules is
+  // realloc'd as it grows, so never cache the array across iterations.
   for (int i = 0; i < c->mod_reg.module_count; i++) {
     Module *m = c->mod_reg.modules[i];
-    had_errors |= !mod_parse(m, &c->diags, &c->al);
 
+    if (!mod_parse(m, &c->diags, &c->al)) {
+      had_errors = true;
+      if (diag_has_diags(&c->diags)) {
+        diag_report(&c->diags, m->file_path.chars, m->source.chars, stderr);
+      }
+      continue; // no AST, so no imports to collect
+    }
+
+    had_errors |=
+        !mod_collect_imports(m, &c->mod_reg, base_dir, &c->diags, &c->al);
+
+    // must report before the next iteration: mod_parse clears the bag.
     if (diag_has_diags(&c->diags)) {
       diag_report(&c->diags, m->file_path.chars, m->source.chars, stderr);
     }
   }
+
   return !had_errors;
+}
+
+// report a dependency cycle, anchored at the import that closes it. one note
+// per edge rather than a chain built into a fixed buffer — that accumulation
+// pattern is what produced the type_sprintf overflow fixed after 6b.
+static void report_cycle(Compiler *c, const int *stack, int sp, int back_to,
+                         Module *closer, ModImport *imp) {
+  diag_error(&c->diags, imp->decl->as.use_decl.path.span,
+             "circular module dependency");
+
+  int start = 0;
+  while (start < sp && stack[start] != back_to) {
+    start++;
+  }
+  for (int i = start; i < sp; i++) {
+    Module *from = c->mod_reg.modules[stack[i]];
+    Module *to = (i + 1 < sp) ? c->mod_reg.modules[stack[i + 1]]
+                              : c->mod_reg.modules[back_to];
+    diag_note(&c->diags, (Span){0}, "  " SV_FMT " imports " SV_FMT,
+              SV_ARG(from->file_path), SV_ARG(to->file_path));
+  }
+
+  diag_report(&c->diags, closer->file_path.chars, closer->source.chars, stderr);
+}
+
+// tri-colour DFS. appends on post-order, so dependencies land in topo_order
+// before their dependents — the order every later phase assumes.
+static bool topo_visit(Compiler *c, int idx, unsigned char *colour, int *stack,
+                       int *sp) {
+  colour[idx] = 1; // grey: on the current path
+  stack[(*sp)++] = idx;
+
+  Module *m = c->mod_reg.modules[idx];
+  for (int i = 0; i < m->import_count; i++) {
+    ModImport *imp = &m->imports[i];
+    if (imp->is_std || imp->module_index < 0) {
+      continue;
+    }
+    int dep = imp->module_index;
+
+    if (colour[dep] == 1) { // back edge onto the current path
+      report_cycle(c, stack, *sp, dep, m, imp);
+      return false;
+    }
+    if (colour[dep] == 0 && !topo_visit(c, dep, colour, stack, sp)) {
+      return false;
+    }
+  }
+
+  (*sp)--;
+  colour[idx] = 2; // black: finished
+  c->mod_reg.topo_order[c->mod_reg.topo_count++] = idx;
+  return true;
 }
 
 // phase 0: build the dependency graph and topologically sort modules.
 static bool compiler_phase_dep_graph(Compiler *c) {
-  c->mod_reg.topo_count = c->mod_reg.module_count;
-  c->mod_reg.topo_order = al_alloc(&c->al, sizeof(int) * c->mod_reg.topo_count);
+  int n = c->mod_reg.module_count;
+  c->mod_reg.topo_order = al_alloc(&c->al, sizeof(int) * n);
+  c->mod_reg.topo_count = 0;
 
-  for (int i = 0; i < c->mod_reg.module_count; i++) {
-    c->mod_reg.topo_order[i] = i;
+  unsigned char *colour = al_alloc_zero(&c->al, sizeof(unsigned char) * n);
+  int *stack = al_alloc(&c->al, sizeof(int) * n);
+  int sp = 0;
+
+  bool ok = true;
+  for (int i = 0; i < n && ok; i++) {
+    if (colour[i] == 0) {
+      ok = topo_visit(c, i, colour, stack, &sp);
+    }
   }
 
+  al_free(&c->al, colour, sizeof(unsigned char) * n);
+  al_free(&c->al, stack, sizeof(int) * n);
+
+  if (!ok) {
+    return false; // stop at the first cycle; a second pass is just noise
+  }
+
+  assert(c->mod_reg.topo_count == n && "topo sort missed a module");
   return true;
 }
 
@@ -90,22 +168,21 @@ static bool compiler_phase_register(Compiler *c) {
     had_errors |= diag_has_errors(&c->diags);
   }
 
-  // todo:
-  // for (int i = 0; i < c->mod_reg.module_count; i++) {
-  //   Module *m = c->mod_reg.modules[i];
-  //   mod_link_imports(m, &c->mod_reg, &c->diags);
-  // }
-
+  // registration reads only a module's own AST, so it needs no ordering.
+  // imports are linked in compiler_phase_resolve instead — see tc_link_imports.
   return !had_errors;
 }
 
-// phase 2: resolve all signatures, in topological order.
+// phase 2: link imports and resolve all signatures, in topological order.
 static bool compiler_phase_resolve(Compiler *c) {
   bool had_errors = false;
   for (int i = 0; i < c->mod_reg.module_count; i++) {
     Module *m = modreg_topo(&c->mod_reg, i);
     diag_clear(&c->diags);
 
+    // every dependency precedes m in topological order, so its scopes are
+    // already populated by the time we copy names out of them.
+    tc_link_imports(&c->tc, m, &c->mod_reg);
     tc_resolve_module(&c->tc, m);
     if (diag_has_diags(&c->diags)) {
       diag_report(&c->diags, m->file_path.chars, m->source.chars, stderr);
@@ -140,11 +217,6 @@ bool compiler_run(Compiler *c, const char *path) {
     return false;
   }
 
-  if (!compiler_phase_parse(c)) {
-    fprintf(stderr, "compilation failed during parsing.\n");
-    return false;
-  }
-
   if (!compiler_phase_dep_graph(c)) {
     fprintf(stderr,
             "compilation failed during dependency graph construction.\n");
@@ -173,6 +245,25 @@ bool compiler_run(Compiler *c, const char *path) {
 // requires a successful compiler_run first.
 bool compiler_execute(Compiler *c, bool gc_stress) {
   Module *m = c->root_module;
+
+  // codegen numbers globals per module, so a program built from several
+  // modules has no single slot space to run in yet. `use std::..` never
+  // creates a module, so single-file programs are unaffected.
+  if (c->mod_reg.module_count > 1) {
+    diag_clear(&c->diags);
+    Span span = (Span){0};
+    for (int i = 0; i < m->import_count; i++) {
+      if (!m->imports[i].is_std) {
+        span = m->imports[i].decl->as.use_decl.path.span;
+        break;
+      }
+    }
+    diag_error(&c->diags, span, "%s is not supported by the VM yet",
+               "a program spanning multiple modules");
+    diag_report(&c->diags, m->file_path.chars, m->source.chars, stderr);
+    fprintf(stderr, "compilation failed during code generation.\n");
+    return false;
+  }
 
   Heap heap;
   heap_init(&heap, m, gc_stress);

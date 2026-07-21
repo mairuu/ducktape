@@ -1,0 +1,14 @@
+# a pub struct and a pub fun imported from a sibling file
+
+use geometry::Point;
+use geometry::origin;
+
+fun shift(p: Point, dx: Int) -> Point {
+  return Point { x: p.x + dx, y: p.y };
+}
+
+fun main() {
+  var p: Point = origin();
+  var q = shift(p, 3);
+  print(q.x);
+}

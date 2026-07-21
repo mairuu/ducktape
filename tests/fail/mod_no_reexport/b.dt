@@ -1,0 +1,6 @@
+# b imports X, but importing it does not re-export it: there is no `pub use`.
+use a::X;
+
+pub fun make() -> X {
+  return X { v: 1 };
+}

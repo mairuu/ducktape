@@ -5,6 +5,7 @@
 #include "diag.h"
 
 typedef struct Module Module;
+typedef struct ModuleRegistry ModuleRegistry;
 typedef struct Subst Subst;
 typedef struct InferCtx InferCtx;
 typedef struct TypeChecker TypeChecker;
@@ -191,6 +192,14 @@ void tc_init(TypeChecker *tc, DiagBag *diags, Allocator *al);
 void tc_destroy(TypeChecker *tc);
 
 void tc_register_module(TypeChecker *tc, Module *m);
+
+// inject every `use`d item into m's value and type scopes under its alias.
+//
+// must run in topological order, immediately before tc_resolve_module(m):
+// a dependency's exported names only acquire types during *its* resolve, and
+// m's own signatures resolve against the imports this puts in place. That is
+// why linking is not a standalone pass.
+void tc_link_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg);
 
 bool tc_resolve_module(TypeChecker *tc, Module *m);
 

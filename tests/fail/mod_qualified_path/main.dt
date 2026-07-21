@@ -1,0 +1,10 @@
+#! expect: paths are not qualified by module
+# importing `lib` is not how you name its items — the item itself is imported
+# and then named directly.
+use lib::Point;
+
+fun f(p: lib::Point) -> Int {
+  return p.x;
+}
+
+fun main() {}

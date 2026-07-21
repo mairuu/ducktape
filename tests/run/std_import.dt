@@ -1,0 +1,10 @@
+# `use std::..` is a reserved namespace over the builtins: no file is read, no
+# module is created, so single-file --run is unaffected.
+use std::io::print as show;
+
+fun main() {
+  show(1);
+  show("two");
+}
+#> 1
+#> two

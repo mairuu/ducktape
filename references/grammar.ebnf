@@ -14,7 +14,8 @@ decl           = useDecl
 useDecl        = "use" usePath ";" ;
 usePath        = path ( "::" "{" useItem ( "," useItem )* ","? "}" )? ;
 useItem        = IDENT ( "as" IDENT )? ;
-                 (* parsed; imports are not linked yet *)
+                 (* leading segments name the file, the last segment or the
+                    brace group names the items — language.md "Modules" *)
 
 varDecl        = "var" binding ( ":" type )? "=" expr ";" ;
                  (* file-scope var parses but is rejected later — known gap *)

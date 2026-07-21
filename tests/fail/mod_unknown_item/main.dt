@@ -1,0 +1,4 @@
+#! expect: has no item named 'B'
+use lib::B;
+
+fun main() {}

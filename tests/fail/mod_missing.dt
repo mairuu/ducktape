@@ -1,0 +1,4 @@
+#! expect: cannot find module 'nope'
+use nope::Thing;
+
+fun main() {}

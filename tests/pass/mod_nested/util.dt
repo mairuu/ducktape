@@ -1,0 +1,11 @@
+# reached by both main.dt and helper.dt — the diamond. Registry dedup on the
+# normalised path must make that one Module, not two.
+
+pub enum Maybe<T> {
+  Some(T),
+  None,
+}
+
+pub fun twice(n: Int) -> Int {
+  return n * 2;
+}

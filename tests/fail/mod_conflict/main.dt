@@ -1,0 +1,8 @@
+#! expect: is already declared in this module
+use lib::Point;
+
+struct Point {
+  y: Int,
+}
+
+fun main() {}

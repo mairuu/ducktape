@@ -1,0 +1,10 @@
+#! expect: circular module dependency
+use b::f;
+
+pub fun g() -> Int {
+  return 1;
+}
+
+fun main() {
+  print(f());
+}

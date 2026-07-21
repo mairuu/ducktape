@@ -703,6 +703,30 @@ static void compile_for(Cg *cg, Expr *expr) {
   }
 }
 
+// does `name` denote the builtin `print` here? either written directly, or
+// bound by a `use std::..::print as name;` — tc_link_imports copies the
+// builtin's scope entry under the alias, and this is codegen's side of that.
+static bool cg_names_builtin_print(Cg *cg, StringView name) {
+  if (sv_equal_cstr(name, "print")) {
+    return true;
+  }
+  Module *m = cg->m;
+  for (int i = 0; i < m->import_count; i++) {
+    ModImport *imp = &m->imports[i];
+    if (!imp->is_std) {
+      continue;
+    }
+    UseTarget *target = &imp->decl->as.use_decl.target;
+    for (int j = 0; j < target->count; j++) {
+      if (sv_equal(target->aliases[j].alias, name) &&
+          sv_equal_cstr(target->aliases[j].name, "print")) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 static void compile_call(Cg *cg, Expr *expr) {
   ExprCall *call = &expr->as.call;
   Expr *callee = call->callee;
@@ -710,7 +734,7 @@ static void compile_call(Cg *cg, Expr *expr) {
   // builtin print: lowered to OP_PRINT when the name isn't shadowed
   if (callee->kind == EXPR_PATH && callee->as.path_expr.path.count == 1) {
     StringView name = callee->as.path_expr.path.segments[0].name;
-    if (sv_equal_cstr(name, "print") && cg_find_local(cg, name) < 0 &&
+    if (cg_names_builtin_print(cg, name) && cg_find_local(cg, name) < 0 &&
         cg_find_module_fun(cg, name) == NULL) {
       assert(call->arg_count == 1 && "print arity got past the checker");
       compile_expr(cg, call->args[0]);

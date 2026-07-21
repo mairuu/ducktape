@@ -185,16 +185,71 @@
   monomorphising against the concrete self), and a call through a bound is
   unreachable at runtime anyway since codegen rejects generic functions.
 
+- **Module system (milestone 7)** — a program is now the root `.dt` file plus
+  everything reachable through `use`. No `mod` keyword was added: `use` both
+  names the file and imports the items, so `use geo::point::{Point, Line};`
+  loads `<root_dir>/geo/point.dt`. Discovery had to fuse with parsing (a
+  module's dependencies *are* its `use` decls, which need an AST), so
+  `compiler_phase_discover` is a worklist that parses a module, runs
+  `mod_collect_imports`, and continues into whatever that appended;
+  `compiler_phase_parse` is gone. `compiler_phase_dep_graph` is a real
+  tri-colour DFS producing a post-order `topo_order`, with a back edge
+  reported as a cycle naming every module in the chain. `pub` finally means
+  something: `tc_link_imports` reads it off the `Decl`. Design:
+  `architecture.md` "Modules".
+
+  Three judgement calls worth recording:
+  - **Linking is not where the old stub said.** The commented-out
+    `mod_link_imports` sat in the *register* phase, which cannot work: module
+    names are only defined into `m->tscope`/`m->vscope` during *resolve*, so a
+    dependency has no exports until it is resolved — while the importer's own
+    signatures need its imports already in scope. The only solution is per
+    module, in topological order, immediately before `tc_resolve_module`,
+    which is also why cycle detection is a prerequisite and not a nicety.
+    Renamed `tc_link_imports` and moved to `src/sema.c` accordingly.
+  - **Path handling is lexical, not `realpath`.** The build is `-std=c23`,
+    which defines `__STRICT_ANSI__` and hides `realpath`/`getcwd`/`PATH_MAX`;
+    an implicit declaration is a *hard error* in C23, not a warning. Module
+    paths are a fixed base dir plus identifier segments, so lexical
+    normalisation dedups them exactly — and unlike `realpath` it works for
+    files that don't exist, which is what lets the missing-module diagnostic
+    name the path it looked for.
+  - **Linking scans the dependency's AST for the item, then copies the entry
+    out of its scopes.** Scanning the decls is what puts `Decl.is_pub` in
+    reach, and it is also what prevents accidental re-export: a dependency's
+    scopes hold *its* imports and the builtins too, so a bare `tscope_lookup`
+    would have given `use b::X` the meaning of `pub use`. The alternative —
+    a visibility flag on every `VarEntry`/`TypeEntry` — would have touched 30+
+    define sites.
+
+  Also cleaned up while here, each a latent bug rather than a new one:
+  - `modreg_add`'s duplicate check was a `// todo` and its only caller wrapped
+    it in `assert(modreg_add(...))` — an assert with a side effect, which
+    `BUILD=release` (`-DNDEBUG`) would have compiled away entirely, silently
+    registering nothing.
+  - `vscope_define`/`tscope_define` still don't detect duplicates and both
+    lookups return the *first* match, so an import colliding with a local
+    declaration would have resolved backwards — the import silently winning.
+    `tc_link_imports` does its own conflict check; the `std` no-op case has to
+    short-circuit before it, or `use std::io::print;` would report a collision
+    with the builtin it names.
+  - codegen matched the `print` builtin by name, so `use std::io::print as p;`
+    type-checked and then failed codegen. `cg_names_builtin_print` resolves the
+    alias through the module's std imports.
+  - `resolve_bound_refs` claimed "modules aren't implemented, so a qualified
+    path resolves by its last segment"; a qualified trait bound is now an error
+    pointing at `use`, matching what `resolve_path` already did for types.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
 milestone (~900 lines).
 
-1. **Module system** (~0.5×): real file discovery, `mod_link_imports`
-   (stubbed at `src/compiler.c` phase_register), cross-module visibility,
-   cycle detection.
-2. **Bytecode serialization + REPL** — after modules; format sketch in
-   `runtime.md`.
+1. **Runtime module linking**: flatten every module's `funs`/`methods`/
+   `closures` into one program-wide slot space (`OP_GET_GLOBAL` is a one-byte
+   index into a single module today) and widen the GC roots to match, so a
+   multi-module program can actually `--run`. Sketch in `runtime.md`.
+2. **Bytecode serialization + REPL** — format sketch in `runtime.md`.
 
 ## Known warts to clean up opportunistically
 
@@ -207,3 +262,10 @@ milestone (~900 lines).
   calls now work without it, via `ExprPath.resolved_fun` — see 5c-ii above)
 - codegen rejects *any* generic function/method/impl, even uncalled ones,
   under `--run` (needs monomorphisation or boxed generics eventually)
+- trait impls are program-global: an impl applies even if its module was never
+  imported (`ImplIndex` lives on the `TypeChecker`, not the `Module`)
+- no `pub use` re-export, no glob `use a::*`, no module-qualified paths
+- `pub` on impls/methods/fields is parsed and ignored — visibility is
+  per-item at module granularity only
+- module dedup is lexical, so one file reached by two different spellings
+  (a symlink, say) would load twice and collide
