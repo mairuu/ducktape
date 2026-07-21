@@ -1,6 +1,12 @@
+# the CFLAGS sentinel rule below is physically the first target in this file,
+# so it would otherwise become the default goal — and since its recipe is
+# entirely @-silenced, a bare `make` would print nothing, build nothing, and
+# still exit 0. Name the real default explicitly.
+.DEFAULT_GOAL := all
+
 DEFS :=
 
-TARGET  := ducktape 
+TARGET  := ducktape
 CC      := cc
 CSTD    := -std=c23
 CFLAGS  := $(CSTD) -Wall -Wextra -Wpedantic $(DEFS)
