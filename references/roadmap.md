@@ -341,8 +341,14 @@
 Estimates are relative to one focused session ≈ the checker-completion
 milestone (~900 lines).
 
-1. **REPL (milestone 9b)** — sketch in `runtime.md`: re-run the pipeline per
-   line with a fresh arena, keeping the GC heap alive across lines.
+1. **Monomorphisation** — the largest remaining gap between what type-checks
+   and what runs: codegen rejects every generic function, method and impl, so
+   `tests/pass/in_fixed.dt` cannot execute at all. Needs instantiation at the
+   call site (or boxed generics) plus a per-instantiation slot in the linker.
+
+Not on the roadmap: the **REPL** is a side feature, not a milestone — it lives
+on the `feature/repl` branch (`--repl`, incremental compilation over one module
+via `Module.decl_base`) and is not part of the main line.
 
 ## Known warts to clean up opportunistically
 
