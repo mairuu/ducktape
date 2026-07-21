@@ -1,0 +1,14 @@
+#! expect: cannot infer type for 'T'
+
+# a bare unit variant infers its type argument from the expected type, so with
+# no expected type at all there is nothing to infer it from. reported here,
+# rather than silently resolving to the enum's own abstract parameter.
+
+enum Opt<T> {
+    Some(T),
+    None,
+}
+
+fun main() {
+    var u = Opt::None;
+}

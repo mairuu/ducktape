@@ -191,6 +191,24 @@ instantiation goes through `infer_open_generics`, which builds a `Subst`
 (name → type) mapping type params to fresh unknowns or explicit args;
 `subst_apply` rewrites types under it.
 
+A generic constructor with no explicit type arguments normally opens them into
+fresh unknowns and lets its *fields* solve them, which is why `Opt::Some(1)`
+needs no turbofish. A constructor with no fields has nothing to solve them
+from, so `hint_type_args` seeds them from the expected type instead: when the
+hint names the same struct or enum, its type arguments are passed to
+`infer_open_generics` as if they had been written out. Seeding only — a hint
+that disagrees with a field is still unified and still reported at the site
+where the value is used. This is what makes `Opt::None` work in every position
+that supplies a hint, including an argument to a *non-generic* function, where
+the parameter is compared with `types_equal` and an unsolved unknown would
+never have been bound.
+
+All three spellings of a variant constructor reach the same `EXPR_VARIANT`
+case: `resolve_call_expr` and the struct-init path re-resolve after
+`rewrite_tuple_variant_call` rewrites the node, and so does the bare
+multi-segment `EXPR_PATH` (`Status::Off`) — returning the resolved path's type
+directly there would hand back the enum's own abstract `Opt<T>`.
+
 `Subst` itself lives in `ast.h`, not `sema.h`, because AST nodes store one:
 every call node records the substitution that instantiated its target
 (`ExprPath.inst`, `ExprMethodCall.inst`) for codegen to monomorphise from.

@@ -598,6 +598,48 @@
   modules — it used to be a silent no-op that surfaced later, confusingly, as
   "undefined variable".
 
+- **`std::option`, and the inference it needed (milestone 15)** — `Option<T>`
+  is the second std module. Design: `language.md` "The standard library" →
+  `std::option`, `architecture.md` "Types and inference".
+
+  The module itself is unremarkable — a generic enum, a generic inherent impl,
+  combinators taking closures, and `impl<T: Ord> Ord for Option<T>` — which is
+  the point: nothing about `Option` is known to the compiler, it is not a
+  prelude, and it needed no language change. It is also the first std module to
+  `use` another (`std::cmp`), which the registry deduplicates against the
+  program's own import of it.
+
+  What blocked it was one wart: **`Option::None` could not infer its type
+  argument**, so `return Option::None;` from a `-> Option<Int>` was a type
+  error and only `Option::<Int>::None` worked. A standard type needing a
+  turbofish everywhere is a bad advert, which is why the fix came first.
+
+  It was two bugs wearing one hat, and separating them is the interesting part:
+  - **The bare-path spelling never re-resolved.** `resolve_call_expr` and the
+    struct-init path both rewrite a variant constructor and then *re-resolve*
+    the rewritten node; the multi-segment `EXPR_PATH` case (`Status::Off`)
+    rewrote and returned `r.type` — the enum's *declared* `Opt<T>` — so the
+    abstract parameter escaped into the caller as if it were concrete, and the
+    diagnostic read "expected 'Int' but got 'T'". Fixed by returning
+    `resolve_expr(ctx, expr, hint)` like the other two, which routes it through
+    the `EXPR_VARIANT` case that opens the parameters into fresh unknowns.
+  - **A constructor with no fields has nothing to solve those unknowns from.**
+    Every other generic constructor is solved by its arguments. `Opt::None`
+    has none, so the unknown survives to whatever position the value flows
+    into — solved there if that position unifies (an annotation, a `return`),
+    but *not* if it compares with `types_equal`, which is what a call to a
+    non-generic function does. `hint_type_args` seeds the type arguments from
+    the expected type instead, so the constructor is already concrete by the
+    time anything compares it. Seeding, not deciding: a hint that contradicts
+    a field is still unified and still reported.
+
+  The second half is the more general fix, and it applies to unit structs too
+  (`var e: Empty<Int> = Empty;`) since the struct-init path grew the same
+  seeding — the case milestone 14's unit-struct rewrite had left for the
+  hint to handle "the same as `Wrap {}`", which turned out to be not at all.
+  A bare unit variant with *no* expected type is now a "cannot infer type"
+  error rather than a silently abstract type.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -608,13 +650,12 @@ Nothing on the main line is *blocked*: every construct the checker accepts in
 warts" section would promote first, in the order that pays off soonest — pick
 by appetite rather than by necessity.
 
-1. **`std::option`, and the unit-variant inference it needs** — the module the
-   library most obviously wants next, and it is *blocked on a wart*:
-   `Option::None` cannot infer its type argument, so `return Option::None;`
-   from a `-> Option<Int>` fails and only `Option::<Int>::None` works. A
-   standard type that needs a turbofish everywhere is a bad advert, so the
-   inference fix comes first and the module follows it. Fixing it also settles
-   the same question for a bare unit variant in argument position.
+1. **`std::result`, and a way to fail** — `?` already recognises a
+   "Result-like" enum structurally, so the type it is named after should be in
+   the library next to `Option`. It runs into the reason `Option` has no
+   `unwrap`: there is no way for a program to *stop*. A panic (or the native
+   functions of item 3, whichever lands first) is what unblocks `unwrap`,
+   `expect` and an honest `std::result`.
 2. **Module-granular impls and `pub use`** — `ImplIndex` lives on the
    `TypeChecker`, so an impl applies even where its module was never
    imported, and imports don't compose (no re-export, no glob, no qualified
@@ -669,9 +710,9 @@ via `Module.decl_base`) and is not part of the main line.
 - a refutable `var` binding whose column type inference never pinned down is
   accepted (the tri-state answer reports nothing) and traps at runtime via
   `OP_MATCH_FAIL` instead of at compile time
-- a bare unit variant of a generic enum can't be instantiated without a
-  turbofish (`Opt::<Bool>::None`) — neither an annotation nor the argument
-  position infers it
+- `pub` is rejected outright on an impl item (`pub fun` inside an `impl`
+  block is "expected impl item"), though it is parsed and ignored on a struct
+  field. Method visibility is not a thing, so std impls simply omit it
 - overlapping method names across impls: bare generic paths take the first
   registered impl
 - `Point::new` vs `Point::<Int>::new`: expression paths require turbofish

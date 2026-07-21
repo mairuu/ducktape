@@ -1,0 +1,63 @@
+# a bare unit variant (and a bare unit struct) of a generic type takes its
+# type arguments from the expected type, so no turbofish is needed.
+#> None
+#> Some(1)
+#> 0
+#> 5
+#> None
+#> Empty
+#> [None, Some(2)]
+#> (None, Empty)
+
+enum Opt<T> {
+    Some(T),
+    None,
+}
+
+struct Empty<T>;
+
+fun get(o: Opt<Int>) -> Int {
+    match o {
+        Opt::Some(v) => v,
+        Opt::None => 0,
+    }
+}
+
+# from the return type
+fun none() -> Opt<Int> {
+    return Opt::None;
+}
+
+fun pair(o: Opt<Int>, e: Empty<Int>) -> (Opt<Int>, Empty<Int>) {
+    return (o, e);
+}
+
+struct Holder {
+    slot: Opt<Int>,
+}
+
+fun main() {
+    print(none());
+    print(Opt::Some(1));
+
+    # from a parameter type — the callee is not generic, so this is the hint
+    # doing the work rather than unification
+    print(get(Opt::None));
+    print(get(Opt::Some(5)));
+
+    # from an annotation, and for a unit struct too
+    var a: Opt<Bool> = Opt::None;
+    print(a);
+    var e: Empty<Int> = Empty;
+    print(e);
+
+    # from a field initializer, an array element, and a tuple element
+    var h = Holder { slot: Opt::None };
+    var arr: [Opt<Int>] = [Opt::None, Opt::Some(2)];
+    print(arr);
+    print(pair(h.slot, Empty));
+
+    # the turbofish still works, and still wins over the hint
+    var t = Opt::<String>::None;
+    var s: Opt<String> = t;
+}

@@ -3489,6 +3489,26 @@ static Type *resolve_closure_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   return fun_ty;
 }
 
+// A generic constructor written without type arguments takes them from the
+// expected type, when the hint names the same struct or enum: `Opt::None` has
+// no field to solve `T` from, and neither does a bare `Wrap`. Seeding only —
+// a hint that disagrees with the fields is still a mismatch, reported where
+// the value is used.
+static Type **hint_type_args(Type *hint, Type *self_type) {
+  if (hint == NULL || hint == self_type) {
+    return NULL;
+  }
+  if (hint->kind == TY_ENUM && self_type->kind == TY_ENUM &&
+      hint->as.enm.def == self_type->as.enm.def) {
+    return hint->as.enm.type_args;
+  }
+  if (hint->kind == TY_STRUCT && self_type->kind == TY_STRUCT &&
+      hint->as.struc.def == self_type->as.struc.def) {
+    return hint->as.struc.type_args;
+  }
+  return NULL;
+}
+
 static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   (void)hint;
   (void)ctx;
@@ -3651,8 +3671,12 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
 
       rewrite_tuple_variant_call(ctx, expr, r.type, r.as.variant.enum_def,
                                  r.as.variant.def);
-      result = r.type;
-      break;
+      // re-resolve as a variant initializer, exactly as the call and
+      // struct-init spellings do. `r.type` is the *declared* enum type, so
+      // returning it directly would hand back the abstract `Opt<T>`; the
+      // EXPR_VARIANT case opens the parameters into fresh unknowns the hint
+      // can solve.
+      return resolve_expr(ctx, expr, hint);
     }
 
     StringView name =
@@ -3797,7 +3821,8 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
 
     if (is_generic) {
       bool had_explicit_args = struct_ty != def->self_type;
-      Type **args = had_explicit_args ? struct_ty->as.struc.type_args : NULL;
+      Type **args = had_explicit_args ? struct_ty->as.struc.type_args
+                                      : hint_type_args(hint, def->self_type);
       subst = infer_open_generics(&ctx->infer, def->type_params, args,
                                   def->type_param_count, expr->span, ctx->al);
     }
@@ -3872,8 +3897,9 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
 
     if (is_generic) {
       bool had_explicit_args = resolved_enum_ty != enum_def->self_type;
-      Type **args =
-          had_explicit_args ? resolved_enum_ty->as.enm.type_args : NULL;
+      Type **args = had_explicit_args
+                        ? resolved_enum_ty->as.enm.type_args
+                        : hint_type_args(hint, enum_def->self_type);
       subst =
           infer_open_generics(&ctx->infer, enum_def->type_params, args,
                               enum_def->type_param_count, expr->span, ctx->al);

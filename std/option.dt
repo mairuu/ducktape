@@ -1,0 +1,107 @@
+# std::option — a value that may be absent.
+#
+# Like std::cmp, this is written in ducktape and needs no builtin: `Option<T>`
+# is an ordinary generic enum, its methods are an ordinary generic inherent
+# impl, and the combinators take ordinary closures.
+#
+# `unwrap` is deliberately missing. A method that aborts the program on `None`
+# needs a way to *fail* at runtime, and the language has none — no panic, no
+# native functions yet (roadmap item 3). Every accessor here therefore names
+# what to do instead: `unwrap_or`, `unwrap_or_else`.
+
+use std::cmp::Ord;
+
+pub enum Option<T> {
+    Some(T),
+    None,
+}
+
+impl<T> Option<T> {
+    fun is_some(self) -> Bool {
+        match self {
+            Option::Some(v) => { return true; },
+            Option::None => { return false; },
+        }
+    }
+
+    fun is_none(self) -> Bool {
+        return not self.is_some();
+    }
+
+    # The contained value, or `fallback` when there is none. `fallback` is
+    # evaluated either way — use `unwrap_or_else` when computing it is costly.
+    fun unwrap_or(self, fallback: T) -> T {
+        match self {
+            Option::Some(v) => { return v; },
+            Option::None => { return fallback; },
+        }
+    }
+
+    fun unwrap_or_else(self, fallback: fun() -> T) -> T {
+        match self {
+            Option::Some(v) => { return v; },
+            Option::None => { return fallback(); },
+        }
+    }
+
+    # Apply `f` to the contained value, if there is one.
+    fun map<U>(self, f: fun(T) -> U) -> Option<U> {
+        match self {
+            Option::Some(v) => { return Option::Some(f(v)); },
+            Option::None => { return Option::None; },
+        }
+    }
+
+    # `map` for an `f` that may itself find nothing — the two `None`s collapse
+    # instead of nesting into `Option<Option<U>>`.
+    fun and_then<U>(self, f: fun(T) -> Option<U>) -> Option<U> {
+        match self {
+            Option::Some(v) => { return f(v); },
+            Option::None => { return Option::None; },
+        }
+    }
+
+    # Keep the value only when it satisfies `pred`.
+    fun filter(self, pred: fun(T) -> Bool) -> Option<T> {
+        match self {
+            Option::Some(v) => {
+                if pred(v) {
+                    return Option::Some(v);
+                }
+                return Option::None;
+            },
+            Option::None => { return Option::None; },
+        }
+    }
+
+    # `self` if it holds a value, otherwise `other`. Not spelled `or`, which is a
+    # keyword; the closure-taking form would be the one named `or_else`.
+    fun otherwise(self, other: Option<T>) -> Option<T> {
+        match self {
+            Option::Some(v) => { return Option::Some(v); },
+            Option::None => { return other; },
+        }
+    }
+}
+
+# `None` sorts before every `Some`, and two `Some`s compare their contents —
+# which is the ordering that makes `min` pick a present value over an absent
+# one. Only available where `T` itself is ordered.
+impl<T: Ord> Ord for Option<T> {
+    fun cmp(self, other: Option<T>) -> Int {
+        match self {
+            Option::Some(a) => {
+                match other {
+                    Option::Some(b) => { return a.cmp(b); },
+                    Option::None => { return 1; },
+                }
+            },
+            Option::None => {
+                match other {
+                    Option::Some(b) => { return 0 - 1; },
+                    Option::None => { return 0; },
+                }
+            },
+        }
+    }
+}

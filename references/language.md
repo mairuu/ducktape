@@ -95,6 +95,13 @@ ending in `return` has type `!` (never), which unifies with anything.
 - A unit struct is a value under its bare name: `struct Marker;` then
   `var m = Marker;`, no `{}` suffix. The name is looked up in the value scope
   first, then as a zero-field struct.
+- A constructor that carries no value to infer from — a unit variant
+  (`Opt::None`) or a unit struct of a generic type (`Empty`) — takes its type
+  arguments from the *expected* type: an annotation, a parameter type, the
+  enclosing function's return type, a field, or an array/tuple element. With
+  no expected type there is nothing to go on and it is an error asking for an
+  annotation; a turbofish (`Opt::<Int>::None`) still overrides
+  (`tests/run/unit_variant_infer.dt`).
 - Paths: `Result::Ok(5)`, `Point::new(..)`. Explicit type arguments use
   turbofish in expression position: `Point::<Int>::new(1, 2)`. A bare
   `Point::new(..)` on a generic type selects the impl by method name and
@@ -278,6 +285,40 @@ join the same trait and `max`/`min` work on them unchanged
 `Ord` is deliberately *not* object-safe — `other: Self` means a caller must
 know the concrete type — so it is a bound, never a `dyn Ord`. That is the rule
 working as designed: object safety is only demanded where `dyn` is written.
+
+### `std::option`
+
+```
+pub enum Option<T> { Some(T), None }
+
+impl<T> Option<T> {
+    fun is_some(self) -> Bool
+    fun is_none(self) -> Bool
+    fun unwrap_or(self, fallback: T) -> T
+    fun unwrap_or_else(self, fallback: fun() -> T) -> T
+    fun map<U>(self, f: fun(T) -> U) -> Option<U>
+    fun and_then<U>(self, f: fun(T) -> Option<U>) -> Option<U>
+    fun filter(self, pred: fun(T) -> Bool) -> Option<T>
+    fun otherwise(self, other: Option<T>) -> Option<T>
+}
+
+impl<T: Ord> Ord for Option<T>      # None sorts before every Some
+```
+
+An ordinary generic enum with an ordinary generic inherent impl — nothing
+about it is known to the compiler, and `Option` is not in scope until it is
+imported (`use std::option::Option;`). It is not a prelude.
+
+Two things are missing on purpose. There is **no `unwrap`**: a method that
+aborts on `None` needs a way to fail at runtime, and the language has neither
+a panic nor native functions, so every accessor here names what to do instead.
+And the `or` combinator is spelled `otherwise`, because `or` is a keyword; by
+the naming convention the rest of the module follows, `or_else` would be the
+closure-taking form, which does not exist yet.
+
+`impl<T: Ord> Ord for Option<T>` is the first place one std module imports
+another — it is an ordinary `use std::cmp::Ord;`, and the registry deduplicates
+it against a program's own import of `std::cmp` (`tests/run/std_option.dt`).
 
 ## Built-ins
 
