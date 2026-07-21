@@ -1434,6 +1434,13 @@ bool exe_link(Executable *exe, ModuleRegistry *reg, Allocator *al) {
   exe->structs = al_alloc_zero(al, sizeof(StructDef *) * (size_t)structs);
   exe->enums = al_alloc_zero(al, sizeof(EnumDef *) * (size_t)enums);
 
+  // re-linkable: the REPL calls this again after every line. Definitions are
+  // only ever appended, so a second pass over a grown registry hands out the
+  // same slots it did before plus new ones — already-emitted chunks stay
+  // correct. `closures` is not rebuilt: codegen appends to it, and the earlier
+  // lines' entries must survive as GC roots.
+  exe->global_count = exe->struct_count = exe->enum_count = 0;
+
   // pass 2: hand out the slots, in topological order — a dependency is
   // numbered before anything that imports it, which is only cosmetic (all
   // slots exist before any chunk is compiled) but keeps a trace readable.
@@ -1473,7 +1480,7 @@ bool exe_link(Executable *exe, ModuleRegistry *reg, Allocator *al) {
 bool codegen_module(Module *m, Executable *exe, Heap *heap, DiagBag *diags,
                     Allocator *al) {
   bool ok = true;
-  for (int i = 0; i < m->ast->decl_count; i++) {
+  for (int i = m->decl_base; i < m->ast->decl_count; i++) {
     Decl *decl = m->ast->decls[i];
     if (decl->kind == DECL_FUN) {
       compile_fun(m, exe, heap, decl, diags, al, &ok);

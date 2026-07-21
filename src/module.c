@@ -215,12 +215,9 @@ bool mod_collect_imports(Module *m, ModuleRegistry *reg, StringView base_dir,
   return ok;
 }
 
-bool mod_parse(Module *m, DiagBag *diags, Allocator *al) {
-  m->source = read_file(m->file_path.chars, al);
-  if (m->source.chars == NULL) {
-    return false;
-  }
-
+// scan + parse `source` (already owned by the module) into declarations.
+static bool mod_parse_current_source(Module *m, DiagBag *diags, Allocator *al,
+                                     Program **out) {
   diag_clear(diags);
   Scanner scanner;
   scanner_init(&scanner, m->source.chars, diags);
@@ -235,13 +232,43 @@ bool mod_parse(Module *m, DiagBag *diags, Allocator *al) {
 
   Parser parser;
   parser_init(&parser, tokens, token_count, al, diags);
-  m->ast = parser_parse(&parser);
-  assert(m->ast != NULL);
+  *out = parser_parse(&parser);
+  assert(*out != NULL);
 
-  if (diag_has_errors(diags)) {
+  return !diag_has_errors(diags);
+}
+
+bool mod_parse(Module *m, DiagBag *diags, Allocator *al) {
+  m->source = read_file(m->file_path.chars, al);
+  if (m->source.chars == NULL) {
     return false;
   }
+  return mod_parse_current_source(m, diags, al, &m->ast);
+}
 
+bool mod_parse_append(Module *m, String source, DiagBag *diags, Allocator *al) {
+  // `source` replaces the module's: a Span is an offset into whatever buffer
+  // the scanner saw, and diag_report renders against exactly one buffer. So a
+  // REPL session's module always holds the *current* line — which is the only
+  // text a diagnostic about that line can point into.
+  m->source = source;
+
+  Program *parsed = NULL;
+  if (!mod_parse_current_source(m, diags, al, &parsed)) {
+    return false;
+  }
+  if (m->ast == NULL) {
+    m->ast = parsed;
+    return true;
+  }
+
+  int old = m->ast->decl_count, added = parsed->decl_count;
+  m->ast->decls = al_realloc(al, m->ast->decls, sizeof(Decl *) * (size_t)old,
+                             sizeof(Decl *) * (size_t)(old + added));
+  for (int i = 0; i < added; i++) {
+    m->ast->decls[old + i] = parsed->decls[i];
+  }
+  m->ast->decl_count = old + added;
   return true;
 }
 

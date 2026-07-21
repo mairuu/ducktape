@@ -819,8 +819,10 @@ static bool decl_item_name(Decl *decl, StringView *out) {
 // neither vscope_define nor tscope_define detects collisions, and both lookups
 // return the *first* match — so a redeclaration would silently lose to the
 // original with no diagnostic. Catch it here, before anything is registered.
+// (`decl_base` only moves the *outer* loop: a new REPL line must still be
+// compared against everything the session already defined.)
 static void tc_check_duplicate_decls(TypeChecker *tc, Module *m) {
-  for (int i = 0; i < m->ast->decl_count; i++) {
+  for (int i = m->decl_base; i < m->ast->decl_count; i++) {
     StringView name;
     if (!decl_item_name(m->ast->decls[i], &name)) {
       continue;
@@ -841,8 +843,11 @@ static void tc_check_duplicate_decls(TypeChecker *tc, Module *m) {
 void tc_register_module(TypeChecker *tc, Module *m) {
   tc_check_duplicate_decls(tc, m);
 
+  int fun_base = m->fun_cap, struct_base = m->struct_cap;
+  int enum_base = m->enum_cap, impl_base = m->impl_cap;
+
   // counts
-  for (int i = 0; i < m->ast->decl_count; i++) {
+  for (int i = m->decl_base; i < m->ast->decl_count; i++) {
     switch (m->ast->decls[i]->kind) {
     case DECL_FUN:
       m->fun_cap++;
@@ -864,14 +869,19 @@ void tc_register_module(TypeChecker *tc, Module *m) {
     }
   }
 
-  // allocate
-  m->funs = al_alloc_zero(tc->al, sizeof(FunDef *) * m->fun_cap);
-  m->structs = al_alloc_zero(tc->al, sizeof(StructDef *) * m->struct_cap);
-  m->enums = al_alloc_zero(tc->al, sizeof(EnumDef *) * m->enum_cap);
-  m->impls = al_alloc_zero(tc->al, sizeof(ImplDef *) * m->impl_cap);
+  // allocate. The caps grow rather than reset, so a REPL line extends the
+  // tables the earlier lines filled instead of orphaning them.
+  m->funs = al_realloc(tc->al, m->funs, sizeof(FunDef *) * fun_base,
+                       sizeof(FunDef *) * m->fun_cap);
+  m->structs = al_realloc(tc->al, m->structs, sizeof(StructDef *) * struct_base,
+                          sizeof(StructDef *) * m->struct_cap);
+  m->enums = al_realloc(tc->al, m->enums, sizeof(EnumDef *) * enum_base,
+                        sizeof(EnumDef *) * m->enum_cap);
+  m->impls = al_realloc(tc->al, m->impls, sizeof(ImplDef *) * impl_base,
+                        sizeof(ImplDef *) * m->impl_cap);
 
   // populate
-  for (int i = 0; i < m->ast->decl_count; i++) {
+  for (int i = m->decl_base; i < m->ast->decl_count; i++) {
     Decl *decl = m->ast->decls[i];
     switch (decl->kind) {
     case DECL_FUN:
@@ -906,7 +916,9 @@ void tc_register_module(TypeChecker *tc, Module *m) {
 
   assert(m->fun_count == m->fun_cap && "fun count mismatch after registration");
 
-  tc_register_builtins(tc, m);
+  if (m->decl_base == 0) {
+    tc_register_builtins(tc, m); // once per module, not once per REPL line
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1523,7 +1535,7 @@ bool tc_resolve_module(TypeChecker *tc, Module *m) {
   ResolveCtx rctx;
   rctx_init(&rctx, tc, tc->diags, tc->al);
 
-  for (int i = 0; i < m->ast->decl_count; i++) {
+  for (int i = m->decl_base; i < m->ast->decl_count; i++) {
     Decl *decl = m->ast->decls[i];
     rctx.tyres.tscope = &m->tscope;
     resolve_decl(&rctx, decl);
@@ -4367,7 +4379,7 @@ static void tc_check_trait(TypeChecker *tc, Decl *decl) {
 }
 
 bool tc_check_module(TypeChecker *tc, Module *m) {
-  for (int i = 0; i < m->ast->decl_count; i++) {
+  for (int i = m->decl_base; i < m->ast->decl_count; i++) {
     Decl *decl = m->ast->decls[i];
     switch (decl->kind) {
     case DECL_FUN:

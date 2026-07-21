@@ -42,7 +42,10 @@ codegen and the `slot` fields by `exe_link` before it (`runtime.md`).
 
 ## Semantic analysis (`src/sema.c`, `include/sema.h`)
 
-Three passes over each module, mirroring compiler phases:
+Three passes over each module, mirroring compiler phases. Each starts at
+`Module.decl_base` rather than at 0 — always 0 for a module compiled from a
+file, and the REPL's handle on a module that grows a line at a time (see
+"REPL" in `overview.md`):
 
 1. **register** — `tc_register_module`: `tc_check_duplicate_decls` first (a
    scope define never detects a collision and a scope lookup returns the

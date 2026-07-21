@@ -1,0 +1,39 @@
+# a submission keeps reading while its brackets are unbalanced, so a
+# declaration can be typed the way it would be written in a file.
+fun classify(n: Int) -> String {
+    if n < 0 {
+        return "negative";
+    }
+    return match n {
+        0 => "zero",
+        1 => "one",
+        _ => "many",
+    };
+}
+
+classify(0)
+#> zero
+classify(3)
+#> many
+classify(0 - 5)
+#> negative
+
+struct Pair {
+    a: Int,
+    b: Int,
+}
+
+impl Pair {
+    fun sum(self) -> Int {
+        return self.a + self.b;
+    }
+}
+
+Pair { a: 20, b: 22 }.sum()
+#> 42
+
+# a bracket inside a string doesn't count towards the depth — otherwise this
+# submission would never look finished. (`{` in a string is interpolation, so
+# the unbalanced one to test with is a paren.)
+"a ( b"
+#> a ( b

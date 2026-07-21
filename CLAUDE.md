@@ -11,6 +11,7 @@ make test          # build + full test suite (must stay green)
 ./build/ducktape --run file.dt   # compile and execute main()
 ./build/ducktape --emit-bc out.dtbc file.dt   # compile to a bytecode image
 ./build/ducktape --run out.dtbc               # execute an image
+./build/ducktape --repl                       # interactive session
 make format        # clang-format over src/ and include/
 ```
 
@@ -33,6 +34,8 @@ in `.vscode/ref/` are historical — do not trust them.
   expected stdout, in order.
 - `tests/fail_run/*.dt` — like `tests/fail`, but invoked with `--run`; for
   programs that type-check yet the VM rejects.
+- `tests/repl/*.dt` — fed to `--repl` on stdin; `#>` lines are the expected
+  stdout (they are comments, so the REPL skips them as submissions).
 - A multi-file test is a *subdirectory* of any of those, entry point
   `main.dt`, imported modules alongside it. The flat globs are non-recursive,
   so the siblings are never collected as tests themselves.

@@ -70,6 +70,13 @@ struct Module {
 
   ValueScope vscope; // module-level values: functions, global vars
   TypeScope tscope;  // module-level types: structs, enums, traits
+
+  // index of the first declaration no phase has processed yet. Always 0 for a
+  // module compiled from a file — every phase sees the whole AST. The REPL
+  // appends each line's declarations to one long-lived module and advances
+  // this, so register/resolve/check/codegen run over the new decls only,
+  // against the scopes and definition tables the earlier lines built up.
+  int decl_base;
 };
 
 Module *mod_new(StringView file_path, Allocator *al);
@@ -77,6 +84,11 @@ Module *mod_new(StringView file_path, Allocator *al);
 void mod_free(Module **m, Allocator *al);
 
 bool mod_parse(Module *m, DiagBag *diags, Allocator *al);
+
+// parse `source` and append its declarations to m's AST, replacing m->source
+// (spans index into it, and diagnostics render against one buffer). The REPL's
+// way of growing one module a line at a time; `m` need not be parsed yet.
+bool mod_parse_append(Module *m, String source, DiagBag *diags, Allocator *al);
 
 // scan m->ast for DECL_USE, resolve each to a dependency file, and fill
 // m->imports. files not yet seen are registered with `reg` as unparsed stubs,

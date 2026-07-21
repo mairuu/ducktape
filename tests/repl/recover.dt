@@ -1,0 +1,33 @@
+# a rejected line must leave the session exactly as it was. Only stdout is
+# compared, so the diagnostics these lines print are not part of the expectation.
+
+# fails to check: `nope` is undefined
+fun f() -> Int { return nope; }
+
+# so the name is still free — this is not a duplicate definition
+fun f() -> Int { return 41; }
+f() + 1
+#> 42
+
+# fails at codegen, not checking: generics have no runtime representation
+fun id<T>(v: T) -> T { return v; }
+
+# and again, the failed definition left nothing behind
+fun id(v: Int) -> Int { return v; }
+id(7)
+#> 7
+
+# a runtime error does not end the session
+fun oops() -> Int { var xs = [1]; return xs[5]; }
+oops()
+
+f()
+#> 41
+
+# a parse error is survivable too. (Nothing here opens a bracket: an unclosed
+# one is read as an unfinished submission and would swallow the lines below.)
+1 +
+
+fun still_here() -> Bool { return true; }
+still_here()
+#> true

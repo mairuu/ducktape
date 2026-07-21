@@ -336,13 +336,52 @@
   extra cases, all of them also verified under `--gc-stress`), plus two
   malformed-image rejections.
 
+- **REPL (milestone 9b)** — `--repl` runs the existing pipeline incrementally
+  over **one module that grows a line at a time**. Design: `overview.md`
+  "REPL".
+
+  `Module.decl_base` is the entire mechanism: every phase (register, resolve,
+  check, codegen) starts there instead of at 0, so a line is compiled against
+  the scopes and definition tables the earlier lines built, and a function
+  defined on line 2 is an ordinary module-level function to line 7. No
+  re-checking, no re-running, and — the point — no second name-resolution path
+  for "REPL scope". The heap and the `Executable` outlive every line;
+  `exe_link` re-runs per line and returns identical slots for everything
+  already linked, since definitions are only appended.
+
+  Three consequences worth recording, each cheaper than the feature it
+  replaces:
+  - **a non-declaration submission is wrapped in a synthetic function**, so
+    statements are evaluated with the function machinery (locals, closures,
+    control flow) rather than a top-level execution mode the compiler doesn't
+    have;
+  - **the trailing expression prints** because the tail after the last
+    top-level `;` is speculatively compiled as `print(<tail>)`, falling back to
+    the untouched text — a wrong guess costs a discarded parse, never a wrong
+    message;
+  - **a rejected line leaves no trace**, because every structure a phase
+    appends to is an array with a count, so mark/restore of the counts is a
+    complete undo. That is what lets a failed definition be retyped without
+    colliding with itself (`tests/repl/recover.dt`).
+
+  Prompts and diagnostics go to stderr, so stdout is exactly what the evaluated
+  code printed and `tests/repl` is a plain output comparison — with `#> ` lines
+  doubling as comments the REPL skips.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
 milestone (~900 lines).
 
-1. **REPL (milestone 9b)** — sketch in `runtime.md`: re-run the pipeline per
-   line with a fresh arena, keeping the GC heap alive across lines.
+1. **Session variables (milestone 9c)** — make a REPL `var` persist. Sketch in
+   `runtime.md` "Future": an `OP_GET_SESSION`/`OP_SET_SESSION` pair over a
+   GC-rooted `Value` array on the `Executable`, a module-level `var` typed from
+   its initializer, and codegen compiling that initializer into the line's
+   function. Small, and it removes the REPL's most visible limit.
+2. **Monomorphisation** — the largest remaining hole between what type-checks
+   and what runs: codegen rejects every generic function, method and impl, so
+   `tests/pass/in_fixed.dt` cannot execute at all. Needs instantiation at the
+   call site (or boxed generics) plus a per-instantiation slot in the linker.
 
 ## Known warts to clean up opportunistically
 
@@ -372,3 +411,9 @@ milestone (~900 lines).
   instructions can still crash the VM
 - an image carries no source, so a runtime error in one reports function names
   with no line information
+- REPL: a `var` binding lives only for the line that declares it (milestone
+  9c), `use` is rejected, a name cannot be redefined (scope lookup returns the
+  first match, so the redefinition would lose), and every submission consumes
+  one of the 256 addressable global slots
+- REPL diagnostics render against the *current* line's source buffer, so a
+  diagnostic pointing at an earlier line's span would print the wrong text

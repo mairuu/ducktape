@@ -37,6 +37,7 @@ make test          # build + run the whole test suite
 ./build/ducktape --run --gc-stress file.dt  # + collect on every allocation
 ./build/ducktape --emit-bc prog.dtbc file.dt # compile to a bytecode image
 ./build/ducktape --run prog.dtbc            # run an image (no source needed)
+./build/ducktape --repl                     # interactive session
 ```
 
 `main()` exits 0 only when every phase succeeded; diagnostics go to stderr.
@@ -77,6 +78,47 @@ into the same `Executable` the VM would have been handed.
 Diagnostics accumulate in a `DiagBag` (`src/diag.c`) shared by all phases; no
 phase aborts mid-file. Error recovery uses a poison type/expr convention (see
 `architecture.md`).
+
+## REPL (`src/repl.c`)
+
+`--repl` runs the same pipeline, incrementally, over **one module that grows a
+line at a time**. `Module.decl_base` is the whole mechanism: every phase starts
+there instead of at 0, so register/resolve/check/codegen see only the new
+declarations, against the scopes and definition tables the earlier lines built.
+A function defined on line 2 is an ordinary module-level function to line 7 —
+no re-checking, no re-running, no second name-resolution path.
+
+The heap and the `Executable` outlive every line. `exe_link` re-runs per line;
+because definitions are only ever appended, it hands back the slots it handed
+out before, plus new ones — so already-emitted chunks stay correct and stay
+rooted. (That is also why `exe_link` resets its counts: it is no longer a
+once-per-program call.)
+
+Three things fall out of the design rather than being features of their own:
+
+- **A non-declaration submission is wrapped in a synthetic function** and run.
+  So the REPL evaluates statements with the *function* machinery — locals,
+  closures, control flow, `?` — instead of needing a top-level execution mode
+  the compiler doesn't have.
+- **A trailing expression prints.** The submission is split at the last
+  top-level `;`; the tail is *speculatively* compiled as `print(<tail>)`, and
+  if that doesn't compile the text is compiled again untouched and *those*
+  diagnostics are the ones reported. A wrong guess costs a discarded parse,
+  never a wrong message.
+- **A rejected line leaves no trace.** Every structure a phase appends to (the
+  decl list, the module's definition tables, both scopes, the impl index) is an
+  array with a count, so a mark/restore of the counts is a complete undo; the
+  arena memory beneath is simply left behind. This is what lets a failed
+  definition be retyped without a duplicate-name error.
+
+Prompts and diagnostics go to stderr, so a session's stdout is exactly what the
+evaluated code printed — which is what makes `tests/repl` a plain output
+comparison.
+
+Limits, all noted in `roadmap.md`: a `var` binding is a local of its line's
+function and does not persist, `use` is rejected, a name cannot be redefined
+(scope lookup returns the first match), and each submission consumes a global
+slot out of the 256 the VM's operands can address.
 
 ## Status snapshot
 

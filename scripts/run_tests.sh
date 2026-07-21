@@ -7,6 +7,8 @@
 #                        stdout equal to the `#> ` comment lines in the file
 #   tests/fail_run/*.dt  like tests/fail, but invoked with --run — for things
 #                        that type-check yet the VM rejects
+#   tests/repl/*.dt      fed to --repl on stdin; `#> ` lines are the expected
+#                        stdout (they are comments, so the REPL skips them)
 #
 # every tests/run program is additionally emitted as a bytecode image and
 # re-run from it, so the suite doubles as the serialization round-trip suite.
@@ -154,6 +156,38 @@ check_bad_image() {  # $1 = description, $2 = file holding the image
 for f in "$ROOT"/tests/run/*.dt "$ROOT"/tests/run/*/main.dt; do
     [ -e "$f" ] || continue
     check_run "$f"
+done
+
+# tests/repl/*.dt are fed to --repl on stdin. Only stdout is compared: prompts
+# and diagnostics go to stderr, and a `#> ` line is a comment to the REPL, so
+# the expectations can sit inline next to the submission that produces them.
+check_repl() {
+    f=$1
+    out_tmp=$(mktemp)
+    "$BIN" --repl <"$f" 2>/dev/null >"$out_tmp"
+    code=$?
+    expected=$(sed -n 's/^#> \{0,1\}//p' "$f")
+    actual=$(cat "$out_tmp")
+    rm -f "$out_tmp"
+
+    if [ "$code" -ne 0 ]; then
+        fail=$((fail + 1))
+        echo "FAIL (repl exited $code): $f"
+        return
+    fi
+    if [ "$actual" != "$expected" ]; then
+        fail=$((fail + 1))
+        echo "FAIL (wrong output): $f"
+        echo "    expected: $(printf '%s' "$expected" | tr '\n' '|')"
+        echo "    actual:   $(printf '%s' "$actual" | tr '\n' '|')"
+        return
+    fi
+    pass=$((pass + 1))
+}
+
+for f in "$ROOT"/tests/repl/*.dt; do
+    [ -e "$f" ] || continue
+    check_repl "$f"
 done
 
 bad=$(mktemp)

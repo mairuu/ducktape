@@ -443,7 +443,16 @@ image is rejected rather than executed. `tests/run` doubles as the round-trip
 suite: `scripts/run_tests.sh` emits an image for every runnable program and
 re-runs it, so a construct the format forgets shows up as an output diff.
 
+The REPL (`overview.md` "REPL") reuses all of this directly: it keeps one heap
+and one `Executable` alive across lines and re-runs `exe_link` after each,
+which is safe precisely because slots are only ever appended.
+
 ## Future (design intent, not implemented)
 
-- **REPL:** does not exist; would re-run the pipeline per line with a fresh
-  arena, keeping the GC heap alive across lines.
+- **Session variables.** A REPL `var` is a local of its line's synthetic
+  function, so it dies at the next prompt. Persisting one needs a value slot
+  space the VM can address — an `OP_GET_SESSION`/`OP_SET_SESSION` pair over a
+  `Value` array on the `Executable`, GC-rooted like the constant pools — plus a
+  module-level `var` that the checker types from its initializer and codegen
+  compiles into the line's function. The `VarEntry.slot < 0` convention is
+  already reserved for it.

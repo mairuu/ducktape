@@ -2,6 +2,7 @@
 #include "arena.h"
 #include "bytecode.h"
 #include "compiler.h"
+#include "repl.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -26,6 +27,7 @@ int main(int argc, char *argv[]) {
   bool gc_stress = false;
   const char *root_path = NULL;
   const char *emit_path = NULL;
+  bool repl = false;
   bool bad_args = false;
 
   for (int i = 1; i < argc; i++) {
@@ -33,6 +35,8 @@ int main(int argc, char *argv[]) {
       run = true;
     } else if (strcmp(argv[i], "--gc-stress") == 0) {
       gc_stress = true;
+    } else if (strcmp(argv[i], "--repl") == 0) {
+      repl = true;
     } else if (strcmp(argv[i], "--emit-bc") == 0) {
       if (++i == argc) {
         bad_args = true;
@@ -47,14 +51,19 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  if (bad_args || root_path == NULL) {
+  if (bad_args || (root_path == NULL) != repl) {
     fprintf(stderr,
-            "usage: %s [--run] [--gc-stress] [--emit-bc <out>] <file>\n",
-            argv[0]);
+            "usage: %s [--run] [--gc-stress] [--emit-bc <out>] <file>\n"
+            "       %s --repl [--gc-stress]\n",
+            argv[0], argv[0]);
     return 1;
   }
 
   Allocator heap_al = heap_allocator_create();
+
+  if (repl) {
+    return repl_run(&heap_al, gc_stress) ? 0 : 1;
+  }
 
   // `--run` accepts either form, told apart by the image magic rather than by
   // an extension or a flag: running a program should not depend on how it was

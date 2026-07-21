@@ -1,0 +1,36 @@
+# fed to `--repl` on stdin; `#>` lines are the expected stdout.
+# (a comment-only submission is skipped, so these lines cost nothing.)
+1 + 2 * 3
+#> 7
+
+# a declaration persists for the rest of the session
+fun square(x: Int) -> Int { return x * x; }
+square(9)
+#> 81
+
+# ... and is visible to a function declared later
+fun quad(x: Int) -> Int { return square(square(x)); }
+quad(2)
+#> 16
+
+# aggregates print through the same value_print the runner uses
+struct Point { x: Int, y: Int }
+Point { x: 1, y: 2 }
+#> Point { x: 1, y: 2 }
+
+enum Opt { Some(Int), None }
+Opt::Some(3)
+#> Some(3)
+
+# statements run; a trailing expression is what gets printed
+print("side effect");
+#> side effect
+
+# statements and a trailing expression in one submission: the `var` is a local
+# of this line's function, so it has to be typed with what uses it
+var xs = [square(2), square(3)]; "{xs[0]} and {xs[1]}"
+#> 4 and 9
+
+fun adder(n: Int) -> fun(Int) -> Int { return |x| => x + n; }
+adder(40)(2)
+#> 42
