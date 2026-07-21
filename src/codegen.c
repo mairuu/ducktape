@@ -14,8 +14,8 @@
 #define CG_MAX_UPVALUES 256
 
 typedef struct {
-  StringView name;   // empty for hidden locals
-  bool is_captured;  // a nested closure captures this slot (needs closing)
+  StringView name;  // empty for hidden locals
+  bool is_captured; // a nested closure captures this slot (needs closing)
 } CgLocal;
 
 // one entry in a closure's capture list: where the value comes from in the
@@ -165,8 +165,8 @@ static int cg_add_upvalue(Cg *cg, bool is_local, uint8_t index, Span span) {
     cg->ok = false;
     return 0;
   }
-  cg->upvalues[cg->upvalue_count] = (CgUpvalue){.is_local = is_local,
-                                                .index = index};
+  cg->upvalues[cg->upvalue_count] =
+      (CgUpvalue){.is_local = is_local, .index = index};
   return cg->upvalue_count++;
 }
 
@@ -761,12 +761,12 @@ static void compile_propagate(Cg *cg, Expr *expr) {
   emit(cg, OP_EQ); // [instance, is_ok]
 
   int err_jump = emit_jump(cg, OP_JUMP_IF_FALSE);
-  emit(cg, OP_POP);               // is_ok was true
-  emit2(cg, OP_FIELD_GET, 0);     // [payload]
+  emit(cg, OP_POP);           // is_ok was true
+  emit2(cg, OP_FIELD_GET, 0); // [payload]
   int end_jump = emit_jump(cg, OP_JUMP);
 
   patch_jump(cg, err_jump);
-  emit(cg, OP_POP); // is_ok was false; [instance]
+  emit(cg, OP_POP);    // is_ok was false; [instance]
   emit(cg, OP_RETURN); // propagate Err(e) to the caller unchanged
 
   patch_jump(cg, end_jump);
@@ -891,9 +891,8 @@ static void compile_pattern_test(Cg *cg, Pattern *pat, Accessor acc,
       if (fp->sub_pattern == NULL) {
         continue; // shorthand bind: always matches
       }
-      int idx =
-          find_field_index(def->fields, def->field_count, def->is_tuple,
-                           fp->ident);
+      int idx = find_field_index(def->fields, def->field_count, def->is_tuple,
+                                 fp->ident);
       compile_pattern_test(cg, fp->sub_pattern,
                            accessor_field(cg, acc, fp->span, idx), fails);
     }
@@ -949,9 +948,8 @@ static void compile_pattern_bind(Cg *cg, Pattern *pat, Accessor acc) {
     StructDef *def = pat->as.struc.resolved_struct;
     for (int i = 0; i < pat->as.struc.field_count; i++) {
       FieldPat *fp = &pat->as.struc.fields[i];
-      int idx =
-          find_field_index(def->fields, def->field_count, def->is_tuple,
-                           fp->ident);
+      int idx = find_field_index(def->fields, def->field_count, def->is_tuple,
+                                 fp->ident);
       Accessor field_acc = accessor_field(cg, acc, fp->span, idx);
       if (fp->sub_pattern != NULL) {
         compile_pattern_bind(cg, fp->sub_pattern, field_acc);
@@ -1129,7 +1127,8 @@ static void compile_expr(Cg *cg, Expr *expr) {
     break;
 
   case EXPR_SELF:
-    assert(cg->self_slot >= 0 && "'self' outside a method got past the checker");
+    assert(cg->self_slot >= 0 &&
+           "'self' outside a method got past the checker");
     emit2(cg, OP_GET_LOCAL, (uint8_t)cg->self_slot);
     break;
 
@@ -1259,7 +1258,11 @@ static void compile_fun_body(Module *m, Heap *heap, FunDef *fun, Expr *body,
     return;
   }
 
-  Cg cg = {.m = m, .heap = heap, .diags = diags, .al = al, .ok = true,
+  Cg cg = {.m = m,
+           .heap = heap,
+           .diags = diags,
+           .al = al,
+           .ok = true,
            .self_slot = -1};
   cg.chunk = al_alloc_zero_for(al, Chunk);
   chunk_init(cg.chunk, al);
@@ -1288,8 +1291,13 @@ static void compile_closure(Cg *cg, Expr *expr) {
   FunDef *fun = closure->def;
   assert(fun != NULL && "closure not resolved before codegen");
 
-  Cg child = {.m = cg->m, .heap = cg->heap, .diags = cg->diags, .al = cg->al,
-              .ok = true, .self_slot = -1, .parent = cg};
+  Cg child = {.m = cg->m,
+              .heap = cg->heap,
+              .diags = cg->diags,
+              .al = cg->al,
+              .ok = true,
+              .self_slot = -1,
+              .parent = cg};
   child.chunk = al_alloc_zero_for(cg->al, Chunk);
   chunk_init(child.chunk, cg->al);
 

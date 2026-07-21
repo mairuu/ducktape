@@ -19,10 +19,10 @@ typedef enum {
   OP_SET_LOCAL,  // u8 frame slot (value stays on the stack)
   OP_GET_GLOBAL, // u8 module function slot
 
-  OP_CLOSURE,      // u8 const index (a VAL_FUN), u8 upvalue count, then that
-                   // many (u8 is_local, u8 index) pairs — builds an ObjClosure
-  OP_GET_UPVALUE,  // u8 upvalue index — push the captured variable's value
-  OP_SET_UPVALUE,  // u8 upvalue index (value stays on the stack)
+  OP_CLOSURE,       // u8 const index (a VAL_FUN), u8 upvalue count, then that
+                    // many (u8 is_local, u8 index) pairs — builds an ObjClosure
+  OP_GET_UPVALUE,   // u8 upvalue index — push the captured variable's value
+  OP_SET_UPVALUE,   // u8 upvalue index (value stays on the stack)
   OP_CLOSE_UPVALUE, // u8 frame slot — close every open upvalue at/above it
 
   OP_ADD,

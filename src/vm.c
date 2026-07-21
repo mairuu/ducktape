@@ -136,7 +136,10 @@ bool vm_run(Module *m, Heap *heap, FunDef *entry) {
     return false;
   }
 
-  Vm vm = {.m = m, .heap = heap, .sp = NULL, .frame_count = 0,
+  Vm vm = {.m = m,
+           .heap = heap,
+           .sp = NULL,
+           .frame_count = 0,
            .open_upvalues = NULL};
   vm.sp = vm.stack;
   heap->mark_roots = vm_mark_roots;
@@ -202,8 +205,8 @@ bool vm_run(Module *m, Heap *heap, FunDef *entry) {
       // top-level funs occupy [0, fun_count); impl methods continue the same
       // slot space right after, in [fun_count, fun_count + method_count).
       FunDef *fun = slot < vm.m->fun_count
-                       ? vm.m->funs[slot]
-                       : vm.m->methods[slot - vm.m->fun_count];
+                        ? vm.m->funs[slot]
+                        : vm.m->methods[slot - vm.m->fun_count];
       push(&vm, val_fun(fun));
       break;
     }
