@@ -1,7 +1,7 @@
 # ducktape — runtime (codegen + VM)
 
 `./build/ducktape --run file.dt` compiles the checked AST to bytecode and
-executes `main()`. Entry: `compiler_execute` (`src/compiler.c`) → `exe_link`
+executes `main()`. Entry: `compiler_execute` (`src/compiler.c`) → `exe_assign_tags`
 then `mono_seed(main)` and drain (`src/codegen.c`) → `vm_run` (`src/vm.c`). `--gc-stress`
 collects on every heap allocation instead of on the usual size threshold —
 useful for shaking out missed GC roots; not part of `make test` since it's
@@ -47,15 +47,31 @@ the language can also read.
 ## Bytecode (`include/chunk.h`)
 
 A `Chunk` per function (`FunDef->chunk`, arena-allocated): growable code
-bytes + constant pool (≤256 consts, u8 index). Operands: u8 unless noted.
+bytes + a growable constant pool.
+
+**Operand width follows one rule: an operand is one byte when it indexes a
+*frame*, two when it indexes a table the *program* grows.** That line is
+structural rather than a budget. The VM reserves `STACK_HEADROOM` (256) slots
+for a single frame, so a u8 local or upvalue index *is* the frame size —
+widening it would address stack that cannot exist, and `CG_MAX_LOCALS` matches
+it exactly. A global, struct, enum, vtable or constant index has no such
+backing bound: it grows with the program, so it gets two bytes (u16,
+big-endian, like the jump offsets), capped at `SLOT_MAX` = 65536.
+
+A third group sits with the frame operands for a different reason: an index
+bounded by one *declaration* — a field (`OP_FIELD_GET`), a variant tag, a
+vtable method (`OP_DYN_METHOD`) — stays u8, because the parser already caps
+and diagnoses those counts well below 256.
+
+Operands are u8 unless noted.
 
 | Ops | Notes |
 |---|---|
-| `OP_CONST` `OP_UNIT` `OP_TRUE` `OP_FALSE` | push |
+| `OP_CONST` (u16) `OP_UNIT` `OP_TRUE` `OP_FALSE` | push |
 | `OP_POP` `OP_POPN n` `OP_SLIDE n` | SLIDE drops n values *beneath* the top — how a block discards its locals while keeping its tail value |
 | `OP_GET_LOCAL` `OP_SET_LOCAL` | frame-relative slot; SET peeks (assignment is an expression) |
-| `OP_GET_GLOBAL` | pushes `VAL_FUN` — one program-wide slot space over every module's top-level funs and impl methods: `exe->globals[slot]` (see "Linking") |
-| `OP_CLOSURE const, n` `, then n×(is_local, idx)` | reads the closure's `FunDef` from constant `const` (a `VAL_FUN`), builds an `ObjClosure` capturing `n` upvalues, pushes it — see "Closures & upvalues" |
+| `OP_GET_GLOBAL` (u16) | pushes `VAL_FUN` — one program-wide slot space over every module's top-level funs and impl methods: `exe->globals[slot]` (see "Linking") |
+| `OP_CLOSURE const(u16), n` `, then n×(is_local, idx)` | reads the closure's `FunDef` from constant `const` (a `VAL_FUN`), builds an `ObjClosure` capturing `n` upvalues, pushes it — see "Closures & upvalues" |
 | `OP_GET_UPVALUE` `OP_SET_UPVALUE` | index into the running closure's upvalue array, reading/writing through the (open or closed) cell; SET peeks |
 | `OP_CLOSE_UPVALUE slot` | closes every open upvalue whose stack slot is at/above `base + slot`, right before those locals are popped |
 | `OP_ADD/SUB/MUL/DIV/MOD` | int×int stays int; any float widens (matches checker); div/mod by zero int → runtime error; float mod = `fmod` |
@@ -72,11 +88,11 @@ bytes + constant pool (≤256 consts, u8 index). Operands: u8 unless noted.
 | `OP_INTERP seg_count` | pops that many values, stringifies + concatenates them in order, pushes the result string |
 | `OP_DUP depth` | pushes a copy of the value `depth` slots below the top |
 | `OP_TUPLE count` | pops `count` elems (left-to-right order), pushes a new tuple |
-| `OP_STRUCT struct_slot` | pops `module->structs[slot]->field_count` elems (declaration order), pushes a struct instance |
-| `OP_ENUM enum_slot tag` | pops that variant's `field_count` elems (declaration order), pushes an enum instance |
+| `OP_STRUCT struct_slot(u16)` | pops `module->structs[slot]->field_count` elems (declaration order), pushes a struct instance |
+| `OP_ENUM enum_slot(u16) tag` | pops that variant's `field_count` elems (declaration order), pushes an enum instance |
 | `OP_FIELD_GET index` | pops a tuple/struct/enum instance, pushes its `index`-th field — no bounds check, since the index is always a compile-time-valid constant |
 | `OP_TAG` | pops an enum instance, pushes its variant tag as `Int` |
-| `OP_MAKE_DYN vtable_slot` | pops a value, pushes it wrapped as a trait object carrying `exe->vtables[slot]` |
+| `OP_MAKE_DYN vtable_slot(u16)` | pops a value, pushes it wrapped as a trait object carrying `exe->vtables[slot]` |
 | `OP_DYN_METHOD index` | pops a trait object, pushes its `index`-th method *then* the unwrapped receiver — so the `OP_CALL` that follows sees an ordinary callee-beneath-args stack |
 | `OP_MATCH_FAIL` | runtime error "no match arm matched" — a backstop; the checker enforces exhaustiveness, but guards can still fail every arm |
 
@@ -399,9 +415,9 @@ calls that land on one the extra binding is simply unused.
 
 `MONO_MAX_DEPTH` (32) bounds the chain. `fun grow<T>(v: T) { grow([v]) }`
 type-checks but names a *different* instantiation at every level, each keyed
-one array deeper than the last, so nothing converges. The one-byte slot space
-would stop it eventually, but only after interning a few hundred new types
-into a fixed-size intern table — so the limit lives where the divergence is.
+one array deeper than the last, so nothing converges. The slot space would
+stop it eventually — and now that both it and the intern table grow rather
+than abort, only eventually — so the limit lives where the divergence is.
 
 ### Trait objects
 
@@ -538,9 +554,9 @@ lengths aren't static).
 
 A program is every module reachable from the root file, and a chunk compiled
 from one module routinely names a definition from another — an imported
-function, a struct whose constructor it calls. But every slot operand is a
-single byte, so it cannot mean "index into my own module": `OP_GET_GLOBAL 3`
-has to identify one function in the whole program.
+function, a struct whose constructor it calls. But a slot operand is a fixed
+width with no module field, so it cannot mean "index into my own module":
+`OP_GET_GLOBAL 3` has to identify one function in the whole program.
 
 That flat namespace lives in an `Executable` (`include/object.h`):
 
@@ -554,17 +570,23 @@ That flat namespace lives in an `Executable` (`include/object.h`):
 
 Each assigned index is written back into the definition's `slot`, so codegen
 only ever emits `def->slot` and never asks which module a definition came
-from. More than 256 of any of them exceeds the operand width and is reported
-against the program rather than against any one declaration.
+from. More than `SLOT_MAX` (65536) of any of them exceeds the operand width
+and is reported against the program rather than against any one declaration.
 
 ### Reachability
 
-Every table is filled **on demand**. `exe_link` (`src/codegen.c`) only sizes
-them — each to the whole operand space, since none of the counts is known
-until compilation is over — and fixes the variant tags, which are the one
+Every table is filled **on demand**, and each grows (doubling from 16) as the
+walk reaches definitions. Pre-sizing to the operand space is what they used to
+do, back when that space was 256 entries; at 65536 it would be a wasted 64K
+pointers apiece for a ceiling almost nothing comes near.
+
+That leaves **nothing for a linking step to do**. All that survives of it is
+`exe_assign_tags` (`src/codegen.c`), which fixes the variant tags — the one
 thing here that is not a slot: a tag is an index within its own enum, fixed by
 declaration order, and a `match` reads it off an enum the program may never
-construct, so it cannot wait for a reference that may not come.
+construct, so it cannot wait for a reference that may not come. Slots became
+demand-driven in milestone 21 and the tables learned to grow in milestone 22;
+with both gone there is no longer a linking pass distinct from the walk.
 
 Slots are then handed out by codegen, as it discovers references:
 
@@ -638,16 +660,16 @@ neither.
 extension.
 
 ```
-header   "DTBC", u16 version, u16 entry (a globals index)
+header   "DTBC", u16 version, u32 entry (a globals index)
 counts   u32 strings, globals, structs, enums, closures, vtables
 strings  [u32 len, len bytes]*        — every name and string constant
 structs  [u32 name, u8 is_tuple, u16 field_count, u32 field_name*]
 enums    [u32 name, u16 variant_count,
             [u32 name, u8 is_tuple, u16 field_count, u32 field_name*]*]
-vtables  [u16 method_count, u16 fun_index*]*
+vtables  [u16 method_count, u32 fun_index*]*
 funs     [u32 name, u16 param_count, u8 has_chunk,
             u32 code_len, code_len bytes,
-            u16 const_count, const*]*  — globals first, then closures
+            u32 const_count, const*]*  — globals first, then closures
 ```
 
 Every multi-byte field is little-endian and written byte by byte, so an image
@@ -666,7 +688,7 @@ closures — a nested closure function is reachable only through a constant, so
 it has no slot of its own). That is what keeps both directions a straight
 loop. Struct and enum references need no encoding at all: `OP_STRUCT`/`OP_ENUM`
 already carry a slot the VM resolves through `exe`, and the tables are written
-in slot order. Variant tags are positional, exactly as `exe_link` assigns them.
+in slot order. Variant tags are positional, exactly as `exe_assign_tags` assigns them.
 A vtable is likewise written as bare function indices: which trait and which
 self type it was built for is compile-time bookkeeping, so it is not in the
 image at all. Vtables sit between the data definitions and the code — they
@@ -688,8 +710,10 @@ Two ordering constraints, both inherited from linking:
   Same shape as the codegen constraint above, one level over.
 
 Every read is bounds-checked against the buffer, and section counts are
-sanity-checked against the one-byte operand ceiling, so a truncated or corrupt
-image is rejected rather than executed. `tests/run` doubles as the round-trip
+sanity-checked against `SLOT_MAX`, so a truncated or corrupt image is rejected
+rather than executed. The version byte covers the operand widths: widening a
+slot operand changes how existing code bytes decode, so an old image must be
+refused rather than misread. `tests/run` doubles as the round-trip
 suite: `scripts/run_tests.sh` emits an image for every runnable program and
 re-runs it, so a construct the format forgets shows up as an output diff.
 

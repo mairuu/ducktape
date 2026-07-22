@@ -10,7 +10,7 @@
 // handed out as codegen reaches definitions, see `mono_seed`) and fix every
 // enum's variant tags, which are not slots and so cannot wait for a reference.
 // must run before any module is compiled: the heap roots off these tables.
-void exe_link(Executable *exe, ModuleRegistry *reg, Allocator *al);
+void exe_assign_tags(ModuleRegistry *reg);
 
 // ── monomorphisation ─────────────────────────────────────────────────────────
 
@@ -79,7 +79,7 @@ void mono_init(Mono *mono, Executable *exe, Heap *heap, Allocator *al);
 // program arrives through what `entry` reaches, transitively. `entry` must be
 // neither generic nor native (it needs a chunk of its own). false if the
 // program has already outgrown the globals space, which needs one function to
-// do. requires exe_link first.
+// do. requires exe_assign_tags first.
 bool mono_seed(Mono *mono, FunDef *entry);
 
 // the module owning the body of the next queued definition, so the caller can

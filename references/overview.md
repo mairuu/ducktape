@@ -78,12 +78,14 @@ Driver: `compiler_run` in `src/compiler.c`. Phases, in order:
 
 With `--run`, `compiler_execute` (`src/compiler.c`) additionally runs:
 
-6. **link** — `exe_link` (`src/codegen.c`): size the program-wide slot spaces
-   (funs + methods, structs, enums, vtables) and fix every enum's variant tags
+6. **tags** — `exe_assign_tags` (`src/codegen.c`): fix every enum's variant
+   tags. All that is left of a linking step, since a tag is the one part of a
+   program's layout that is not demand-driven
 7. **codegen** — `src/codegen.c`: AST → bytecode `Chunk`, demand-driven from
    `main` outwards (`Mono`, drained until it reaches a fixpoint). A definition
    takes a slot and a chunk when something *reaches* it; one nothing reaches
-   costs neither, generic or not
+   costs neither, generic or not. The program-wide slot tables (funs + methods,
+   structs, enums, vtables) grow as that walk fills them
 8. **vm** — `src/vm.c`: stack VM executes the root module's `main()`
 
 `--emit-bc` stops after 7 and serializes the linked program instead

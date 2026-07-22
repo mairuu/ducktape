@@ -1,0 +1,342 @@
+# 300 reached functions: crosses the old 256-slot ceiling on OP_GET_GLOBAL.
+# Summed ten per statement so the block stays under the old statement cap —
+# each of these tests pins exactly one ceiling.
+#> 44850
+
+use std::io::print;
+
+fun f0() -> Int { return 0; }
+fun f1() -> Int { return 1; }
+fun f2() -> Int { return 2; }
+fun f3() -> Int { return 3; }
+fun f4() -> Int { return 4; }
+fun f5() -> Int { return 5; }
+fun f6() -> Int { return 6; }
+fun f7() -> Int { return 7; }
+fun f8() -> Int { return 8; }
+fun f9() -> Int { return 9; }
+fun f10() -> Int { return 10; }
+fun f11() -> Int { return 11; }
+fun f12() -> Int { return 12; }
+fun f13() -> Int { return 13; }
+fun f14() -> Int { return 14; }
+fun f15() -> Int { return 15; }
+fun f16() -> Int { return 16; }
+fun f17() -> Int { return 17; }
+fun f18() -> Int { return 18; }
+fun f19() -> Int { return 19; }
+fun f20() -> Int { return 20; }
+fun f21() -> Int { return 21; }
+fun f22() -> Int { return 22; }
+fun f23() -> Int { return 23; }
+fun f24() -> Int { return 24; }
+fun f25() -> Int { return 25; }
+fun f26() -> Int { return 26; }
+fun f27() -> Int { return 27; }
+fun f28() -> Int { return 28; }
+fun f29() -> Int { return 29; }
+fun f30() -> Int { return 30; }
+fun f31() -> Int { return 31; }
+fun f32() -> Int { return 32; }
+fun f33() -> Int { return 33; }
+fun f34() -> Int { return 34; }
+fun f35() -> Int { return 35; }
+fun f36() -> Int { return 36; }
+fun f37() -> Int { return 37; }
+fun f38() -> Int { return 38; }
+fun f39() -> Int { return 39; }
+fun f40() -> Int { return 40; }
+fun f41() -> Int { return 41; }
+fun f42() -> Int { return 42; }
+fun f43() -> Int { return 43; }
+fun f44() -> Int { return 44; }
+fun f45() -> Int { return 45; }
+fun f46() -> Int { return 46; }
+fun f47() -> Int { return 47; }
+fun f48() -> Int { return 48; }
+fun f49() -> Int { return 49; }
+fun f50() -> Int { return 50; }
+fun f51() -> Int { return 51; }
+fun f52() -> Int { return 52; }
+fun f53() -> Int { return 53; }
+fun f54() -> Int { return 54; }
+fun f55() -> Int { return 55; }
+fun f56() -> Int { return 56; }
+fun f57() -> Int { return 57; }
+fun f58() -> Int { return 58; }
+fun f59() -> Int { return 59; }
+fun f60() -> Int { return 60; }
+fun f61() -> Int { return 61; }
+fun f62() -> Int { return 62; }
+fun f63() -> Int { return 63; }
+fun f64() -> Int { return 64; }
+fun f65() -> Int { return 65; }
+fun f66() -> Int { return 66; }
+fun f67() -> Int { return 67; }
+fun f68() -> Int { return 68; }
+fun f69() -> Int { return 69; }
+fun f70() -> Int { return 70; }
+fun f71() -> Int { return 71; }
+fun f72() -> Int { return 72; }
+fun f73() -> Int { return 73; }
+fun f74() -> Int { return 74; }
+fun f75() -> Int { return 75; }
+fun f76() -> Int { return 76; }
+fun f77() -> Int { return 77; }
+fun f78() -> Int { return 78; }
+fun f79() -> Int { return 79; }
+fun f80() -> Int { return 80; }
+fun f81() -> Int { return 81; }
+fun f82() -> Int { return 82; }
+fun f83() -> Int { return 83; }
+fun f84() -> Int { return 84; }
+fun f85() -> Int { return 85; }
+fun f86() -> Int { return 86; }
+fun f87() -> Int { return 87; }
+fun f88() -> Int { return 88; }
+fun f89() -> Int { return 89; }
+fun f90() -> Int { return 90; }
+fun f91() -> Int { return 91; }
+fun f92() -> Int { return 92; }
+fun f93() -> Int { return 93; }
+fun f94() -> Int { return 94; }
+fun f95() -> Int { return 95; }
+fun f96() -> Int { return 96; }
+fun f97() -> Int { return 97; }
+fun f98() -> Int { return 98; }
+fun f99() -> Int { return 99; }
+fun f100() -> Int { return 100; }
+fun f101() -> Int { return 101; }
+fun f102() -> Int { return 102; }
+fun f103() -> Int { return 103; }
+fun f104() -> Int { return 104; }
+fun f105() -> Int { return 105; }
+fun f106() -> Int { return 106; }
+fun f107() -> Int { return 107; }
+fun f108() -> Int { return 108; }
+fun f109() -> Int { return 109; }
+fun f110() -> Int { return 110; }
+fun f111() -> Int { return 111; }
+fun f112() -> Int { return 112; }
+fun f113() -> Int { return 113; }
+fun f114() -> Int { return 114; }
+fun f115() -> Int { return 115; }
+fun f116() -> Int { return 116; }
+fun f117() -> Int { return 117; }
+fun f118() -> Int { return 118; }
+fun f119() -> Int { return 119; }
+fun f120() -> Int { return 120; }
+fun f121() -> Int { return 121; }
+fun f122() -> Int { return 122; }
+fun f123() -> Int { return 123; }
+fun f124() -> Int { return 124; }
+fun f125() -> Int { return 125; }
+fun f126() -> Int { return 126; }
+fun f127() -> Int { return 127; }
+fun f128() -> Int { return 128; }
+fun f129() -> Int { return 129; }
+fun f130() -> Int { return 130; }
+fun f131() -> Int { return 131; }
+fun f132() -> Int { return 132; }
+fun f133() -> Int { return 133; }
+fun f134() -> Int { return 134; }
+fun f135() -> Int { return 135; }
+fun f136() -> Int { return 136; }
+fun f137() -> Int { return 137; }
+fun f138() -> Int { return 138; }
+fun f139() -> Int { return 139; }
+fun f140() -> Int { return 140; }
+fun f141() -> Int { return 141; }
+fun f142() -> Int { return 142; }
+fun f143() -> Int { return 143; }
+fun f144() -> Int { return 144; }
+fun f145() -> Int { return 145; }
+fun f146() -> Int { return 146; }
+fun f147() -> Int { return 147; }
+fun f148() -> Int { return 148; }
+fun f149() -> Int { return 149; }
+fun f150() -> Int { return 150; }
+fun f151() -> Int { return 151; }
+fun f152() -> Int { return 152; }
+fun f153() -> Int { return 153; }
+fun f154() -> Int { return 154; }
+fun f155() -> Int { return 155; }
+fun f156() -> Int { return 156; }
+fun f157() -> Int { return 157; }
+fun f158() -> Int { return 158; }
+fun f159() -> Int { return 159; }
+fun f160() -> Int { return 160; }
+fun f161() -> Int { return 161; }
+fun f162() -> Int { return 162; }
+fun f163() -> Int { return 163; }
+fun f164() -> Int { return 164; }
+fun f165() -> Int { return 165; }
+fun f166() -> Int { return 166; }
+fun f167() -> Int { return 167; }
+fun f168() -> Int { return 168; }
+fun f169() -> Int { return 169; }
+fun f170() -> Int { return 170; }
+fun f171() -> Int { return 171; }
+fun f172() -> Int { return 172; }
+fun f173() -> Int { return 173; }
+fun f174() -> Int { return 174; }
+fun f175() -> Int { return 175; }
+fun f176() -> Int { return 176; }
+fun f177() -> Int { return 177; }
+fun f178() -> Int { return 178; }
+fun f179() -> Int { return 179; }
+fun f180() -> Int { return 180; }
+fun f181() -> Int { return 181; }
+fun f182() -> Int { return 182; }
+fun f183() -> Int { return 183; }
+fun f184() -> Int { return 184; }
+fun f185() -> Int { return 185; }
+fun f186() -> Int { return 186; }
+fun f187() -> Int { return 187; }
+fun f188() -> Int { return 188; }
+fun f189() -> Int { return 189; }
+fun f190() -> Int { return 190; }
+fun f191() -> Int { return 191; }
+fun f192() -> Int { return 192; }
+fun f193() -> Int { return 193; }
+fun f194() -> Int { return 194; }
+fun f195() -> Int { return 195; }
+fun f196() -> Int { return 196; }
+fun f197() -> Int { return 197; }
+fun f198() -> Int { return 198; }
+fun f199() -> Int { return 199; }
+fun f200() -> Int { return 200; }
+fun f201() -> Int { return 201; }
+fun f202() -> Int { return 202; }
+fun f203() -> Int { return 203; }
+fun f204() -> Int { return 204; }
+fun f205() -> Int { return 205; }
+fun f206() -> Int { return 206; }
+fun f207() -> Int { return 207; }
+fun f208() -> Int { return 208; }
+fun f209() -> Int { return 209; }
+fun f210() -> Int { return 210; }
+fun f211() -> Int { return 211; }
+fun f212() -> Int { return 212; }
+fun f213() -> Int { return 213; }
+fun f214() -> Int { return 214; }
+fun f215() -> Int { return 215; }
+fun f216() -> Int { return 216; }
+fun f217() -> Int { return 217; }
+fun f218() -> Int { return 218; }
+fun f219() -> Int { return 219; }
+fun f220() -> Int { return 220; }
+fun f221() -> Int { return 221; }
+fun f222() -> Int { return 222; }
+fun f223() -> Int { return 223; }
+fun f224() -> Int { return 224; }
+fun f225() -> Int { return 225; }
+fun f226() -> Int { return 226; }
+fun f227() -> Int { return 227; }
+fun f228() -> Int { return 228; }
+fun f229() -> Int { return 229; }
+fun f230() -> Int { return 230; }
+fun f231() -> Int { return 231; }
+fun f232() -> Int { return 232; }
+fun f233() -> Int { return 233; }
+fun f234() -> Int { return 234; }
+fun f235() -> Int { return 235; }
+fun f236() -> Int { return 236; }
+fun f237() -> Int { return 237; }
+fun f238() -> Int { return 238; }
+fun f239() -> Int { return 239; }
+fun f240() -> Int { return 240; }
+fun f241() -> Int { return 241; }
+fun f242() -> Int { return 242; }
+fun f243() -> Int { return 243; }
+fun f244() -> Int { return 244; }
+fun f245() -> Int { return 245; }
+fun f246() -> Int { return 246; }
+fun f247() -> Int { return 247; }
+fun f248() -> Int { return 248; }
+fun f249() -> Int { return 249; }
+fun f250() -> Int { return 250; }
+fun f251() -> Int { return 251; }
+fun f252() -> Int { return 252; }
+fun f253() -> Int { return 253; }
+fun f254() -> Int { return 254; }
+fun f255() -> Int { return 255; }
+fun f256() -> Int { return 256; }
+fun f257() -> Int { return 257; }
+fun f258() -> Int { return 258; }
+fun f259() -> Int { return 259; }
+fun f260() -> Int { return 260; }
+fun f261() -> Int { return 261; }
+fun f262() -> Int { return 262; }
+fun f263() -> Int { return 263; }
+fun f264() -> Int { return 264; }
+fun f265() -> Int { return 265; }
+fun f266() -> Int { return 266; }
+fun f267() -> Int { return 267; }
+fun f268() -> Int { return 268; }
+fun f269() -> Int { return 269; }
+fun f270() -> Int { return 270; }
+fun f271() -> Int { return 271; }
+fun f272() -> Int { return 272; }
+fun f273() -> Int { return 273; }
+fun f274() -> Int { return 274; }
+fun f275() -> Int { return 275; }
+fun f276() -> Int { return 276; }
+fun f277() -> Int { return 277; }
+fun f278() -> Int { return 278; }
+fun f279() -> Int { return 279; }
+fun f280() -> Int { return 280; }
+fun f281() -> Int { return 281; }
+fun f282() -> Int { return 282; }
+fun f283() -> Int { return 283; }
+fun f284() -> Int { return 284; }
+fun f285() -> Int { return 285; }
+fun f286() -> Int { return 286; }
+fun f287() -> Int { return 287; }
+fun f288() -> Int { return 288; }
+fun f289() -> Int { return 289; }
+fun f290() -> Int { return 290; }
+fun f291() -> Int { return 291; }
+fun f292() -> Int { return 292; }
+fun f293() -> Int { return 293; }
+fun f294() -> Int { return 294; }
+fun f295() -> Int { return 295; }
+fun f296() -> Int { return 296; }
+fun f297() -> Int { return 297; }
+fun f298() -> Int { return 298; }
+fun f299() -> Int { return 299; }
+
+fun main() {
+  var total = 0;
+  total = total + f0() + f1() + f2() + f3() + f4() + f5() + f6() + f7() + f8() + f9();
+  total = total + f10() + f11() + f12() + f13() + f14() + f15() + f16() + f17() + f18() + f19();
+  total = total + f20() + f21() + f22() + f23() + f24() + f25() + f26() + f27() + f28() + f29();
+  total = total + f30() + f31() + f32() + f33() + f34() + f35() + f36() + f37() + f38() + f39();
+  total = total + f40() + f41() + f42() + f43() + f44() + f45() + f46() + f47() + f48() + f49();
+  total = total + f50() + f51() + f52() + f53() + f54() + f55() + f56() + f57() + f58() + f59();
+  total = total + f60() + f61() + f62() + f63() + f64() + f65() + f66() + f67() + f68() + f69();
+  total = total + f70() + f71() + f72() + f73() + f74() + f75() + f76() + f77() + f78() + f79();
+  total = total + f80() + f81() + f82() + f83() + f84() + f85() + f86() + f87() + f88() + f89();
+  total = total + f90() + f91() + f92() + f93() + f94() + f95() + f96() + f97() + f98() + f99();
+  total = total + f100() + f101() + f102() + f103() + f104() + f105() + f106() + f107() + f108() + f109();
+  total = total + f110() + f111() + f112() + f113() + f114() + f115() + f116() + f117() + f118() + f119();
+  total = total + f120() + f121() + f122() + f123() + f124() + f125() + f126() + f127() + f128() + f129();
+  total = total + f130() + f131() + f132() + f133() + f134() + f135() + f136() + f137() + f138() + f139();
+  total = total + f140() + f141() + f142() + f143() + f144() + f145() + f146() + f147() + f148() + f149();
+  total = total + f150() + f151() + f152() + f153() + f154() + f155() + f156() + f157() + f158() + f159();
+  total = total + f160() + f161() + f162() + f163() + f164() + f165() + f166() + f167() + f168() + f169();
+  total = total + f170() + f171() + f172() + f173() + f174() + f175() + f176() + f177() + f178() + f179();
+  total = total + f180() + f181() + f182() + f183() + f184() + f185() + f186() + f187() + f188() + f189();
+  total = total + f190() + f191() + f192() + f193() + f194() + f195() + f196() + f197() + f198() + f199();
+  total = total + f200() + f201() + f202() + f203() + f204() + f205() + f206() + f207() + f208() + f209();
+  total = total + f210() + f211() + f212() + f213() + f214() + f215() + f216() + f217() + f218() + f219();
+  total = total + f220() + f221() + f222() + f223() + f224() + f225() + f226() + f227() + f228() + f229();
+  total = total + f230() + f231() + f232() + f233() + f234() + f235() + f236() + f237() + f238() + f239();
+  total = total + f240() + f241() + f242() + f243() + f244() + f245() + f246() + f247() + f248() + f249();
+  total = total + f250() + f251() + f252() + f253() + f254() + f255() + f256() + f257() + f258() + f259();
+  total = total + f260() + f261() + f262() + f263() + f264() + f265() + f266() + f267() + f268() + f269();
+  total = total + f270() + f271() + f272() + f273() + f274() + f275() + f276() + f277() + f278() + f279();
+  total = total + f280() + f281() + f282() + f283() + f284() + f285() + f286() + f287() + f288() + f289();
+  total = total + f290() + f291() + f292() + f293() + f294() + f295() + f296() + f297() + f298() + f299();
+  print("{total}");
+}

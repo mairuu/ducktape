@@ -1028,6 +1028,89 @@
   70% load assert, so a program cannot name more than ~179 distinct types at
   all — the intern table binds long before 256 structs do. The on-demand rule
   is right for them, but the pressure it relieves is entirely in `globals[]`.
+  (Milestone 22 lifted both, and `tests/run/many_structs.dt` is the program
+  that reaches past 256 struct slots.)
+
+- **The ceilings (milestone 22)** — no fixed limit aborts the compiler any
+  more. Design: `runtime.md` "Bytecode" (the operand rule) and "Linking" →
+  "Reachability", `architecture.md` "Types and inference", `overview.md`
+  pipeline steps 6–7.
+
+  The roadmap listed this as "wider slot spaces", which is half of it. Four
+  fixed limits stood in the way of a merely *large* program, and three of them
+  failed by **aborting** rather than diagnosing — a worse failure than the one
+  the roadmap named:
+
+  | limit | before | after |
+  |---|---|---|
+  | globals / structs / enums / vtables | 256, diagnosed | u16 operand, tables grow |
+  | constants in one chunk | 256, `assert` | u16 operand, diagnosed |
+  | distinct types (intern table) | ~179, `assert` at 70% load | grows and rehashes |
+  | statements in one block | 256, `assert` | grows |
+
+  The observation the milestone turns on: **an operand is one byte when it
+  indexes a *frame*, two when it indexes a table the *program* grows.** Which
+  is not a budget but a structural fact — the VM reserves `STACK_HEADROOM`
+  (256) slots for a single frame, and `CG_MAX_LOCALS` is 256, so a u8 local or
+  upvalue index *is* the frame size. Widening it would address stack that
+  cannot exist. Everything on the other side of that line — globals, structs,
+  enums, vtables, constants — indexes a table with no such backing bound, so
+  each gets two bytes and `SLOT_MAX` (65536) replaces four scattered 256s.
+
+  Stating the rule that way settles the two questions the roadmap left open:
+  - **A two-byte operand, not a wide-operand opcode pair.** The pair saves a
+    byte in the common case at the cost of two opcodes per slot space and a
+    decode branch on the hottest ops. There is nothing to choose *between* here
+    — no operand ever wants to be narrow — so the uniform width is the honest
+    encoding.
+  - **A declaration-bounded index stays u8** — a field, a variant tag, a vtable
+    method. These look program-wide but are not: the parser already caps and
+    diagnoses each of those counts well below 256, so widening them would buy
+    a ceiling nothing can reach.
+
+  Three things follow, and they are most of the diff:
+  - **The tables now grow instead of being pre-sized**, which pre-sizing to the
+    operand space made unavoidable: 256 pointers apiece was free, 64K is not.
+  - **So linking finished dissolving.** `exe_link` handed out slots until
+    milestone 21 made them demand-driven and sized the four tables until they
+    learned to grow; with both gone it no longer touches the `Executable` at
+    all. What is left is `exe_assign_tags` — a variant tag is not a slot, and
+    it is the one part of a program's layout that cannot wait for a reference
+    that might not come. There is no longer a linking pass distinct from the
+    walk itself.
+  - **The image format is version 4.** Widening a slot operand changes how
+    existing code bytes decode, so an old image has to be refused rather than
+    misread — which is what the version field was always for. Entry index,
+    per-chunk constant count and vtable method indices went to u32 for the same
+    reason the operands went to u16: each now spans a table that can outgrow
+    the width it was written at.
+
+  **The intern table was the real ceiling, and it was lower than the one the
+  roadmap named.** A program aborted at ~179 distinct types — reachable by
+  merely declaring structs, and *below* the 256 slot space, which is why
+  milestone 21 recorded that the struct and enum slot spaces "cannot actually
+  be reached today". It is now open-addressed with a doubling growth path. The
+  ordering constraint is the one `ty_generic` already had: growth rehashes, so
+  it must run *before* a probe, because a slot index is only meaningful under
+  the mask it was computed with — filing an entry under a mask no later lookup
+  recomputes is exactly the bug milestone 6b's "sort after hashing" was.
+
+  Also fixed, a latent use-after-free the growth path made worth closing: the
+  intern table is a **process global** (it has to be — pointer identity means
+  two `Type *` compare equal only if one table produced them) whose entries are
+  compiler-arena memory, and now whose array is too. Nothing reset it, so a
+  second `compiler_init` in one process would have read freed memory.
+  Unreachable from `main`, which compiles once — but the `feature/repl` branch
+  is precisely a second compile, so `type_intern_reset` runs in
+  `compiler_destroy`, beside the `diag_destroy` ordering the milestone-17
+  use-after-free established.
+
+  Each of the four ceilings has a test that pins exactly *it*: on master
+  `many_globals.dt` reports 257 functions, `many_structs.dt` aborts in
+  `type_intern`, `many_constants.dt` in `chunk_add_const`, and
+  `long_block.dt` in `parse_block`. Getting there took a second pass — the
+  first drafts all had 300-statement `main`s, so all four died in the parser
+  and only the last ceiling was really under test.
 
 ## Next (in recommended order)
 
@@ -1048,19 +1131,7 @@ by appetite rather than by necessity.
    type are each one entry plus a decision about the type they need — and
    padding is the one that would decide whether `{}` ever grows a format-spec
    grammar or stays a bare segment with `std::fmt` functions beside it.
-2. **Wider slot spaces** — 256 globals program-wide. Milestone 21 took the
-   cheap half of this (nothing unreached is spent), so what remains is genuine
-   use: instantiations of generics, trait-object vtables, and the natives
-   beside them, all drawing on one operand byte. A two-byte operand (or a
-   wide-operand opcode pair) lifts it.
-
-   The **type intern table** is worth pricing in the same session:
-   `TYPE_INTERN_CAP` is 256 with a 70% load assert and no growth path, so a
-   program aborts the compiler at ~179 distinct types — a *lower* ceiling than
-   the slot space, reached by a program that merely declares a lot of structs.
-   Widening the operand while leaving that in place would move the failure
-   rather than remove it, and an assert is a worse failure than a diagnostic.
-3. **Object-safe traits with associated types** — the object-safety rule
+2. **Object-safe traits with associated types** — the object-safety rule
    rejects `Self.Item` outright. Allowing `dyn Iterator` with the associated
    type *named* at the coercion site (`dyn Iterator<Item = Int>`) is the
    natural follow-on, and needs `dyn` to carry type arguments at all.
@@ -1101,14 +1172,9 @@ via `Module.decl_base`) and is not part of the main line.
   refuses inside one goes unreported — the diagnostic arrives only if
   something calls it (`tests/run/unreachable_body.dt`). The checker is
   unaffected; this is codegen only
-- the type intern table is fixed at 256 entries and asserts at 70% load, so a
-  program naming more than ~179 distinct types *aborts the compiler* instead
-  of reporting anything. It is a lower ceiling than any slot space
 - overlapping method names across impls: bare generic paths take the first
   registered impl
 - `Point::new` vs `Point::<Int>::new`: expression paths require turbofish
-- every instantiation takes a global slot, so the 256-function ceiling is
-  reached by *use* of generics, not by how many are written
 - an associated-type projection cannot key an instantiation: handing a
   `T.Item` / `Self.Item` value to another generic (`id(v.item())`) reports
   "cannot instantiate 'id': type argument 'T' is not known here", because
@@ -1161,8 +1227,10 @@ via `Module.decl_base`) and is not part of the main line.
   can't be handed on as a `dyn Trait` even when the trait is object-safe
 - no downcast from `dyn Trait` back to a concrete type, and no `dyn` with type
   arguments (`dyn Into<Int>`) — a generic trait can only be named bare
-- every distinct (trait, concrete type) pair a program coerces takes a vtable
-  slot out of the same 256-wide operand space as everything else
+- the slot spaces are two bytes wide, so 65536 functions/structs/enums/vtables
+  is a hard program-wide ceiling (reported, not silently truncated) — and every
+  instantiation of a generic and every (trait, type) pair coerced spends one,
+  so it is reached by *use* rather than by how much is written
 - an unsupported construct inside a trait method is reported at the coercion
   site that builds the vtable, since that is where the body is first demanded
   — the same "only seen where it is instantiated" limitation generics have
@@ -1172,8 +1240,6 @@ via `Module.decl_base`) and is not part of the main line.
   per-item at module granularity only
 - module dedup is lexical, so one file reached by two different spellings
   (a symlink, say) would load twice and collide
-- the linked slot spaces are one byte wide, so 256 functions/structs/enums is
-  a hard program-wide ceiling (reported, not silently truncated)
 - a bytecode image is structurally validated (bounds, indices, counts) but the
   code itself is not verified: an image with a plausible header and nonsense
   instructions can still crash the VM

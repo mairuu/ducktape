@@ -308,7 +308,18 @@ body, answer from the trait they name.
 ### Types and inference
 
 `Type` (`include/ast.h`) is a tagged union; structural types are interned so
-identity is pointer equality (`types_equal`). Singletons: Int, Float, Bool,
+identity is pointer equality (`types_equal`). The interning table (`src/ast.c`)
+is open-addressed and doubles at 70% load — it has to grow rather than cap,
+because a program's distinct-type count is bounded by nothing but the source,
+and a fixed table could only ever abort on a valid program. Growth rehashes,
+so it happens *before* a probe: a slot index is only meaningful under the mask
+it was computed with, the same hazard as canonicalising a generic's bounds
+after hashing it.
+
+The table is a process global, because pointer identity means two `Type *`
+compare equal only if one table produced them. Its entries — and the array —
+are compiler-arena memory, so `type_intern_reset` runs in `compiler_destroy`
+before that arena goes; nothing may hold a `Type *` across it. Singletons: Int, Float, Bool,
 String, `()` (unit), `!` (`TY_NEVER` — produced by blocks ending in `return`,
 unifies with anything), `Range` (`TY_RANGE`, Int-only), and `TY_POISON`.
 

@@ -175,6 +175,11 @@ int type_name_sprintf(const Type *t, char *buf, size_t buf_size);
 int type_sprintf(const Type *t, char *buf,
                  size_t buf_size); // fully qualified, with type args
 
+// drop the process-global interning table. Structural types are interned into
+// the compiler's arena, so this must run before that arena is destroyed, and
+// nothing may hold a `Type *` across it.
+void type_intern_reset(void);
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // SUBSTITUTION
 // ═══════════════════════════════════════════════════════════════════════════════

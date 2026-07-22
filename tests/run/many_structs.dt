@@ -1,0 +1,342 @@
+# 300 structs declared and constructed: crosses both the old ~179-type
+# intern-table ceiling (which aborted the compiler) and the 256 OP_STRUCT
+# slots.
+#> 44850
+
+use std::io::print;
+
+struct S0 { v: Int }
+struct S1 { v: Int }
+struct S2 { v: Int }
+struct S3 { v: Int }
+struct S4 { v: Int }
+struct S5 { v: Int }
+struct S6 { v: Int }
+struct S7 { v: Int }
+struct S8 { v: Int }
+struct S9 { v: Int }
+struct S10 { v: Int }
+struct S11 { v: Int }
+struct S12 { v: Int }
+struct S13 { v: Int }
+struct S14 { v: Int }
+struct S15 { v: Int }
+struct S16 { v: Int }
+struct S17 { v: Int }
+struct S18 { v: Int }
+struct S19 { v: Int }
+struct S20 { v: Int }
+struct S21 { v: Int }
+struct S22 { v: Int }
+struct S23 { v: Int }
+struct S24 { v: Int }
+struct S25 { v: Int }
+struct S26 { v: Int }
+struct S27 { v: Int }
+struct S28 { v: Int }
+struct S29 { v: Int }
+struct S30 { v: Int }
+struct S31 { v: Int }
+struct S32 { v: Int }
+struct S33 { v: Int }
+struct S34 { v: Int }
+struct S35 { v: Int }
+struct S36 { v: Int }
+struct S37 { v: Int }
+struct S38 { v: Int }
+struct S39 { v: Int }
+struct S40 { v: Int }
+struct S41 { v: Int }
+struct S42 { v: Int }
+struct S43 { v: Int }
+struct S44 { v: Int }
+struct S45 { v: Int }
+struct S46 { v: Int }
+struct S47 { v: Int }
+struct S48 { v: Int }
+struct S49 { v: Int }
+struct S50 { v: Int }
+struct S51 { v: Int }
+struct S52 { v: Int }
+struct S53 { v: Int }
+struct S54 { v: Int }
+struct S55 { v: Int }
+struct S56 { v: Int }
+struct S57 { v: Int }
+struct S58 { v: Int }
+struct S59 { v: Int }
+struct S60 { v: Int }
+struct S61 { v: Int }
+struct S62 { v: Int }
+struct S63 { v: Int }
+struct S64 { v: Int }
+struct S65 { v: Int }
+struct S66 { v: Int }
+struct S67 { v: Int }
+struct S68 { v: Int }
+struct S69 { v: Int }
+struct S70 { v: Int }
+struct S71 { v: Int }
+struct S72 { v: Int }
+struct S73 { v: Int }
+struct S74 { v: Int }
+struct S75 { v: Int }
+struct S76 { v: Int }
+struct S77 { v: Int }
+struct S78 { v: Int }
+struct S79 { v: Int }
+struct S80 { v: Int }
+struct S81 { v: Int }
+struct S82 { v: Int }
+struct S83 { v: Int }
+struct S84 { v: Int }
+struct S85 { v: Int }
+struct S86 { v: Int }
+struct S87 { v: Int }
+struct S88 { v: Int }
+struct S89 { v: Int }
+struct S90 { v: Int }
+struct S91 { v: Int }
+struct S92 { v: Int }
+struct S93 { v: Int }
+struct S94 { v: Int }
+struct S95 { v: Int }
+struct S96 { v: Int }
+struct S97 { v: Int }
+struct S98 { v: Int }
+struct S99 { v: Int }
+struct S100 { v: Int }
+struct S101 { v: Int }
+struct S102 { v: Int }
+struct S103 { v: Int }
+struct S104 { v: Int }
+struct S105 { v: Int }
+struct S106 { v: Int }
+struct S107 { v: Int }
+struct S108 { v: Int }
+struct S109 { v: Int }
+struct S110 { v: Int }
+struct S111 { v: Int }
+struct S112 { v: Int }
+struct S113 { v: Int }
+struct S114 { v: Int }
+struct S115 { v: Int }
+struct S116 { v: Int }
+struct S117 { v: Int }
+struct S118 { v: Int }
+struct S119 { v: Int }
+struct S120 { v: Int }
+struct S121 { v: Int }
+struct S122 { v: Int }
+struct S123 { v: Int }
+struct S124 { v: Int }
+struct S125 { v: Int }
+struct S126 { v: Int }
+struct S127 { v: Int }
+struct S128 { v: Int }
+struct S129 { v: Int }
+struct S130 { v: Int }
+struct S131 { v: Int }
+struct S132 { v: Int }
+struct S133 { v: Int }
+struct S134 { v: Int }
+struct S135 { v: Int }
+struct S136 { v: Int }
+struct S137 { v: Int }
+struct S138 { v: Int }
+struct S139 { v: Int }
+struct S140 { v: Int }
+struct S141 { v: Int }
+struct S142 { v: Int }
+struct S143 { v: Int }
+struct S144 { v: Int }
+struct S145 { v: Int }
+struct S146 { v: Int }
+struct S147 { v: Int }
+struct S148 { v: Int }
+struct S149 { v: Int }
+struct S150 { v: Int }
+struct S151 { v: Int }
+struct S152 { v: Int }
+struct S153 { v: Int }
+struct S154 { v: Int }
+struct S155 { v: Int }
+struct S156 { v: Int }
+struct S157 { v: Int }
+struct S158 { v: Int }
+struct S159 { v: Int }
+struct S160 { v: Int }
+struct S161 { v: Int }
+struct S162 { v: Int }
+struct S163 { v: Int }
+struct S164 { v: Int }
+struct S165 { v: Int }
+struct S166 { v: Int }
+struct S167 { v: Int }
+struct S168 { v: Int }
+struct S169 { v: Int }
+struct S170 { v: Int }
+struct S171 { v: Int }
+struct S172 { v: Int }
+struct S173 { v: Int }
+struct S174 { v: Int }
+struct S175 { v: Int }
+struct S176 { v: Int }
+struct S177 { v: Int }
+struct S178 { v: Int }
+struct S179 { v: Int }
+struct S180 { v: Int }
+struct S181 { v: Int }
+struct S182 { v: Int }
+struct S183 { v: Int }
+struct S184 { v: Int }
+struct S185 { v: Int }
+struct S186 { v: Int }
+struct S187 { v: Int }
+struct S188 { v: Int }
+struct S189 { v: Int }
+struct S190 { v: Int }
+struct S191 { v: Int }
+struct S192 { v: Int }
+struct S193 { v: Int }
+struct S194 { v: Int }
+struct S195 { v: Int }
+struct S196 { v: Int }
+struct S197 { v: Int }
+struct S198 { v: Int }
+struct S199 { v: Int }
+struct S200 { v: Int }
+struct S201 { v: Int }
+struct S202 { v: Int }
+struct S203 { v: Int }
+struct S204 { v: Int }
+struct S205 { v: Int }
+struct S206 { v: Int }
+struct S207 { v: Int }
+struct S208 { v: Int }
+struct S209 { v: Int }
+struct S210 { v: Int }
+struct S211 { v: Int }
+struct S212 { v: Int }
+struct S213 { v: Int }
+struct S214 { v: Int }
+struct S215 { v: Int }
+struct S216 { v: Int }
+struct S217 { v: Int }
+struct S218 { v: Int }
+struct S219 { v: Int }
+struct S220 { v: Int }
+struct S221 { v: Int }
+struct S222 { v: Int }
+struct S223 { v: Int }
+struct S224 { v: Int }
+struct S225 { v: Int }
+struct S226 { v: Int }
+struct S227 { v: Int }
+struct S228 { v: Int }
+struct S229 { v: Int }
+struct S230 { v: Int }
+struct S231 { v: Int }
+struct S232 { v: Int }
+struct S233 { v: Int }
+struct S234 { v: Int }
+struct S235 { v: Int }
+struct S236 { v: Int }
+struct S237 { v: Int }
+struct S238 { v: Int }
+struct S239 { v: Int }
+struct S240 { v: Int }
+struct S241 { v: Int }
+struct S242 { v: Int }
+struct S243 { v: Int }
+struct S244 { v: Int }
+struct S245 { v: Int }
+struct S246 { v: Int }
+struct S247 { v: Int }
+struct S248 { v: Int }
+struct S249 { v: Int }
+struct S250 { v: Int }
+struct S251 { v: Int }
+struct S252 { v: Int }
+struct S253 { v: Int }
+struct S254 { v: Int }
+struct S255 { v: Int }
+struct S256 { v: Int }
+struct S257 { v: Int }
+struct S258 { v: Int }
+struct S259 { v: Int }
+struct S260 { v: Int }
+struct S261 { v: Int }
+struct S262 { v: Int }
+struct S263 { v: Int }
+struct S264 { v: Int }
+struct S265 { v: Int }
+struct S266 { v: Int }
+struct S267 { v: Int }
+struct S268 { v: Int }
+struct S269 { v: Int }
+struct S270 { v: Int }
+struct S271 { v: Int }
+struct S272 { v: Int }
+struct S273 { v: Int }
+struct S274 { v: Int }
+struct S275 { v: Int }
+struct S276 { v: Int }
+struct S277 { v: Int }
+struct S278 { v: Int }
+struct S279 { v: Int }
+struct S280 { v: Int }
+struct S281 { v: Int }
+struct S282 { v: Int }
+struct S283 { v: Int }
+struct S284 { v: Int }
+struct S285 { v: Int }
+struct S286 { v: Int }
+struct S287 { v: Int }
+struct S288 { v: Int }
+struct S289 { v: Int }
+struct S290 { v: Int }
+struct S291 { v: Int }
+struct S292 { v: Int }
+struct S293 { v: Int }
+struct S294 { v: Int }
+struct S295 { v: Int }
+struct S296 { v: Int }
+struct S297 { v: Int }
+struct S298 { v: Int }
+struct S299 { v: Int }
+
+fun main() {
+  var total = 0;
+  total = total + S0 { v: 0 }.v + S1 { v: 1 }.v + S2 { v: 2 }.v + S3 { v: 3 }.v + S4 { v: 4 }.v + S5 { v: 5 }.v + S6 { v: 6 }.v + S7 { v: 7 }.v + S8 { v: 8 }.v + S9 { v: 9 }.v;
+  total = total + S10 { v: 10 }.v + S11 { v: 11 }.v + S12 { v: 12 }.v + S13 { v: 13 }.v + S14 { v: 14 }.v + S15 { v: 15 }.v + S16 { v: 16 }.v + S17 { v: 17 }.v + S18 { v: 18 }.v + S19 { v: 19 }.v;
+  total = total + S20 { v: 20 }.v + S21 { v: 21 }.v + S22 { v: 22 }.v + S23 { v: 23 }.v + S24 { v: 24 }.v + S25 { v: 25 }.v + S26 { v: 26 }.v + S27 { v: 27 }.v + S28 { v: 28 }.v + S29 { v: 29 }.v;
+  total = total + S30 { v: 30 }.v + S31 { v: 31 }.v + S32 { v: 32 }.v + S33 { v: 33 }.v + S34 { v: 34 }.v + S35 { v: 35 }.v + S36 { v: 36 }.v + S37 { v: 37 }.v + S38 { v: 38 }.v + S39 { v: 39 }.v;
+  total = total + S40 { v: 40 }.v + S41 { v: 41 }.v + S42 { v: 42 }.v + S43 { v: 43 }.v + S44 { v: 44 }.v + S45 { v: 45 }.v + S46 { v: 46 }.v + S47 { v: 47 }.v + S48 { v: 48 }.v + S49 { v: 49 }.v;
+  total = total + S50 { v: 50 }.v + S51 { v: 51 }.v + S52 { v: 52 }.v + S53 { v: 53 }.v + S54 { v: 54 }.v + S55 { v: 55 }.v + S56 { v: 56 }.v + S57 { v: 57 }.v + S58 { v: 58 }.v + S59 { v: 59 }.v;
+  total = total + S60 { v: 60 }.v + S61 { v: 61 }.v + S62 { v: 62 }.v + S63 { v: 63 }.v + S64 { v: 64 }.v + S65 { v: 65 }.v + S66 { v: 66 }.v + S67 { v: 67 }.v + S68 { v: 68 }.v + S69 { v: 69 }.v;
+  total = total + S70 { v: 70 }.v + S71 { v: 71 }.v + S72 { v: 72 }.v + S73 { v: 73 }.v + S74 { v: 74 }.v + S75 { v: 75 }.v + S76 { v: 76 }.v + S77 { v: 77 }.v + S78 { v: 78 }.v + S79 { v: 79 }.v;
+  total = total + S80 { v: 80 }.v + S81 { v: 81 }.v + S82 { v: 82 }.v + S83 { v: 83 }.v + S84 { v: 84 }.v + S85 { v: 85 }.v + S86 { v: 86 }.v + S87 { v: 87 }.v + S88 { v: 88 }.v + S89 { v: 89 }.v;
+  total = total + S90 { v: 90 }.v + S91 { v: 91 }.v + S92 { v: 92 }.v + S93 { v: 93 }.v + S94 { v: 94 }.v + S95 { v: 95 }.v + S96 { v: 96 }.v + S97 { v: 97 }.v + S98 { v: 98 }.v + S99 { v: 99 }.v;
+  total = total + S100 { v: 100 }.v + S101 { v: 101 }.v + S102 { v: 102 }.v + S103 { v: 103 }.v + S104 { v: 104 }.v + S105 { v: 105 }.v + S106 { v: 106 }.v + S107 { v: 107 }.v + S108 { v: 108 }.v + S109 { v: 109 }.v;
+  total = total + S110 { v: 110 }.v + S111 { v: 111 }.v + S112 { v: 112 }.v + S113 { v: 113 }.v + S114 { v: 114 }.v + S115 { v: 115 }.v + S116 { v: 116 }.v + S117 { v: 117 }.v + S118 { v: 118 }.v + S119 { v: 119 }.v;
+  total = total + S120 { v: 120 }.v + S121 { v: 121 }.v + S122 { v: 122 }.v + S123 { v: 123 }.v + S124 { v: 124 }.v + S125 { v: 125 }.v + S126 { v: 126 }.v + S127 { v: 127 }.v + S128 { v: 128 }.v + S129 { v: 129 }.v;
+  total = total + S130 { v: 130 }.v + S131 { v: 131 }.v + S132 { v: 132 }.v + S133 { v: 133 }.v + S134 { v: 134 }.v + S135 { v: 135 }.v + S136 { v: 136 }.v + S137 { v: 137 }.v + S138 { v: 138 }.v + S139 { v: 139 }.v;
+  total = total + S140 { v: 140 }.v + S141 { v: 141 }.v + S142 { v: 142 }.v + S143 { v: 143 }.v + S144 { v: 144 }.v + S145 { v: 145 }.v + S146 { v: 146 }.v + S147 { v: 147 }.v + S148 { v: 148 }.v + S149 { v: 149 }.v;
+  total = total + S150 { v: 150 }.v + S151 { v: 151 }.v + S152 { v: 152 }.v + S153 { v: 153 }.v + S154 { v: 154 }.v + S155 { v: 155 }.v + S156 { v: 156 }.v + S157 { v: 157 }.v + S158 { v: 158 }.v + S159 { v: 159 }.v;
+  total = total + S160 { v: 160 }.v + S161 { v: 161 }.v + S162 { v: 162 }.v + S163 { v: 163 }.v + S164 { v: 164 }.v + S165 { v: 165 }.v + S166 { v: 166 }.v + S167 { v: 167 }.v + S168 { v: 168 }.v + S169 { v: 169 }.v;
+  total = total + S170 { v: 170 }.v + S171 { v: 171 }.v + S172 { v: 172 }.v + S173 { v: 173 }.v + S174 { v: 174 }.v + S175 { v: 175 }.v + S176 { v: 176 }.v + S177 { v: 177 }.v + S178 { v: 178 }.v + S179 { v: 179 }.v;
+  total = total + S180 { v: 180 }.v + S181 { v: 181 }.v + S182 { v: 182 }.v + S183 { v: 183 }.v + S184 { v: 184 }.v + S185 { v: 185 }.v + S186 { v: 186 }.v + S187 { v: 187 }.v + S188 { v: 188 }.v + S189 { v: 189 }.v;
+  total = total + S190 { v: 190 }.v + S191 { v: 191 }.v + S192 { v: 192 }.v + S193 { v: 193 }.v + S194 { v: 194 }.v + S195 { v: 195 }.v + S196 { v: 196 }.v + S197 { v: 197 }.v + S198 { v: 198 }.v + S199 { v: 199 }.v;
+  total = total + S200 { v: 200 }.v + S201 { v: 201 }.v + S202 { v: 202 }.v + S203 { v: 203 }.v + S204 { v: 204 }.v + S205 { v: 205 }.v + S206 { v: 206 }.v + S207 { v: 207 }.v + S208 { v: 208 }.v + S209 { v: 209 }.v;
+  total = total + S210 { v: 210 }.v + S211 { v: 211 }.v + S212 { v: 212 }.v + S213 { v: 213 }.v + S214 { v: 214 }.v + S215 { v: 215 }.v + S216 { v: 216 }.v + S217 { v: 217 }.v + S218 { v: 218 }.v + S219 { v: 219 }.v;
+  total = total + S220 { v: 220 }.v + S221 { v: 221 }.v + S222 { v: 222 }.v + S223 { v: 223 }.v + S224 { v: 224 }.v + S225 { v: 225 }.v + S226 { v: 226 }.v + S227 { v: 227 }.v + S228 { v: 228 }.v + S229 { v: 229 }.v;
+  total = total + S230 { v: 230 }.v + S231 { v: 231 }.v + S232 { v: 232 }.v + S233 { v: 233 }.v + S234 { v: 234 }.v + S235 { v: 235 }.v + S236 { v: 236 }.v + S237 { v: 237 }.v + S238 { v: 238 }.v + S239 { v: 239 }.v;
+  total = total + S240 { v: 240 }.v + S241 { v: 241 }.v + S242 { v: 242 }.v + S243 { v: 243 }.v + S244 { v: 244 }.v + S245 { v: 245 }.v + S246 { v: 246 }.v + S247 { v: 247 }.v + S248 { v: 248 }.v + S249 { v: 249 }.v;
+  total = total + S250 { v: 250 }.v + S251 { v: 251 }.v + S252 { v: 252 }.v + S253 { v: 253 }.v + S254 { v: 254 }.v + S255 { v: 255 }.v + S256 { v: 256 }.v + S257 { v: 257 }.v + S258 { v: 258 }.v + S259 { v: 259 }.v;
+  total = total + S260 { v: 260 }.v + S261 { v: 261 }.v + S262 { v: 262 }.v + S263 { v: 263 }.v + S264 { v: 264 }.v + S265 { v: 265 }.v + S266 { v: 266 }.v + S267 { v: 267 }.v + S268 { v: 268 }.v + S269 { v: 269 }.v;
+  total = total + S270 { v: 270 }.v + S271 { v: 271 }.v + S272 { v: 272 }.v + S273 { v: 273 }.v + S274 { v: 274 }.v + S275 { v: 275 }.v + S276 { v: 276 }.v + S277 { v: 277 }.v + S278 { v: 278 }.v + S279 { v: 279 }.v;
+  total = total + S280 { v: 280 }.v + S281 { v: 281 }.v + S282 { v: 282 }.v + S283 { v: 283 }.v + S284 { v: 284 }.v + S285 { v: 285 }.v + S286 { v: 286 }.v + S287 { v: 287 }.v + S288 { v: 288 }.v + S289 { v: 289 }.v;
+  total = total + S290 { v: 290 }.v + S291 { v: 291 }.v + S292 { v: 292 }.v + S293 { v: 293 }.v + S294 { v: 294 }.v + S295 { v: 295 }.v + S296 { v: 296 }.v + S297 { v: 297 }.v + S298 { v: 298 }.v + S299 { v: 299 }.v;
+  print("{total}");
+}

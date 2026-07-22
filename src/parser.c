@@ -755,10 +755,24 @@ static Expr *parse_block(Parser *p) {
   };
   Span start_span = previous_tok_span(p);
 
-  Stmt *tmp_stmts[256];
+  // grown rather than fixed: a block's length is bounded by nothing but the
+  // source, so a cap here could only ever be an abort on a valid program.
+  Stmt **tmp_stmts = NULL;
   int stmt_count = 0;
+  int stmt_cap = 0;
   Expr *tail = NULL;
   bool block_had_error = false;
+
+#define PUSH_STMT(s)                                                           \
+  do {                                                                         \
+    if (stmt_count == stmt_cap) {                                              \
+      int new_cap = stmt_cap == 0 ? 8 : stmt_cap * 2;                          \
+      tmp_stmts = al_realloc(p->al, tmp_stmts, sizeof(Stmt *) * stmt_cap,      \
+                             sizeof(Stmt *) * new_cap);                        \
+      stmt_cap = new_cap;                                                      \
+    }                                                                          \
+    tmp_stmts[stmt_count++] = (s);                                             \
+  } while (0)
 
   while (!check_tok(p, TOKEN_RBRACE) && !is_at_end(p)) {
     if (tail) {
@@ -777,8 +791,7 @@ static Expr *parse_block(Parser *p) {
         // a value-bearing block expression just before `}` is the tail
         tail = stmt->as.expr_stmt.expr;
       } else {
-        assert(stmt_count < 256 && "too many statements in block");
-        tmp_stmts[stmt_count++] = stmt;
+        PUSH_STMT(stmt);
       }
     } else {
       Expr *expr = parse_expr(p);
@@ -788,8 +801,7 @@ static Expr *parse_block(Parser *p) {
       } else if (match_tok(p, TOKEN_SEMICOLON)) {
         Stmt *stmt = ast_stmt(STMT_EXPR, expr->span, p->al);
         stmt->as.expr_stmt.expr = expr;
-        assert(stmt_count < 256 && "too many statements in block");
-        tmp_stmts[stmt_count++] = stmt;
+        PUSH_STMT(stmt);
       } else {
         tail = expr;
       }
@@ -811,11 +823,15 @@ static Expr *parse_block(Parser *p) {
 
   Expr *expr =
       ast_expr(EXPR_BLOCK, span_merge(start_span, previous_tok_span(p)), p->al);
-  expr->as.block.stmts = al_alloc(p->al, sizeof(Stmt *) * stmt_count);
-  memcpy(expr->as.block.stmts, tmp_stmts, sizeof(Stmt *) * stmt_count);
+  if (stmt_count > 0) {
+    // right-size: the grown buffer is up to twice what the block needs
+    expr->as.block.stmts = al_alloc(p->al, sizeof(Stmt *) * stmt_count);
+    memcpy(expr->as.block.stmts, tmp_stmts, sizeof(Stmt *) * stmt_count);
+  }
   expr->as.block.stmt_count = stmt_count;
   expr->as.block.tail_expr = tail;
   return expr;
+#undef PUSH_STMT
 }
 
 static int parse_type_args(Parser *p, TypeNode ***out_args) {

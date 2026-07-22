@@ -6,8 +6,18 @@
 #include <stdint.h>
 
 // bytecode operations. operands are listed after each op.
+//
+// An operand is one byte when it indexes a *frame*, two when it indexes a
+// table the *program* grows. That line is structural rather than a budget:
+// the VM reserves STACK_HEADROOM (256) slots for one frame, so a u8 local or
+// upvalue index *is* the frame size — widening it would address stack that
+// cannot exist. A global, struct, enum, vtable or constant index has no such
+// backing bound; it grows with the program, so it gets two bytes (u16, big-
+// endian, like the jump offsets). An index bounded by one *declaration* — a
+// field, a variant tag, a vtable method — stays one byte, since the parser
+// already caps and diagnoses those counts.
 typedef enum {
-  OP_CONST, // u8 constant index
+  OP_CONST, // u16 constant index
   OP_UNIT,
   OP_TRUE,
   OP_FALSE,
@@ -17,9 +27,9 @@ typedef enum {
 
   OP_GET_LOCAL,  // u8 frame slot
   OP_SET_LOCAL,  // u8 frame slot (value stays on the stack)
-  OP_GET_GLOBAL, // u8 module function slot
+  OP_GET_GLOBAL, // u16 program function slot
 
-  OP_CLOSURE,       // u8 const index (a VAL_FUN), u8 upvalue count, then that
+  OP_CLOSURE,       // u16 const index (a VAL_FUN), u8 upvalue count, then that
                     // many (u8 is_local, u8 index) pairs — builds an ObjClosure
   OP_GET_UPVALUE,   // u8 upvalue index — push the captured variable's value
   OP_SET_UPVALUE,   // u8 upvalue index (value stays on the stack)
@@ -66,13 +76,15 @@ typedef enum {
   OP_DUP,       // u8 depth — push a copy of the value `depth` below the top
 
   OP_TUPLE,      // u8 count — pop count elems (left-to-right), push a tuple
-  OP_STRUCT,     // u8 module struct slot — pop that struct's field_count
+  OP_STRUCT,     // u16 program struct slot — pop that struct's field_count
                  // elems (declaration order), push a struct instance
-  OP_ENUM,       // u8 module enum slot, u8 variant tag — pop that variant's
-                 // field_count elems (declaration order), push an instance
+  OP_ENUM,       // u16 program enum slot, u8 variant tag — pop that variant's
+                 // field_count elems (declaration order), push an instance.
+                 // The tag stays one byte: it is an index within one enum's
+                 // declaration, which the parser caps well below 256.
   OP_FIELD_GET,  // u8 index — pops a tuple/struct/enum instance, pushes its
                  // index-th field (no bounds check: indices are static)
-  OP_MAKE_DYN,   // u8 vtable slot — pops a value, pushes it wrapped as a
+  OP_MAKE_DYN,   // u16 vtable slot — pops a value, pushes it wrapped as a
                  // trait object carrying that vtable
   OP_DYN_METHOD, // u8 vtable method index — pops a trait object, pushes its
                  // method's function *then* the unwrapped receiver, so the
@@ -95,7 +107,16 @@ typedef struct Chunk {
   Allocator *al;
 } Chunk;
 
+// the widest value a u16 operand addresses, and so the size of every table
+// one indexes: constants in a chunk, and the program-wide slot spaces in
+// `Executable`. Slots run 0..SLOT_MAX-1.
+#define SLOT_MAX 65536
+
 void chunk_init(Chunk *c, Allocator *al);
 void chunk_write(Chunk *c, uint8_t byte);
-// returns the constant's index; aborts past 256 constants (u8 operand).
+// big-endian, matching the jump offsets.
+void chunk_write_u16(Chunk *c, uint16_t v);
+// returns the constant's index, or -1 if the pool has outgrown the operand.
+// The caller reports it: a chunk has no diagnostics of its own, and the limit
+// is worth a message rather than the assert this used to be.
 int chunk_add_const(Chunk *c, Value v);

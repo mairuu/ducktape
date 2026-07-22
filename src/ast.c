@@ -5,13 +5,21 @@
 #include <assert.h>
 #include <stdio.h>
 
-#define TYPE_INTERN_CAP 256
+// the interning table starts here and doubles; it is open-addressed, so the
+// capacity is always a power of two and the load is kept under 70%.
+#define TYPE_INTERN_INIT_CAP 256
 
 typedef struct {
-  Type *entries[TYPE_INTERN_CAP];
+  Type **entries; // NULL until the first intern
   int count;
+  int cap;
 } TypeInternTable;
 
+// Interning is process-global rather than per-compiler because type identity
+// is pointer equality: two `Type *` compare equal only if the same table
+// produced them. The entries (and, now that the table has a growth path, the
+// array itself) live in the compiler's arena, so `type_intern_reset` has to
+// run before that arena is torn down — see compiler_destroy.
 static TypeInternTable g_intern;
 
 static uint32_t type_hash(const Type *t) {
@@ -188,20 +196,48 @@ static inline bool type_is_internable(Type *t) {
   return true;
 }
 
-static Type *type_intern(Type *t) {
+// place `t` in `entries` without checking for a duplicate: only ever used to
+// refill a freshly grown table, whose contents are already distinct.
+static void type_intern_put(Type **entries, uint32_t mask, Type *t) {
+  uint32_t slot = type_hash(t) & mask;
+  while (entries[slot]) {
+    slot = (slot + 1) & mask;
+  }
+  entries[slot] = t;
+}
+
+// grow (and rehash) if inserting one more would push the load past 70%. This
+// has to run *before* a probe rather than at the point of insertion: a slot
+// index is only meaningful under the mask it was computed with, so resizing
+// between finding a free slot and filling it would file the entry where no
+// later lookup looks — the same hazard as sorting a generic's bounds after
+// hashing it.
+static void type_intern_reserve(Allocator *al) {
+  if ((g_intern.count + 1) * 10 < g_intern.cap * 7) {
+    return;
+  }
+  int new_cap = g_intern.cap == 0 ? TYPE_INTERN_INIT_CAP : g_intern.cap * 2;
+  Type **entries = al_alloc_zero(al, sizeof(Type *) * (size_t)new_cap);
+  for (int i = 0; i < g_intern.cap; i++) {
+    if (g_intern.entries[i]) {
+      type_intern_put(entries, (uint32_t)new_cap - 1, g_intern.entries[i]);
+    }
+  }
+  g_intern.entries = entries;
+  g_intern.cap = new_cap;
+}
+
+static Type *type_intern(Type *t, Allocator *al) {
   if (!type_is_internable(t)) {
     return t;
   }
+  type_intern_reserve(al);
 
-  uint32_t h = type_hash(t);
-  uint32_t mask = TYPE_INTERN_CAP - 1;
-  uint32_t slot = h & mask;
+  uint32_t mask = (uint32_t)g_intern.cap - 1;
+  uint32_t slot = type_hash(t) & mask;
   while (true) {
     Type *entry = g_intern.entries[slot];
     if (!entry) {
-      assert(g_intern.count < TYPE_INTERN_CAP * 0.7 &&
-             "intern table is too full");
-
       // NB: bound order must already be canonical here — sorting after
       // type_hash ran would file the entry under a slot no later lookup
       // computes. ty_generic sorts before probing, so there's nothing to do.
@@ -217,9 +253,11 @@ static Type *type_intern(Type *t) {
 }
 
 static Type *type_intern_lookup(Type *probe) {
-  uint32_t h = type_hash(probe);
-  uint32_t mask = TYPE_INTERN_CAP - 1;
-  uint32_t slot = h & mask;
+  if (g_intern.cap == 0) {
+    return NULL;
+  }
+  uint32_t mask = (uint32_t)g_intern.cap - 1;
+  uint32_t slot = type_hash(probe) & mask;
   while (g_intern.entries[slot]) {
     if (type_structurally_equal(g_intern.entries[slot], probe)) {
       return g_intern.entries[slot];
@@ -228,6 +266,11 @@ static Type *type_intern_lookup(Type *probe) {
   }
   return NULL; // miss
 }
+
+// the table and everything in it is arena memory, so the global cannot be left
+// pointing at it once that arena is gone. Unreachable from `main` today (one
+// compile per process), but it is a use-after-free waiting for the second.
+void type_intern_reset(void) { g_intern = (TypeInternTable){0}; }
 
 Type *ty_int(void) {
   static Type int_type = {.kind = TY_INT};
@@ -297,7 +340,7 @@ Type *ty_fun(Type **params, int param_count, Type *ret, Allocator *al) {
   }
   t->as.fun.param_count = param_count;
   t->as.fun.return_type = ret;
-  return type_intern(t);
+  return type_intern(t, al);
 }
 
 Type *ty_tuple(Type **elems, int elem_count, Allocator *al) {
@@ -317,7 +360,7 @@ Type *ty_tuple(Type **elems, int elem_count, Allocator *al) {
     t->as.tuple.elem_types[i] = elems[i];
   }
   t->as.tuple.elem_count = elem_count;
-  return type_intern(t);
+  return type_intern(t, al);
 }
 
 Type *ty_array(Type *elem, Allocator *al) {
@@ -332,7 +375,7 @@ Type *ty_array(Type *elem, Allocator *al) {
   Type *t = al_alloc_for(al, Type);
   t->kind = TY_ARRAY;
   t->as.array.elem_type = elem;
-  return type_intern(t);
+  return type_intern(t, al);
 }
 
 Type *ty_generic(StringView name, TraitDef **bounds, int bound_count,
@@ -365,7 +408,7 @@ Type *ty_generic(StringView name, TraitDef **bounds, int bound_count,
   t->as.generic.name = name;
   t->as.generic.bounds = sorted;
   t->as.generic.bound_count = bound_count;
-  return type_intern(t);
+  return type_intern(t, al);
 }
 
 Type *ty_assoc(Type *base, StringView assoc_name, TraitDef *trait,
@@ -386,7 +429,7 @@ Type *ty_assoc(Type *base, StringView assoc_name, TraitDef *trait,
   t->as.assoc.base = base;
   t->as.assoc.assoc_name = assoc_name;
   t->as.assoc.trait = trait;
-  return type_intern(t);
+  return type_intern(t, al);
 }
 
 Type *ty_struct(StructDef *def, Type **args, int argc, Allocator *al) {
@@ -409,7 +452,7 @@ Type *ty_struct(StructDef *def, Type **args, int argc, Allocator *al) {
     t->as.struc.type_args[i] = args[i];
   }
   t->as.struc.type_arg_count = argc;
-  return type_intern(t);
+  return type_intern(t, al);
 }
 
 Type *ty_enum(EnumDef *def, Type **args, int argc, Allocator *al) {
@@ -432,7 +475,7 @@ Type *ty_enum(EnumDef *def, Type **args, int argc, Allocator *al) {
     t->as.enm.type_args[i] = args[i];
   }
   t->as.enm.type_arg_count = argc;
-  return type_intern(t);
+  return type_intern(t, al);
 }
 
 Type *ty_trait(TraitDef *def, Allocator *al) {
@@ -448,7 +491,7 @@ Type *ty_trait(TraitDef *def, Allocator *al) {
   Type *t = al_alloc_zero_for(al, Type);
   t->kind = TY_TRAIT;
   t->as.trait.def = def;
-  return type_intern(t);
+  return type_intern(t, al);
 }
 
 Type *ty_dyn(TraitDef *def, Allocator *al) {
@@ -461,7 +504,7 @@ Type *ty_dyn(TraitDef *def, Allocator *al) {
   Type *t = al_alloc_zero_for(al, Type);
   t->kind = TY_DYN;
   t->as.dyn.def = def;
-  return type_intern(t);
+  return type_intern(t, al);
 }
 
 // bool types_equal(const Type *a, const Type *b) { return a == b; }

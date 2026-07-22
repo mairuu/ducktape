@@ -238,7 +238,7 @@ static void w_fun(BcWriter *w, const FunDef *fun) {
   }
   w_u32(w, (uint32_t)chunk->count);
   w_bytes(w, chunk->code, (size_t)chunk->count);
-  w_u16(w, (uint16_t)chunk->const_count);
+  w_u32(w, (uint32_t)chunk->const_count);
   for (int i = 0; i < chunk->const_count; i++) {
     w_const(w, chunk->consts[i]);
   }
@@ -311,7 +311,7 @@ bool bc_write(const Executable *exe, const FunDef *entry, const char *path,
 
   w_bytes(&w, BC_MAGIC, 4);
   w_u16(&w, BC_VERSION);
-  w_u16(&w, (uint16_t)entry_idx);
+  w_u32(&w, (uint32_t)entry_idx);
 
   w_u32(&w, (uint32_t)w.strings.count);
   w_u32(&w, (uint32_t)exe->global_count);
@@ -353,7 +353,7 @@ bool bc_write(const Executable *exe, const FunDef *entry, const char *path,
                         SV_ARG(vt->methods[j]->name));
         idx = 0;
       }
-      w_u16(&w, (uint16_t)idx);
+      w_u32(&w, (uint32_t)idx);
     }
   }
   for (int i = 0; i < exe->global_count; i++) {
@@ -563,7 +563,7 @@ static void r_fun(BcReader *r, FunDef *fun) {
   memcpy(chunk->code, code, code_len);
   chunk->count = chunk->cap = (int)code_len;
 
-  int const_count = r_u16(r);
+  int const_count = (int)r_u32(r);
   if (const_count > 0) {
     chunk->consts = al_alloc(r->al, sizeof(Value) * (size_t)const_count);
     chunk->const_count = chunk->const_cap = const_count;
@@ -581,10 +581,10 @@ static void r_fun(BcReader *r, FunDef *fun) {
   fun->chunk = chunk;
 }
 
-// the operand of OP_GET_GLOBAL/OP_STRUCT/OP_ENUM is one byte, so an image
-// claiming more definitions than that could address is corrupt, not merely
-// large — `exe_link` would have refused to produce it.
-#define BC_MAX_SLOTS 256
+// the operand of OP_GET_GLOBAL/OP_STRUCT/OP_ENUM/OP_MAKE_DYN is two bytes, so
+// an image claiming more definitions than that could address is corrupt, not
+// merely large — codegen would have refused to produce it.
+#define BC_MAX_SLOTS SLOT_MAX
 
 bool bc_load(const char *path, Allocator *al, Executable *exe, Heap *heap,
              bool gc_stress, FunDef **entry_out) {
@@ -618,7 +618,7 @@ bool bc_load(const char *path, Allocator *al, Executable *exe, Heap *heap,
     return bc_error("bytecode image version %u, expected %u", version,
                     BC_VERSION);
   }
-  uint16_t entry_idx = r_u16(&r);
+  uint32_t entry_idx = r_u32(&r);
 
   r.string_count = (int)r_u32(&r);
   exe->global_count = (int)r_u32(&r);
@@ -635,7 +635,7 @@ bool bc_load(const char *path, Allocator *al, Executable *exe, Heap *heap,
       exe->enum_count > BC_MAX_SLOTS || exe->vtable_count > BC_MAX_SLOTS) {
     return bc_error("bytecode image: implausible section counts");
   }
-  if (entry_idx >= exe->global_count) {
+  if (entry_idx >= (uint32_t)exe->global_count) {
     return bc_error("bytecode image: entry point %u is not a global",
                     entry_idx);
   }
@@ -658,7 +658,7 @@ bool bc_load(const char *path, Allocator *al, Executable *exe, Heap *heap,
   // every definition is allocated before any record is decoded — both so a
   // VAL_FUN constant can name a function further down the file, and so the
   // heap can root off complete tables (chunks still NULL) before the first
-  // string constant is interned. Same ordering exe_link imposes on codegen.
+  // string constant is interned. Same ordering codegen imposes on itself.
   exe->globals =
       al_alloc_zero(al, sizeof(FunDef *) * (size_t)exe->global_count);
   exe->global_cap = exe->global_count; // an image is already monomorphised
@@ -706,7 +706,7 @@ bool bc_load(const char *path, Allocator *al, Executable *exe, Heap *heap,
       VariantDef *v = &e->variants[j];
       v->name = r_str(&r);
       v->fields = r_fields(&r, &v->field_count, &v->is_tuple);
-      v->tag = (uint8_t)j; // tags are positional, as exe_link assigns them
+      v->tag = (uint8_t)j; // positional, as exe_assign_tags assigns them
     }
   }
   // vtables sit between the data definitions and the code, matching bc_write:
@@ -729,8 +729,8 @@ bool bc_load(const char *path, Allocator *al, Executable *exe, Heap *heap,
           al_alloc_zero(al, sizeof(FunDef *) * (size_t)vt->method_count);
     }
     for (int j = 0; j < vt->method_count && r.ok; j++) {
-      uint16_t idx = r_u16(&r);
-      if (idx >= (uint16_t)exe->global_count) {
+      uint32_t idx = r_u32(&r);
+      if (idx >= (uint32_t)exe->global_count) {
         r.ok = bc_error("bytecode image: vtable method index %u out of range",
                         idx);
         break;

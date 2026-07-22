@@ -16,7 +16,7 @@
 // does not depend on the host's byte order or struct layout.
 
 #define BC_MAGIC "DTBC"
-#define BC_VERSION 3 // 3: a fun record carries a body kind (native by name)
+#define BC_VERSION 4 // 4: two-byte slot operands, u32 entry/const counts
 
 // serialize the linked program to `path`. `entry` is the function `--run`
 // would have started at; its slot is recorded in the header. `exe`'s chunks

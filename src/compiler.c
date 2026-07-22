@@ -32,6 +32,10 @@ void compiler_destroy(Compiler *c, Allocator *al) {
   diag_destroy(&c->diags);
   modreg_destroy(&c->mod_reg);
   tc_destroy(&c->tc);
+  // the interning table is a process global whose entries — and, now that it
+  // can grow, whose array — are arena memory. Dropping it here is what keeps
+  // "one compile per process" an incidental fact rather than a requirement.
+  type_intern_reset();
 
   arena_destroy(&c->arena);
 }
@@ -295,7 +299,7 @@ static bool compiler_codegen(Compiler *c, Executable *exe, Heap *heap,
   // these tables, and codegen interns strings as it goes so it may collect
   // mid-compile. They start empty — codegen fills them as it discovers what
   // the program actually names.
-  exe_link(exe, &c->mod_reg, &c->al);
+  exe_assign_tags(&c->mod_reg);
   heap_init(heap, exe, gc_stress);
 
   Mono mono;

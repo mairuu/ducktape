@@ -1220,7 +1220,7 @@ static void link_copy_entry(TypeChecker *tc, Module *dst, Module *src,
     VarEntry *ve = NULL;
     // VarEntry.slot is meaningless for a module-level binding (it numbers a
     // binding in the importer, not a callable): the runtime slot lives on the
-    // FunDef, assigned program-wide by exe_link, and travels with `ve->as`.
+    // FunDef, assigned program-wide by codegen, and travels with `ve->as`.
     vscope_define(&dst->vscope, alias, src_ve->type, tc->diags, span, &ve);
     ve->as = src_ve->as;
   }

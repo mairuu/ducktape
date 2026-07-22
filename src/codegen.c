@@ -113,8 +113,9 @@ static void cg_error(Cg *cg, Span span, const char *what) {
 //     refuses inside one goes unreported. That was already true of every
 //     generic; it is now true uniformly, which is the honest price.
 
-static bool exe_add_global(Executable *exe, FunDef *fun);
+static bool exe_add_global(Executable *exe, Allocator *al, FunDef *fun);
 static bool exe_too_many(const char *what, int count);
+static int exe_next_cap(int cap);
 
 void mono_init(Mono *mono, Executable *exe, Heap *heap, Allocator *al) {
   *mono = (Mono){.exe = exe, .heap = heap, .al = al};
@@ -221,7 +222,7 @@ static FunDef *mono_request(Mono *mono, FunDef *origin, Subst s, int depth,
   FunDef *instance = al_alloc_zero_for(mono->al, FunDef);
   *instance = *origin; // same body, params and name; its own slot and chunk
   instance->chunk = NULL;
-  if (!exe_add_global(mono->exe, instance)) {
+  if (!exe_add_global(mono->exe, mono->al, instance)) {
     return NULL;
   }
   mono_enqueue(mono, origin, instance, s, depth, impls);
@@ -247,7 +248,7 @@ static FunDef *mono_reach(Mono *mono, FunDef *fun) {
   if (fun->slot != SLOT_NONE) {
     return fun;
   }
-  if (!exe_add_global(mono->exe, fun)) {
+  if (!exe_add_global(mono->exe, mono->al, fun)) {
     return NULL;
   }
   if (!fun_is_native(fun)) {
@@ -380,8 +381,31 @@ static void emit2(Cg *cg, uint8_t a, uint8_t b) {
   emit(cg, b);
 }
 
+// an op whose operand indexes a program-grown table: two bytes, big-endian.
+static void emit_slot(Cg *cg, uint8_t op, int slot) {
+  assert(slot >= 0 && slot < SLOT_MAX && "slot outside the operand space");
+  emit(cg, op);
+  chunk_write_u16(cg->chunk, (uint16_t)slot);
+}
+
+// the pool is per function but has no frame bounding it, so it is a u16 space
+// like the program-wide ones — and outgrowing it is a diagnostic rather than
+// the assert it used to be.
+static int cg_add_const(Cg *cg, Value v) {
+  int idx = chunk_add_const(cg->chunk, v);
+  if (idx < 0) {
+    fprintf(stderr,
+            "error: a function has more than %d constants; the VM addresses "
+            "at most that many (a two-byte operand)\n",
+            SLOT_MAX);
+    cg->ok = false;
+    return 0;
+  }
+  return idx;
+}
+
 static void emit_const(Cg *cg, Value v) {
-  emit2(cg, OP_CONST, (uint8_t)chunk_add_const(cg->chunk, v));
+  emit_slot(cg, OP_CONST, cg_add_const(cg, v));
 }
 
 // decode the scanner's accepted escapes (\n \t \r \" \\ \{) and intern; the
@@ -1014,7 +1038,7 @@ static bool cg_emit_target(Cg *cg, FunDef *fun, const Subst *primary,
     emit(cg, OP_UNIT);
     return false;
   }
-  emit2(cg, OP_GET_GLOBAL, (uint8_t)target->slot);
+  emit_slot(cg, OP_GET_GLOBAL, target->slot);
   return true;
 }
 
@@ -1091,10 +1115,17 @@ static int cg_vtable_for(Cg *cg, TraitDef *trait, Type *self, Span span) {
   }
 
   Executable *exe = mono->exe;
-  if (exe->vtable_count == exe->vtable_cap) {
+  if (exe->vtable_count == SLOT_MAX) {
     exe_too_many("trait-object vtables", exe->vtable_count + 1);
     cg->ok = false;
     return -1;
+  }
+  if (exe->vtable_count == exe->vtable_cap) {
+    int new_cap = exe_next_cap(exe->vtable_cap);
+    exe->vtables = al_realloc(cg->al, exe->vtables,
+                              sizeof(VTable *) * (size_t)exe->vtable_cap,
+                              sizeof(VTable *) * (size_t)new_cap);
+    exe->vtable_cap = new_cap;
   }
 
   // Reserve the slot *before* filling the table in. Compiling a method body
@@ -1162,7 +1193,7 @@ static void compile_coerce_dyn(Cg *cg, Expr *expr) {
   if (slot < 0) {
     return;
   }
-  emit2(cg, OP_MAKE_DYN, (uint8_t)slot);
+  emit_slot(cg, OP_MAKE_DYN, slot);
 }
 
 // `obj.method(args)`: the checker elides `self` from `mc->args` (it's
@@ -1292,10 +1323,18 @@ static bool cg_reach_struct(Cg *cg, StructDef *def) {
   if (def->slot != SLOT_NONE) {
     return true;
   }
-  if (cg->exe->struct_count == cg->exe->struct_cap) {
+  if (cg->exe->struct_count == SLOT_MAX) {
     exe_too_many("structs", cg->exe->struct_count + 1);
     cg->ok = false;
     return false;
+  }
+  if (cg->exe->struct_count == cg->exe->struct_cap) {
+    int new_cap = exe_next_cap(cg->exe->struct_cap);
+    cg->exe->structs =
+        al_realloc(cg->al, cg->exe->structs,
+                   sizeof(StructDef *) * (size_t)cg->exe->struct_cap,
+                   sizeof(StructDef *) * (size_t)new_cap);
+    cg->exe->struct_cap = new_cap;
   }
   def->slot = cg->exe->struct_count;
   cg->exe->structs[cg->exe->struct_count++] = def;
@@ -1306,10 +1345,17 @@ static bool cg_reach_enum(Cg *cg, EnumDef *def) {
   if (def->slot != SLOT_NONE) {
     return true;
   }
-  if (cg->exe->enum_count == cg->exe->enum_cap) {
+  if (cg->exe->enum_count == SLOT_MAX) {
     exe_too_many("enums", cg->exe->enum_count + 1);
     cg->ok = false;
     return false;
+  }
+  if (cg->exe->enum_count == cg->exe->enum_cap) {
+    int new_cap = exe_next_cap(cg->exe->enum_cap);
+    cg->exe->enums = al_realloc(cg->al, cg->exe->enums,
+                                sizeof(EnumDef *) * (size_t)cg->exe->enum_cap,
+                                sizeof(EnumDef *) * (size_t)new_cap);
+    cg->exe->enum_cap = new_cap;
   }
   def->slot = cg->exe->enum_count;
   cg->exe->enums[cg->exe->enum_count++] = def;
@@ -1331,7 +1377,7 @@ static void compile_struct_init(Cg *cg, Expr *expr) {
                                     def->is_tuple, def->fields[i].ident);
     compile_expr(cg, fi->value);
   }
-  emit2(cg, OP_STRUCT, (uint8_t)def->slot);
+  emit_slot(cg, OP_STRUCT, def->slot);
 }
 
 static void compile_variant_init(Cg *cg, Expr *expr) {
@@ -1349,9 +1395,8 @@ static void compile_variant_init(Cg *cg, Expr *expr) {
                         variant->fields[i].ident);
     compile_expr(cg, fi->value);
   }
-  emit(cg, OP_ENUM);
-  emit(cg, (uint8_t)enum_def->slot);
-  emit(cg, (uint8_t)variant->tag);
+  emit_slot(cg, OP_ENUM, enum_def->slot);
+  emit(cg, variant->tag);
 }
 
 // ── pattern matching ─────────────────────────────────────────────────────────
@@ -1926,8 +1971,8 @@ static void compile_closure(Cg *cg, Expr *expr) {
 
   cg_register_closure(cg, fun);
 
-  int const_idx = chunk_add_const(cg->chunk, val_fun(fun));
-  emit2(cg, OP_CLOSURE, (uint8_t)const_idx);
+  int const_idx = cg_add_const(cg, val_fun(fun));
+  emit_slot(cg, OP_CLOSURE, const_idx);
   emit(cg, (uint8_t)child.upvalue_count);
   for (int i = 0; i < child.upvalue_count; i++) {
     emit2(cg, child.upvalues[i].is_local ? 1 : 0, child.upvalues[i].index);
@@ -1950,49 +1995,57 @@ bool mono_compile_next(Mono *mono, DiagBag *diags) {
 
 // ── linking ──────────────────────────────────────────────────────────────────
 
-#define CG_MAX_SLOTS 256 // every slot operand is one byte
-
-// one shared complaint for the three slot spaces. No span: outgrowing the
+// one shared complaint for the four slot spaces. No span: outgrowing the
 // operand width is a property of the whole program, not of any one
 // declaration, so there is nothing honest to point at.
 static bool exe_too_many(const char *what, int count) {
   fprintf(stderr,
           "error: the program has %d %s; the VM addresses at most %d "
-          "(one operand byte)\n",
-          count, what, CG_MAX_SLOTS);
+          "(a two-byte operand)\n",
+          count, what, SLOT_MAX);
   return false;
 }
 
+// the growth policy for all four tables, stated once. They start empty and
+// double, rather than being sized to the operand space up front: since
+// milestone 21 a table holds what the program *reaches*, and a typical program
+// reaches a few dozen — pre-sizing would now be 64K pointers apiece for a
+// ceiling almost nothing comes near.
+static int exe_next_cap(int cap) {
+  int next = cap == 0 ? 16 : cap * 2;
+  return next > SLOT_MAX ? SLOT_MAX : next;
+}
+
 // append `fun` to the globals table and record the slot on it. The only
-// failure is outgrowing the one-byte operand space, which the monomorphiser
-// can hit too — it appends here for every instantiation it derives.
-static bool exe_add_global(Executable *exe, FunDef *fun) {
-  if (exe->global_count == exe->global_cap) {
+// failure is outgrowing the operand space, which the monomorphiser can hit too
+// — it appends here for every instantiation it derives.
+static bool exe_add_global(Executable *exe, Allocator *al, FunDef *fun) {
+  if (exe->global_count == SLOT_MAX) {
     return exe_too_many("functions and methods", exe->global_count + 1);
+  }
+  if (exe->global_count == exe->global_cap) {
+    int new_cap = exe_next_cap(exe->global_cap);
+    exe->globals =
+        al_realloc(al, exe->globals, sizeof(FunDef *) * (size_t)exe->global_cap,
+                   sizeof(FunDef *) * (size_t)new_cap);
+    exe->global_cap = new_cap;
   }
   fun->slot = exe->global_count;
   exe->globals[exe->global_count++] = fun;
   return true;
 }
 
-void exe_link(Executable *exe, ModuleRegistry *reg, Allocator *al) {
-  // Every table is sized to the whole operand space and left empty: which
-  // definitions a program spends its slots on is discovered by codegen, not
-  // counted here. Impl methods share the globals space with top-level funs, so
-  // OP_GET_GLOBAL addresses either with one operand.
-  exe->global_cap = CG_MAX_SLOTS;
-  exe->globals = al_alloc_zero(al, sizeof(FunDef *) * (size_t)CG_MAX_SLOTS);
-  exe->vtable_cap = CG_MAX_SLOTS;
-  exe->vtables = al_alloc_zero(al, sizeof(VTable *) * (size_t)CG_MAX_SLOTS);
-  exe->struct_cap = CG_MAX_SLOTS;
-  exe->structs = al_alloc_zero(al, sizeof(StructDef *) * (size_t)CG_MAX_SLOTS);
-  exe->enum_cap = CG_MAX_SLOTS;
-  exe->enums = al_alloc_zero(al, sizeof(EnumDef *) * (size_t)CG_MAX_SLOTS);
-
-  // The one thing that is *not* demand-driven: a variant tag is not a slot. It
-  // is an index within its own enum, fixed by declaration order and bounded by
-  // the variant count, and a `match` reads it off an enum the program may
-  // never construct — so it cannot wait for a reference that might not come.
+// The one thing about the program's layout that is *not* demand-driven, and
+// so all that is left of linking. A variant tag is not a slot: it is an index
+// within its own enum, fixed by declaration order and bounded by the variant
+// count, and a `match` reads it off an enum the program may never construct —
+// so it cannot wait for a reference that might not come.
+//
+// Everything else that `exe_link` used to do has dissolved into codegen. It
+// handed out slots until milestone 21 made them demand-driven, and sized the
+// four tables until they learned to grow; with both gone there is no linking
+// step distinct from the walk itself.
+void exe_assign_tags(ModuleRegistry *reg) {
   for (int i = 0; i < reg->module_count; i++) {
     Module *m = reg->modules[i];
     for (int j = 0; j < m->enum_count; j++) {

@@ -168,7 +168,7 @@ bool vm_run(Executable *exe, Heap *heap, FunDef *entry) {
     OpCode op = (OpCode)READ_BYTE();
     switch (op) {
     case OP_CONST:
-      push(&vm, frame->fun->chunk->consts[READ_BYTE()]);
+      push(&vm, frame->fun->chunk->consts[READ_U16()]);
       break;
     case OP_UNIT:
       push(&vm, val_unit());
@@ -202,13 +202,13 @@ bool vm_run(Executable *exe, Heap *heap, FunDef *entry) {
       break;
     case OP_GET_GLOBAL: {
       // one program-wide slot space over every module's funs and impl
-      // methods, handed out by exe_link.
-      push(&vm, val_fun(vm.exe->globals[READ_BYTE()]));
+      // methods, handed out on demand by codegen.
+      push(&vm, val_fun(vm.exe->globals[READ_U16()]));
       break;
     }
 
     case OP_CLOSURE: {
-      uint8_t const_idx = READ_BYTE();
+      uint16_t const_idx = READ_U16();
       uint8_t upvalue_count = READ_BYTE();
       FunDef *fun = frame->fun->chunk->consts[const_idx].as.fun;
       ObjClosure *closure = heap_closure(vm.heap, fun, upvalue_count);
@@ -560,7 +560,7 @@ bool vm_run(Executable *exe, Heap *heap, FunDef *entry) {
     }
 
     case OP_STRUCT: {
-      StructDef *def = vm.exe->structs[READ_BYTE()];
+      StructDef *def = vm.exe->structs[READ_U16()];
       Value *elems = vm.sp - def->field_count; // still-live roots
       ObjStruct *s = heap_struct(vm.heap, def);
       for (int i = 0; i < def->field_count; i++) {
@@ -572,7 +572,7 @@ bool vm_run(Executable *exe, Heap *heap, FunDef *entry) {
     }
 
     case OP_ENUM: {
-      uint8_t enum_slot = READ_BYTE();
+      uint16_t enum_slot = READ_U16();
       uint8_t tag = READ_BYTE();
       VariantDef *variant = &vm.exe->enums[enum_slot]->variants[tag];
       Value *elems = vm.sp - variant->field_count; // still-live roots
@@ -612,7 +612,7 @@ bool vm_run(Executable *exe, Heap *heap, FunDef *entry) {
       break;
 
     case OP_MAKE_DYN: {
-      VTable *vt = exe->vtables[READ_BYTE()];
+      VTable *vt = exe->vtables[READ_U16()];
       // the operand stays on the stack across heap_dyn: allocating may
       // collect, and until the wrapper exists the stack is what keeps the
       // value alive.
