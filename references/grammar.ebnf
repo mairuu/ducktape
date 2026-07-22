@@ -62,10 +62,13 @@ implItem       = "type" IDENT "=" type ";"
 
 typeParams     = "<" typeParam ( "," typeParam )* ">" ;
 typeParam      = IDENT ( ":" traitBound )? ;
-                 (* inline bounds parse; the checker rejects them for now *)
+                 (* a bound may name an earlier parameter of the same list:
+                    <T, U: Into<T>> *)
 whereClause    = "where" wherePred ( "," wherePred )* ;
 wherePred      = type ":" traitBound ;
 traitBound     = path ( "+" path )* ;
+                 (* each path may carry the trait's type arguments, as in
+                    T: Into<Int> — the ordinary pathSeg "<" ... ">" *)
 
 (* ── types ────────────────────────────────────────────────────────────── *)
 
@@ -73,15 +76,19 @@ type           = "(" ")"                          (* unit *)
                | "(" type ( "," type )* ")"       (* tuple; single = group *)
                | "fun" "(" ( type ( "," type )* )? ")" "->" type
                | "[" type "]"                     (* array *)
-               | "dyn" IDENT assocBindings?       (* trait object *)
+               | "dyn" IDENT dynArgs?             (* trait object *)
                | "Self" assocSuffix?
                | typePath assocSuffix? ;
                  (* "dyn" is required: a bare trait name in type position is
                     the bound spelling (impl/where), never a value type *)
-assocBindings  = "<" IDENT "=" type ( "," IDENT "=" type )* ">" ;
-                 (* one per associated type the trait declares, all required.
-                    NOT a type-argument list: the path after "dyn" is parsed
-                    without one, so this "<" is read here *)
+dynArgs        = "<" dynArg ( "," dynArg )* ">" ;
+dynArg         = type                             (* the trait's own arg *)
+               | IDENT "=" type ;                 (* associated-type binding *)
+                 (* two lists in one bracket pair: the trait's type arguments
+                    are positional and come first, then one binding per
+                    associated type the trait declares, all required. The path
+                    after "dyn" is parsed without type arguments, so this "<"
+                    is read here rather than by the path *)
 typePath       = pathSeg ( "::" pathSeg )* ;
 pathSeg        = IDENT ( "::"? "<" type ( "," type )* ">" )? ;
                  (* in type position "::" before "<" is optional *)

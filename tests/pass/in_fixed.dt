@@ -92,6 +92,32 @@ pub fun total_weight(items: [dyn Weigh]) -> Int {
     return sum;
 }
 
+# a trait may take type parameters of its own. They are supplied wherever the
+# trait is *named* — this impl head, the bound on `packed` below, a `dyn` — and
+# a trait reference is what carries them, so the signatures a trait declares
+# are generic over them exactly as a function's are over its own.
+trait Pack<T> {
+    fun pack(self, item: T) -> Int;
+
+    fun pack_two(self, a: T, b: T) -> Int {
+        return self.pack(a) + self.pack(b);
+    }
+}
+
+impl Pack<Int> for Brick {
+    fun pack(self, item: Int) -> Int { self.kg + item }
+}
+
+# `Brick` implements the trait twice, at two different arguments: the
+# reference is what tells them apart, so coherence lets both stand.
+impl Pack<String> for Brick {
+    fun pack(self, item: String) -> Int { self.kg }
+}
+
+pub fun packed<P: Pack<Int>>(packer: P) -> Int {
+    return packer.pack_two(1, 2);
+}
+
 # a bounded generic: the argument type must implement Drawable, and the bound
 # is also what makes `item.draw()` (and the projection `T.Color`) resolve
 pub fun render<T: Drawable>(item: T) -> T.Color {
@@ -110,6 +136,7 @@ pub fun process_data<T>(data: T) -> Result<Int, String> {
     var shown: String = render(p);
     # `is_visible` has a default body the impl omits — inherited from the trait
     var visible: Bool = p.is_visible();
+    var packed_kg: Int = packed(Brick { kg: 5 });
     # a `var` binding is an irrefutable pattern: tuples, named-field structs,
     # tuple structs, nesting and `_` all bind the same way a match arm does
     var (a, b) = (1, 2.5);

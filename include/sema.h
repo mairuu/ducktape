@@ -80,7 +80,13 @@ bool impl_defs_conflict(ImplDef *a, ImplDef *b, Allocator *al);
 // the call site to solve. Receivers must pass bare_path=false: TY_GENERIC is
 // interned, so a generic impl's `Self` is pointer-identical to the struct's
 // canonical self and the type alone can't distinguish the two cases.
-MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, StringView name,
+// `trait_ref` narrows the search to impls of that trait reference (a TY_TRAIT,
+// with its type arguments), or NULL for "any trait" — which is what a receiver
+// wants, since a method may come from any impl. Codegen passes one when the
+// call was resolved through a bound: `Into<Int>` and `Into<String>` are two
+// impls for one type, and only the bound says which body was meant.
+MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, Type *trait_ref,
+                             StringView name, Type *ret_hint,
                              ImplMatch *out_match, InferCtx *infer,
                              bool bare_path, Span span, Allocator *al);
 
@@ -90,13 +96,15 @@ MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, StringView name,
 // on a match *out_impl/*out_trait/*out_subst describe the impl it comes
 // through, enough to project the trait signature into concrete terms.
 TraitMethodDef *impl_index_default_method(ImplIndex *idx, Type *self_type,
-                                          StringView name, ImplDef **out_impl,
+                                          Type *trait_ref, StringView name,
+                                          ImplDef **out_impl,
                                           TraitDef **out_trait,
                                           Subst *out_subst, Allocator *al);
 
-// does `type` implement `trait`? true if some registered impl heads
-// `impl [<..>] trait for T` with a self type matching `type`.
-bool impl_index_implements(ImplIndex *idx, Type *type, TraitDef *trait,
+// does `type` implement the trait reference `trait_ref` (a TY_TRAIT, with its
+// type arguments)? true if some registered impl heads `impl [<..>] trait for T`
+// matching both the self type and the reference.
+bool impl_index_implements(ImplIndex *idx, Type *type, Type *trait_ref,
                            Allocator *al);
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -387,6 +395,12 @@ struct CheckCtx {
   // cctx_solve_insts once inference has settled.
   Subst **pending_insts;
   int pending_inst_count, pending_inst_cap;
+
+  // the same, for trait-object coercions: `Expr.coerce_dyn` is a trait
+  // reference, and a generic trait's argument can still be an unsolved
+  // unknown when the coercion is discovered (`[dyn Into<T>]`).
+  Type ***pending_coercions;
+  int pending_coercion_count, pending_coercion_cap;
 
   ValueScope *vscope;
   TypeScope *tscope;

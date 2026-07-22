@@ -110,9 +110,27 @@ void subst_init(Subst *s, StringView *params, Type **args, int count) {
   *s = (Subst){.params = params, .args = args, .count = count};
 }
 
+// the cap on how many traits one type parameter may be bounded by; the parser
+// has a matching one, and resolve_bound_refs reports rather than truncates.
+#define MAX_BOUNDS 16
+
 // recursively replace TY_GENERIC nodes whose .name matches an entry.
-// unmatched generics pass through unchanged.
+//
+// `total` says whether every generic the type mentions is expected to be in
+// `s`, which is the case at every site that instantiates a definition — a
+// leftover parameter there is a bug, and the assert is what catches it.
+// Opening a *bound* is the exception: `U: Into<T>` inside an `impl<X>` can
+// mention parameters of three scopes at once, and only one is being opened.
+static Type *subst_apply_(const Subst *s, Type *t, bool total, Allocator *al);
+
 Type *subst_apply(const Subst *s, Type *t, Allocator *al) {
+  return subst_apply_(s, t, /*total=*/true, al);
+}
+
+static Type *subst_apply_(const Subst *s, Type *t, bool total, Allocator *al) {
+// the recursive calls below all propagate `total`; spelling that out at each
+// one would bury the substitution itself in plumbing.
+#define subst_apply(s, t, al) subst_apply_((s), (t), total, (al))
   if (!s->count) {
     return t;
   }
@@ -124,7 +142,7 @@ Type *subst_apply(const Subst *s, Type *t, Allocator *al) {
         return s->args[i];
       }
     }
-    assert(false && "subst_apply: generic type not found in substitution");
+    assert((!total || !"subst_apply: generic type not found in substitution"));
     return t; // unmatched — pass through
 
   case TY_INT:
@@ -197,20 +215,37 @@ Type *subst_apply(const Subst *s, Type *t, Allocator *al) {
     Type *elem = subst_apply(s, t->as.array.elem_type, al);
     return elem != t->as.array.elem_type ? ty_array(elem, al) : t;
   }
-  case TY_DYN: {
-    // `dyn Iterator<Item = T>` inside a generic follows T, exactly as a
-    // `[T]` or an `Opt<T>` does — the bindings are ordinary types.
-    if (!t->as.dyn.assoc_type_count) {
+  case TY_TRAIT: {
+    // a trait *reference* follows T like any other composite: the bound
+    // `U: Into<T>` inside a generic function is `Into<Int>` once T is Int.
+    if (!t->as.trait.type_arg_count) {
       return t;
     }
     TypeScratch args;
-    ts_init(&args, t->as.dyn.assoc_type_count, al);
+    ts_init(&args, t->as.trait.type_arg_count, al);
     bool changed = false;
+    for (int i = 0; i < t->as.trait.type_arg_count; i++) {
+      args.ptr[i] = subst_apply(s, t->as.trait.type_args[i], al);
+      changed |= args.ptr[i] != t->as.trait.type_args[i];
+    }
+    return changed ? ty_trait(t->as.trait.def, args.ptr, args.count, al) : t;
+  }
+  case TY_DYN: {
+    // `dyn Iterator<Item = T>` inside a generic follows T, exactly as a
+    // `[T]` or an `Opt<T>` does — the bindings are ordinary types, and so
+    // are the trait's own type arguments (`dyn Into<T>`).
+    Type *trait = subst_apply(s, t->as.dyn.trait, al);
+    bool changed = trait != t->as.dyn.trait;
+    if (!t->as.dyn.assoc_type_count) {
+      return changed ? ty_dyn(trait, NULL, 0, al) : t;
+    }
+    TypeScratch args;
+    ts_init(&args, t->as.dyn.assoc_type_count, al);
     for (int i = 0; i < t->as.dyn.assoc_type_count; i++) {
       args.ptr[i] = subst_apply(s, t->as.dyn.assoc_types[i], al);
       changed |= args.ptr[i] != t->as.dyn.assoc_types[i];
     }
-    return changed ? ty_dyn(t->as.dyn.def, args.ptr, args.count, al) : t;
+    return changed ? ty_dyn(trait, args.ptr, args.count, al) : t;
   }
   case TY_ASSOC: {
     // `T.Item` follows T. The projection can't be collapsed here (the binding
@@ -224,13 +259,17 @@ Type *subst_apply(const Subst *s, Type *t, Allocator *al) {
   default:
     return t;
   }
+#undef subst_apply
 }
 
 static Type *impl_index_assoc_type(ImplIndex *idx, Type *self_type,
                                    StringView name, Allocator *al);
-static bool impl_applies(ImplDef *impl, Type *self_type, Subst *out_subst,
-                         ImplIndex *bounds_idx, Allocator *al);
+static bool impl_applies(ImplDef *impl, Type *self_type, Type *trait_ref,
+                         Subst *out_subst, ImplIndex *bounds_idx,
+                         Allocator *al);
 static TraitDef *impl_trait_def(ImplDef *impl);
+static Type *impl_index_trait_ref(ImplIndex *idx, Type *type, TraitDef *def,
+                                  bool *ambiguous, Allocator *al);
 
 static void infer_note_explicit_bound(InferCtx *ctx, Type *param, Type *arg,
                                       Span span) {
@@ -282,6 +321,44 @@ Subst infer_open_generics(InferCtx *ctx, Type **params, int count,
   }
   Subst s;
   subst_init(&s, names, args, count);
+
+  // A bound may mention another parameter of the same declaration
+  // (`fun conv<T, U: Into<T>>`), and at this point that parameter is a fresh
+  // unknown — so the bound stashed on each unknown is rewritten through the
+  // substitution just built. Without it, infer_check_bounds would later ask
+  // whether the solved `U` implements the literal `Into<T>`, which no impl
+  // heads. Partial, because a bound can also mention an *enclosing* scope's
+  // parameters (an impl's), which this substitution does not open.
+  for (int i = 0; i < count; i++) {
+    Type *g = params[i];
+    if (g->as.generic.bound_count == 0) {
+      continue;
+    }
+    Type *bounds[MAX_BOUNDS];
+    bool changed = false;
+    for (int b = 0; b < g->as.generic.bound_count && b < MAX_BOUNDS; b++) {
+      bounds[b] =
+          subst_apply_(&s, g->as.generic.bounds[b], /*total=*/false, al);
+      changed |= bounds[b] != g->as.generic.bounds[b];
+    }
+    if (!changed) {
+      continue;
+    }
+    Type *rebound =
+        ty_generic(g->as.generic.name, bounds, g->as.generic.bound_count, al);
+    if (args[i]->kind == TY_UNKNOWN) {
+      args[i]->as.unknown.bound = rebound;
+    } else {
+      // an explicit type argument: the queued check has to see the rewritten
+      // bound too, and it was queued above with the original.
+      for (int e = ctx->explicit_bound_count - 1; e >= 0; e--) {
+        if (ctx->explicit_bounds[e].param == g) {
+          ctx->explicit_bounds[e].param = rebound;
+          break;
+        }
+      }
+    }
+  }
   return s;
 }
 
@@ -365,6 +442,26 @@ static Subst subst_with_self(Subst method_args, Type *self_ty, Allocator *al) {
   return s;
 }
 
+// The substitution a trait *reference* carries: the trait's own type
+// parameters bound to the arguments it was named with. `Into<Int>` inside a
+// bound, an impl head or a `dyn` is what turns the trait's signatures — which
+// are written against those parameters — into the caller's terms. Empty for a
+// trait with no parameters, which is every trait before milestone 28.
+static Subst trait_ref_subst(Type *trait_ref, Allocator *al) {
+  TraitDef *def = trait_ref->as.trait.def;
+  int n = trait_ref->as.trait.type_arg_count;
+  if (n == 0 || def->type_param_count != n) {
+    return subst_empty(); // none, or a poisoned head already diagnosed
+  }
+  StringView *names = al_alloc(al, sizeof(StringView) * (size_t)n);
+  for (int i = 0; i < n; i++) {
+    names[i] = def->type_params[i]->as.generic.name;
+  }
+  Subst s;
+  subst_init(&s, names, trait_ref->as.trait.type_args, n);
+  return s;
+}
+
 // ── instantiation records ────────────────────────────────────────────────────
 
 // Stash on a call node the substitution that instantiated its target, so
@@ -393,6 +490,22 @@ static void cctx_record_inst(CheckCtx *ctx, Subst *slot, Subst s) {
   ctx->pending_insts[ctx->pending_inst_count++] = slot;
 }
 
+// The same, for the trait reference a coercion records: queued rather than
+// applied, because at the moment the coercion is discovered the trait's type
+// argument may still be an unknown — which is the reason `inst` is queued too.
+static void cctx_record_coercion(CheckCtx *ctx, Type **slot) {
+  if (ctx->pending_coercion_count == ctx->pending_coercion_cap) {
+    int new_cap =
+        ctx->pending_coercion_cap == 0 ? 8 : ctx->pending_coercion_cap * 2;
+    ctx->pending_coercions =
+        al_realloc(ctx->al, ctx->pending_coercions,
+                   sizeof(Type ***) * ctx->pending_coercion_cap,
+                   sizeof(Type ***) * new_cap);
+    ctx->pending_coercion_cap = new_cap;
+  }
+  ctx->pending_coercions[ctx->pending_coercion_count++] = slot;
+}
+
 // Rewrite every recorded instantiation against the solved inference state.
 // Run after infer_finalize, whose diagnostics cover the arguments that stayed
 // free; those keep a TY_UNKNOWN here, which is exactly what makes codegen
@@ -405,6 +518,12 @@ static void cctx_solve_insts(CheckCtx *ctx) {
     }
   }
   ctx->pending_inst_count = 0;
+
+  for (int i = 0; i < ctx->pending_coercion_count; i++) {
+    Type **slot = ctx->pending_coercions[i];
+    *slot = infer_apply(&ctx->infer, *slot, ctx->al);
+  }
+  ctx->pending_coercion_count = 0;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -579,12 +698,33 @@ bool infer_unify(InferCtx *ctx, Type *a, Type *b, DiagBag *diags, Span span) {
     return infer_unify(ctx, a->as.array.elem_type, b->as.array.elem_type, diags,
                        span);
 
-  case TY_TRAIT:
+  case TY_TRAIT: {
+    // a trait reference decomposes like any other composite: `Into<_>` and
+    // `Into<Int>` differ only in an argument, and solving it is what lets a
+    // coercion into `dyn Into<T>` read the argument off the impl.
+    TypeTrait *at = &a->as.trait, *bt = &b->as.trait;
+    if (at->def == bt->def && at->type_arg_count == bt->type_arg_count) {
+      bool ok = true;
+      for (int i = 0; i < at->type_arg_count; i++) {
+        ok &= infer_unify(ctx, at->type_args[i], bt->type_args[i], diags, span);
+      }
+      return ok;
+    }
+    char ab[64], bb[64];
+    type_sprintf(a, ab, sizeof(ab));
+    type_sprintf(b, bb, sizeof(bb));
+    diag_error(diags, span, "type mismatch: expected '%s' but got '%s'", ab,
+               bb);
+    return false;
+  }
+
   case TY_DYN:
   case TY_ASSOC: {
     // both are interned, so anything that reaches here (they weren't
     // types_equal) is a genuine mismatch — `T.Item` vs `U.Item`, or two
-    // different traits. There is nothing to decompose. Note that
+    // different trait objects. There is nothing to decompose: a trait
+    // object's bindings are decided by the *coercion*, which is where an
+    // unsolved one is unified (see check_coerce_dyn). Note that
     // `dyn Show` vs a concrete `Sq` never reaches this switch at all: the
     // kinds differ, so it is caught above — and a *coercion* is offered
     // there instead (see check_coerce).
@@ -704,20 +844,37 @@ Type *infer_apply(InferCtx *ctx, Type *ty, Allocator *al) {
     return elem != ty->as.array.elem_type ? ty_array(elem, al) : ty;
   }
 
-  case TY_DYN: {
-    TypeDyn *d = &ty->as.dyn;
-    if (!d->assoc_type_count) {
+  case TY_TRAIT: {
+    TypeTrait *tr = &ty->as.trait;
+    if (!tr->type_arg_count) {
       return ty;
     }
     TypeScratch args;
-    ts_init(&args, d->assoc_type_count, al);
+    ts_init(&args, tr->type_arg_count, al);
     bool changed = false;
+
+    for (int i = 0; i < tr->type_arg_count; i++) {
+      args.ptr[i] = infer_apply(ctx, tr->type_args[i], al);
+      changed |= args.ptr[i] != tr->type_args[i];
+    }
+    return changed ? ty_trait(tr->def, args.ptr, args.count, al) : ty;
+  }
+
+  case TY_DYN: {
+    TypeDyn *d = &ty->as.dyn;
+    Type *trait = infer_apply(ctx, d->trait, al);
+    bool changed = trait != d->trait;
+    if (!d->assoc_type_count) {
+      return changed ? ty_dyn(trait, NULL, 0, al) : ty;
+    }
+    TypeScratch args;
+    ts_init(&args, d->assoc_type_count, al);
 
     for (int i = 0; i < d->assoc_type_count; i++) {
       args.ptr[i] = infer_apply(ctx, d->assoc_types[i], al);
       changed |= args.ptr[i] != d->assoc_types[i];
     }
-    return changed ? ty_dyn(d->def, args.ptr, args.count, al) : ty;
+    return changed ? ty_dyn(trait, args.ptr, args.count, al) : ty;
   }
 
   default:
@@ -788,12 +945,13 @@ static void note_unimported_impl(DiagBag *diags, ImplDef *impl) {
 // NULL to consider every impl — which is what the "no method named" caller
 // wants, since a method may come from any of them.
 static void note_blocking_bound(DiagBag *diags, ImplIndex *idx, Type *self_type,
-                                TraitDef *trait, StringView method,
+                                Type *trait_ref, StringView method,
                                 Allocator *al) {
   for (int i = 0; i < idx->count; i++) {
     ImplDef *impl = idx->all[i];
     if (impl->type_param_count == 0 ||
-        (trait != NULL && impl_trait_def(impl) != trait)) {
+        (trait_ref != NULL &&
+         impl_trait_def(impl) != trait_ref->as.trait.def)) {
       continue;
     }
     if (method.len > 0) {
@@ -806,7 +964,7 @@ static void note_blocking_bound(DiagBag *diags, ImplIndex *idx, Type *self_type,
       }
     }
     Subst subst;
-    if (!impl_applies(impl, self_type, &subst, NULL, al)) {
+    if (!impl_applies(impl, self_type, NULL, &subst, NULL, al)) {
       continue; // didn't match even structurally
     }
     for (int j = 0; j < impl->type_param_count; j++) {
@@ -819,15 +977,15 @@ static void note_blocking_bound(DiagBag *diags, ImplIndex *idx, Type *self_type,
         continue;
       }
       for (int b = 0; b < param->as.generic.bound_count; b++) {
-        TraitDef *need = param->as.generic.bounds[b];
+        Type *need = param->as.generic.bounds[b];
         if (impl_index_implements(idx, arg, need, al)) {
           continue;
         }
-        char arg_buf[64];
+        char arg_buf[64], need_buf[64];
         type_sprintf(arg, arg_buf, sizeof(arg_buf));
-        diag_note(diags, (Span){0},
-                  "an impl exists, but it requires '%s: " SV_FMT "'", arg_buf,
-                  SV_ARG(need->name));
+        type_sprintf(need, need_buf, sizeof(need_buf));
+        diag_note(diags, (Span){0}, "an impl exists, but it requires '%s: %s'",
+                  arg_buf, need_buf);
         return;
       }
     }
@@ -836,7 +994,7 @@ static void note_blocking_bound(DiagBag *diags, ImplIndex *idx, Type *self_type,
 
 typedef struct {
   Type *self_type;
-  TraitDef *trait;   // NULL to match any
+  Type *trait;       // TY_TRAIT ref, or NULL to match any
   StringView method; // empty to match any
   ImplIndex *impls;  // visible set, to answer the candidate's own bounds
   Allocator *al;
@@ -844,13 +1002,10 @@ typedef struct {
 
 static bool impl_query_matches(ImplDef *impl, void *raw) {
   ImplQuery *q = raw;
-  if (q->trait != NULL && impl_trait_def(impl) != q->trait) {
-    return false;
-  }
   // bounds are asked against the *visible* set, the same one selection would
   // have used — otherwise the note offers an import that would not have helped.
   Subst ignored;
-  if (!impl_applies(impl, q->self_type, &ignored, q->impls, q->al)) {
+  if (!impl_applies(impl, q->self_type, q->trait, &ignored, q->impls, q->al)) {
     return false;
   }
   if (q->method.len == 0) {
@@ -869,16 +1024,25 @@ static bool impl_query_matches(ImplDef *impl, void *raw) {
 // unknown carries its source TY_GENERIC in `.bound` (see infer_open_generics);
 // unsolved unknowns are left to infer_finalize.
 // report every bound of `param` (a TY_GENERIC) that `arg` fails to implement.
-static void check_bounds_satisfied(TypeChecker *tc, ImplIndex *idx, Type *param,
-                                   Type *arg, DiagBag *diags, Span span,
-                                   Allocator *al) {
+static void check_bounds_satisfied(InferCtx *ictx, TypeChecker *tc,
+                                   ImplIndex *idx, Type *param, Type *arg,
+                                   DiagBag *diags, Span span, Allocator *al) {
   for (int b = 0; b < param->as.generic.bound_count; b++) {
-    TraitDef *trait = param->as.generic.bounds[b];
+    Type *trait = infer_apply(ictx, param->as.generic.bounds[b], al);
+    if (type_is_abstract(trait)) {
+      // the bound names a type argument of an enclosing generic definition
+      // (`Into<T>` inside `fun outer<T>`), so what it asks for is not known
+      // here. It is re-checked where *that* definition is instantiated — the
+      // same trust a bounded receiver already gets from
+      // impl_index_implements.
+      continue;
+    }
     if (!impl_index_implements(idx, arg, trait, al)) {
-      char buf[64];
+      char buf[64], trait_buf[64];
       type_sprintf(arg, buf, sizeof(buf));
-      diag_error(diags, span, "type '%s' does not implement trait '" SV_FMT "'",
-                 buf, SV_ARG(trait->name));
+      type_sprintf(trait, trait_buf, sizeof(trait_buf));
+      diag_error(diags, span, "type '%s' does not implement trait '%s'", buf,
+                 trait_buf);
       ImplQuery q = {.self_type = arg, .trait = trait, .impls = idx, .al = al};
       note_unimported_impl(
           diags, find_unimported_impl(tc, idx, impl_query_matches, &q));
@@ -904,8 +1068,8 @@ void infer_check_bounds(InferCtx *ctx, TypeChecker *tc, DiagBag *diags,
     if (type_is_poison(sol)) {
       continue;
     }
-    check_bounds_satisfied(tc, idx, g, sol, diags, node->as.unknown.intro_span,
-                           al);
+    check_bounds_satisfied(ctx, tc, idx, g, sol, diags,
+                           node->as.unknown.intro_span, al);
   }
 
   // and the type arguments written out explicitly, which never became unknowns
@@ -915,7 +1079,7 @@ void infer_check_bounds(InferCtx *ctx, TypeChecker *tc, DiagBag *diags,
     if (type_is_poison(arg) || arg->kind == TY_UNKNOWN) {
       continue;
     }
-    check_bounds_satisfied(tc, idx, eb->param, arg, diags, eb->span, al);
+    check_bounds_satisfied(ctx, tc, idx, eb->param, arg, diags, eb->span, al);
   }
 }
 
@@ -1412,14 +1576,42 @@ void tc_import_impls(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
   }
 }
 
-#define MAX_BOUNDS 16
-
 // Resolve a trait bound (one or more `+`-joined trait refs) to TraitDefs,
 // appending de-duplicated into `out`. A ref must name a trait in scope;
 // anything else is diagnosed and skipped. A bound is never module-qualified —
 // an imported trait is in scope under its alias, so the ref is a bare name.
+// Build the TY_TRAIT reference for a trait named with `argc` type arguments.
+// The arity is the whole check: a trait's type parameters are supplied at
+// every place it is *named* — a bound, an impl head, a `dyn` — and never
+// inferred, since nothing about a trait reference is solved from a value.
+// Returns poison (already diagnosed) on a wrong count or a poisoned argument.
+static Type *trait_ref_resolve(TypeResolver *r, TraitDef *def,
+                               TypeNode **arg_nodes, int argc, Span span) {
+  if (argc != def->type_param_count) {
+    diag_error(r->diags, span,
+               "trait '" SV_FMT "' takes %d type argument%s but %d %s given",
+               SV_ARG(def->name), def->type_param_count,
+               def->type_param_count == 1 ? "" : "s", argc,
+               argc == 1 ? "was" : "were");
+    return r->tc->t_poison;
+  }
+  if (argc == 0) {
+    return def->self_type;
+  }
+
+  TypeScratch args;
+  ts_init(&args, argc, r->al);
+  for (int i = 0; i < argc; i++) {
+    args.ptr[i] = tyres_resolve(r, arg_nodes[i]);
+    if (type_is_poison(args.ptr[i])) {
+      return r->tc->t_poison;
+    }
+  }
+  return ty_trait(def, args.ptr, args.count, r->al);
+}
+
 static void resolve_bound_refs(ResolveCtx *rctx, const TraitBound *bound,
-                               TraitDef **out, int *count) {
+                               Type **out, int *count) {
   for (int i = 0; i < bound->ref_count; i++) {
     const TraitRef *ref = &bound->refs[i];
     if (ref->path.count > 1) {
@@ -1428,17 +1620,22 @@ static void resolve_bound_refs(ResolveCtx *rctx, const TraitBound *bound,
                  "with 'use' and name it directly");
       continue;
     }
-    StringView name = ref->path.segments[ref->path.count - 1].name;
-    TypeEntry *te = tscope_lookup(rctx->tyres.tscope, name);
+    const PathSegment *seg = &ref->path.segments[ref->path.count - 1];
+    TypeEntry *te = tscope_lookup(rctx->tyres.tscope, seg->name);
     if (te == NULL || te->type == NULL || te->type->kind != TY_TRAIT) {
       diag_error(rctx->diags, ref->span, "'" SV_FMT "' is not a trait",
-                 SV_ARG(name));
+                 SV_ARG(seg->name));
       continue;
     }
-    TraitDef *def = te->as.trait_def;
+    Type *trait_ref =
+        trait_ref_resolve(&rctx->tyres, te->as.trait_def, seg->type_args,
+                          seg->type_arg_count, ref->span);
+    if (type_is_poison(trait_ref)) {
+      continue; // already diagnosed
+    }
     bool dup = false;
     for (int j = 0; j < *count; j++) {
-      if (out[j] == def) {
+      if (out[j] == trait_ref) {
         dup = true;
         break;
       }
@@ -1451,7 +1648,7 @@ static void resolve_bound_refs(ResolveCtx *rctx, const TraitBound *bound,
                  MAX_BOUNDS);
       return;
     }
-    out[(*count)++] = def;
+    out[(*count)++] = trait_ref;
   }
 }
 
@@ -1460,7 +1657,7 @@ static void resolve_bound_refs(ResolveCtx *rctx, const TraitBound *bound,
 // naming it. Associated-type predicates (`where T::Item: C`) are not supported.
 static Type *resolve_generic_param(ResolveCtx *rctx, const TypeParamNode *param,
                                    const WhereClause *where) {
-  TraitDef *bounds[MAX_BOUNDS];
+  Type *bounds[MAX_BOUNDS];
   int count = 0;
 
   if (param->inline_bound.ref_count > 0) {
@@ -1483,24 +1680,32 @@ static Type *resolve_generic_param(ResolveCtx *rctx, const TypeParamNode *param,
   return ty_generic(param->name, bounds, count, rctx->al);
 }
 
+// Resolve a declaration's type parameters into `out`, defining each in the
+// current type scope as it goes. The interleaving is what lets a bound name an
+// earlier parameter of the same list (`fun conv<T, U: Into<T>>`) — a generic
+// trait is the first thing that gives that a meaning, since a bound had
+// nowhere to put a type before. Left to right, so a forward reference is an
+// unknown type rather than a second pass.
+static void resolve_type_params(ResolveCtx *rctx, const TypeParamNode *params,
+                                int count, const WhereClause *where,
+                                Type **out) {
+  for (int i = 0; i < count; i++) {
+    out[i] = resolve_generic_param(rctx, &params[i], where);
+    tscope_define(rctx->tyres.tscope, params[i].name, out[i], rctx->diags,
+                  params[i].span, NULL);
+  }
+}
+
 static void resolve_fun_decl(ResolveCtx *rctx, Decl *decl) {
   assert(decl->kind == DECL_FUN && "expected fun decl");
   DeclFun *fun_decl = &decl->as.fun_decl;
   FunDef *fun_def = fun_decl->def;
 
-  for (int i = 0; i < fun_decl->type_param_count; i++) {
-    fun_def->type_params[i] = resolve_generic_param(
-        rctx, &fun_decl->type_params[i], fun_decl->where_clause);
-  }
-
   // begin fun local type scope
   rctx->tyres.tscope = tscope_push(rctx->tyres.tscope, rctx->al);
 
-  for (int i = 0; i < fun_def->type_param_count; i++) {
-    tscope_define(rctx->tyres.tscope, fun_decl->type_params[i].name,
-                  fun_def->type_params[i], rctx->diags,
-                  fun_decl->type_params[i].span, NULL);
-  }
+  resolve_type_params(rctx, fun_decl->type_params, fun_decl->type_param_count,
+                      fun_decl->where_clause, fun_def->type_params);
 
   TypeScratch param_types;
   ts_init(&param_types, fun_decl->param_count, rctx->al);
@@ -1542,19 +1747,12 @@ static void resolve_struct_decl(ResolveCtx *rctx, Decl *decl) {
   DeclStruct *struct_decl = &decl->as.struct_decl;
   StructDef *struct_def = struct_decl->def;
 
-  for (int i = 0; i < struct_decl->type_param_count; i++) {
-    struct_def->type_params[i] = resolve_generic_param(
-        rctx, &struct_decl->type_params[i], struct_decl->where_clause);
-  }
-
   // begin struct local type scope
   rctx->tyres.tscope = tscope_push(rctx->tyres.tscope, rctx->al);
 
-  for (int i = 0; i < struct_def->type_param_count; i++) {
-    tscope_define(rctx->tyres.tscope, struct_decl->type_params[i].name,
-                  struct_def->type_params[i], rctx->diags,
-                  struct_decl->type_params[i].span, NULL);
-  }
+  resolve_type_params(rctx, struct_decl->type_params,
+                      struct_decl->type_param_count, struct_decl->where_clause,
+                      struct_def->type_params);
 
   TypeScratch field_types;
   ts_init(&field_types, struct_decl->field_count, rctx->al);
@@ -1587,19 +1785,11 @@ static void resolve_enum_decl(ResolveCtx *rctx, Decl *decl) {
   DeclEnum *enum_decl = &decl->as.enum_decl;
   EnumDef *enum_def = enum_decl->def;
 
-  for (int i = 0; i < enum_decl->type_param_count; i++) {
-    enum_def->type_params[i] = resolve_generic_param(
-        rctx, &enum_decl->type_params[i], enum_decl->where_clause);
-  }
-
   // begin type scope
   rctx->tyres.tscope = tscope_push(rctx->tyres.tscope, rctx->al);
 
-  for (int i = 0; i < enum_def->type_param_count; i++) {
-    tscope_define(rctx->tyres.tscope, enum_decl->type_params[i].name,
-                  enum_def->type_params[i], rctx->diags,
-                  enum_decl->type_params[i].span, NULL);
-  }
+  resolve_type_params(rctx, enum_decl->type_params, enum_decl->type_param_count,
+                      enum_decl->where_clause, enum_def->type_params);
 
   // resolve variants
   for (int i = 0; i < enum_decl->variant_count; i++) {
@@ -1642,19 +1832,11 @@ static void resolve_impl_decl(ResolveCtx *rctx, Decl *decl) {
   DeclImpl *impl_decl = &decl->as.impl_decl;
   ImplDef *impl_def = impl_decl->def;
 
-  for (int i = 0; i < impl_decl->type_param_count; i++) {
-    impl_def->type_params[i] = resolve_generic_param(
-        rctx, &impl_decl->type_params[i], impl_decl->where_clause);
-  }
-
   // begin; impl level type scope
   rctx->tyres.tscope = tscope_push(rctx->tyres.tscope, rctx->al);
 
-  for (int i = 0; i < impl_def->type_param_count; i++) {
-    tscope_define(rctx->tyres.tscope, impl_decl->type_params[i].name,
-                  impl_def->type_params[i], rctx->diags,
-                  impl_decl->type_params[i].span, NULL);
-  }
+  resolve_type_params(rctx, impl_decl->type_params, impl_decl->type_param_count,
+                      impl_decl->where_clause, impl_def->type_params);
 
   // resolve self
   Type *self_ty = rctx_resolve(rctx, impl_decl->self_type);
@@ -1739,19 +1921,12 @@ static void resolve_impl_decl(ResolveCtx *rctx, Decl *decl) {
       fun_def->type_param_count = fun_decl->type_param_count;
       fun_def->type_params = al_alloc_zero(
           rctx->al, sizeof(StringView) * fun_decl->type_param_count);
-      for (int j = 0; j < fun_def->type_param_count; j++) {
-        fun_def->type_params[j] = resolve_generic_param(
-            rctx, &fun_decl->type_params[j], fun_decl->where_clause);
-      }
-
       // begin; method level type scope
       rctx->tyres.tscope = tscope_push(rctx->tyres.tscope, rctx->al);
 
-      for (int i = 0; i < fun_def->type_param_count; i++) {
-        tscope_define(rctx->tyres.tscope, fun_decl->type_params[i].name,
-                      fun_def->type_params[i], rctx->diags,
-                      fun_decl->type_params[i].span, NULL);
-      }
+      resolve_type_params(rctx, fun_decl->type_params,
+                          fun_decl->type_param_count, fun_decl->where_clause,
+                          fun_def->type_params);
 
       // resolve parameters and return type
       TypeScratch param_types;
@@ -1801,7 +1976,11 @@ static Type *trait_project(Type *t, TraitDef *trait, Type *self_to,
 // scope it is checked under, the key an instantiation is compiled under — is
 // the same type.
 static Type *trait_self_param(TraitDef *trait, Allocator *al) {
-  TraitDef *bounds[1] = {trait};
+  // bounded by the trait *reference* stating the trait's own parameters as
+  // its arguments (`Self: Into<T>` inside `trait Into<T>`), which is what
+  // makes a call on `self` inside a default body resolve against the very
+  // signatures being declared.
+  Type *bounds[1] = {trait->self_type};
   return ty_generic(sv_from_cstr("Self"), bounds, 1, al);
 }
 
@@ -1828,15 +2007,40 @@ static FunDef *resolve_trait_default_impl(ResolveCtx *rctx, TraitDef *trait_def,
   fun->span = item->span;
   fun->slot = SLOT_NONE;
 
-  // `Self` first, then the method's own parameters — the order cg_inst_key
-  // walks them in does not matter (the key is name-addressed), but a body can
-  // mention both.
-  fun->type_param_count = method_def->type_param_count + 1;
+  // `Self` first, then the trait's own type parameters, then the method's —
+  // the order cg_inst_key walks them in does not matter (the key is
+  // name-addressed), but a body can mention all three. The trait's are what
+  // milestone 28 added: `fun into_pair(self) -> (T, T)` inside `trait Into<T>`
+  // is a body generic over T as much as over `Self`, and the call site records
+  // both (see check_trait_method_call). A trait parameter the method shadows
+  // is dropped, since inside the body that name can only mean the method's.
+  int trait_params = 0;
+  for (int i = 0; i < trait_def->type_param_count; i++) {
+    bool shadowed = false;
+    for (int j = 0; j < method_def->type_param_count; j++) {
+      shadowed |= sv_equal(trait_def->type_params[i]->as.generic.name,
+                           method_def->type_params[j]->as.generic.name);
+    }
+    trait_params += shadowed ? 0 : 1;
+  }
+
+  fun->type_param_count = method_def->type_param_count + trait_params + 1;
   fun->type_params =
       al_alloc(rctx->al, sizeof(Type *) * (size_t)fun->type_param_count);
-  fun->type_params[0] = self_param;
+  int k = 0;
+  fun->type_params[k++] = self_param;
+  for (int i = 0; i < trait_def->type_param_count; i++) {
+    bool shadowed = false;
+    for (int j = 0; j < method_def->type_param_count; j++) {
+      shadowed |= sv_equal(trait_def->type_params[i]->as.generic.name,
+                           method_def->type_params[j]->as.generic.name);
+    }
+    if (!shadowed) {
+      fun->type_params[k++] = trait_def->type_params[i];
+    }
+  }
   for (int i = 0; i < method_def->type_param_count; i++) {
-    fun->type_params[i + 1] = method_def->type_params[i];
+    fun->type_params[k++] = method_def->type_params[i];
   }
 
   Type *fun_ty = trait_project(method_def->method_type, trait_def, self_param,
@@ -1861,14 +2065,33 @@ static void resolve_trait_decl(ResolveCtx *rctx, Decl *decl) {
   DeclTrait *trait_decl = &decl->as.trait_decl;
   TraitDef *trait_def = trait_decl->def;
 
-  Type *trait_ty = ty_trait(trait_def, rctx->al);
+  // begin; trait level type scope — the trait's own type parameters are in
+  // scope for its item signatures, and `Self` names them as arguments.
+  rctx->tyres.tscope = tscope_push(rctx->tyres.tscope, rctx->al);
+
+  trait_def->type_param_count = trait_decl->type_param_count;
+  trait_def->type_params =
+      al_alloc_zero(rctx->al, sizeof(Type *) * trait_decl->type_param_count);
+  resolve_type_params(rctx, trait_decl->type_params,
+                      trait_decl->type_param_count, trait_decl->where_clause,
+                      trait_def->type_params);
+
+  // `Self` inside the trait is the trait applied to its own parameters:
+  // inside `trait Into<T>`, `Self` is `Into<T>`, and an impl head reading
+  // `Into<Int>` is what binds T. So a trait's type parameters are ordinary
+  // generic parameters of every signature it declares, and everything that
+  // already knew how to substitute one — conformance, a call through a bound,
+  // monomorphisation — needs nothing new to carry them.
+  Type *trait_ty = ty_trait(trait_def, trait_def->type_params,
+                            trait_def->type_param_count, rctx->al);
   trait_def->self_type = trait_ty;
 
   // define the trait name up front so its own item signatures (and, in source
-  // order, later impls) can reference it.
+  // order, later impls) can reference it. The name is defined in the *parent*
+  // scope: the type parameters shadow nothing, and the trait outlives them.
   TypeEntry *te = NULL;
-  tscope_define(rctx->tyres.tscope, trait_def->name, trait_ty, rctx->diags,
-                decl->span, &te);
+  tscope_define(rctx->tyres.tscope->parent, trait_def->name, trait_ty,
+                rctx->diags, decl->span, &te);
   te->as.trait_def = trait_def;
 
   // count items by kind and allocate the def tables.
@@ -1884,32 +2107,10 @@ static void resolve_trait_decl(ResolveCtx *rctx, Decl *decl) {
   trait_def->assoc_types = al_alloc_zero(
       rctx->al, sizeof(AssocTypeDef) * trait_def->assoc_type_count);
 
-  // begin; trait level type scope
-  rctx->tyres.tscope = tscope_push(rctx->tyres.tscope, rctx->al);
-
-  // `Self` inside the trait is the abstract trait type; `Self.Assoc`
-  // projections stay abstract until an impl binds them (see TYNODE_ASSOC).
+  // `Self` is the abstract trait type; `Self.Assoc` projections stay abstract
+  // until an impl binds them (see TYNODE_ASSOC).
   tscope_define(rctx->tyres.tscope, sv_from_cstr("Self"), trait_ty, rctx->diags,
                 decl->span, NULL);
-
-  // A trait's *own* type parameters are parsed but nothing carries them:
-  // `TypeTrait` has no type arguments, so `Into<Int>` cannot be a type and a
-  // bound cannot name one. Reported here, where the mistake is, and each
-  // parameter is bound as poison so a signature mentioning it does not report
-  // a second time — the poison convention, one mistake one message.
-  if (trait_decl->type_param_count > 0) {
-    diag_error(rctx->diags, decl->span,
-               "trait '" SV_FMT
-               "' cannot take type parameters — declare an associated type "
-               "('type Item;') instead, which is the part of a trait a "
-               "signature and a 'dyn' can both name",
-               SV_ARG(trait_def->name));
-    for (int i = 0; i < trait_decl->type_param_count; i++) {
-      tscope_define(rctx->tyres.tscope, trait_decl->type_params[i].name,
-                    rctx->tc->t_poison, rctx->diags,
-                    trait_decl->type_params[i].span, NULL);
-    }
-  }
 
   // record associated-type names first so method signatures can project
   // `Self.Assoc`. The concrete type is supplied per-impl, so it stays NULL.
@@ -1937,18 +2138,10 @@ static void resolve_trait_decl(ResolveCtx *rctx, Decl *decl) {
     method_def->type_param_count = item->type_param_count;
     method_def->type_params =
         al_alloc_zero(rctx->al, sizeof(Type *) * item->type_param_count);
-    for (int j = 0; j < item->type_param_count; j++) {
-      method_def->type_params[j] =
-          resolve_generic_param(rctx, &item->type_params[j], NULL);
-    }
-
     // begin; method level type scope
     rctx->tyres.tscope = tscope_push(rctx->tyres.tscope, rctx->al);
-    for (int j = 0; j < item->type_param_count; j++) {
-      tscope_define(rctx->tyres.tscope, item->type_params[j].name,
-                    method_def->type_params[j], rctx->diags,
-                    item->type_params[j].span, NULL);
-    }
+    resolve_type_params(rctx, item->type_params, item->type_param_count,
+                        /*where=*/NULL, method_def->type_params);
 
     // resolve parameters (self resolves to the abstract trait type) and return.
     TypeScratch param_types;
@@ -2355,8 +2548,38 @@ static bool check_coerce_dyn(CheckCtx *ctx, Expr *e, Type *actual,
     break;
   }
 
-  TraitDef *trait = expected->as.dyn.def;
-  if (!impl_index_implements(ctx->impls, actual, trait, ctx->al)) {
+  Type *trait_ref = infer_apply(&ctx->infer, expected->as.dyn.trait, ctx->al);
+  TraitDef *trait = dyn_trait_def(expected);
+
+  // A trait argument that is still an unsolved unknown — `fun first<T>(xs:
+  // [dyn Into<T>])` — is not written down anywhere, so the impl is the only
+  // thing that knows it. Solved here, exactly as an unsolved associated-type
+  // binding is below: the two are the same situation, one bracket list apart.
+  // Several impls at different arguments is the case neither can settle, and
+  // it is the one thing an associated type cannot run into, since an impl
+  // binds each of those once.
+  if (type_is_abstract(trait_ref)) {
+    bool ambiguous = false;
+    Type *from_impl =
+        impl_index_trait_ref(ctx->impls, actual, trait, &ambiguous, ctx->al);
+    if (ambiguous) {
+      char ab[64], tb[64];
+      type_sprintf(actual, ab, sizeof(ab));
+      type_sprintf(trait_ref, tb, sizeof(tb));
+      diag_error(ctx->diags, e->span,
+                 "cannot decide which 'dyn %s' '%s' should become: it "
+                 "implements '" SV_FMT "' at more than one type argument",
+                 tb, ab, SV_ARG(trait->name));
+      return true; // reported; the caller must not add a vaguer one
+    }
+    if (from_impl == NULL ||
+        !infer_unify(&ctx->infer, trait_ref, from_impl, ctx->diags, e->span)) {
+      return false;
+    }
+    trait_ref = infer_apply(&ctx->infer, trait_ref, ctx->al);
+  }
+
+  if (!impl_index_implements(ctx->impls, actual, trait_ref, ctx->al)) {
     return false;
   }
 
@@ -2395,17 +2618,24 @@ static bool check_coerce_dyn(CheckCtx *ctx, Expr *e, Type *actual,
     type_sprintf(actual, ab, sizeof(ab));
     type_sprintf(want, wb, sizeof(wb));
     type_sprintf(got, gb, sizeof(gb));
+    char tb[64];
+    type_sprintf(trait_ref, tb, sizeof(tb));
     diag_error(ctx->diags, e->span,
-               "'%s' cannot be a 'dyn " SV_FMT "<" SV_FMT
-               " = %s>': it implements '" SV_FMT "' with '" SV_FMT "' = '%s'",
-               ab, SV_ARG(trait->name), SV_ARG(name), wb, SV_ARG(trait->name),
-               SV_ARG(name), gb);
+               "'%s' cannot be a 'dyn %s<" SV_FMT
+               " = %s>': it implements '%s' with '" SV_FMT "' = '%s'",
+               ab, tb, SV_ARG(name), wb, tb, SV_ARG(name), gb);
     // reported, so the caller must not add a second, vaguer diagnostic — the
     // poison convention, one level up: one mistake, one message.
     return true;
   }
 
-  e->coerce_dyn = trait;
+  // the trait *reference*, not the definition: `dyn Into<Int>` and
+  // `dyn Into<String>` are two vtables over one self type, and only the
+  // reference tells codegen which impl built this one. Recorded unsolved if
+  // the argument is still an unknown at this point — cg pushes the
+  // instantiation's substitution through it, the same as for `bound_trait`.
+  e->coerce_dyn = expected->as.dyn.trait;
+  cctx_record_coercion(ctx, &e->coerce_dyn);
   return true;
 }
 
@@ -3336,10 +3566,13 @@ static Type *resolve_match_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
 // steps: `impl` (NULL for an abstract receiver) resolves `Self.Assoc` against
 // what that impl bound, and `impl_subst` then replaces the impl's own type
 // params with the receiver's type arguments.
-static Type *check_trait_method_call(CheckCtx *ctx, Expr *expr, TraitDef *trait,
+// `trait_ref` is the trait as it was named — with its type arguments, which
+// are what the trait's own signatures are generic over.
+static Type *check_trait_method_call(CheckCtx *ctx, Expr *expr, Type *trait_ref,
                                      TraitMethodDef *tm, Type *self_ty,
                                      ImplDef *impl, Subst impl_subst) {
   ExprMethodCall *mc = &expr->as.method_call;
+  TraitDef *trait = trait_ref->as.trait.def;
 
   if (tm->self_index < 0) {
     diag_error(ctx->diags, expr->span,
@@ -3376,18 +3609,32 @@ static Type *check_trait_method_call(CheckCtx *ctx, Expr *expr, TraitDef *trait,
     // dispatch through a bound: which impl supplies the body depends on what
     // `self_ty` is instantiated with, so codegen redoes the lookup once it
     // knows — and it may land on an impl method or on the trait's default.
-    mc->bound_trait = trait;
+    mc->bound_trait = trait_ref;
     mc->bound_self = self_ty;
   }
 
-  // record `Self` alongside the method's own type args: it is the first type
-  // parameter of the default body, the one definition a call can reach whose
-  // signature is written in terms of the receiver rather than of an impl. An
-  // impl method has no parameter of that name, so the extra binding is simply
-  // unused when the call lands on one.
-  cctx_record_inst(ctx, &mc->inst, subst_with_self(subst, self_ty, ctx->al));
+  // the trait's own type parameters are generic parameters of every signature
+  // it declares, and the reference is what binds them: inside `trait Into<T>`,
+  // a call through `S: Into<Int>` reads `into` as `fun(Self) -> Int`. Dropped
+  // where a method type parameter reuses the name, like every other outer
+  // substitution.
+  Subst trait_subst =
+      subst_exclude_shadowed(trait_ref_subst(trait_ref, ctx->al),
+                             tm->type_params, tm->type_param_count, ctx->al);
+
+  // record `Self` and the trait's type arguments alongside the method's own:
+  // together they are exactly the type parameters of the default body, the one
+  // definition a call can reach whose signature is written in terms of the
+  // receiver rather than of an impl. An impl method has no parameter of those
+  // names, so the extra bindings are simply unused when the call lands on one.
+  cctx_record_inst(ctx, &mc->inst,
+                   subst_with_self(subst_concat(trait_subst, subst, ctx->al),
+                                   self_ty, ctx->al));
 
   Type *fun_ty = subst_apply(&subst, tm->method_type, ctx->al);
+  if (trait_subst.count > 0) {
+    fun_ty = subst_apply(&trait_subst, fun_ty, ctx->al);
+  }
   fun_ty = trait_project(fun_ty, trait, self_ty, impl, ctx->al);
 
   impl_subst = subst_exclude_shadowed(impl_subst, tm->type_params,
@@ -3448,14 +3695,15 @@ static Type *check_trait_method_call(CheckCtx *ctx, Expr *expr, TraitDef *trait,
 // caller can fall back to the impl index (a blanket `impl<T> Trait for T` can
 // still apply). First bound declaring the name wins, like impl selection.
 static Type *resolve_bound_method_call(CheckCtx *ctx, Expr *expr, Type *self_ty,
-                                       TraitDef **bounds, int bound_count) {
+                                       Type **bounds, int bound_count) {
   StringView name = expr->as.method_call.method_name;
 
   for (int i = 0; i < bound_count; i++) {
-    for (int j = 0; j < bounds[i]->method_count; j++) {
-      if (sv_equal(bounds[i]->methods[j].name, name)) {
-        return check_trait_method_call(ctx, expr, bounds[i],
-                                       &bounds[i]->methods[j], self_ty,
+    TraitDef *def = bounds[i]->as.trait.def;
+    for (int j = 0; j < def->method_count; j++) {
+      if (sv_equal(def->methods[j].name, name)) {
+        return check_trait_method_call(ctx, expr, bounds[i], &def->methods[j],
+                                       self_ty,
                                        /*impl=*/NULL, subst_empty());
       }
     }
@@ -3468,21 +3716,21 @@ static Type *resolve_bound_method_call(CheckCtx *ctx, Expr *expr, Type *self_ty,
 // decide whether it is a primitive at all) and must not resolve it twice —
 // a second pass would re-report its diagnostics and re-queue its
 // instantiations.
-static Type *resolve_method_call_typed(CheckCtx *ctx, Expr *expr,
-                                       Type *self_ty) {
+static Type *resolve_method_call_typed(CheckCtx *ctx, Expr *expr, Type *self_ty,
+                                       Type *hint) {
   ExprMethodCall *mc = &expr->as.method_call;
 
   // an abstract receiver dispatches through its trait bounds instead of the
   // impl index: a type parameter offers the bounds it was declared with, and
   // `Self` inside a trait default body offers that trait's own signatures.
-  TraitDef *self_trait[1];
-  TraitDef **bounds = NULL;
+  Type *self_trait[1];
+  Type **bounds = NULL;
   int bound_count = 0;
   if (self_ty->kind == TY_GENERIC) {
     bounds = self_ty->as.generic.bounds;
     bound_count = self_ty->as.generic.bound_count;
   } else if (self_ty->kind == TY_TRAIT) {
-    self_trait[0] = self_ty->as.trait.def;
+    self_trait[0] = self_ty;
     bounds = self_trait;
     bound_count = 1;
   } else if (self_ty->kind == TY_DYN) {
@@ -3490,7 +3738,7 @@ static Type *resolve_method_call_typed(CheckCtx *ctx, Expr *expr,
     // any other abstract receiver — object safety is what guarantees the
     // signature stays callable once `Self` is gone — and only *codegen* tells
     // the two apart, by the vtable.
-    self_trait[0] = self_ty->as.dyn.def;
+    self_trait[0] = self_ty->as.dyn.trait;
     bounds = self_trait;
     bound_count = 1;
   }
@@ -3503,22 +3751,29 @@ static Type *resolve_method_call_typed(CheckCtx *ctx, Expr *expr,
   }
 
   ImplMatch match;
-  MethodDef *method =
-      impl_index_method(ctx->impls, self_ty, mc->method_name, &match,
-                        &ctx->infer, /*bare_path=*/false, expr->span, ctx->al);
+  MethodDef *method = impl_index_method(
+      ctx->impls, self_ty, /*trait_ref=*/NULL, mc->method_name, hint, &match,
+      &ctx->infer, /*bare_path=*/false, expr->span, ctx->al);
   if (!method) {
     // no impl defines it — the receiver may still inherit a trait's default
     // body, which is checked against the trait's signature.
     ImplDef *via_impl = NULL;
     TraitDef *via_trait = NULL;
     Subst via_subst = subst_empty();
-    TraitMethodDef *inherited =
-        impl_index_default_method(ctx->impls, self_ty, mc->method_name,
-                                  &via_impl, &via_trait, &via_subst, ctx->al);
+    TraitMethodDef *inherited = impl_index_default_method(
+        ctx->impls, self_ty, /*trait_ref=*/NULL, mc->method_name, &via_impl,
+        &via_trait, &via_subst, ctx->al);
     if (inherited != NULL) {
       mc->resolved_impl = via_impl;
       mc->resolved_default = inherited->default_impl;
-      return check_trait_method_call(ctx, expr, via_trait, inherited, self_ty,
+      // the impl's own head says what the trait's type arguments are, in the
+      // impl's terms; `via_subst` (from its self type) puts them in the
+      // caller's.
+      Type *via_ref =
+          via_subst.count > 0
+              ? subst_apply(&via_subst, via_impl->trait_type, ctx->al)
+              : via_impl->trait_type;
+      return check_trait_method_call(ctx, expr, via_ref, inherited, self_ty,
                                      via_impl, via_subst);
     }
 
@@ -3643,12 +3898,14 @@ static Type *resolve_method_call_typed(CheckCtx *ctx, Expr *expr,
 }
 
 static Type *resolve_method_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
-  (void)hint;
   Type *self_ty = resolve_expr(ctx, expr->as.method_call.object, NULL);
   if (type_is_poison(self_ty)) {
     return ctx->tc->t_poison;
   }
-  return resolve_method_call_typed(ctx, expr, self_ty);
+  // the hint is a tie-break for method selection only (see impl_index_method),
+  // never an expectation the call is checked against — that stays the caller's
+  // job, so a wrong hint still reports the ordinary mismatch.
+  return resolve_method_call_typed(ctx, expr, self_ty, hint);
 }
 
 // a "Result-like" enum has exactly two single-field tuple variants named
@@ -3889,14 +4146,19 @@ static Type **hint_type_args(Type *hint, Type *self_type, int *out_count) {
 // answer from the trait they name.
 static bool display_satisfied(CheckCtx *ctx, Type *type) {
   TraitDef *display = ctx->tc->display_trait;
+  if (display == NULL) {
+    return false; // `std::fmt` is not in the program at all
+  }
   if (type->kind == TY_DYN) {
-    return type->as.dyn.def == display;
+    return dyn_trait_def(type) == display;
   }
   if (type->kind == TY_TRAIT) {
     // the abstract `Self` of a default body, which offers its own trait only
     return type->as.trait.def == display;
   }
-  return impl_index_implements(ctx->impls, type, display, ctx->al);
+  // `Display` takes no type parameters, so its reference is the trait's own
+  // self type — the same one every mention of the bare name resolves to.
+  return impl_index_implements(ctx->impls, type, display->self_type, ctx->al);
 }
 
 static void check_interpol_seg(CheckCtx *ctx, InterpolSeg *seg) {
@@ -3948,14 +4210,17 @@ static void check_interpol_seg(CheckCtx *ctx, InterpolSeg *seg) {
                "cannot interpolate a value of type '%s': it does not "
                "implement 'Display'",
                buf);
+    Type *display_ref = ctx->tc->display_trait != NULL
+                            ? ctx->tc->display_trait->self_type
+                            : NULL;
     ImplQuery q = {.self_type = seg_ty,
-                   .trait = ctx->tc->display_trait,
+                   .trait = display_ref,
                    .impls = ctx->impls,
                    .al = ctx->al};
     note_unimported_impl(
         ctx->diags,
         find_unimported_impl(ctx->tc, ctx->impls, impl_query_matches, &q));
-    note_blocking_bound(ctx->diags, ctx->impls, seg_ty, ctx->tc->display_trait,
+    note_blocking_bound(ctx->diags, ctx->impls, seg_ty, display_ref,
                         (StringView){0}, ctx->al);
     return;
   }
@@ -3972,7 +4237,7 @@ static void check_interpol_seg(CheckCtx *ctx, InterpolSeg *seg) {
   // the receiver is already resolved, so this must not go through
   // resolve_method_call_expr. A failure here is a malformed `Display` impl,
   // which conformance checking has already reported against the impl itself.
-  resolve_method_call_typed(ctx, call, seg_ty);
+  resolve_method_call_typed(ctx, call, seg_ty, /*hint=*/NULL);
 }
 
 static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
@@ -4929,7 +5194,7 @@ static Type *trait_project(Type *t, TraitDef *trait, Type *self_to,
   case TY_ASSOC:
     if (t->as.assoc.base->kind == TY_TRAIT &&
         t->as.assoc.base->as.trait.def == trait) {
-      if (self_to->kind == TY_DYN && self_to->as.dyn.def == trait) {
+      if (self_to->kind == TY_DYN && dyn_trait_def(self_to) == trait) {
         // a trait object *is* the binding: `Self.Item` on a
         // `dyn Iterator<Item = Int>` receiver is `Int`, known without knowing
         // what the receiver is. This is the case object safety was relaxed
@@ -4974,14 +5239,19 @@ static Type *trait_project(Type *t, TraitDef *trait, Type *self_to,
         trait_project(t->as.array.elem_type, trait, self_to, impl, al), al);
   case TY_DYN: {
     // a binding can mention the trait's `Self` (`-> dyn Show<T = Self.Item>`),
-    // so a trait object is projected like any other composite type.
+    // so a trait object is projected like any other composite type — trait
+    // reference included, since that too may mention it.
+    Type *trait_ty = trait_project(t->as.dyn.trait, trait, self_to, impl, al);
+    if (trait_ty->kind != TY_TRAIT) {
+      trait_ty = t->as.dyn.trait; // `Self` is not a trait object; leave it
+    }
     TypeScratch args;
     ts_init(&args, t->as.dyn.assoc_type_count, al);
     for (int i = 0; i < t->as.dyn.assoc_type_count; i++) {
       args.ptr[i] =
           trait_project(t->as.dyn.assoc_types[i], trait, self_to, impl, al);
     }
-    return ty_dyn(t->as.dyn.def, args.ptr, args.count, al);
+    return ty_dyn(trait_ty, args.ptr, args.count, al);
   }
   case TY_STRUCT: {
     TypeScratch args;
@@ -5015,6 +5285,10 @@ static void tc_check_impl_conformance(TypeChecker *tc, Decl *decl,
     return; // inherent impl, or a poisoned trait head already diagnosed
   }
   TraitDef *trait = impl_def->trait_type->as.trait.def;
+  // the impl head binds the trait's own type parameters (`impl Into<Int> for
+  // S`), so a required signature is read in the impl's terms before it is
+  // compared — the same substitution a call through a bound applies.
+  Subst trait_subst = trait_ref_subst(impl_def->trait_type, tc->al);
 
   for (int i = 0; i < trait->assoc_type_count; i++) {
     StringView name = trait->assoc_types[i].name;
@@ -5052,8 +5326,14 @@ static void tc_check_impl_conformance(TypeChecker *tc, Decl *decl,
       continue;
     }
 
-    Type *expected = trait_project(tm->method_type, trait, impl_def->self_type,
-                                   impl_def, tc->al);
+    Type *expected = tm->method_type;
+    Subst ms = subst_exclude_shadowed(trait_subst, tm->type_params,
+                                      tm->type_param_count, tc->al);
+    if (ms.count > 0) {
+      expected = subst_apply(&ms, expected, tc->al);
+    }
+    expected =
+        trait_project(expected, trait, impl_def->self_type, impl_def, tc->al);
     Type *actual = impl_method->fun->fun_type;
     if (!type_is_poison(expected) && !type_is_poison(actual) &&
         !types_equal(expected, actual)) {
@@ -5395,7 +5675,17 @@ static Type *impl_index_assoc_type(ImplIndex *idx, Type *self_type,
 static bool type_mentions_self(const Type *t, const TraitDef *trait) {
   switch (t->kind) {
   case TY_TRAIT:
-    return t->as.trait.def == trait;
+    if (t->as.trait.def == trait) {
+      return true;
+    }
+    // another trait, applied to something — `Into<Self>` hides one as an
+    // argument, which is as unrecoverable as writing it directly.
+    for (int i = 0; i < t->as.trait.type_arg_count; i++) {
+      if (type_mentions_self(t->as.trait.type_args[i], trait)) {
+        return true;
+      }
+    }
+    return false;
   case TY_ASSOC:
     // `Self.Item` is deliberately *not* a mention. `Self` itself cannot be
     // recovered once a value is coerced — that is what the coercion erased —
@@ -5425,8 +5715,12 @@ static bool type_mentions_self(const Type *t, const TraitDef *trait) {
   case TY_ARRAY:
     return type_mentions_self(t->as.array.elem_type, trait);
   case TY_DYN:
-    // `-> dyn Show<T = Self>` hides a `Self` behind a binding, and it is no
-    // more recoverable there than anywhere else.
+    // `-> dyn Show<T = Self>` hides a `Self` behind a binding, and
+    // `dyn Into<Self>` behind a type argument; neither is more recoverable
+    // there than anywhere else.
+    if (type_mentions_self(t->as.dyn.trait, trait)) {
+      return true;
+    }
     for (int i = 0; i < t->as.dyn.assoc_type_count; i++) {
       if (type_mentions_self(t->as.dyn.assoc_types[i], trait)) {
         return true;
@@ -5582,6 +5876,16 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
 
       TypeEntry *e = tscope_lookup(r->tscope, name);
       if (e) {
+        // a bare trait name is the trait applied to its own parameters, which
+        // is a *declaration's* meaning of it and not a usable reference: an
+        // `impl Into for S` head has said nothing about what it converts to.
+        // The arity check is the same one every other spelling gets.
+        if (e->type != NULL && e->type->kind == TY_TRAIT &&
+            e->type->as.trait.def->type_param_count > 0) {
+          result =
+              trait_ref_resolve(r, e->type->as.trait.def, NULL, 0, node->span);
+          break;
+        }
         result = e->type;
         break;
       }
@@ -5631,7 +5935,16 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
       break;
     }
 
-    TraitDef *trait = e->type->as.trait.def;
+    TraitDef *trait = e->as.trait_def;
+    // the trait's own type arguments come first in the bracket list, before
+    // the associated-type bindings — two different questions that share one
+    // pair of angle brackets, exactly as the source writes them.
+    Type *trait_ref = trait_ref_resolve(r, trait, dyn->type_args,
+                                        dyn->type_arg_count, node->span);
+    if (type_is_poison(trait_ref)) {
+      result = r->tc->t_poison;
+      break;
+    }
     if (!trait_check_object_safe(r, trait, node->span)) {
       result = r->tc->t_poison;
       break;
@@ -5697,7 +6010,7 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
       break;
     }
 
-    result = ty_dyn(trait, assoc_types.ptr, trait->assoc_type_count, r->al);
+    result = ty_dyn(trait_ref, assoc_types.ptr, trait->assoc_type_count, r->al);
     break;
   }
   case TYNODE_TUPLE: {
@@ -5742,7 +6055,7 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
     if (base->kind == TY_GENERIC) {
       TraitDef *owner = NULL;
       for (int i = 0; i < base->as.generic.bound_count && !owner; i++) {
-        TraitDef *trait_def = base->as.generic.bounds[i];
+        TraitDef *trait_def = base->as.generic.bounds[i]->as.trait.def;
         for (int j = 0; j < trait_def->assoc_type_count; j++) {
           if (sv_equal(trait_def->assoc_types[j].name, assoc->assoc_name)) {
             owner = trait_def;
@@ -5892,6 +6205,22 @@ static bool impl_type_match(Type *pattern, Type *concrete,
     return impl_type_match(pattern->as.array.elem_type,
                            concrete->as.array.elem_type, param_names,
                            param_count, out_args, bound);
+  case TY_TRAIT: {
+    // a trait *reference* is matched like any other composite, which is what
+    // lets `impl<T> Into<T> for Wrap<T>` be selected by the bound that asked
+    // for `Into<Int>` rather than only by its receiver.
+    TypeTrait *pt = &pattern->as.trait, *ct = &concrete->as.trait;
+    if (pt->def != ct->def || pt->type_arg_count != ct->type_arg_count) {
+      return false;
+    }
+    for (int i = 0; i < pt->type_arg_count; i++) {
+      if (!impl_type_match(pt->type_args[i], ct->type_args[i], param_names,
+                           param_count, out_args, bound)) {
+        return false;
+      }
+    }
+    return true;
+  }
   case TY_TUPLE: {
     TypeTuple *pt = &pattern->as.tuple, *ct = &concrete->as.tuple;
     if (pt->elem_count != ct->elem_count) {
@@ -5927,7 +6256,7 @@ static Type *impl_index_assoc_type(ImplIndex *idx, Type *self_type,
     }
 
     Subst subst;
-    if (!impl_applies(impl, self_type, &subst, NULL, al)) {
+    if (!impl_applies(impl, self_type, NULL, &subst, NULL, al)) {
       continue;
     }
 
@@ -6017,15 +6346,28 @@ static bool impl_bounds_satisfied(ImplDef *impl, Type **args, int n,
 // associated-type lookup pass NULL: both run while the index is still filling,
 // and coherence wants the conservative answer anyway — two impls for one type
 // overlap whether or not their bounds happen to be disjoint.
-static bool impl_applies(ImplDef *impl, Type *self_type, Subst *out_subst,
-                         ImplIndex *bounds_idx, Allocator *al) {
+//
+// `trait_ref` is the trait the caller is asking about (a TY_TRAIT, with its
+// type arguments), or NULL for "any trait, match on the receiver alone". Since
+// a trait may take type parameters, an impl applies to a *pair* — a self type
+// and a trait reference — and both halves may pin the impl's own parameters:
+// `impl<T> Into<T> for Wrap<T>` is selected by its receiver, while
+// `impl<T: Display> Into<String> for T` is selected by both.
+static bool impl_applies(ImplDef *impl, Type *self_type, Type *trait_ref,
+                         Subst *out_subst, ImplIndex *bounds_idx,
+                         Allocator *al) {
   *out_subst = subst_empty();
   if (impl->self_type == NULL || type_is_poison(impl->self_type)) {
     return false;
   }
+  if (trait_ref != NULL &&
+      (impl->trait_type == NULL || impl->trait_type->kind != TY_TRAIT)) {
+    return false;
+  }
 
   if (impl->type_param_count == 0) {
-    return types_equal(impl->self_type, self_type);
+    return types_equal(impl->self_type, self_type) &&
+           (trait_ref == NULL || types_equal(impl->trait_type, trait_ref));
   }
 
   int n = impl->type_param_count;
@@ -6038,6 +6380,10 @@ static bool impl_applies(ImplDef *impl, Type *self_type, Subst *out_subst,
 
   bool matched =
       impl_type_match(impl->self_type, self_type, names, n, args, bound);
+  if (matched && trait_ref != NULL) {
+    matched =
+        impl_type_match(impl->trait_type, trait_ref, names, n, args, bound);
+  }
   for (int j = 0; matched && j < n; j++) {
     matched = bound[j];
   }
@@ -6074,8 +6420,8 @@ bool impl_defs_conflict(ImplDef *a, ImplDef *b, Allocator *al) {
   // `Ord for Option<Int>` the generic one matches the concrete one's self
   // type, which is the case a receiver would find ambiguous.
   Subst ignored;
-  return impl_applies(a, b->self_type, &ignored, NULL, al) ||
-         impl_applies(b, a->self_type, &ignored, NULL, al);
+  return impl_applies(a, b->self_type, b->trait_type, &ignored, NULL, al) ||
+         impl_applies(b, a->self_type, a->trait_type, &ignored, NULL, al);
 }
 
 // A trait method the receiver inherits rather than defines: some
@@ -6085,7 +6431,8 @@ bool impl_defs_conflict(ImplDef *a, ImplDef *b, Allocator *al) {
 // the default is inherited through, so the caller can project the trait's
 // signature into concrete terms.
 TraitMethodDef *impl_index_default_method(ImplIndex *idx, Type *self_type,
-                                          StringView name, ImplDef **out_impl,
+                                          Type *trait_ref, StringView name,
+                                          ImplDef **out_impl,
                                           TraitDef **out_trait,
                                           Subst *out_subst, Allocator *al) {
   if (type_is_poison(self_type)) {
@@ -6098,7 +6445,7 @@ TraitMethodDef *impl_index_default_method(ImplIndex *idx, Type *self_type,
       continue;
     }
     Subst subst;
-    if (!impl_applies(impl, self_type, &subst, idx, al)) {
+    if (!impl_applies(impl, self_type, trait_ref, &subst, idx, al)) {
       continue;
     }
     for (int j = 0; j < trait->method_count; j++) {
@@ -6115,7 +6462,8 @@ TraitMethodDef *impl_index_default_method(ImplIndex *idx, Type *self_type,
   return NULL;
 }
 
-MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, StringView name,
+MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, Type *trait_ref,
+                             StringView name, Type *ret_hint,
                              ImplMatch *out_match, InferCtx *infer,
                              bool bare_path, Span span, Allocator *al) {
   if (type_is_poison(self_type)) {
@@ -6159,31 +6507,62 @@ MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, StringView name,
     return NULL;
   }
 
+  // First applicable impl declaring the name wins — except that a generic
+  // trait lets one type have several impls of it (`Into<Int>` and
+  // `Into<Fahrenheit>` for one `Celsius`), which makes the order arbitrary
+  // rather than merely unspecified. A bound names the reference and so never
+  // gets here; the only thing a *bare* `c.into()` can name is the type it is
+  // expected to produce, so that breaks the tie when the receiver alone
+  // cannot. It is a tie-break and not a selection rule: with one candidate the
+  // hint is never consulted, so a wrong hint still reports the ordinary
+  // mismatch against the one impl that exists.
+  MethodDef *first = NULL;
   for (int i = 0; i < idx->count; i++) {
     ImplDef *impl = idx->all[i];
     Subst subst;
-    if (!impl_applies(impl, self_type, &subst, idx, al)) {
+    if (!impl_applies(impl, self_type, trait_ref, &subst, idx, al)) {
       continue;
     }
 
     for (int j = 0; j < impl->method_count; j++) {
-      if (sv_equal(impl->methods[j].name, name)) {
+      if (!sv_equal(impl->methods[j].name, name)) {
+        continue;
+      }
+      MethodDef *cand = &impl->methods[j];
+      bool wanted = false;
+      // a method with type parameters of its own is skipped: its return type
+      // mentions generics this substitution does not bind, and an equality
+      // test against the hint could not be the right question for it anyway.
+      if (ret_hint != NULL && cand->fun != NULL &&
+          cand->fun->return_type != NULL && cand->fun->type_param_count == 0) {
+        Type *ret = subst.count > 0
+                        ? subst_apply(&subst, cand->fun->return_type, al)
+                        : cand->fun->return_type;
+        wanted = types_equal(ret, ret_hint);
+      }
+      if (first == NULL || wanted) {
         if (out_match) {
           out_match->impl = impl;
           out_match->subst = subst;
         }
-        return &impl->methods[j];
+        first = cand;
       }
+      if (wanted) {
+        return first;
+      }
+      break; // one impl declares a name at most once
     }
   }
 
-  return NULL;
+  return first;
 }
 
-// Does `type` implement `trait`? True if any registered impl heads
-// `impl [<..>] trait for T` with a self type matching `type` — exact for a
-// non-generic impl, structural (binding the impl's params) for a generic one.
-bool impl_index_implements(ImplIndex *idx, Type *type, TraitDef *trait,
+// Does `type` implement the trait reference `trait_ref`? True if any registered
+// impl heads `impl [<..>] trait for T` matching both — exact for a non-generic
+// impl, structural (binding the impl's params) for a generic one. The trait's
+// own type arguments are part of the question: `S: Into<Int>` is not answered
+// by an `impl Into<String> for S`.
+bool impl_index_implements(ImplIndex *idx, Type *type, Type *trait_ref,
                            Allocator *al) {
   if (type_is_poison(type)) {
     return true; // already diagnosed; don't pile on
@@ -6193,9 +6572,10 @@ bool impl_index_implements(ImplIndex *idx, Type *type, TraitDef *trait,
     // what it was declared to. This is what lets one bounded generic hand its
     // parameter to another (`fun a<T: Show>(v: T) { b(v) }`), and it is sound
     // because the bound is re-checked against the concrete type wherever the
-    // outer function is instantiated.
+    // outer function is instantiated. Trait references are interned, so the
+    // comparison covers the type arguments too.
     for (int i = 0; i < type->as.generic.bound_count; i++) {
-      if (type->as.generic.bounds[i] == trait) {
+      if (types_equal(type->as.generic.bounds[i], trait_ref)) {
         return true;
       }
     }
@@ -6203,15 +6583,47 @@ bool impl_index_implements(ImplIndex *idx, Type *type, TraitDef *trait,
   }
   for (int i = 0; i < idx->count; i++) {
     ImplDef *impl = idx->all[i];
-    if (impl_trait_def(impl) != trait) {
+    if (impl_trait_def(impl) != trait_ref->as.trait.def) {
       continue;
     }
     Subst subst;
-    if (impl_applies(impl, type, &subst, idx, al)) {
+    if (impl_applies(impl, type, trait_ref, &subst, idx, al)) {
       return true;
     }
   }
   return false;
+}
+
+// The reference `type` gets from an impl of `def` — the one thing that can
+// decide a trait argument nobody wrote down (`[dyn Into<T>]` at a call site).
+// NULL when no impl heads that trait for it, and NULL with *ambiguous set when
+// several do at different arguments, which is a question only the source can
+// answer.
+static Type *impl_index_trait_ref(ImplIndex *idx, Type *type, TraitDef *def,
+                                  bool *ambiguous, Allocator *al) {
+  *ambiguous = false;
+  if (type_is_poison(type)) {
+    return NULL;
+  }
+  Type *found = NULL;
+  for (int i = 0; i < idx->count; i++) {
+    ImplDef *impl = idx->all[i];
+    if (impl_trait_def(impl) != def) {
+      continue;
+    }
+    Subst subst;
+    if (!impl_applies(impl, type, /*trait_ref=*/NULL, &subst, idx, al)) {
+      continue;
+    }
+    Type *ref = subst.count > 0 ? subst_apply(&subst, impl->trait_type, al)
+                                : impl->trait_type;
+    if (found != NULL && !types_equal(found, ref)) {
+      *ambiguous = true;
+      return NULL;
+    }
+    found = ref;
+  }
+  return found;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -6415,20 +6827,29 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
         };
         break;
       }
-      case TY_TRAIT:
-        // a trait named *with* type arguments: `impl Into<Int> for S`, or a
-        // bound `T: Into<Int>`. A trait without them never reaches here — a
-        // single bare segment is answered by `tscope_lookup` in tyres — so
-        // this branch is exactly the unsupported spelling, and it used to
-        // abort the compiler on `default:` below.
-        diag_error(ctx->diags, path->span,
-                   "trait '" SV_FMT "' cannot take type arguments",
-                   SV_ARG(te->type->as.trait.def->name));
-        // reported, so this *succeeds* with a poison type rather than failing:
-        // a failure would add the caller's generic "unresolved type" on top,
-        // and poison is what propagates one mistake silently.
-        *out_res = (PathRes){.kind = PATHRES_TYPE, .type = ty_poison()};
+      case TY_TRAIT: {
+        // a trait named *with* type arguments: the head of `impl Into<Int> for
+        // S`. A trait without them never reaches here — a single bare segment
+        // is answered by `tscope_lookup` in tyres — so this branch is exactly
+        // the generic spelling. (A *bound* does not come through here either:
+        // `resolve_bound_refs` reads the segment's arguments itself, since a
+        // bound is a trait reference by construction and never a type.)
+        if (!is_last) {
+          diag_error(ctx->diags, path->span,
+                     "cannot access member '" SV_FMT "' of a trait",
+                     SV_ARG(segment));
+          return false;
+        }
+        Type *trait_ref = trait_ref_resolve(
+            ctx->tyres, te->as.trait_def, path->segments[i].type_args,
+            path->segments[i].type_arg_count, path->span);
+        // an arity mistake is reported inside, and *succeeds* with a poison
+        // type rather than failing: a failure would add the caller's generic
+        // "unresolved type" on top, and poison is what propagates one mistake
+        // silently.
+        *out_res = (PathRes){.kind = PATHRES_TYPE, .type = trait_ref};
         return true;
+      }
       default:
         assert(false &&
                "unhandled type kind in cctx_resolve_path PATHRES_SCOPE");
@@ -6490,8 +6911,9 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
 
       ImplMatch match;
       MethodDef *method = impl_index_method(
-          ctx->tyres->impls, struct_ty, segment, &match, ctx->tyres->infer,
-          /*bare_path=*/true, path->span, ctx->al);
+          ctx->tyres->impls, struct_ty, /*trait_ref=*/NULL, segment,
+          /*ret_hint=*/NULL, &match, ctx->tyres->infer, /*bare_path=*/true,
+          path->span, ctx->al);
       if (!method) {
         char ty_buf[64];
         type_sprintf(struct_ty, ty_buf, sizeof(ty_buf));

@@ -30,6 +30,10 @@ trait Drawable {                     # item signatures are resolved & checked
     fun visible(self) -> Bool { return true; }  # default; impls may omit it
 }
 
+trait Into<T> {                      # a trait may take type parameters
+    fun into(self) -> T;             # supplied wherever the trait is named
+}
+
 impl Drawable for Point<Int> { ... } # trait impl
 impl<T> Box<T> { ... }               # generic inherent impl
 impl Point<Int> {
@@ -54,7 +58,7 @@ case for it) — declare variables inside functions only.
 | `[T]` | array of `T` |
 | `fun(A, B) -> R` | function type |
 | `Point<Int>` | generic instance |
-| `dyn Drawable`, `dyn Iterator<Item = Int>` | trait object — see "Trait objects" |
+| `dyn Drawable`, `dyn Into<Int>`, `dyn Iterator<Item = Int>` | trait object — see "Trait objects" |
 | `Self`, `Self.Color`, `Point.Color` | self type, associated types |
 
 ## Statements and blocks
@@ -133,6 +137,50 @@ ending in `return` has type `!` (never), which unifies with anything.
   A type parameter also *satisfies* the bounds it was declared with, so a
   bounded generic can hand its parameter to another one that requires the same
   trait (`tests/run/generic_impls.dt`).
+- A bound may name an *earlier* type parameter of the same list
+  (`fun conv<T, U: Into<T>>(v: U) -> T`), which is what a generic trait is for.
+  The bound is opened alongside the parameter it mentions, so what gets
+  checked once inference settles is `Into<Int>` and not the literal `Into<T>`
+  (`tests/fail/trait_bound_arg_forwarded.dt`). Left to right: a bound cannot
+  name a parameter declared after it.
+
+### Generic traits
+
+A trait may declare type parameters of its own:
+
+```
+trait Into<T> {
+    fun into(self) -> T;
+    fun into_pair(self) -> (T, T) { (self.into(), self.into()) }
+}
+
+impl Into<Fahrenheit> for Celsius { fun into(self) -> Fahrenheit { .. } }
+impl Into<String>     for Celsius { fun into(self) -> String { .. } }
+```
+
+They behave as ordinary generic parameters of every signature the trait
+declares — including its default bodies, which are compiled once per
+`(Self, arguments)` pair like any other generic function. A trait *reference*
+(`Into<Int>`) is what supplies them, and one is written at each of the three
+places a trait can be named: an impl head, a bound, and a `dyn`. They are
+never inferred there, so the argument count is checked at each
+(`tests/fail/trait_type_args.dt`, `tests/fail/trait_missing_type_args.dt`) —
+a bare `Into` is not a usable reference, since it has said nothing about what
+it converts to.
+
+The arguments are part of what a bound asks for: `impl Into<Int> for S` does
+not answer `T: Into<String>` (`tests/fail/trait_type_arg_unsatisfied.dt`).
+They are equally part of coherence, so one type may implement one trait
+several times as long as the arguments differ — `Celsius` above is two impls,
+not a conflict.
+
+That makes a *bare* method call the one place the receiver alone cannot
+decide: `c.into()` has two bodies to choose from. The expected type breaks the
+tie (`var f: Fahrenheit = c.into()`), and a call through a bound never needs
+it, since the bound names the reference. With neither, the first matching impl
+wins — the same rule overlapping method names have always had.
+
+See `tests/run/generic_trait.dt`.
 - Generic code runs: each generic function, method and impl is compiled once
   per distinct tuple of type arguments, discovered from its call sites
   (`runtime.md` "Monomorphisation"). A generic definition nobody calls is
@@ -196,9 +244,20 @@ each is a separate instantiation, and coercing to one needs an impl that
 binds the same type — implementing the trait is no longer enough
 (`tests/fail/dyn_assoc_mismatch.dt`). The binding may itself be a type
 parameter (`[dyn Iterator<Item = T>]`), in which case the impl is what solves
-it. `<Item = Int>` is a binding list and not a type-argument list: a trait's
-own type parameters are still not supported, so `dyn Into<Int>` has no
-meaning. See `tests/run/dyn_assoc.dt`.
+it. See `tests/run/dyn_assoc.dt`.
+
+The bracket list carries **two different things**: the trait's own type
+arguments, which are positional, and its associated-type bindings, which are
+named — `dyn Into<Int>`, `dyn Iterator<Item = Int>`, or
+`dyn Pipe<String, Out = Int>` for a trait with both. Arguments come first
+(`tests/fail/dyn_binding_before_arg.dt`). A trait argument may also be left to
+the impl to solve (`[dyn Into<T>]`), which works exactly when one visible impl
+answers: a type implementing the trait at two different arguments is a
+question only the source can settle
+(`tests/fail/trait_arg_ambiguous.dt`).
+
+A trait's own type parameters cost it no object safety. They are written down
+by whoever names the `dyn`, so unlike `Self` they were never erased.
 
 A default body works through a trait object like any other method, and an
 impl that overrides it wins, exactly as under static dispatch. Printing and
@@ -860,7 +919,8 @@ types".
 | a `String` that is guaranteed valid UTF-8 | it is a byte string — `slice` cuts at byte offsets, so `chars` reports a runtime error on a halved sequence |
 | width, alignment, or padding in a format | only `std::fmt::float(value, precision)`; there is no format-spec grammar inside `{}` |
 | casting a `dyn Trait` back to its concrete type | no downcast; the coercion is one-way |
-| a trait with type parameters (`trait Into<T>`) | parses, then a diagnostic at the declaration; naming one with arguments (`impl Into<Int> for S`, `T: Into<Int>`, `dyn Into<Int>`) is a second one. An associated type is the supported way for a trait to range over a type it does not fix |
+| a trait's type arguments at a bare method call | the expected type breaks the tie between two impls of one generic trait; with no expected type the first impl wins, and the mismatch it then reports names the types rather than the ambiguity |
+| a bound naming a *later* type parameter (`fun f<U: Into<T>, T>`) | "unknown type: T" — bounds resolve left to right |
 | `mod` declarations | no such keyword; `use` is what pulls a file in |
 | glob imports (`use a::*`) | not parsed; name each item |
 | module-qualified paths (`geometry::Point`) | import the item and name it directly; the diagnostic says so |

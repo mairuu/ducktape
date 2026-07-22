@@ -199,9 +199,12 @@ typedef enum {
 
 static bool parse_path(Parser *p, PathParseMode mode, Path *out);
 
-// `<Item = Int, Key = String>` after a `dyn Trait`. Returns the count written
-// into `out` (at most MAX_ASSOC_BINDINGS), or -1 on a parse error.
-static int parse_assoc_bindings(Parser *p, AssocBindingNode *out);
+// The `<..>` after a `dyn Trait`: the trait's own type arguments, then its
+// associated-type bindings (`<Int, Item = String>`). Writes each list into its
+// out-parameter and returns false on a parse error.
+static bool parse_dyn_args(Parser *p, TypeNode **out_args, int *out_arg_count,
+                           AssocBindingNode *out_bindings,
+                           int *out_binding_count);
 
 // a `var` binding is a pattern; the checker rejects the refutable ones.
 static Pattern *parse_pattern(Parser *p);
@@ -341,10 +344,11 @@ static TypeNode *parse_type(Parser *p) {
   // in type position stays the *bound* spelling (`impl Show for T`), so the
   // two dispatch strategies are told apart in the source, not inferred.
   //
-  // `dyn Iterator<Item = Int>` pins each associated type the trait declares.
-  // The path is parsed *bare* so the '<' lands here rather than in
-  // `parse_type_args`: what follows is a binding list, not a type-argument
-  // list, and reading it as one would report "expected '>'" at the `=`.
+  // `dyn Iterator<Item = Int>` pins each associated type the trait declares,
+  // and `dyn Into<Int>` supplies the trait's own type parameter. The path is
+  // parsed *bare* so the '<' lands here rather than in `parse_type_args`: what
+  // follows is one bracket list holding both, and reading it as a plain
+  // type-argument list would report "expected '>'" at the `=`.
   if (match_tok(p, TOKEN_DYN)) {
     Token start = *previous_tok(p);
 
@@ -353,19 +357,23 @@ static TypeNode *parse_type(Parser *p) {
       return ast_type_node(TYNODE_POISON, current_tok_span(p), p->al);
     }
 
+    TypeNode *type_args[MAX_ASSOC_BINDINGS];
     AssocBindingNode bindings[MAX_ASSOC_BINDINGS];
-    int binding_count = 0;
-    if (check_tok(p, TOKEN_LT)) {
-      binding_count = parse_assoc_bindings(p, bindings);
-      if (binding_count < 0) {
-        return ast_type_node(TYNODE_POISON, current_tok_span(p), p->al);
-      }
+    int type_arg_count = 0, binding_count = 0;
+    if (check_tok(p, TOKEN_LT) && !parse_dyn_args(p, type_args, &type_arg_count,
+                                                  bindings, &binding_count)) {
+      return ast_type_node(TYNODE_POISON, current_tok_span(p), p->al);
     }
 
     base = ast_type_node(TYNODE_DYN,
                          span_merge(token_span(&start), previous_tok_span(p)),
                          p->al);
     base->as.dyn.path = path;
+    base->as.dyn.type_args =
+        al_alloc(p->al, sizeof(TypeNode *) * type_arg_count);
+    memcpy(base->as.dyn.type_args, type_args,
+           sizeof(TypeNode *) * type_arg_count);
+    base->as.dyn.type_arg_count = type_arg_count;
     base->as.dyn.bindings =
         al_alloc(p->al, sizeof(AssocBindingNode) * binding_count);
     memcpy(base->as.dyn.bindings, bindings,
@@ -411,48 +419,63 @@ static TypeNode *parse_type(Parser *p) {
   return ast_type_node(TYNODE_POISON, current_tok_span(p), p->al);
 }
 
-static int parse_assoc_bindings(Parser *p, AssocBindingNode *out) {
-  if (!consume_tok(p, TOKEN_LT, "expected '<' before associated types")) {
-    return -1;
+static bool parse_dyn_args(Parser *p, TypeNode **out_args, int *out_arg_count,
+                           AssocBindingNode *out_bindings,
+                           int *out_binding_count) {
+  if (!consume_tok(p, TOKEN_LT, "expected '<' after the trait's name")) {
+    return false;
   }
 
-  int count = 0;
+  *out_arg_count = 0;
+  *out_binding_count = 0;
   do {
-    if (count >= MAX_ASSOC_BINDINGS) {
-      error_at(p, current_tok_span(p), "too many associated types");
-      return -1;
+    if (*out_arg_count >= MAX_ASSOC_BINDINGS ||
+        *out_binding_count >= MAX_ASSOC_BINDINGS) {
+      error_at(p, current_tok_span(p), "too many type arguments");
+      return false;
     }
-    if (!consume_tok(p, TOKEN_IDENT, "expected an associated type name")) {
-      return -1;
-    }
-    Token name = *previous_tok(p);
 
-    // the `=` is what tells a binding from a type argument, so it is worth
-    // saying so: a trait object names its associated types, it does not take
-    // type arguments.
-    if (!consume_tok(p, TOKEN_EQ,
-                     "expected '=' after the associated type's name — a trait "
-                     "object binds them by name, as in 'dyn Iterator<Item = "
-                     "Int>'")) {
-      return -1;
+    // an entry is a binding when it is `Name =`, and a type argument
+    // otherwise. Two tokens of lookahead decide it, and nothing else has to:
+    // a type argument may be any type, including a bare name.
+    if (check_tok(p, TOKEN_IDENT) && peek_ahead(p, 1)->type == TOKEN_EQ) {
+      Token name = *current_tok(p);
+      advance_tok(p);
+      advance_tok(p);
+
+      TypeNode *ty = parse_type(p);
+      if (ty->kind == TYNODE_POISON) {
+        return false;
+      }
+      out_bindings[(*out_binding_count)++] = (AssocBindingNode){
+          .name = name.lexeme,
+          .type = ty,
+          .span = span_merge(token_span(&name), previous_tok_span(p)),
+      };
+      continue;
+    }
+
+    // a type argument after a binding would leave the two lists interleaved,
+    // and the trait's parameters are positional — so order is not a style
+    // question here.
+    if (*out_binding_count > 0) {
+      error_at(p, current_tok_span(p),
+               "a trait's type arguments come before its associated-type "
+               "bindings, as in 'dyn Trait<Int, Item = String>'");
+      return false;
     }
 
     TypeNode *ty = parse_type(p);
     if (ty->kind == TYNODE_POISON) {
-      return -1;
+      return false;
     }
-
-    out[count++] = (AssocBindingNode){
-        .name = name.lexeme,
-        .type = ty,
-        .span = span_merge(token_span(&name), previous_tok_span(p)),
-    };
+    out_args[(*out_arg_count)++] = ty;
   } while (match_tok(p, TOKEN_COMMA));
 
-  if (!consume_tok(p, TOKEN_GT, "expected '>' after associated types")) {
-    return -1;
+  if (!consume_tok(p, TOKEN_GT, "expected '>' after the trait's arguments")) {
+    return false;
   }
-  return count;
+  return true;
 }
 
 static int parse_type_args(Parser *p, TypeNode ***out_args);

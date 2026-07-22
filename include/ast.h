@@ -85,10 +85,17 @@ typedef struct {
   int type_arg_count;
 } TypeEnum;
 
+// TY_TRAIT — a trait *reference*: the trait and the type arguments it was
+// named with. A trait's type parameters are ordinary generic parameters of
+// every signature it declares, so a reference is what supplies the
+// substitution that turns those signatures into concrete terms — at an impl
+// head (`impl Into<Int> for S`), at a bound (`T: Into<Int>`), and inside a
+// `dyn`. Interned on the arguments too, so `Into<Int>` and `Into<String>` are
+// two types and pointer equality still decides identity.
 typedef struct {
   TraitDef *def;
-  // Type **type_args;
-  // int type_arg_count;
+  Type **type_args; // one per def->type_params, in declaration order
+  int type_arg_count;
 } TypeTrait;
 
 // TY_DYN — `dyn Trait`, a trait object.
@@ -110,8 +117,8 @@ typedef struct {
 // `Self.Item` is once `Self` is gone, which is what makes such a method
 // object-safe at all.
 typedef struct {
-  TraitDef *def;
-  Type **assoc_types; // one per def->assoc_types, in declaration order
+  Type *trait;        // TY_TRAIT — the trait, with its own type arguments
+  Type **assoc_types; // one per trait def's assoc_types, in declaration order
   int assoc_type_count;
 } TypeDyn;
 
@@ -121,8 +128,8 @@ typedef struct {
 
 // TY_GENERIC — an unresolved type parameter like T
 typedef struct {
-  StringView name;   // e.g. "T"
-  TraitDef **bounds; // e.g. [Display, Clone]
+  StringView name; // e.g. "T"
+  Type **bounds;   // TY_TRAIT refs, e.g. [Display, Into<Int>]
   int bound_count;
 } TypeGeneric;
 
@@ -171,20 +178,29 @@ Type *ty_unknown(uint32_t id, Type *bound, Allocator *al);
 Type *ty_fun(Type **params, int param_count, Type *ret, Allocator *al);
 Type *ty_tuple(Type **elems, int elem_count, Allocator *al);
 Type *ty_array(Type *elem, Allocator *al);
-Type *ty_generic(StringView name, TraitDef **bounds, int bound_count,
+Type *ty_generic(StringView name, Type **bounds, int bound_count,
                  Allocator *al);
 Type *ty_assoc(Type *base, StringView assoc_name, TraitDef *trait,
                Allocator *al);
 Type *ty_struct(StructDef *def, Type **args, int argc, Allocator *al);
 Type *ty_enum(EnumDef *def, Type **args, int argc, Allocator *al);
-Type *ty_trait(TraitDef *def, Allocator *al);
-Type *ty_dyn(TraitDef *def, Type **assoc_types, int assoc_type_count,
+Type *ty_trait(TraitDef *def, Type **args, int argc, Allocator *al);
+Type *ty_dyn(Type *trait, Type **assoc_types, int assoc_type_count,
              Allocator *al);
+// the TraitDef behind a TY_DYN's trait reference.
+static inline TraitDef *dyn_trait_def(const Type *t) {
+  return t->as.dyn.trait->as.trait.def;
+}
 // the type `dyn` binds to `name`, or NULL if the trait has no such associated
 // type. Total by construction, so a NULL means the name is wrong.
 Type *ty_dyn_assoc(const Type *dyn, StringView name);
 
 static inline bool types_equal(const Type *a, const Type *b) { return a == b; }
+// does `t` mention a type parameter, an unsolved unknown or an unresolved
+// projection anywhere inside it? A trait reference answers about its type
+// arguments (`Into<T>` is abstract, `Into<Int>` is not), which is what a bound
+// has to ask before it can be checked against an impl.
+bool type_is_abstract(const Type *t);
 bool type_is_numeric(const Type *t);
 static inline bool type_is_poison(const Type *t) {
   return t->kind == TY_POISON;
@@ -496,13 +512,16 @@ typedef struct {
   Span span;
 } AssocBindingNode;
 
-// TYNODE_DYN — the path names the trait, and the bindings pin each of its
-// associated types. The list is *not* a type-argument list, which is why it is
-// parsed here rather than by `parse_path`: `<Item = Int>` says what
-// `Self.Item` means once `Self` is erased, and a trait's own type parameters
-// (were they supported) would be a separate question.
+// TYNODE_DYN — the path names the trait; the bracket list after it carries
+// two different things, which is why it is parsed here rather than by
+// `parse_path`. `<Int>` is a type argument, supplying one of the trait's own
+// type parameters; `<Item = Int>` is a binding, saying what `Self.Item` means
+// once `Self` is erased. Arguments come first, exactly as in the source:
+// `dyn Into<Int>`, `dyn Iterator<Item = Int>`, or both.
 typedef struct {
   Path path;
+  TypeNode **type_args;
+  int type_arg_count;
   AssocBindingNode *bindings;
   int binding_count;
 } TypeNodeDyn;
@@ -807,7 +826,7 @@ typedef struct {
   // call went through a trait bound: which impl provides the body is not
   // knowable until `bound_self` is substituted with a concrete type, so
   // codegen redoes the impl lookup per instantiation.
-  TraitDef *bound_trait;
+  Type *bound_trait; // TY_TRAIT — the trait reference the bound named
   Type *bound_self;
 } ExprMethodCall;
 
@@ -897,7 +916,10 @@ struct Expr {
   // applied to `resolved_type` for the same reason `inst` is: at the moment
   // the coercion is discovered the receiver type may still be an unsolved
   // unknown, and codegen is the consumer either way.
-  TraitDef *coerce_dyn;
+  //
+  // The *trait reference* (a TY_TRAIT, with its type arguments), not the trait
+  // definition: `Into<Int>` and `Into<String>` are two vtables over one type.
+  Type *coerce_dyn;
 
   union {
     int64_t int_val;

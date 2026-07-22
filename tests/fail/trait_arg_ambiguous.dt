@@ -1,0 +1,28 @@
+#! expect: cannot decide which 'dyn Into<_>'
+# A trait argument nobody wrote down is read off the impl — but only when one
+# impl answers. `S` converts into two things, so `dyn Into<T>` with `T` still
+# unsolved is a question the source has to settle. This is the one case an
+# associated-type binding cannot run into, since an impl binds each of those
+# exactly once.
+
+trait Into<T> {
+    fun into(self) -> T;
+}
+
+struct S { n: Int }
+
+impl Into<Int> for S {
+    fun into(self) -> Int { self.n }
+}
+
+impl Into<String> for S {
+    fun into(self) -> String { "s" }
+}
+
+fun first<T>(xs: [dyn Into<T>]) -> T {
+    return xs[0].into();
+}
+
+fun main() {
+    var a: Int = first([S { n: 1 }]);
+}

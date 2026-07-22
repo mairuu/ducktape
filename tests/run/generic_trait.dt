@@ -1,0 +1,116 @@
+# Generic traits (milestone 28): a trait's type parameters are ordinary
+# generic parameters of every signature it declares, and the reference that
+# names the trait — at an impl head, at a bound, inside a `dyn` — is what
+# binds them.
+
+#> 212
+#> 100C
+#> 42
+#> 9
+#> 3
+#> 9
+#> 4
+
+use std::io::print;
+
+trait Into<T> {
+    fun into(self) -> T;
+    # a default body is generic over the trait's parameters as much as over
+    # `Self`, and the call site records both.
+    fun into_pair(self) -> (T, T) { (self.into(), self.into()) }
+}
+
+struct Celsius { deg: Int }
+struct Fahrenheit { deg: Int }
+
+# one type, two impls of one trait: they differ only in the trait's argument,
+# so coherence lets both stand.
+impl Into<Fahrenheit> for Celsius {
+    fun into(self) -> Fahrenheit { Fahrenheit { deg: self.deg * 9 / 5 + 32 } }
+}
+
+impl Into<String> for Celsius {
+    fun into(self) -> String { "{self.deg}C" }
+}
+
+# a generic impl of a generic trait: the impl's own parameter is what the
+# trait's argument is written in terms of.
+struct Wrap<T> { v: T }
+
+impl<T> Into<T> for Wrap<T> {
+    fun into(self) -> T { self.v }
+}
+
+# through a bound: the reference says which impl, so no annotation is needed.
+fun sum<T: Into<Int>>(a: T, b: T) -> Int {
+    return a.into() + b.into();
+}
+
+struct Count { n: Int }
+
+impl Into<Int> for Count {
+    fun into(self) -> Int { self.n }
+}
+
+# through a trait object: the vtable is keyed on the reference, so two `dyn`s
+# over one self type are two tables.
+fun label(v: dyn Into<String>) -> String {
+    return v.into();
+}
+
+# a trait may take a type parameter *and* declare an associated type: the two
+# are different questions, and the bracket list after a `dyn` carries both.
+trait Pipe<T> {
+    type Out;
+    fun pipe(self, v: T) -> Self.Out;
+}
+
+struct Repeat { times: Int }
+
+impl Pipe<String> for Repeat {
+    type Out = Int;
+    fun pipe(self, v: String) -> Int { self.times }
+}
+
+fun run(p: dyn Pipe<String, Out = Int>) -> Int {
+    return p.pipe("x");
+}
+
+# a bound may name another type parameter of the same list, which is the shape
+# a generic trait exists for: `U` converts into whatever `T` turns out to be.
+# The bound is opened alongside `T`, so it is `Into<Int>` by the time the
+# solved argument is checked against it.
+fun conv<T, U: Into<T>>(v: U) -> T {
+    return v.into();
+}
+
+# a trait argument nobody wrote down: the impl is the only thing that knows
+# what `Count` converts into, so the coercion solves `T` rather than checking
+# it — the same move an unsolved associated-type binding gets.
+fun first<T>(xs: [dyn Into<T>]) -> T {
+    return xs[0].into();
+}
+
+fun main() {
+    var c = Celsius { deg: 100 };
+
+    # the expected type is what tells the two `into` impls apart at a bare
+    # call site; a bound would have named the reference itself.
+    var f: Fahrenheit = c.into();
+    print(f.deg);
+
+    print(label(c));
+
+    var w = Wrap { v: 21 };
+    var p = w.into_pair();
+    print(p.0 + p.1);
+
+    print(sum(Count { n: 4 }, Count { n: 5 }));
+
+    print(run(Repeat { times: 3 }));
+
+    var n: Int = conv(Count { n: 9 });
+    print(n);
+
+    print(first([Count { n: 4 }]));
+}

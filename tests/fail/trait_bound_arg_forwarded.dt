@@ -1,0 +1,23 @@
+#! expect: type 'S' does not implement trait 'Into<String>'
+# `U: Into<T>` is checked with `T`'s own solution substituted in: the bound is
+# opened alongside the parameter it mentions, so what reaches the check is
+# `Into<String>` and not the literal `Into<T>`, which no impl heads and which
+# would have made every such bound vacuous.
+
+trait Into<T> {
+    fun into(self) -> T;
+}
+
+struct S { n: Int }
+
+impl Into<Int> for S {
+    fun into(self) -> Int { self.n }
+}
+
+fun conv<T, U: Into<T>>(v: U) -> T {
+    return v.into();
+}
+
+fun main() {
+    var x: String = conv(S { n: 5 });
+}

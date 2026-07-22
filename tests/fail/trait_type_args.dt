@@ -1,10 +1,9 @@
-#! expect: trait 'Show' cannot take type arguments
-# A trait named with type arguments used to *abort the compiler*: a bare trait
-# name is answered by the type scope directly, so only this spelling reaches
-# `resolve_path`, where `TY_TRAIT` fell into a `default: assert(false)`.
-# Nothing carries a trait's type arguments — `TypeTrait` has none — so the
-# honest answer is a diagnostic. An associated type is the supported way for a
-# trait to range over a type it does not fix.
+#! expect: trait 'Show' takes 0 type arguments but 1 was given
+# A trait's type parameters are supplied wherever it is *named* — an impl
+# head, a bound, a `dyn` — and never inferred, so the arity is checked at each
+# of them. `Show` declares none, which makes `Show<Int>` a mistake rather than
+# a spelling nothing carries: before milestone 28 it was the second, and
+# before 27 it aborted the compiler.
 
 use std::io::print;
 

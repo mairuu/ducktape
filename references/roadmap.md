@@ -1548,6 +1548,71 @@
   rather than failing, so the caller's blanket "unresolved type" does not pile
   on top.
 
+- **Generic traits (milestone 28)** — `trait Into<T>` carries its type
+  arguments, so `impl Into<Int> for S`, `T: Into<Int>` and `dyn Into<Int>` all
+  mean something. Design: `language.md` "Generic traits", `architecture.md`
+  "Generic traits", `runtime.md` "Monomorphisation" / "Trait objects".
+
+  The observation the milestone turns on: **a trait's type parameters are
+  ordinary generic parameters of every signature it declares.** So `TY_TRAIT`
+  stops being a name and becomes a *reference* — a `TraitDef` plus arguments,
+  interned on both — and a reference is exactly what the three places a trait
+  can be named already were: an impl head, a bound, a `dyn`. Everything that
+  knew how to substitute a type parameter then carries them for free.
+  Conformance, a call through a bound and a default body's instantiation each
+  apply one `Subst` more (`trait_ref_subst`), and the backend never learns
+  that traits changed at all: an argument is erased at runtime exactly as an
+  associated type is, which is milestone 27's own observation read once more.
+
+  Three things follow, and they are the whole milestone:
+  - **The bound is where the arguments were always missing.** `TypeGeneric`
+    held `TraitDef *`, so a bound could name a trait and nothing about it.
+    Holding a `TY_TRAIT` instead makes `S: Into<Int>` a question with an
+    answer, and — because trait references are interned — the check stayed the
+    pointer comparison it already was. It also gives a bound somewhere to put
+    a *type*, which is what makes `fun conv<T, U: Into<T>>` writable: bounds
+    now resolve left to right, defining each parameter as they go, and
+    `infer_open_generics` rewrites the stashed bound through the substitution
+    it just built so `Into<T>` is checked as `Into<Int>` rather than as a
+    literal no impl heads.
+  - **An impl applies to a *pair*, not to a receiver.** `impl_applies` takes
+    the trait reference alongside the self type and matches the head against
+    both, so either half may pin the impl's own parameters, and coherence asks
+    the same question from both sides — which is what lets one type implement
+    one trait at several arguments (`Into<Int>` and `Into<Fahrenheit>` for one
+    `Celsius`) without it being a conflict.
+  - **That makes a bare method call the one thing the receiver cannot
+    decide.** `c.into()` has two bodies, and a bound would have named the
+    reference. So the expected type breaks the tie — `impl_index_method` grew
+    a `ret_hint`, consulted only when there is more than one candidate, so a
+    wrong hint still reports the ordinary mismatch rather than "no method".
+    This is the one place the feature costs the language a rule rather than
+    reusing one.
+
+  `dyn` needed a small grammar change and no new concept: the bracket list now
+  holds the trait's positional type arguments *then* its named associated-type
+  bindings (`dyn Pipe<String, Out = Int>`), told apart by two tokens of
+  lookahead. Object safety is untouched — a trait's type parameters are
+  written down by whoever names the `dyn`, so unlike `Self` they were never
+  erased, which is the same argument milestone 27 made for `Self.Item`.
+
+  A trait argument may also be left to the impl to solve
+  (`fun first<T>(xs: [dyn Into<T>])`), which is milestone 27's
+  "the coercion solves rather than checks" exception one bracket list over.
+  Unlike an associated-type binding it can be *ambiguous*, since a type may
+  implement the trait at two arguments — reported rather than guessed
+  (`tests/fail/trait_arg_ambiguous.dt`).
+
+  No pre-existing bug surfaced, which is the second milestone in a row to be
+  green on the first `make sanitize`. Two latent ones were *pre-empted* by the
+  design rather than found by it: `subst_apply`'s "every generic must be in
+  the substitution" assert is a real invariant everywhere it instantiates a
+  definition and simply false when opening a bound, so it grew a `total` flag
+  instead of being relaxed; and `Expr.coerce_dyn` had to join `inst` on the
+  queue `cctx_solve_insts` drains, because a trait argument — unlike the
+  `TraitDef *` it replaced — can still be an unsolved unknown when the
+  coercion is discovered.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -1579,12 +1644,14 @@ by appetite rather than by necessity.
      The one open question in the set is whether they take byte offsets (like
      `slice`) or characters (like `chars`), which is the same fork milestone 26
      answered for indexing and would have to answer the same way.
-2. **Generic traits** — a trait may be *declared* with type parameters, but
-   nothing carries them: `TypeTrait` has no type arguments, so `T: Into<Int>`
-   and `dyn Into<Int>` both have no meaning. Milestone 27 gave `dyn` a bracket
-   list of its own (associated-type bindings), which is the shape the two
-   would have to share, so this is the next thing the trait machinery is
-   missing rather than the first.
+2. **A `std::convert`, now that `Into<T>` is writable** — milestone 28 made
+   generic traits work and deliberately shipped no std module using one, since
+   an import's cost to its dependents is measured in the impls it carries and
+   a conversion trait would want several. What it would decide is which
+   primitives convert into which, and whether `From` exists as well as `Into`
+   (in Rust one is a blanket impl of the other, which needs an impl whose self
+   type is a bare type parameter — writable today, and the one shape
+   `IMPL_BOUND_MAX_DEPTH` is known to cut off).
 
 Not on the roadmap: the **REPL** is a side feature, not a milestone — it lives
 on the `feature/repl` branch (`--repl`, incremental compilation over one module
@@ -1734,13 +1801,23 @@ via `Module.decl_base`) and is not part of the main line.
   `check_coerce_dyn` refuses a `TY_TRAIT`, so `self` inside a default body
   can't be handed on as a `dyn Trait` even when the trait is object-safe
 - no downcast from `dyn Trait` back to a concrete type
-- **a trait cannot take type parameters.** They parse, and both spellings are
-  now diagnosed rather than ignored or aborted on (milestone 27), but nothing
-  carries them: `TypeTrait` has no type arguments, so `T: Into<Int>` and
-  `dyn Into<Int>` have no meaning. An associated type is the supported way for
-  a trait to range over a type it does not fix, and since milestone 27 a `dyn`
-  can name one — `dyn Iterator<Item = Int>` is a binding list, not the
-  type-argument list a generic trait would need
+- a trait's type arguments are never *inferred* at the place the trait is
+  named: an impl head, a bound and a `dyn` each write them out, and a bare
+  `Into` is an arity error rather than a request to work it out. The one
+  exception is a `dyn` whose argument is an unsolved unknown, where the impl
+  decides — and that is ambiguous the moment two impls answer
+- **a bare method call on a type implementing one generic trait twice** picks
+  by the *expected* type, and by first-registered-impl when there is none. So
+  `print(c.into())` is not the same question as `var f: Fahrenheit =
+  c.into()`, and only the second has an answer. A trait-qualified call syntax
+  (`Into::<Fahrenheit>::into(c)`) is what would settle it, and there is none
+- a bound may name an earlier type parameter of the same list
+  (`<T, U: Into<T>>`) but not a later one — bounds resolve left to right, so a
+  forward reference is "unknown type: T" rather than a second pass
+- a *generic* trait's parameters cannot themselves be pinned by the receiver
+  in an impl head: `impl<T> Into<T> for S` type-checks, but nothing solves `T`
+  from an `S`, so the impl applies only where a bound or a `dyn` names the
+  argument
 - the slot spaces are two bytes wide, so 65536 functions/structs/enums/vtables
   is a hard program-wide ceiling (reported, not silently truncated) — and every
   instantiation of a generic and every (trait, type) pair coerced spends one,

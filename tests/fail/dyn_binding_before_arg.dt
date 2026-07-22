@@ -1,0 +1,17 @@
+#! expect: type arguments come before its associated-type bindings
+# One bracket list after a `dyn` carries two different things: the trait's own
+# type arguments, which are positional, and its associated-type bindings, which
+# are named. Interleaving them would leave the positional half ambiguous, so
+# the order is a grammar rule and not a style question.
+
+trait Pipe<T> {
+    type Out;
+    fun pipe(self, v: T) -> Self.Out;
+}
+
+fun run(p: dyn Pipe<Out = Int, String>) -> Int {
+    return p.pipe("x");
+}
+
+fun main() {
+}

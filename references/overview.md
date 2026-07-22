@@ -98,8 +98,8 @@ phase aborts mid-file. Error recovery uses a poison type/expr convention (see
 
 ## Status snapshot
 
-- **Type-checks:** the full grammar — generics, traits/impls with associated
-  types, match with guards, closures, ranges, arrays, casts, interpolation,
+- **Type-checks:** the full grammar — generics, traits (with type parameters
+  and associated types) and impls, match with guards, closures, ranges, arrays, casts, interpolation,
   `?` propagation, and programs spanning several files via `use`. See
   `language.md` for the precise rules and the not-yet-implemented list.
 - **Executes (`--run`):** nearly all of it — arithmetic, control flow,

@@ -476,9 +476,12 @@ Two call shapes need more than the recorded arguments:
   name and takes the first hit).
 - **A call through a trait bound.** The checker resolved `v.show()` against
   the trait *signature*, so there is no `MethodDef` on the node — only
-  `bound_trait` and `bound_self`. Codegen substitutes `bound_self` into a
-  concrete type and re-runs `impl_index_method` to find the body, falling back
-  to `impl_index_default_method` when the impl inherited it. This is the one
+  `bound_trait` (the trait *reference*, so a generic trait's arguments come
+  with it) and `bound_self`. Codegen substitutes both into this
+  instantiation's terms and re-runs `impl_index_method` to find the body,
+  falling back to `impl_index_default_method` when the impl inherited it.
+  Passing the reference is what tells `impl Into<Int> for S` from
+  `impl Into<String> for S`, which the receiver alone cannot. This is the one
   place codegen consults an impl index — and since impls became
   module-granular, *which* index is a question of its own.
 
@@ -500,7 +503,8 @@ inside it would already have been refused by the coherence check
 **Inherited default bodies** ride the same machinery. A trait method's default
 body gets a `FunDef` of its own at resolve time
 (`resolve_trait_default_impl` → `TraitMethodDef.default_impl`) whose *first
-type parameter is `Self`*, bounded by the trait:
+type parameter is `Self`*, bounded by the trait — followed by the trait's own
+type parameters, if it has any:
 
 ```
 trait Show { fun twice(self) -> Int { self.show() + self.show() } }
@@ -515,8 +519,8 @@ ordinary generic function: `self.show()` inside it dispatches through `Self`'s
 bound exactly as it would in a `<T: Show>` function, and one copy is compiled
 per receiver type. Every call routed through a trait — a bound, or an impl
 that omitted the method — records `Self` in its `ExprMethodCall.inst`
-alongside the method's own type arguments, which is the whole key
-`cg_inst_key` needs. An impl method has no parameter of that name, so on the
+alongside the trait's type arguments and the method's own, which is the whole
+key `cg_inst_key` needs. An impl method has no parameter of that name, so on the
 calls that land on one the extra binding is simply unused.
 
 `MONO_MAX_DEPTH` (32) bounds the chain. `fun grow<T>(v: T) { grow([v]) }`
@@ -554,8 +558,12 @@ one level over. **Nor does it hold the associated-type bindings.** A
 types to the checker and the same shape to the VM, because an associated type
 is erased exactly as a type argument is — so naming one at a coercion site
 changed nothing in codegen, the vtable, the opcodes or the image format. The
-memo key stays `(trait, self type)`, which still determines the bindings: an
-impl binds each associated type once.
+memo key stays `(trait reference, self type)`, which still determines the
+bindings: an impl binds each associated type once. The *reference* rather than
+the trait, since milestone 28: `dyn Into<Int>` and `dyn Into<String>` over one
+self type name two impls, so they are two tables — and a trait's type argument
+is erased at runtime exactly as an associated type is, so that is again the
+only thing that changed.
 
 Two opcodes, and deliberately no third:
 

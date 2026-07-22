@@ -55,11 +55,11 @@ static uint32_t type_hash(const Type *t) {
     break;
   case TY_TRAIT:
     h = h * 31 + (uint32_t)(uintptr_t)t->as.trait.def;
-    // for (int i = 0; i < t->as.trait.type_arg_count; i++)
-    //   h = h * 31 + (uint32_t)(uintptr_t)t->as.trait.type_args[i];
+    for (int i = 0; i < t->as.trait.type_arg_count; i++)
+      h = h * 31 + (uint32_t)(uintptr_t)t->as.trait.type_args[i];
     break;
   case TY_DYN:
-    h = h * 31 + (uint32_t)(uintptr_t)t->as.dyn.def;
+    h = h * 31 + (uint32_t)(uintptr_t)t->as.dyn.trait;
     for (int i = 0; i < t->as.dyn.assoc_type_count; i++)
       h = h * 31 + (uint32_t)(uintptr_t)t->as.dyn.assoc_types[i];
     break;
@@ -131,9 +131,16 @@ static bool type_structurally_equal(const Type *a, const Type *b) {
         return false;
     return true;
   case TY_TRAIT:
-    return a->as.trait.def == b->as.trait.def;
+    if (a->as.trait.def != b->as.trait.def)
+      return false;
+    if (a->as.trait.type_arg_count != b->as.trait.type_arg_count)
+      return false;
+    for (int i = 0; i < a->as.trait.type_arg_count; i++)
+      if (a->as.trait.type_args[i] != b->as.trait.type_args[i])
+        return false;
+    return true;
   case TY_DYN:
-    if (a->as.dyn.def != b->as.dyn.def)
+    if (a->as.dyn.trait != b->as.dyn.trait)
       return false;
     if (a->as.dyn.assoc_type_count != b->as.dyn.assoc_type_count)
       return false;
@@ -150,11 +157,11 @@ static bool type_structurally_equal(const Type *a, const Type *b) {
   }
 }
 
-static void sort_bounds(TraitDef **bounds, int count) {
+static void sort_bounds(Type **bounds, int count) {
   for (int i = 0; i < count - 1; i++) {
     for (int j = 0; j < count - i - 1; j++) {
       if (bounds[j] > bounds[j + 1]) {
-        TraitDef *temp = bounds[j];
+        Type *temp = bounds[j];
         bounds[j] = bounds[j + 1];
         bounds[j + 1] = temp;
       }
@@ -199,11 +206,21 @@ static inline bool type_is_internable(Type *t) {
       }
     }
     break;
+  case TY_TRAIT:
+    for (int i = 0; i < t->as.trait.type_arg_count; i++) {
+      if (!type_is_internable(t->as.trait.type_args[i])) {
+        return false;
+      }
+    }
+    break;
   case TY_DYN:
-    // a binding can still be an unsolved unknown
+    // a binding — or a trait argument — can still be an unsolved unknown
     // (`[dyn Iterator<Item = T>]` at a call site), and a container of a
     // non-internable type is not internable — the same rule every case above
     // follows.
+    if (!type_is_internable(t->as.dyn.trait)) {
+      return false;
+    }
     for (int i = 0; i < t->as.dyn.assoc_type_count; i++) {
       if (!type_is_internable(t->as.dyn.assoc_types[i])) {
         return false;
@@ -408,14 +425,14 @@ Type *ty_array(Type *elem, Allocator *al) {
   return type_intern(t, al);
 }
 
-Type *ty_generic(StringView name, TraitDef **bounds, int bound_count,
+Type *ty_generic(StringView name, Type **bounds, int bound_count,
                  Allocator *al) {
   // Canonicalise bound order up front: `T: A + B` and `T: B + A` denote the
   // same type, and both type_hash and the probe below are order-sensitive.
   // (The caller's array is borrowed, so sort a copy.)
-  TraitDef **sorted = NULL;
+  Type **sorted = NULL;
   if (bound_count > 0) {
-    sorted = al_alloc(al, bound_count * sizeof(TraitDef *));
+    sorted = al_alloc(al, bound_count * sizeof(Type *));
     for (int i = 0; i < bound_count; i++) {
       sorted[i] = bounds[i];
     }
@@ -508,10 +525,12 @@ Type *ty_enum(EnumDef *def, Type **args, int argc, Allocator *al) {
   return type_intern(t, al);
 }
 
-Type *ty_trait(TraitDef *def, Allocator *al) {
+Type *ty_trait(TraitDef *def, Type **args, int argc, Allocator *al) {
   Type probe = {.kind = TY_TRAIT,
                 .as.trait = {
                     .def = def,
+                    .type_args = args,
+                    .type_arg_count = argc,
                 }};
   Type *interned = type_intern_lookup(&probe);
   if (interned) {
@@ -521,14 +540,19 @@ Type *ty_trait(TraitDef *def, Allocator *al) {
   Type *t = al_alloc_zero_for(al, Type);
   t->kind = TY_TRAIT;
   t->as.trait.def = def;
+  t->as.trait.type_args = al_alloc(al, argc * sizeof(Type *));
+  for (int i = 0; i < argc; i++) {
+    t->as.trait.type_args[i] = args[i];
+  }
+  t->as.trait.type_arg_count = argc;
   return type_intern(t, al);
 }
 
-Type *ty_dyn(TraitDef *def, Type **assoc_types, int assoc_type_count,
+Type *ty_dyn(Type *trait, Type **assoc_types, int assoc_type_count,
              Allocator *al) {
   Type probe = {.kind = TY_DYN,
                 .as.dyn = {
-                    .def = def,
+                    .trait = trait,
                     .assoc_types = assoc_types,
                     .assoc_type_count = assoc_type_count,
                 }};
@@ -539,7 +563,7 @@ Type *ty_dyn(TraitDef *def, Type **assoc_types, int assoc_type_count,
 
   Type *t = al_alloc_zero_for(al, Type);
   t->kind = TY_DYN;
-  t->as.dyn.def = def;
+  t->as.dyn.trait = trait;
   t->as.dyn.assoc_types = al_alloc(al, assoc_type_count * sizeof(Type *));
   for (int i = 0; i < assoc_type_count; i++) {
     t->as.dyn.assoc_types[i] = assoc_types[i];
@@ -548,8 +572,68 @@ Type *ty_dyn(TraitDef *def, Type **assoc_types, int assoc_type_count,
   return type_intern(t, al);
 }
 
+bool type_is_abstract(const Type *t) {
+  switch (t->kind) {
+  case TY_GENERIC:
+  case TY_UNKNOWN:
+  case TY_ASSOC:
+    return true;
+  case TY_FUNCTION:
+    for (int i = 0; i < t->as.fun.param_count; i++) {
+      if (type_is_abstract(t->as.fun.param_types[i])) {
+        return true;
+      }
+    }
+    return type_is_abstract(t->as.fun.return_type);
+  case TY_TUPLE:
+    for (int i = 0; i < t->as.tuple.elem_count; i++) {
+      if (type_is_abstract(t->as.tuple.elem_types[i])) {
+        return true;
+      }
+    }
+    return false;
+  case TY_STRUCT:
+    for (int i = 0; i < t->as.struc.type_arg_count; i++) {
+      if (type_is_abstract(t->as.struc.type_args[i])) {
+        return true;
+      }
+    }
+    return false;
+  case TY_ENUM:
+    for (int i = 0; i < t->as.enm.type_arg_count; i++) {
+      if (type_is_abstract(t->as.enm.type_args[i])) {
+        return true;
+      }
+    }
+    return false;
+  case TY_ARRAY:
+    return type_is_abstract(t->as.array.elem_type);
+  case TY_TRAIT:
+    // the trait itself is a name; what can be abstract is what it was applied
+    // to.
+    for (int i = 0; i < t->as.trait.type_arg_count; i++) {
+      if (type_is_abstract(t->as.trait.type_args[i])) {
+        return true;
+      }
+    }
+    return false;
+  case TY_DYN:
+    if (type_is_abstract(t->as.dyn.trait)) {
+      return true;
+    }
+    for (int i = 0; i < t->as.dyn.assoc_type_count; i++) {
+      if (type_is_abstract(t->as.dyn.assoc_types[i])) {
+        return true;
+      }
+    }
+    return false;
+  default:
+    return false;
+  }
+}
+
 Type *ty_dyn_assoc(const Type *dyn, StringView name) {
-  const TraitDef *trait = dyn->as.dyn.def;
+  const TraitDef *trait = dyn_trait_def(dyn);
   for (int i = 0; i < dyn->as.dyn.assoc_type_count; i++) {
     if (sv_equal(trait->assoc_types[i].name, name)) {
       return dyn->as.dyn.assoc_types[i];
@@ -613,7 +697,8 @@ int type_name_sprintf(const Type *t, char *buf, size_t buf_size) {
   case TY_TRAIT:
     return snprintf(buf, buf_size, SV_FMT, SV_ARG(t->as.trait.def->name));
   case TY_DYN:
-    return snprintf(buf, buf_size, "dyn " SV_FMT, SV_ARG(t->as.dyn.def->name));
+    return snprintf(buf, buf_size, "dyn " SV_FMT,
+                    SV_ARG(dyn_trait_def(t)->name));
   case TY_ARRAY:
     return snprintf(buf, buf_size, "Array<...>");
   case TY_RANGE:
@@ -745,26 +830,52 @@ int type_sprintf(const Type *t, char *buf, size_t buf_size) {
     }
     return n;
   }
-  case TY_TRAIT:
-    return snprintf(buf, buf_size, SV_FMT,
-                    SV_ARG(t->as.trait.def->name)); // todo: include type args
+  case TY_TRAIT: {
+    int n =
+        sp_bump(0, buf_size,
+                snprintf(buf, buf_size, SV_FMT, SV_ARG(t->as.trait.def->name)));
+    // the type arguments are part of the identity, so a mismatch has to show
+    // them: `Into<Int>` and `Into<String>` are two bounds.
+    for (int i = 0; i < t->as.trait.type_arg_count; i++) {
+      n = sp_bump(n, buf_size,
+                  snprintf(buf + n, buf_size - n, "%s", i == 0 ? "<" : ", "));
+      n = sp_bump(
+          n, buf_size,
+          type_sprintf(t->as.trait.type_args[i], buf + n, buf_size - n));
+    }
+    if (t->as.trait.type_arg_count > 0) {
+      n = sp_bump(n, buf_size, snprintf(buf + n, buf_size - n, ">"));
+    }
+    return n;
+  }
   case TY_DYN: {
-    int n = sp_bump(
-        0, buf_size,
-        snprintf(buf, buf_size, "dyn " SV_FMT, SV_ARG(t->as.dyn.def->name)));
-    // the bindings are part of the type, so a mismatch diagnostic has to show
-    // them: `dyn Iterator<Item = Int>` and `dyn Iterator<Item = String>` are
-    // two different expectations and would otherwise print the same.
+    const TraitDef *def = dyn_trait_def(t);
+    const TypeTrait *ref = &t->as.dyn.trait->as.trait;
+    int n = sp_bump(0, buf_size,
+                    snprintf(buf, buf_size, "dyn " SV_FMT, SV_ARG(def->name)));
+    // the type arguments and the bindings are both part of the type, so a
+    // mismatch diagnostic has to show them: `dyn Iterator<Item = Int>` and
+    // `dyn Iterator<Item = String>` are two different expectations and would
+    // otherwise print the same. One bracket list, arguments before bindings —
+    // the same shape the source writes.
+    int written = 0;
+    for (int i = 0; i < ref->type_arg_count; i++) {
+      n = sp_bump(
+          n, buf_size,
+          snprintf(buf + n, buf_size - n, "%s", written++ == 0 ? "<" : ", "));
+      n = sp_bump(n, buf_size,
+                  type_sprintf(ref->type_args[i], buf + n, buf_size - n));
+    }
     for (int i = 0; i < t->as.dyn.assoc_type_count; i++) {
       n = sp_bump(n, buf_size,
                   snprintf(buf + n, buf_size - n, "%s" SV_FMT " = ",
-                           i == 0 ? "<" : ", ",
-                           SV_ARG(t->as.dyn.def->assoc_types[i].name)));
+                           written++ == 0 ? "<" : ", ",
+                           SV_ARG(def->assoc_types[i].name)));
       n = sp_bump(
           n, buf_size,
           type_sprintf(t->as.dyn.assoc_types[i], buf + n, buf_size - n));
     }
-    if (t->as.dyn.assoc_type_count > 0) {
+    if (written > 0) {
       n = sp_bump(n, buf_size, snprintf(buf + n, buf_size - n, ">"));
     }
     return n;
@@ -919,9 +1030,12 @@ void dump_type(const Type *t) {
     break;
   case TY_TRAIT:
     fprintf(stdout, SV_FMT, SV_ARG(t->as.trait.def->name));
+    if (t->as.trait.type_arg_count > 0) {
+      fprintf(stdout, "<...>");
+    }
     break;
   case TY_DYN:
-    fprintf(stdout, "dyn " SV_FMT, SV_ARG(t->as.dyn.def->name));
+    fprintf(stdout, "dyn " SV_FMT, SV_ARG(dyn_trait_def(t)->name));
     if (t->as.dyn.assoc_type_count > 0) {
       fprintf(stdout, "<...>");
     }

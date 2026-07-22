@@ -1,0 +1,20 @@
+#! expect: trait 'Into' takes 1 type argument but 0 were given
+# The mirror of trait_type_args.dt: a *bare* trait name is the trait applied
+# to its own parameters, which is what a declaration means by it and not a
+# reference a program can use — `impl Into for S` has said nothing about what
+# it converts to. Reported at the head rather than as the signature mismatch
+# ("expected 'fun(S) -> T'") it would otherwise become, which describes the
+# abstract parameter leaking rather than the missing argument.
+
+trait Into<T> {
+    fun into(self) -> T;
+}
+
+struct S { n: Int }
+
+impl Into for S {
+    fun into(self) -> Int { self.n }
+}
+
+fun main() {
+}

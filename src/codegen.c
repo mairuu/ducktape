@@ -168,7 +168,14 @@ static bool type_is_concrete(const Type *t) {
     // exactly like a struct can. That difference *is* the feature. Its
     // associated-type bindings are ordinary types and can still be abstract
     // (`dyn Iterator<Item = T>` inside a generic), so they are asked too —
-    // the same question `Opt<T>` above answers about its type arguments.
+    // the same question `Opt<T>` above answers about its type arguments — and
+    // since milestone 28 the trait's own arguments are asked the same way
+    // (`dyn Into<T>`).
+    for (int i = 0; i < t->as.dyn.trait->as.trait.type_arg_count; i++) {
+      if (!type_is_concrete(t->as.dyn.trait->as.trait.type_args[i])) {
+        return false;
+      }
+    }
     for (int i = 0; i < t->as.dyn.assoc_type_count; i++) {
       if (!type_is_concrete(t->as.dyn.assoc_types[i])) {
         return false;
@@ -1079,16 +1086,38 @@ static void compile_call(Cg *cg, Expr *expr) {
 // Trait objects
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Bind `Self` and the trait's own type parameters, which together are the
+// type parameters a trait's default body is generic over (milestone 12 gave it
+// `Self`; a generic trait adds the rest). The trait reference is what names
+// them, so this is the same substitution `trait_ref_subst` builds in the
+// checker, plus the receiver.
+static Subst cg_trait_ref_subst(Cg *cg, Type *trait_ref, Type *self) {
+  TraitDef *def = trait_ref->as.trait.def;
+  int n = trait_ref->as.trait.type_arg_count;
+  StringView *names = al_alloc(cg->al, sizeof(StringView) * (size_t)(n + 1));
+  Type **args = al_alloc(cg->al, sizeof(Type *) * (size_t)(n + 1));
+  for (int i = 0; i < n; i++) {
+    names[i] = def->type_params[i]->as.generic.name;
+    args[i] = trait_ref->as.trait.type_args[i];
+  }
+  names[n] = sv_from_cstr("Self");
+  args[n] = self;
+
+  Subst s;
+  subst_init(&s, names, args, n + 1);
+  return s;
+}
+
 // The body one vtable slot points at, for a concrete `self`: the impl's own
 // method, or the trait's default body when the impl omitted it. This is the
 // same two-way choice `compile_method_call` makes for a bound receiver — a
 // vtable is just that choice made ahead of time, for every method at once.
-static FunDef *cg_dyn_slot_target(Cg *cg, Type *self, StringView name,
-                                  Span span) {
+static FunDef *cg_dyn_slot_target(Cg *cg, Type *trait_ref, Type *self,
+                                  StringView name, Span span) {
   ImplMatch match;
-  MethodDef *method =
-      impl_index_method(cg->impls, self, name, &match, /*infer=*/NULL,
-                        /*bare_path=*/false, span, cg->al);
+  MethodDef *method = impl_index_method(
+      cg->impls, self, trait_ref, name, /*ret_hint=*/NULL, &match,
+      /*infer=*/NULL, /*bare_path=*/false, span, cg->al);
   if (method != NULL) {
     return cg_call_target(cg, method->fun, &match.subst, NULL, span);
   }
@@ -1096,28 +1125,29 @@ static FunDef *cg_dyn_slot_target(Cg *cg, Type *self, StringView name,
   ImplDef *via_impl = NULL;
   TraitDef *via_trait = NULL;
   Subst via_subst = subst_empty();
-  TraitMethodDef *inherited = impl_index_default_method(
-      cg->impls, self, name, &via_impl, &via_trait, &via_subst, cg->al);
+  TraitMethodDef *inherited =
+      impl_index_default_method(cg->impls, self, trait_ref, name, &via_impl,
+                                &via_trait, &via_subst, cg->al);
   if (inherited == NULL || inherited->default_impl == NULL) {
     return NULL;
   }
 
-  // the default body is a generic function whose first type parameter is
-  // `Self` (milestone 12), so binding that one name instantiates it.
-  StringView self_name = sv_from_cstr("Self");
-  Type *args[1] = {self};
-  Subst s;
-  subst_init(&s, &self_name, args, 1);
+  // the default body is a generic function over `Self` and the trait's own
+  // type parameters (milestone 12, extended in 28), so binding those names
+  // instantiates it — and the trait reference is exactly what names them.
+  Subst s = cg_trait_ref_subst(cg, trait_ref, self);
   return cg_call_target(cg, inherited->default_impl, &s, &via_subst, span);
 }
 
 // find or build the vtable for coercing `self` to `dyn trait`, returning its
 // slot. Memoised on the (trait, self) pair so every coercion of one type to
 // one trait shares a table.
-static int cg_vtable_for(Cg *cg, TraitDef *trait, Type *self, Span span) {
+static int cg_vtable_for(Cg *cg, Type *trait_ref, Type *self, Span span) {
+  TraitDef *trait = trait_ref->as.trait.def;
   Mono *mono = cg->mono;
   for (int i = 0; i < mono->vtable_count; i++) {
-    if (mono->vtables[i].trait == trait && mono->vtables[i].self_type == self) {
+    if (mono->vtables[i].trait == trait_ref &&
+        mono->vtables[i].self_type == self) {
       return mono->vtables[i].index;
     }
   }
@@ -1156,10 +1186,11 @@ static int cg_vtable_for(Cg *cg, TraitDef *trait, Type *self, Span span) {
     mono->vtable_cap = new_cap;
   }
   mono->vtables[mono->vtable_count++] =
-      (DynVTable){.trait = trait, .self_type = self, .index = index};
+      (DynVTable){.trait = trait_ref, .self_type = self, .index = index};
 
   for (int i = 0; i < trait->method_count; i++) {
-    FunDef *target = cg_dyn_slot_target(cg, self, trait->methods[i].name, span);
+    FunDef *target =
+        cg_dyn_slot_target(cg, trait_ref, self, trait->methods[i].name, span);
     if (target == NULL) {
       char buf[64];
       type_sprintf(self, buf, sizeof(buf));
@@ -1197,7 +1228,8 @@ static void compile_coerce_dyn(Cg *cg, Expr *expr) {
     return;
   }
 
-  int slot = cg_vtable_for(cg, expr->coerce_dyn, self, expr->span);
+  Type *trait_ref = subst_apply(&cg->subst, expr->coerce_dyn, cg->al);
+  int slot = cg_vtable_for(cg, trait_ref, self, expr->span);
   if (slot < 0) {
     return;
   }
@@ -1228,7 +1260,7 @@ static void compile_method_call(Cg *cg, Expr *expr) {
     // The receiver carries the table, so the slot is all codegen picks: the
     // position the trait fixes for this method name.
     if (self->kind == TY_DYN) {
-      TraitDef *trait = self->as.dyn.def;
+      TraitDef *trait = dyn_trait_def(self);
       int index = -1;
       for (int i = 0; i < trait->method_count; i++) {
         if (sv_equal(trait->methods[i].name, mc->method_name)) {
@@ -1251,9 +1283,13 @@ static void compile_method_call(Cg *cg, Expr *expr) {
       return;
     }
 
+    // which trait the bound named, in this instantiation's terms: two impls
+    // of one generic trait for one type differ only here.
+    Type *trait_ref = subst_apply(&cg->subst, mc->bound_trait, cg->al);
+
     ImplMatch match;
     MethodDef *method = impl_index_method(
-        cg->impls, self, mc->method_name, &match,
+        cg->impls, self, trait_ref, mc->method_name, /*ret_hint=*/NULL, &match,
         /*infer=*/NULL, /*bare_path=*/false, expr->span, cg->al);
     if (method != NULL) {
       fun = method->fun;
@@ -1266,8 +1302,8 @@ static void compile_method_call(Cg *cg, Expr *expr) {
       TraitDef *via_trait = NULL;
       Subst via_subst = subst_empty();
       TraitMethodDef *inherited =
-          impl_index_default_method(cg->impls, self, mc->method_name, &via_impl,
-                                    &via_trait, &via_subst, cg->al);
+          impl_index_default_method(cg->impls, self, trait_ref, mc->method_name,
+                                    &via_impl, &via_trait, &via_subst, cg->al);
       if (inherited == NULL || inherited->default_impl == NULL) {
         cg_error(cg, expr->span, "this method call");
         return;

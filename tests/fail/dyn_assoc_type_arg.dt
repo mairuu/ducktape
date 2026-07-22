@@ -1,7 +1,9 @@
-#! expect: a trait object binds them by name
-# `<Item = Int>` is a binding list, not a type-argument list — which is why the
-# path after `dyn` is parsed without type arguments and the '<' is read here.
-# A trait's own type parameters are a separate, still-unsupported question.
+#! expect: trait 'Iterator' takes 0 type arguments but 1 was given
+# The bracket list after a `dyn` holds the trait's type arguments and its
+# associated-type bindings, which are two different questions sharing one pair
+# of angle brackets. `Iterator` declares no type parameters, so a positional
+# argument to it is an arity mistake — and `Item` still has to be bound by
+# name, which dyn_assoc_missing.dt covers.
 
 use std::io::print;
 

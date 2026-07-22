@@ -401,11 +401,25 @@ in place by `cctx_solve_insts` after `infer_finalize` — see
 bounds written inline (`<T: A + B>`) with any `where T: C` predicate naming it;
 `resolve_bound_refs` resolves each trait ref through the type scope (a ref that
 isn't a trait is diagnosed) and de-duplicates. The result is a `TY_GENERIC`
-carrying `bounds`/`bound_count`.
+carrying `bounds`/`bound_count` — each bound a `TY_TRAIT` *reference*, so it
+carries the trait's own type arguments (see "Generic traits").
+
+`resolve_type_params` resolves the list and defines each parameter in the type
+scope *as it goes*, which is what lets a bound name an earlier parameter
+(`<T, U: Into<T>>`). Left to right, so a forward reference is an unknown type
+rather than a second pass.
 
 Enforcement is deferred to the end of inference, because a bound can only be
 judged once its parameter is solved. `infer_open_generics` stashes the source
-`TY_GENERIC` in each fresh unknown's `.bound`; after `infer_finalize`,
+`TY_GENERIC` in each fresh unknown's `.bound` — rewritten through the
+substitution it just built, so a bound mentioning a sibling parameter
+(`U: Into<T>`) becomes `Into<?T>` and is checked against `T`'s own solution
+rather than against a literal that no impl heads. That rewrite is the one
+*partial* `subst_apply`: a bound can mention parameters of an enclosing scope
+too, and only this declaration's are being opened. `check_bounds_satisfied`
+skips a bound that is still abstract after `infer_apply`, on the same trust
+`impl_index_implements` places in a `TY_GENERIC` — it is re-checked where the
+enclosing definition is instantiated; after `infer_finalize`,
 `infer_check_bounds` walks the unknowns, and for every solved one with bounds
 asks `impl_index_implements` (does any `impl Trait for T` head match — exact for
 a non-generic impl, `impl_type_match` for a generic one) and reports
@@ -418,6 +432,53 @@ entirely, so `infer_open_generics` records the (param, argument) pair in
 `ty_generic` interns like every other `ty_*` constructor, canonicalising bound
 order first (`T: A + B` and `T: B + A` are one type) — the intern hash is
 order-sensitive, so sorting must happen *before* the probe.
+
+### Generic traits
+
+A trait's type parameters are ordinary generic parameters of every signature it
+declares. `TY_TRAIT` is therefore a *reference* — a `TraitDef` plus type
+arguments, interned on both — and a reference is written at each of the three
+places a trait can be named: an impl head (`ImplDef.trait_type`), a bound
+(`TypeGeneric.bounds`), and inside a `dyn` (`TypeDyn.trait`). `trait_ref_resolve`
+builds one and is where the arity is checked; a *bare* trait name in type
+position resolves to `TraitDef.self_type`, the trait applied to its own
+parameters, which is a declaration's meaning of it and reported as a missing
+argument anywhere else.
+
+`trait_ref_subst` turns a reference into the substitution its signatures are
+read under, and three places apply it: `tc_check_impl_conformance` (before
+comparing an impl's method against the trait's), `check_trait_method_call` (a
+call through a bound), and `cg_trait_ref_subst` (instantiating a default body).
+Each drops entries a method's own type parameters shadow, exactly as every
+other outer substitution is dropped. Nothing else in the pipeline changed:
+`subst_apply`/`infer_apply`/`infer_unify` walk a reference's arguments like a
+struct's, and the backend never sees one at all.
+
+Selection asks about the pair. `impl_applies` takes a nullable `trait_ref`
+alongside the self type, and matches the impl's head against *both* — so an
+impl's own parameters may be pinned by either half (`impl<T> Into<T> for
+Wrap<T>` by the receiver, `impl<T: Display> Into<String> for T` by both), and
+`impl Into<Int> for S` no longer answers `S: Into<String>`. Coherence
+(`impl_defs_conflict`) asks the same question from both sides, which is what
+lets one type implement one trait at several arguments.
+
+Two consequences worth naming, because they are the only places the checker
+had to decide something new:
+
+- **A bare method call may have several bodies.** The receiver alone cannot
+  pick between `Into<Int>` and `Into<Fahrenheit>` for one type, and a bound
+  would have named the reference. So `impl_index_method` takes a `ret_hint` —
+  the expected type, threaded from `resolve_method_call_expr` — and uses it as
+  a *tie-break* only: with one candidate it is never consulted, so a wrong
+  hint still reports the ordinary mismatch rather than "no method".
+- **A trait argument can be solved rather than checked.** `[dyn Into<T>]` at a
+  call site names no argument, so `check_coerce_dyn` reads it off the impl
+  (`impl_index_trait_ref`) and unifies — the same exception milestone 27 made
+  for an unsolved associated-type binding, one bracket list over. Unlike a
+  binding this one can be ambiguous, since a type may implement the trait at
+  two arguments, and that is reported rather than guessed. The recorded
+  `Expr.coerce_dyn` is therefore queued like `inst` and rewritten by
+  `cctx_solve_insts` once inference settles.
 
 ### Calls through a trait bound
 
@@ -455,7 +516,8 @@ trait Show { fun twice(self) -> Int { self.show() + self.show() } }
 ```
 
 `resolve_trait_default_impl` builds that `FunDef` at resolve time: its type
-params are `Self` — `ty_generic("Self", bounds=[the trait])` — followed by the
+params are `Self` — `ty_generic("Self", bounds=[the trait's own reference])` —
+then the trait's type parameters (those the method does not shadow), then the
 method's own, and its signature is `method_type` run through `trait_project`
 onto that parameter. The trait's `method_type` itself keeps the abstract
 `TY_TRAIT` `Self`, since impl conformance and call sites are checked against
@@ -503,8 +565,12 @@ as far as codegen is concerned (`type_is_concrete` says yes, and a `dyn Show`
 can key an instantiation exactly like a struct can). Sharing one kind would
 put two dispatch strategies behind one type.
 
-Resolution is `TYNODE_DYN` → `ty_dyn(trait, bindings)`, interned like every
-other structural type. **Object safety** is checked there — where `dyn Trait`
+Resolution is `TYNODE_DYN` → `ty_dyn(trait_ref, bindings)`, interned like every
+other structural type. The bracket list after the path holds two lists —
+positional type arguments for the trait itself, then named associated-type
+bindings — told apart by two tokens of lookahead in `parse_dyn_args`, since a
+type argument may be a bare name too. Arguments first, because the positional
+half cannot survive being interleaved. **Object safety** is checked there — where `dyn Trait`
 is written, not at the trait declaration, because a trait is free to be
 static-dispatch-only and only naming it as a type asks for more. A method is
 vtable-able only if a receiver and nothing else is enough to call it:
@@ -655,10 +721,12 @@ bind.
 
 ### Impls and method lookup
 
-`ImplIndex` is a flat list. `impl_index_method` matches a receiver type
-against each impl's self type: exact `types_equal` for non-generic impls,
-`impl_type_match` (structural, binds the impl's `TY_GENERIC` leaves) for
-generic ones. A *bare generic self* — the canonical `Point<T>` that a path
+`ImplIndex` is a flat list. `impl_index_method` matches a receiver type — and,
+when the caller has one, a trait reference — against each impl's head: exact
+`types_equal` for non-generic impls, `impl_type_match` (structural, binds the
+impl's `TY_GENERIC` leaves) for generic ones. First match wins, except that a
+`ret_hint` breaks a tie between two impls of one generic trait (see "Generic
+traits"). A *bare generic self* — the canonical `Point<T>` that a path
 like `Point::new` resolves to, detected by pointer identity with
 `def->self_type` — instead selects by method name and opens the impl's params
 as unknowns for the call site to solve. That branch is gated on the caller's

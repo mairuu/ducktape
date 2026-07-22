@@ -52,9 +52,11 @@ typedef struct {
 // concrete type to the same trait must reach the same `exe->vtables` entry —
 // otherwise identical trait objects would carry different tables, and the
 // slot space would grow with coercion *sites* rather than with (trait, type)
-// pairs.
+// pairs. The key is the trait *reference*: `dyn Into<Int>` and
+// `dyn Into<String>` over one self type are two tables, since each names a
+// different impl.
 typedef struct {
-  TraitDef *trait;
+  Type *trait;     // TY_TRAIT, interned — the trait and its type arguments
   Type *self_type; // interned, so pointer equality is identity
   int index;       // into exe->vtables
 } DynVTable;
