@@ -47,6 +47,49 @@ impl Display for String {
   }
 }
 
+# ── the containers ────────────────────────────────────────────────────────────
+#
+# An array and a tuple are the two types with no module of their own, so their
+# impls live here; every other container implements `Display` beside its own
+# definition (`std::option`, `std::result`), the same way it already implements
+# `Ord` there. Nothing structural allowed these before milestone 19: an impl was
+# program-global, so shipping one would have silently claimed the rendering of
+# `[T]` for every program whether it imported `std::fmt` or not.
+#
+# The element goes through `Display` in turn, which is the whole point — a
+# `[Point]` renders with `Point`'s own `to_string`, not with the runtime's
+# structural walk. It also means a `String` element renders bare: `Display`
+# answers "render this for a reader", and quoting is a debugging affordance.
+# `print` still shows the structural view, and the two only agree by
+# coincidence of taste on the separators below.
+#
+# The bound is on the *impl's* type param, and since milestone 20 that is
+# checked where the impl is selected — so `"{v}"` on a `[Widget]` whose element
+# has no `Display` is an error at the interpolation, naming `Widget`.
+
+impl<T: Display> Display for [T] {
+  fun to_string(self) -> String {
+    var out = "[";
+    var first = true;
+    for item in self {
+      if not first {
+        out = out + ", ";
+      }
+      out = out + item.to_string();
+      first = false;
+    }
+    return out + "]";
+  }
+}
+
+# Arity is per-impl: a tuple's length is part of its type and the language has
+# no way to be generic over it, so a 3-tuple would need its own impl below.
+impl<A: Display, B: Display> Display for (A, B) {
+  fun to_string(self) -> String {
+    return "(" + self.0.to_string() + ", " + self.1.to_string() + ")";
+  }
+}
+
 # The trait as a function, for the places a method call cannot go: a value
 # passed to something expecting a `String`, or a pipe stage.
 pub fun to_string<T: Display>(value: T) -> String {

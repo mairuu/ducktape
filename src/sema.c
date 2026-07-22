@@ -208,7 +208,7 @@ Type *subst_apply(const Subst *s, Type *t, Allocator *al) {
 static Type *impl_index_assoc_type(ImplIndex *idx, Type *self_type,
                                    StringView name, Allocator *al);
 static bool impl_applies(ImplDef *impl, Type *self_type, Subst *out_subst,
-                         Allocator *al);
+                         ImplIndex *bounds_idx, Allocator *al);
 static TraitDef *impl_trait_def(ImplDef *impl);
 
 static void infer_note_explicit_bound(InferCtx *ctx, Type *param, Type *arg,
@@ -733,10 +733,66 @@ static void note_unimported_impl(DiagBag *diags, ImplDef *impl) {
             SV_ARG(impl->module->file_path));
 }
 
+// An impl that matched `self_type` structurally but was rejected because one
+// of its *own* type params failed a bound — `impl<T: Display> Display for [T]`
+// meeting `[Widget]`. Without this note the diagnostic says only that
+// `[Widget]` is not Display, which is true and useless: the impl exists, and
+// the thing to fix is one level down. Same role as `note_unimported_impl` — the
+// visible set cannot tell you *why* it declined. `trait` narrows the search, or
+// NULL to consider every impl — which is what the "no method named" caller
+// wants, since a method may come from any of them.
+static void note_blocking_bound(DiagBag *diags, ImplIndex *idx, Type *self_type,
+                                TraitDef *trait, StringView method,
+                                Allocator *al) {
+  for (int i = 0; i < idx->count; i++) {
+    ImplDef *impl = idx->all[i];
+    if (impl->type_param_count == 0 ||
+        (trait != NULL && impl_trait_def(impl) != trait)) {
+      continue;
+    }
+    if (method.len > 0) {
+      bool declares = false;
+      for (int j = 0; j < impl->method_count && !declares; j++) {
+        declares = sv_equal(impl->methods[j].name, method);
+      }
+      if (!declares) {
+        continue;
+      }
+    }
+    Subst subst;
+    if (!impl_applies(impl, self_type, &subst, NULL, al)) {
+      continue; // didn't match even structurally
+    }
+    for (int j = 0; j < impl->type_param_count; j++) {
+      Type *param = impl->type_params[j];
+      if (param == NULL || param->kind != TY_GENERIC) {
+        continue;
+      }
+      Type *arg = subst_find(&subst, param->as.generic.name);
+      if (arg == NULL) {
+        continue;
+      }
+      for (int b = 0; b < param->as.generic.bound_count; b++) {
+        TraitDef *need = param->as.generic.bounds[b];
+        if (impl_index_implements(idx, arg, need, al)) {
+          continue;
+        }
+        char arg_buf[64];
+        type_sprintf(arg, arg_buf, sizeof(arg_buf));
+        diag_note(diags, (Span){0},
+                  "an impl exists, but it requires '%s: " SV_FMT "'", arg_buf,
+                  SV_ARG(need->name));
+        return;
+      }
+    }
+  }
+}
+
 typedef struct {
   Type *self_type;
   TraitDef *trait;   // NULL to match any
   StringView method; // empty to match any
+  ImplIndex *impls;  // visible set, to answer the candidate's own bounds
   Allocator *al;
 } ImplQuery;
 
@@ -745,8 +801,10 @@ static bool impl_query_matches(ImplDef *impl, void *raw) {
   if (q->trait != NULL && impl_trait_def(impl) != q->trait) {
     return false;
   }
+  // bounds are asked against the *visible* set, the same one selection would
+  // have used — otherwise the note offers an import that would not have helped.
   Subst ignored;
-  if (!impl_applies(impl, q->self_type, &ignored, q->al)) {
+  if (!impl_applies(impl, q->self_type, &ignored, q->impls, q->al)) {
     return false;
   }
   if (q->method.len == 0) {
@@ -775,9 +833,10 @@ static void check_bounds_satisfied(TypeChecker *tc, ImplIndex *idx, Type *param,
       type_sprintf(arg, buf, sizeof(buf));
       diag_error(diags, span, "type '%s' does not implement trait '" SV_FMT "'",
                  buf, SV_ARG(trait->name));
-      ImplQuery q = {.self_type = arg, .trait = trait, .al = al};
+      ImplQuery q = {.self_type = arg, .trait = trait, .impls = idx, .al = al};
       note_unimported_impl(
           diags, find_unimported_impl(tc, idx, impl_query_matches, &q));
+      note_blocking_bound(diags, idx, arg, trait, (StringView){0}, al);
     }
   }
 }
@@ -3351,11 +3410,15 @@ static Type *resolve_method_call_typed(CheckCtx *ctx, Expr *expr,
     diag_error(ctx->diags, expr->span,
                "no method named '" SV_FMT "' found for type '%s'",
                SV_ARG(mc->method_name), self_buf);
-    ImplQuery q = {
-        .self_type = self_ty, .method = mc->method_name, .al = ctx->al};
+    ImplQuery q = {.self_type = self_ty,
+                   .method = mc->method_name,
+                   .impls = ctx->impls,
+                   .al = ctx->al};
     note_unimported_impl(
         ctx->diags,
         find_unimported_impl(ctx->tc, ctx->impls, impl_query_matches, &q));
+    note_blocking_bound(ctx->diags, ctx->impls, self_ty, NULL, mc->method_name,
+                        ctx->al);
     return ctx->tc->t_poison;
   }
 
@@ -3762,11 +3825,15 @@ static void check_interpol_seg(CheckCtx *ctx, InterpolSeg *seg) {
                "cannot interpolate a value of type '%s': it does not "
                "implement 'Display'",
                buf);
-    ImplQuery q = {
-        .self_type = seg_ty, .trait = ctx->tc->display_trait, .al = ctx->al};
+    ImplQuery q = {.self_type = seg_ty,
+                   .trait = ctx->tc->display_trait,
+                   .impls = ctx->impls,
+                   .al = ctx->al};
     note_unimported_impl(
         ctx->diags,
         find_unimported_impl(ctx->tc, ctx->impls, impl_query_matches, &q));
+    note_blocking_bound(ctx->diags, ctx->impls, seg_ty, ctx->tc->display_trait,
+                        (StringView){0}, ctx->al);
     return;
   }
 
@@ -5618,7 +5685,7 @@ static Type *impl_index_assoc_type(ImplIndex *idx, Type *self_type,
     }
 
     Subst subst;
-    if (!impl_applies(impl, self_type, &subst, al)) {
+    if (!impl_applies(impl, self_type, &subst, NULL, al)) {
       continue;
     }
 
@@ -5663,13 +5730,53 @@ static bool type_same_nominal_def(Type *a, Type *b) {
   return false;
 }
 
+// Does an impl's own type params satisfy their declared bounds, once the
+// receiver has pinned them down? `impl<T: Display> Display for [T]` applies to
+// `[Int]` but not to `[NoShow]`, and asking here — at selection — is what keeps
+// the failure at the call site. Left unasked, the impl is selected regardless
+// and the bound is only felt inside its body, where the diagnostic names the
+// impl's source rather than the code that reached for it.
+//
+// Answering recurses: `[[Int]]` asks whether `[Int]` is Display, which selects
+// this same impl one level down. The type shrinks each step, so the only way
+// not to terminate is a self-referential blanket impl
+// (`impl<T: Foo> Foo for T`), which the depth cap catches.
+#define IMPL_BOUND_MAX_DEPTH 32
+static int impl_bound_depth = 0;
+
+static bool impl_bounds_satisfied(ImplDef *impl, Type **args, int n,
+                                  ImplIndex *idx, Allocator *al) {
+  if (impl_bound_depth >= IMPL_BOUND_MAX_DEPTH) {
+    return false;
+  }
+  impl_bound_depth++;
+  bool ok = true;
+  for (int j = 0; ok && j < n; j++) {
+    Type *param = impl->type_params[j];
+    if (param == NULL || param->kind != TY_GENERIC) {
+      continue;
+    }
+    for (int b = 0; ok && b < param->as.generic.bound_count; b++) {
+      ok = impl_index_implements(idx, args[j], param->as.generic.bounds[b], al);
+    }
+  }
+  impl_bound_depth--;
+  return ok;
+}
+
 // Does `impl` apply to a receiver of type `self_type`? For a non-generic impl
 // that's plain type identity; for a generic one, the impl's self type is
 // matched structurally against the receiver and *out_subst is filled with the
 // resulting binding of the impl's type params (every one of which must be
 // pinned down by the receiver, or the impl doesn't apply).
+//
+// `bounds_idx` is the visible set to answer the impl's own bounds against, or
+// NULL to match structurally only. Coherence (`impl_defs_conflict`) and
+// associated-type lookup pass NULL: both run while the index is still filling,
+// and coherence wants the conservative answer anyway — two impls for one type
+// overlap whether or not their bounds happen to be disjoint.
 static bool impl_applies(ImplDef *impl, Type *self_type, Subst *out_subst,
-                         Allocator *al) {
+                         ImplIndex *bounds_idx, Allocator *al) {
   *out_subst = subst_empty();
   if (impl->self_type == NULL || type_is_poison(impl->self_type)) {
     return false;
@@ -5691,6 +5798,9 @@ static bool impl_applies(ImplDef *impl, Type *self_type, Subst *out_subst,
       impl_type_match(impl->self_type, self_type, names, n, args, bound);
   for (int j = 0; matched && j < n; j++) {
     matched = bound[j];
+  }
+  if (matched && bounds_idx != NULL) {
+    matched = impl_bounds_satisfied(impl, args, n, bounds_idx, al);
   }
   if (matched) {
     subst_init(out_subst, names, args, n);
@@ -5722,8 +5832,8 @@ bool impl_defs_conflict(ImplDef *a, ImplDef *b, Allocator *al) {
   // `Ord for Option<Int>` the generic one matches the concrete one's self
   // type, which is the case a receiver would find ambiguous.
   Subst ignored;
-  return impl_applies(a, b->self_type, &ignored, al) ||
-         impl_applies(b, a->self_type, &ignored, al);
+  return impl_applies(a, b->self_type, &ignored, NULL, al) ||
+         impl_applies(b, a->self_type, &ignored, NULL, al);
 }
 
 // A trait method the receiver inherits rather than defines: some
@@ -5746,7 +5856,7 @@ TraitMethodDef *impl_index_default_method(ImplIndex *idx, Type *self_type,
       continue;
     }
     Subst subst;
-    if (!impl_applies(impl, self_type, &subst, al)) {
+    if (!impl_applies(impl, self_type, &subst, idx, al)) {
       continue;
     }
     for (int j = 0; j < trait->method_count; j++) {
@@ -5809,7 +5919,7 @@ MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, StringView name,
   for (int i = 0; i < idx->count; i++) {
     ImplDef *impl = idx->all[i];
     Subst subst;
-    if (!impl_applies(impl, self_type, &subst, al)) {
+    if (!impl_applies(impl, self_type, &subst, idx, al)) {
       continue;
     }
 
@@ -5854,7 +5964,7 @@ bool impl_index_implements(ImplIndex *idx, Type *type, TraitDef *trait,
       continue;
     }
     Subst subst;
-    if (impl_applies(impl, type, &subst, al)) {
+    if (impl_applies(impl, type, &subst, idx, al)) {
       return true;
     }
   }

@@ -1,0 +1,19 @@
+#! expect: conflicting implementations of trait 'Display' for type '[Int]'
+# Now that std ships a `Display` for `[T]`, a program cannot also write its own:
+# naming the trait requires importing `std::fmt`, which makes the std impl
+# visible, and coherence is deliberately blind to bounds — two impls for one
+# type overlap whether or not their bounds happen to be disjoint. This is the
+# real cost of shipping a container impl, and it is why one could not be shipped
+# before impls became module-granular.
+use std::io::print;
+use std::fmt::Display;
+
+impl Display for [Int] {
+    fun to_string(self) -> String {
+        return "mine";
+    }
+}
+
+fun main() {
+    print("{[1]}");
+}

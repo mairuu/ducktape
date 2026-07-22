@@ -648,8 +648,12 @@ int type_sprintf(const Type *t, char *buf, size_t buf_size) {
                     SV_ARG(t->as.trait.def->name)); // todo: include type args
   case TY_DYN:
     return snprintf(buf, buf_size, "dyn " SV_FMT, SV_ARG(t->as.dyn.def->name));
-  case TY_ARRAY:
-    return snprintf(buf, buf_size, "[...]"); // todo: include elem type
+  case TY_ARRAY: {
+    int n = sp_bump(0, buf_size, snprintf(buf, buf_size, "["));
+    n = sp_bump(n, buf_size,
+                type_sprintf(t->as.array.elem_type, buf + n, buf_size - n));
+    return sp_bump(n, buf_size, snprintf(buf + n, buf_size - n, "]"));
+  }
   case TY_RANGE:
     return snprintf(buf, buf_size, "Range");
   case TY_ASSOC: {

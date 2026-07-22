@@ -342,6 +342,10 @@ pub trait Display {
 
 pub fun to_string<T: Display>(value: T) -> String
 pub fun float(value: Float, precision: Int) -> String   # @native
+
+impl Display for Int / Float / Bool / String
+impl<T: Display> Display for [T]
+impl<A: Display, B: Display> Display for (A, B)
 ```
 
 `Display` is **the one standard-library name the compiler knows.** Every other
@@ -377,6 +381,43 @@ add. If no module in the program imports `std::fmt` at all, the diagnostic says
 instantiated at one. Each impl is written by interpolating `self` — the
 built-in path — which makes them free.
 
+**The containers implement it too**, each requiring the same of its elements:
+
+```
+impl<T: Display> Display for [T]                 # [1, 2, 3]
+impl<A: Display, B: Display> Display for (A, B)  # (1, hi)
+impl<T: Display> Display for Option<T>           # Some(5) / None
+impl<T: Display, E: Display> Display for Result<T, E>    # Ok(7) / Err(nope)
+```
+
+An impl belongs beside the type it is for, so only the first two live in
+`std::fmt`: an array and a tuple are the two types with no module of their own.
+`Option`'s and `Result`'s live in `std::option` and `std::result`, exactly as
+`impl<T: Ord> Ord for Option<T>` already did — which also decides who sees
+them, since a module only selects from impls it can reach.
+
+The element goes through `Display` in turn, which is the point: a `[Point]`
+renders with `Point`'s own `to_string`. It also means a `String` element renders
+bare (`[a, b]`, not `["a", "b"]`) — `Display` answers "render this for a
+reader", and quoting is a debugging affordance. Arity is per-impl: a tuple's
+length is part of its type and nothing can be generic over it, so a 3-tuple
+would need its own impl.
+
+The bound is on the *impl's* type parameter, and it is checked where the impl
+is selected — so `"{v}"` on a `[Widget]` fails at the interpolation, naming
+`Widget`:
+
+```
+error: cannot interpolate a value of type '[Widget]': it does not implement 'Display'
+note: an impl exists, but it requires 'Widget: Display'
+```
+
+The cost of shipping these is that a program cannot write its own: naming
+`Display` requires importing `std::fmt`, which makes the std impl visible, and
+coherence rejects the pair (`tests/fail/display_container_conflict.dt`). That
+is also why none could be shipped before impls became module-granular — the
+claim would have applied to every program in the language.
+
 **`print` is deliberately not held to `Display`.** It renders any value
 structurally, through the runtime's own walk: `print(p)` gives
 `Point { x: 1, y: 2 }` with no impl at all. The two are different questions —
@@ -406,7 +447,8 @@ impl<T> Option<T> {
     fun otherwise(self, other: Option<T>) -> Option<T>
 }
 
-impl<T: Ord> Ord for Option<T>      # None sorts before every Some
+impl<T: Ord> Ord for Option<T>          # None sorts before every Some
+impl<T: Display> Display for Option<T>  # Some(5) / None
 ```
 
 An ordinary generic enum with an ordinary generic inherent impl — nothing
@@ -481,6 +523,8 @@ impl<T, E> Result<T, E> {
     fun map_err<F>(self, f: fun(E) -> F) -> Result<T, F>
     fun and_then<U>(self, f: fun(T) -> Result<U, E>) -> Result<U, E>
 }
+
+impl<T: Display, E: Display> Display for Result<T, E>   # Ok(7) / Err(nope)
 ```
 
 The type `?` is named after. The operator does **not** know this module — it
@@ -572,7 +616,8 @@ mistaken for an `Int`: `1.0`, `0.3333333333333333`, `300.0`, `1e+18`, `1e-07`,
 | `dyn Trait` for a non-object-safe trait | rejected where `dyn` is written, naming the method and the reason |
 | coercing the abstract `Self` of a default body to `dyn Trait` | not offered — `self` inside a default body cannot be handed over as a trait object |
 | recovering from a panic (`catch`, unwinding) | a panic reports at the call site and stops; there is no `catch` |
-| `Display` for a container (`[T]`, `(A, B)`, `Option<T>`) | no impl ships; a `[dyn Display]` interpolates its elements one at a time, or `print` renders the whole thing structurally |
+| `Display` for a tuple of arity other than 2 | arity is part of a tuple's type and nothing is generic over it, so each needs its own impl; only `(A, B)` ships |
+| writing your own `Display` for a container | rejected as a conflict with the std impl, which naming the trait makes visible |
 | width, alignment, or padding in a format | only `std::fmt::float(value, precision)`; there is no format-spec grammar inside `{}` |
 | casting a `dyn Trait` back to its concrete type | no downcast; the coercion is one-way |
 | `dyn Trait` with type arguments (`dyn Into<Int>`) | generic traits are not parameterised in `dyn` position |

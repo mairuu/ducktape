@@ -1,0 +1,15 @@
+#! expect: an impl exists, but it requires 'T: Display'
+# The container's element is an unbounded type parameter, so the impl for `[T]`
+# does not apply here either. The segment's own type is `[T]`, not `T`, so this
+# takes the general "does not implement" wording — and the note is what names
+# the bound to add, one level down, where the fix actually goes.
+use std::io::print;
+use std::fmt::Display;
+
+fun show<T>(items: [T]) {
+    print("{items}");
+}
+
+fun main() {
+    show([1, 2]);
+}

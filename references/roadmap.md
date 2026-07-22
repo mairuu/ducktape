@@ -888,6 +888,72 @@
   Deliberately not done: glob imports and module-qualified paths, both still
   listed as gaps. Neither is needed to make imports compose.
 
+- **`Display` for the containers (milestone 20)** — `"{v}"` renders an array, a
+  tuple, an `Option` and a `Result`. Design: `language.md` "`std::fmt`" → the
+  containers, `architecture.md` "An impl's own bounds, at selection".
+
+  The observation the milestone turns on: **the std code needed no compiler
+  change at all — all four impls ran against the unmodified binary.** What the
+  milestone actually is, is the check that makes them *safe to ship*.
+
+  Milestone 19 supplied the permission. An impl used to be program-global, so
+  shipping one would have claimed the rendering of `[T]` for every program in
+  the language whether it imported `std::fmt` or not, and a user writing their
+  own would have silently lost. Module-granular impls plus coherence turn both
+  into ordinary outcomes: you get the impl if you reach the module, and writing
+  a competing one is an error rather than a coin toss.
+
+  What was still missing was the bound. `impl_applies` only ever asked the
+  *structural* question, so an impl's own `T: Display` was never checked when
+  the impl was selected — only felt inside its body. Shipping a container impl
+  is what makes that unlivable rather than merely untidy:
+
+      var ws = [Widget { id: 1 }];   # Widget has no Display
+      print("{ws}");
+
+  used to type-check and then fail at *codegen*, with a diagnostic naming a
+  method call the user never wrote, inside `<std>/fmt.dt`. So bounds are now
+  checked where the impl is selected, and the failure lands on the
+  interpolation, naming `Widget`.
+
+  Three things follow, and they are the whole compiler diff:
+  - **The check is opt-in per call site** (`impl_applies`'s `bounds_idx`, NULL
+    for structural-only). The three selection paths pass the visible set;
+    coherence passes NULL *deliberately* — two impls for one type overlap
+    whether or not their bounds are disjoint, and the conservative answer is
+    the one coherence wants — and associated-type lookup passes NULL because,
+    like coherence, it runs while the index is still filling.
+  - **Answering recurses**, since `[[Int]]` asks whether `[Int]` is `Display`,
+    selecting the same impl one level down. The type shrinks each step, so the
+    only non-terminating shape is a self-referential blanket impl
+    (`impl<T: Foo> Foo for T`); `IMPL_BOUND_MAX_DEPTH` is where that lives,
+    for the same reason `MONO_MAX_DEPTH` does — at the divergence.
+  - **The failure has to explain itself**, which is milestone 19's lesson read
+    a second time. "`[Widget]` does not implement `Display`" is true and
+    useless: the impl exists and the fix is one level down. So
+    `note_blocking_bound` joins `find_unimported_impl` on the same three
+    diagnostics, appending "an impl exists, but it requires 'Widget: Display'".
+
+  **Placement follows a rule the library already set**: an impl belongs beside
+  the type it is for. An array and a tuple are the two types with no module of
+  their own, so those two impls live in `std::fmt`; `Option`'s and `Result`'s
+  live in `std::option` and `std::result`, exactly where `impl<T: Ord> Ord for
+  Option<T>` already was. Since milestone 19 that is not a filing decision but
+  a visibility one — it decides who sees them.
+
+  The rendering decisions, which are the ones the roadmap flagged as genuinely
+  new: separators match what `print` already does (`[1, 2, 3]`, `(1, hi)`), and
+  a nested `String` renders **bare**, because `Display` answers "render this for
+  a reader" and quoting is a debugging affordance `print` keeps. Arity is
+  per-impl — a tuple's length is part of its type and nothing is generic over
+  it — so only `(A, B)` ships.
+
+  Also cleared: `type_sprintf` rendered every array as `[...]` (a standing
+  `todo`). Harmless while `[T]` never appeared in a diagnostic; not harmless
+  now that "cannot interpolate a value of type `[Widget]`" is a message people
+  will meet, and unreadable for the `[T]` case where the note names the bound
+  to add.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -898,16 +964,7 @@ Nothing on the main line is *blocked*: every construct the checker accepts in
 warts" section would promote first, in the order that pays off soonest — pick
 by appetite rather than by necessity.
 
-1. **`Display` for the containers, now that std can ship one** — milestone 19
-   removed the reason `[T]`, `(A, B)` and `Option<T>` have no `Display` impl: a
-   std impl is no longer program-global, so it only reaches a module that
-   imports `std::fmt`, and a user writing their own now gets a conflict rather
-   than a silent loss. What is left to decide is the *shape*: an impl for `[T]`
-   needs `T: Display` on the impl itself (bounds on an impl's type params are
-   resolved but never checked against the receiver at selection time), and
-   rendering a container means choosing separators and nesting — the first
-   formatting decision the language has had to make rather than defer.
-2. **Growing std on top of the natives** — the mechanism landed in milestone
+1. **Growing std on top of the natives** — the mechanism landed in milestone
    16 with a deliberately small registry (`print`, array `len`, string
    `len`/`slice`, `fmt` `float`). What it does not yet reach is anything that
    *mutates* or *grows* a heap object: `push` needs `ObjArray` to stop being
@@ -916,7 +973,7 @@ by appetite rather than by necessity.
    type are each one entry plus a decision about the type they need — and
    padding is the one that would decide whether `{}` ever grows a format-spec
    grammar or stays a bare segment with `std::fmt` functions beside it.
-3. **Wider slot spaces** — 256 functions/structs/enums program-wide, now
+2. **Wider slot spaces** — 256 functions/structs/enums program-wide, now
    reached by *use* of generics rather than by how many are written, by
    trait-object vtables on top of that, and by natives once they take slots
    too — three independent pressures on one byte. A two-byte operand (or a
@@ -934,7 +991,7 @@ by appetite rather than by necessity.
    through calls,
    vtables, closures and `?`, which is real work — but it shrinks the pressure
    instead of just moving the ceiling.
-4. **Object-safe traits with associated types** — the object-safety rule
+3. **Object-safe traits with associated types** — the object-safety rule
    rejects `Self.Item` outright. Allowing `dyn Iterator` with the associated
    type *named* at the coercion site (`dyn Iterator<Item = Int>`) is the
    natural follow-on, and needs `dyn` to carry type arguments at all.
@@ -955,10 +1012,10 @@ via `Module.decl_base`) and is not part of the main line.
   correct there only because a primitive receiver takes the built-in path —
   the asymmetry is invisible from the source. A cycle check would have to run
   where the impl is written, not where it is called
-- no `Display` impl ships for a container: `[T]`, `(A, B)` and `Option<T>`
-  cannot interpolate. Since milestone 19 nothing structural prevents one —
-  what is missing is a decision about separators and about bounds on an impl's
-  own type params. `print` still renders them structurally
+- `Display` ships for `[T]`, `(A, B)`, `Option<T>` and `Result<T, E>`, which
+  means a program can no longer write its own for those: naming the trait makes
+  the std impl visible and coherence rejects the pair. A tuple of any other
+  arity has no impl, since nothing can be generic over a tuple's length
 - a unit struct's name cannot be bound as a variable any more: `var Marker =
   7;` is a struct pattern against an `Int`, and the diagnostic ("expected
   struct type in struct pattern") describes the rewrite rather than the
@@ -985,10 +1042,13 @@ via `Module.decl_base`) and is not part of the main line.
   concrete — `subst_apply` passes `TY_ASSOC` through untouched and
   `impl_index_assoc_type` is checker-side. Affects bounded generic functions
   and trait default bodies alike
-- a trait impl's own type params carry bounds that are resolved but never
-  checked when the impl is *selected*: `impl<T: Ord> Ord for Option<T>` applies
-  to `Option<P>` for any `P`, and the bound is only felt inside the body. This
-  is what an impl for `[T]` would have to face first
+- an impl's own type-param bounds are checked at selection (milestone 20), but
+  *coherence* is deliberately blind to them: `impl<T: Ord> Ord for Option<T>`
+  and an `impl Ord for Option<Widget>` conflict even though no receiver could
+  ever satisfy both. Disjointness would have to be decidable to do better
+- a self-referential blanket impl (`impl<T: Foo> Foo for T`) is cut off by
+  `IMPL_BOUND_MAX_DEPTH` rather than diagnosed, so it silently fails to apply
+  and the receiver reports "no method named 'foo'"
 - two impls of one trait for one type can still coexist in a program, as long
   as no single module sees both — and if two such modules instantiate the same
   generic at the same type, `mono_request` memoises one copy and whichever

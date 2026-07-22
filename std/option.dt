@@ -5,6 +5,7 @@
 # impl, and the combinators take ordinary closures.
 #
 use std::cmp::Ord;
+use std::fmt::Display;
 use std::panic::panic;
 
 pub enum Option<T> {
@@ -119,6 +120,20 @@ impl<T: Ord> Ord for Option<T> {
                     Option::None => { return 0; },
                 }
             },
+        }
+    }
+}
+
+# Rendered the way it is written. `Display` lives here rather than in
+# `std::fmt` for the same reason `Ord` above does: an impl belongs beside the
+# type it is for, and since milestone 19 that also decides who sees it — a
+# program that imports `Option` gets its rendering, and one that doesn't is
+# free to define its own.
+impl<T: Display> Display for Option<T> {
+    fun to_string(self) -> String {
+        match self {
+            Option::Some(v) => { return "Some(" + v.to_string() + ")"; },
+            Option::None => { return "None"; },
         }
     }
 }

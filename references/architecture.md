@@ -185,6 +185,45 @@ non-`Display` interpolation) append "an applicable impl exists in module 'x',
 but this module does not import it". Without it, making impls module-granular
 would have turned a working program into "no method named 'show'".
 
+### An impl's own bounds, at selection
+
+`impl_applies` answers two questions, not one. The first is structural — does
+the impl's self type match the receiver, binding the impl's type params
+(`impl_type_match`). The second, added once std shipped a container `Display`,
+is whether those bindings satisfy the bounds the impl *declared on them*:
+`impl<T: Display> Display for [T]` applies to `[Int]` and not to `[Widget]`.
+
+Asking at selection is the whole point. Left unasked, the impl is selected
+regardless and the bound is felt only inside its body — where the diagnostic
+names the *impl's* source rather than the code that reached for it. For a std
+impl that means pointing into `<std>/fmt.dt`, at codegen, about a method call
+the user never wrote.
+
+The check is opt-in per call site, through `impl_applies`'s `bounds_idx`
+parameter (NULL = structural only):
+
+- the three **selection** paths pass the visible set — `impl_index_method`,
+  `impl_index_default_method`, `impl_index_implements`;
+- **coherence** (`impl_defs_conflict`) passes NULL, deliberately. Two impls for
+  one type overlap whether or not their bounds are disjoint, and the
+  conservative answer is the one coherence wants. It also runs during resolve,
+  while the index is still filling;
+- **associated-type lookup** (`impl_index_assoc_type`) passes NULL for the
+  second of those reasons alone.
+
+Answering **recurses**: `[[Int]]` asks whether `[Int]` is `Display`, which
+selects the same impl one level down. The type shrinks each step, so the only
+non-terminating shape is a self-referential blanket impl
+(`impl<T: Foo> Foo for T`) — caught by `IMPL_BOUND_MAX_DEPTH`, past which an
+impl simply does not apply.
+
+`note_blocking_bound` is the counterpart to `find_unimported_impl`, and exists
+for the same reason: an impl that matched structurally but was rejected for a
+bound would otherwise report only that `[Widget]` is not `Display` — true, and
+useless, since the impl exists and the fix is one level down. The note names
+it (`an impl exists, but it requires 'Widget: Display'`) and is appended to the
+same three diagnostics.
+
 ### The embedded standard library
 
 `std/*.dt` are ordinary ducktape sources, mirrored into the binary by

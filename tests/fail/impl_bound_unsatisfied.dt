@@ -1,0 +1,16 @@
+#! expect: cannot interpolate a value of type '[Widget]'
+# An impl's own type-param bounds are checked where the impl is *selected*.
+# Without that, `impl<T: Display> Display for [T]` applies to any `[T]` at all
+# and the bound is only felt inside the body — so this would compile, then fail
+# at codegen with a diagnostic pointing into `<std>/fmt.dt` rather than here.
+use std::io::print;
+use std::fmt::Display;
+
+struct Widget {
+    id: Int,
+}
+
+fun main() {
+    var ws = [Widget { id: 1 }];
+    print("{ws}");
+}

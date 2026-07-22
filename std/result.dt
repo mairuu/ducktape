@@ -12,6 +12,7 @@
 # `return panic(..)` is how — `panic` returns `Never`, which stands in for any
 # type, so the arm type-checks like any other.
 
+use std::fmt::Display;
 use std::option::Option;
 use std::panic::panic;
 
@@ -112,6 +113,17 @@ impl<T, E> Result<T, E> {
         match self {
             Result::Ok(v) => { return f(v); },
             Result::Err(e) => { return Result::Err(e); },
+        }
+    }
+}
+
+# As with `Option`, rendered the way it is written, and implemented here rather
+# than in `std::fmt` so that the impl travels with the type.
+impl<T: Display, E: Display> Display for Result<T, E> {
+    fun to_string(self) -> String {
+        match self {
+            Result::Ok(v) => { return "Ok(" + v.to_string() + ")"; },
+            Result::Err(e) => { return "Err(" + e.to_string() + ")"; },
         }
     }
 }
