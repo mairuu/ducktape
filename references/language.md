@@ -87,7 +87,8 @@ ending in `return` has type `!` (never), which unifies with anything.
   `iter` may be an array or a range.
 - Ranges: `a..b`, `a..=b` — Int-only, first-class values (`var r = 0..10;`).
 - Casts: `x as T` — only `Int`↔`Float` and identity casts.
-- String interpolation: `"x = {x}"` — segments must be Int/Float/Bool/String.
+- String interpolation: `"x = {x}"` — a primitive segment (Int/Float/Bool/
+  String) renders itself; anything else must implement `std::fmt::Display`.
 - Calls: `f(a, b)`; functions are first-class (`var g = f; g(1)`).
 - Closures use pipes: `|x, y| => x + y`, `|n: Int| -> Int { return n * 2; }`.
   Unannotated params infer from a function-typed hint
@@ -256,7 +257,7 @@ directory. `std::` never touches the filesystem, so a local `std.dt` is
 unreachable. Where ducktape cannot express the operation, a module declares a
 bodyless function bound to C (see "Native functions" below); `std::cmp`,
 `std::option` and `std::result` need none, `std::io` and `std::panic` are
-nothing but.
+nothing but. `std::fmt::Display` is the only std name the *compiler* knows.
 
 **There is no prelude.** Every std name, `print` included, has to be imported.
 
@@ -292,6 +293,61 @@ join the same trait and `max`/`min` work on them unchanged
 `Ord` is deliberately *not* object-safe — `other: Self` means a caller must
 know the concrete type — so it is a bound, never a `dyn Ord`. That is the rule
 working as designed: object safety is only demanded where `dyn` is written.
+
+### `std::fmt`
+
+```
+pub trait Display {
+    fun to_string(self) -> String;
+}
+
+pub fun to_string<T: Display>(value: T) -> String
+pub fun float(value: Float, precision: Int) -> String   # @native
+```
+
+`Display` is **the one standard-library name the compiler knows.** Every other
+std item is anonymous to it — `Option` is an ordinary enum, `Ord` an ordinary
+trait — but interpolation has to decide which `to_string` a `"{v}"` segment
+means, and that cannot be left to whatever happens to be in scope.
+
+So `"{v}"` splits in two:
+
+- a **primitive** segment (Int, Float, Bool, String) renders itself. This is
+  the path the VM has always had, and it is what lets a program interpolate a
+  number without importing anything.
+- **anything else** must implement `Display`, and the segment *is* the call
+  `v.to_string()` — checked and compiled as exactly that. So every dispatch
+  shape a method call already had works: a concrete impl, a `T: Display`
+  bound, and a `dyn Display` vtable (`tests/run/fmt.dt`).
+
+```
+impl Display for Point {
+    fun to_string(self) -> String { return "({self.x}, {self.y})"; }
+}
+
+print("{p}");                              # (1, 2)
+fun label<T: Display>(v: T) -> String { return "[{v}]"; }
+var xs: [dyn Display] = [p, Colour::Red];
+```
+
+Without the bound, `"{v}"` on a type parameter is an error naming the bound to
+add. If no module in the program imports `std::fmt` at all, the diagnostic says
+*that* instead, rather than reporting a failed bound that was never in play.
+
+`Display` ships for the four primitives, so a `T: Display` generic can be
+instantiated at one. Each impl is written by interpolating `self` — the
+built-in path — which makes them free.
+
+**`print` is deliberately not held to `Display`.** It renders any value
+structurally, through the runtime's own walk: `print(p)` gives
+`Point { x: 1, y: 2 }` with no impl at all. The two are different questions —
+"show me what this is" is a debugging view the runtime can always answer, while
+"render this for a reader" is the type's own decision, and only the second
+needs a trait.
+
+`float` is the one rendering interpolation cannot ask for: `"{f}"` gives the
+shortest decimal that round-trips, which is the only rendering the VM has.
+There is no format-spec grammar inside `{}`.
 
 ### `std::option`
 
@@ -363,10 +419,10 @@ it, and stops. Recovering would need a story for what a half-finished frame
 leaves behind, and the language has none.
 
 The message is an ordinary `String`, so a call site can build one by
-interpolation — but a panic *inside* a generic cannot name the value that
-caused it, since interpolation is defined over primitives and there is no
-`to_string` over arbitrary values. That is why `unwrap`'s message is fixed and
-`expect` takes one from the caller.
+interpolation. A panic *inside* a generic can name the value that caused it
+only where the type parameter is bounded (`E: Display`); `Option::unwrap` and
+`Result::unwrap` are not, so their messages are fixed and `expect` takes one
+from the caller.
 
 ### `std::result`
 
@@ -451,15 +507,17 @@ std::array   len<T>(xs: [T]) -> Int                 # @intrinsic (OP_LEN)
 
 std::string  len(s: String) -> Int                  # @native
              slice(s: String, from: Int, to: Int) -> String
+
+std::fmt     float(value: Float, precision: Int) -> String   # @native
 ```
 
 **`print` is not a builtin and is not in scope by default** — `use
 std::io::print;` is a real import of a real module, and forgetting it is an
 ordinary "cannot find 'print' in this scope" error. There is no prelude.
 
-`std::string::slice` is the one std function that can fail: a native reports a
-runtime error by setting `ctx->error`, and the VM raises it at the call site.
-It is the closest thing the language has to a panic.
+`std::string::slice` and `std::fmt::float` are the std functions that can fail
+without a `Result`: a native reports a runtime error by setting `ctx->error`,
+and the VM raises it at the call site, exactly as `std::panic::panic` does.
 
 A `Float` prints — and interpolates — as the shortest decimal that reads back
 as the same double, always carrying a `.` or an exponent so it is never
@@ -475,7 +533,8 @@ mistaken for an `Int`: `1.0`, `0.3333333333333333`, `300.0`, `1e+18`, `1e-07`,
 | `dyn Trait` for a non-object-safe trait | rejected where `dyn` is written, naming the method and the reason |
 | coercing the abstract `Self` of a default body to `dyn Trait` | not offered — `self` inside a default body cannot be handed over as a trait object |
 | recovering from a panic (`catch`, unwinding) | a panic reports at the call site and stops; there is no `catch` |
-| formatting a non-primitive value (`to_string`, `{v}` on a generic) | interpolation is defined over primitives — "cannot interpolate a value of type 'T'", which is why `unwrap`'s panic message cannot name the error |
+| `Display` for a container (`[T]`, `(A, B)`, `Option<T>`) | no impl ships; a `[dyn Display]` interpolates its elements one at a time, or `print` renders the whole thing structurally |
+| width, alignment, or padding in a format | only `std::fmt::float(value, precision)`; there is no format-spec grammar inside `{}` |
 | casting a `dyn Trait` back to its concrete type | no downcast; the coercion is one-way |
 | `dyn Trait` with type arguments (`dyn Into<Int>`) | generic traits are not parameterised in `dyn` position |
 | `mod` declarations | no such keyword; `use` is what pulls a file in |

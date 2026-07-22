@@ -1,7 +1,8 @@
-#! expect: cannot interpolate a value of type 'T'
-# interpolation is defined over primitives, so a generic value cannot be
-# formatted — printing one would need a `to_string` over arbitrary values,
-# which is why `Result::unwrap`'s panic message cannot name the error it found.
+#! expect: cannot interpolate a value of type 'T': add the bound 'T: Display'
+# a type parameter satisfies exactly the bounds it was declared with, so an
+# unbounded `T` cannot render itself — and the fix is at the declaration rather
+# than at an impl, which is what the diagnostic names. `tests/run/fmt.dt` is
+# this same function with the bound in place.
 #
 # Also the regression test for a use-after-free at teardown: each compiler
 # phase clears the diag bag at the *top* of its loop, so a failing last module
@@ -9,6 +10,7 @@
 # `compiler_destroy` used to free first. It takes a multi-module program (the
 # `use` below) to lay the arena out so the read faults.
 use std::option::Option;
+use std::fmt::Display;
 
 fun show<T>(v: T) -> String {
     return "{v}";

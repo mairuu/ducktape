@@ -125,6 +125,18 @@ static bool is_std_key(StringView path) {
   return path.len > 6 && memcmp(path.chars, "<std>/", 6) == 0;
 }
 
+// is this the embedded std module of that name? The key is the only thing
+// that can answer it: a std Module is an ordinary Module in every other
+// respect, deliberately.
+bool mod_is_std(const Module *m, const char *name) {
+  if (!is_std_key(m->file_path)) {
+    return false;
+  }
+  StringView stem = {.chars = m->file_path.chars + 6,
+                     .len = m->file_path.len - 6 - 3}; // "<std>/" .. ".dt"
+  return sv_equal_cstr(stem, name);
+}
+
 Module *mod_new(StringView file_path, Allocator *al) {
   Module *m = al_alloc_zero_for(al, Module);
   m->file_path = file_path;

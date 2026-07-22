@@ -932,6 +932,14 @@ static void tc_register_trait(TypeChecker *tc, Module *m, Decl *decl) {
 
   trait_decl->def = def;
   def->module = m;
+
+  // the one place the compiler learns a name from the standard library. It is
+  // keyed on the module too, not just the spelling: a user trait called
+  // `Display` is an ordinary trait, and interpolation will not route through
+  // it. See TypeChecker.display_trait.
+  if (mod_is_std(m, "fmt") && sv_equal_cstr(def->name, "Display")) {
+    tc->display_trait = def;
+  }
 }
 
 // the name a top-level decl introduces into the module's scopes, if any.
@@ -3121,14 +3129,14 @@ static Type *resolve_bound_method_call(CheckCtx *ctx, Expr *expr, Type *self_ty,
   return NULL;
 }
 
-static Type *resolve_method_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
-  (void)hint;
+// The body of a method call, given a receiver whose type is already known.
+// Split out for interpolation, which has to resolve the receiver *first* (to
+// decide whether it is a primitive at all) and must not resolve it twice —
+// a second pass would re-report its diagnostics and re-queue its
+// instantiations.
+static Type *resolve_method_call_typed(CheckCtx *ctx, Expr *expr,
+                                       Type *self_ty) {
   ExprMethodCall *mc = &expr->as.method_call;
-
-  Type *self_ty = resolve_expr(ctx, mc->object, NULL);
-  if (type_is_poison(self_ty)) {
-    return ctx->tc->t_poison;
-  }
 
   // an abstract receiver dispatches through its trait bounds instead of the
   // impl index: a type parameter offers the bounds it was declared with, and
@@ -3289,6 +3297,15 @@ static Type *resolve_method_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   }
 
   return ret_ty;
+}
+
+static Type *resolve_method_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
+  (void)hint;
+  Type *self_ty = resolve_expr(ctx, expr->as.method_call.object, NULL);
+  if (type_is_poison(self_ty)) {
+    return ctx->tc->t_poison;
+  }
+  return resolve_method_call_typed(ctx, expr, self_ty);
 }
 
 // a "Result-like" enum has exactly two single-field tuple variants named
@@ -3495,6 +3512,109 @@ static Type **hint_type_args(Type *hint, Type *self_type) {
     return hint->as.struc.type_args;
   }
   return NULL;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Interpolation
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// A `"{v}"` segment has to turn `v` into a String. The primitives render
+// themselves: the VM's `stringify` has always known how, and keeping that path
+// is what lets a program interpolate an `Int` without importing anything.
+//
+// Everything else asks the *type* how it wants to render, through `std::fmt`'s
+// `Display`. Once the trait is what decides, the segment *is* the call
+// `v.to_string()` — so that is exactly what it is rewritten into, and the
+// ordinary machinery does the rest. Dispatch through a trait bound, through a
+// `dyn`, an inherited default body, and monomorphising the instance all arrive
+// already working; codegen, `OP_INTERP`, the VM and the image format need no
+// change at all, because the segment now simply evaluates to a String, which
+// `stringify` passes straight through.
+//
+// Note that `print` is *not* held to this: it renders any value structurally,
+// through `value_print`. The two are different questions — "show me what this
+// is" is a debugging view the runtime can always answer, while "render this
+// for a reader" is the type's own decision, and only the second needs a trait.
+
+// does `type` satisfy `Display`? The impl index answers for a concrete type
+// and for a bounded generic; the two abstract kinds it has no entry for
+// answer from the trait they name.
+static bool display_satisfied(CheckCtx *ctx, Type *type) {
+  TraitDef *display = ctx->tc->display_trait;
+  if (type->kind == TY_DYN) {
+    return type->as.dyn.def == display;
+  }
+  if (type->kind == TY_TRAIT) {
+    // the abstract `Self` of a default body, which offers its own trait only
+    return type->as.trait.def == display;
+  }
+  return impl_index_implements(&ctx->tc->impl_index, type, display, ctx->al);
+}
+
+static void check_interpol_seg(CheckCtx *ctx, InterpolSeg *seg) {
+  Expr *recv = seg->expr;
+  Type *seg_ty = resolve_expr(ctx, recv, NULL);
+  seg_ty = infer_apply(&ctx->infer, seg_ty, ctx->al);
+  if (type_is_poison(seg_ty)) {
+    return; // already reported
+  }
+
+  switch (seg_ty->kind) {
+  case TY_INT:
+  case TY_FLOAT:
+  case TY_BOOL:
+  case TY_STRING:
+    return; // rendered by the VM; no call is emitted at all
+  default:
+    break;
+  }
+
+  char buf[64];
+  type_sprintf(seg_ty, buf, sizeof(buf));
+
+  if (seg_ty->kind == TY_UNKNOWN) {
+    diag_error(ctx->diags, recv->span,
+               "cannot infer the type of this interpolated value");
+    return;
+  }
+  if (ctx->tc->display_trait == NULL) {
+    diag_error(ctx->diags, recv->span,
+               "cannot interpolate a value of type '%s': only a primitive "
+               "renders itself, and this program does not import 'std::fmt' "
+               "to get the 'Display' trait",
+               buf);
+    return;
+  }
+  if (!display_satisfied(ctx, seg_ty)) {
+    if (seg_ty->kind == TY_GENERIC) {
+      // a type parameter satisfies exactly what it was declared to, so the
+      // fix is at the declaration rather than at an impl
+      diag_error(ctx->diags, recv->span,
+                 "cannot interpolate a value of type '%s': add the bound "
+                 "'%s: Display'",
+                 buf, buf);
+      return;
+    }
+    diag_error(ctx->diags, recv->span,
+               "cannot interpolate a value of type '%s': it does not "
+               "implement 'Display'",
+               buf);
+    return;
+  }
+
+  Expr *call = al_alloc_zero_for(ctx->al, Expr);
+  *call = (Expr){
+      .kind = EXPR_METHOD_CALL,
+      .span = recv->span,
+      .as.method_call = {.object = recv,
+                         .method_name = sv_from_cstr("to_string")},
+  };
+  seg->expr = call;
+
+  // the receiver is already resolved, so this must not go through
+  // resolve_method_call_expr. A failure here is a malformed `Display` impl,
+  // which conformance checking has already reported against the impl itself.
+  resolve_method_call_typed(ctx, call, seg_ty);
 }
 
 static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
@@ -4353,30 +4473,8 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     ExprInterpolated *interp = &expr->as.interpolated;
     for (int i = 0; i < interp->seg_count; i++) {
       InterpolSeg *seg = &interp->segs[i];
-      if (seg->kind != ISEG_EXPR) {
-        continue;
-      }
-
-      Type *seg_ty = resolve_expr(ctx, seg->expr, NULL);
-      seg_ty = infer_find(&ctx->infer, seg_ty);
-      if (type_is_poison(seg_ty)) {
-        continue; // error already reported
-      }
-
-      switch (seg_ty->kind) {
-      case TY_INT:
-      case TY_FLOAT:
-      case TY_BOOL:
-      case TY_STRING:
-        break;
-      default: {
-        char buf[64];
-        type_sprintf(seg_ty, buf, sizeof(buf));
-        diag_error(ctx->diags, seg->expr->span,
-                   "cannot interpolate a value of type '%s' (user-defined "
-                   "formatting is not yet supported)",
-                   buf);
-      }
+      if (seg->kind == ISEG_EXPR) {
+        check_interpol_seg(ctx, seg);
       }
     }
     result = ctx->tc->t_string;

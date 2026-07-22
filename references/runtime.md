@@ -26,8 +26,9 @@ points at a GC-managed heap object (`include/object.h`):
 strings compare by pointer (interning makes that correct); arrays, tuples,
 structs, and enum instances compare structurally (elementwise, recursive —
 enum instances additionally compare unequal if their variant differs).
-`value_print` (used by `print` and, indirectly, nowhere else — string
-interpolation only accepts Int/Float/Bool/String, see `language.md`) prints
+`value_print` (used by `print`, and by nothing else — a string interpolation
+segment either renders as a primitive or is a `Display::to_string` call, see
+`architecture.md` "Interpolation and `Display`") prints
 tuples as `(a, b)`, structs as `Name { field: v, ... }` or `Name(a, b)` for
 tuple structs, and enum instances the same way but with the variant's name
 and no enum qualifier (`Some(1)`, not `Option::Some(1)`), matching how Rust's
@@ -111,7 +112,10 @@ before allocating, so `==` on strings is a pointer compare. Codegen interns
 string *literals* at compile time (`cg_decode_string` in `src/codegen.c`,
 decoding the scanner's `\n \t \r \" \\ \{` escapes); the VM interns at
 runtime for `+` concat (`heap_concat`) and interpolation (`OP_INTERP`,
-`stringify` in `src/vm.c`).
+`stringify` in `src/vm.c`). `stringify` handles only the four primitives and
+passes a String straight through, which is the whole reason `Display` cost the
+runtime nothing: the checker rewrites a non-primitive segment into a
+`to_string()` call, so by the time `OP_INTERP` sees it, it is a String.
 
 **Collection** is mark-sweep, triggered from `heap_alloc` (the sole entry
 point that grows `bytes_allocated`) once it crosses `next_gc` (starts at
@@ -661,8 +665,8 @@ if (fun->native != NULL) {
 
 The **calling convention is a GC rule**: the arguments stay on the value stack
 across the call and are only popped once the result exists. The stack is the
-root set, so an allocating native (`string_slice` interns) cannot have its own
-arguments swept out from under it. `OP_MAKE_DYN` already followed exactly this
+root set, so an allocating native (`string_slice` and `fmt_float` both intern)
+cannot have its own arguments swept out from under it. `OP_MAKE_DYN` already followed exactly this
 discipline for `heap_dyn`; getting it wrong reproduces the 5c-ii class of bug,
 something reachable-looking the collector cannot see. A native fails by
 setting `ctx->error`, which becomes a runtime error at the call site.

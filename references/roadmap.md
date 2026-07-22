@@ -758,6 +758,74 @@
   which is why a single-file failure never showed it and
   `tests/fail/interp_generic.dt` has to `use` a std module to reproduce.
 
+- **A formatting story (milestone 18)** — a type can decide how it renders.
+  `std::fmt::Display` is the fourth std module and the first thing in the
+  standard library the *compiler* knows by name. Design: `architecture.md`
+  "Interpolation and `Display`", `language.md` "`std::fmt`".
+
+  The observation the milestone turns on: **once a trait is what decides how a
+  value renders, `"{v}"` is not a formatting feature at all — it is the call
+  `v.to_string()`.** So that is what `check_interpol_seg` rewrites a
+  non-primitive segment into: an `EXPR_METHOD_CALL` node, resolved by the
+  ordinary machinery.
+
+  Everything follows from taking that literally rather than approximately, and
+  it is the same move milestone 11 made when a `var` binding became a one-arm
+  match:
+  - Dispatch through a `T: Display` bound, through a `dyn Display` vtable, an
+    inherited default body, and monomorphising the instance all arrive
+    *already working* — every one of them is a method-call shape the checker
+    and codegen already had. The showcase (`tests/run/fmt.dt`) exercises all
+    three and none of them cost a line.
+  - **Codegen, `OP_INTERP`, the VM and the image format did not change.** The
+    segment now evaluates to a String, and `stringify` has always passed a
+    String through untouched. The diff is one std file, one checker helper, and
+    a native for `Float` precision.
+  - The primitives keep their built-in path, which is why no existing test
+    needed an import: `"{1}"` still emits no call. The four impls in `std::fmt`
+    exist for the *other* direction — so a `T: Display` generic can instantiate
+    at a primitive — and each is written by interpolating `self`, which makes
+    them free.
+
+  Two details are what make the rewrite safe rather than merely short. The
+  receiver has to be resolved *first* (to know whether it is a primitive), so
+  the rewrite cannot re-enter `resolve_method_call_expr` — doing so would
+  re-report the receiver's diagnostics and re-queue its instantiations, so that
+  function was split into `resolve_method_call_typed` plus a three-line wrapper.
+  And the `Display` check runs *before* the rewrite rather than letting method
+  resolution fail, which is what keeps the diagnostic about interpolation
+  (naming the bound to add, for a type parameter) instead of about a missing
+  method — and what stops an unrelated inherent `to_string` from silently
+  qualifying.
+
+  **The design decision worth recording is that `Display` is a lang item, and
+  that this is a real cost.** Every other std name is anonymous to the
+  compiler — `Option` is an ordinary enum, `Ord` an ordinary trait, and
+  milestone 14's whole claim was that the std/not-std distinction lives in one
+  branch of `mod_parse`. Interpolation cannot be written that way: it has to
+  decide *which* `to_string` a segment means, and leaving that to whatever is
+  in scope would make the meaning of `"{v}"` depend on imports. So
+  `TypeChecker.display_trait` is captured in `tc_register_trait`, keyed on the
+  module (`mod_is_std(m, "fmt")`) and not just the spelling, so a user trait
+  called `Display` stays an ordinary trait. It is one field and one branch, but
+  it is the first crack in "the compiler knows nothing about std" and the
+  honest thing is to say so rather than to pretend the branch in `mod_parse` is
+  still the only one.
+
+  **`print` is deliberately not held to `Display`** and still renders any value
+  structurally through `value_print`. The two are different questions — "show
+  me what this is" is a debugging view the runtime can always answer, while
+  "render this for a reader" is the type's own decision — so holding `print` to
+  the trait would have cost 48 test files an impl to buy uniformity that isn't
+  real. That leaves the language with two renderings, which is the same split
+  Rust draws as `Debug`/`Display`, arrived at from the other end.
+
+  Also cleared: `std::fmt::float(value, precision)` is the first rendering
+  control a `Float` has ever had, and the `-Woverlength-strings` warning
+  `std/result.dt` started emitting in milestone 17 (a std module crossing the
+  4095-character literal ISO requires support for) is suppressed in the
+  Makefile with a note, so the build is warning-free again.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -768,29 +836,24 @@ Nothing on the main line is *blocked*: every construct the checker accepts in
 warts" section would promote first, in the order that pays off soonest — pick
 by appetite rather than by necessity.
 
-1. **A formatting story** — now the most-requested thing the library cannot
-   express, and it blocks three separate items. Interpolation is defined over
-   primitives, so a generic value cannot be printed: `Result::unwrap` panics
-   without naming the error, `Float` has no precision or width, and no user
-   type can decide how it renders. `value_print` already walks every value
-   shape, so the mechanism is a sink abstraction over it plus a
-   `to_string<T>(v: T) -> String` native — the design question is whether a
-   user type overrides it through a `Display` trait, which is the part that
-   needs a decision rather than code.
-2. **Module-granular impls and `pub use`** — `ImplIndex` lives on the
+1. **Module-granular impls and `pub use`** — `ImplIndex` lives on the
    `TypeChecker`, so an impl applies even where its module was never
    imported, and imports don't compose (no re-export, no glob, no qualified
    paths). Now also the reason a user's `impl Ord for Int` collides with
    `std::cmp`'s. Fixing the first is a scoping change; the second is parser
-   plus `tc_link_imports`.
-3. **Growing std on top of the natives** — the mechanism landed in milestone
+   plus `tc_link_imports`. Now also where a `Display` impl for `[T]`,
+   `(A, B)` or `Option<T>` would have to live: std cannot ship one without it
+   applying program-wide and pre-empting the user's own.
+2. **Growing std on top of the natives** — the mechanism landed in milestone
    16 with a deliberately small registry (`print`, array `len`, string
-   `len`/`slice`). What it does not yet reach is anything that *mutates* or
-   *grows* a heap object: `push` needs `ObjArray` to stop being fixed-size,
-   which is a real allocator question rather than another table entry. String
-   comparison, `to_string` with a width or a precision, and a `Char` type are
-   each one entry plus a decision about the type they need.
-4. **Wider slot spaces** — 256 functions/structs/enums program-wide, now
+   `len`/`slice`, `fmt` `float`). What it does not yet reach is anything that
+   *mutates* or *grows* a heap object: `push` needs `ObjArray` to stop being
+   fixed-size, which is a real allocator question rather than another table
+   entry. String comparison, padding a rendered value to a width, and a `Char`
+   type are each one entry plus a decision about the type they need — and
+   padding is the one that would decide whether `{}` ever grows a format-spec
+   grammar or stays a bare segment with `std::fmt` functions beside it.
+3. **Wider slot spaces** — 256 functions/structs/enums program-wide, now
    reached by *use* of generics rather than by how many are written, by
    trait-object vtables on top of that, and by natives once they take slots
    too — three independent pressures on one byte. A two-byte operand (or a
@@ -799,14 +862,16 @@ by appetite rather than by necessity.
    Worth weighing first, though: **reachability-based linking** may buy more
    for less. `exe_link` currently gives every non-generic definition a slot
    whether or not anything calls it, which is why importing `std::cmp` spends
-   two slots on `Int::cmp`/`Float::cmp` even when only one is used — and why a
-   growing std taxes every program that touches it. Generic definitions
-   already behave the right way (an uncalled one is never compiled and costs
-   nothing), so making non-generics match is the *consistent* fix rather than
-   a new mechanism. It needs a reachability walk from `main` through calls,
+   two slots on `Int::cmp`/`Float::cmp` even when only one is used, and why
+   `use std::fmt::Display;` spends four on primitive impls a program may never
+   instantiate — and why a growing std taxes every program that touches it.
+   Generic definitions already behave the right way (an uncalled one is never
+   compiled and costs nothing), so making non-generics match is the *consistent*
+   fix rather than a new mechanism. It needs a reachability walk from `main`
+   through calls,
    vtables, closures and `?`, which is real work — but it shrinks the pressure
    instead of just moving the ceiling.
-5. **Object-safe traits with associated types** — the object-safety rule
+4. **Object-safe traits with associated types** — the object-safety rule
    rejects `Self.Item` outright. Allowing `dyn Iterator` with the associated
    type *named* at the coercion site (`dyn Iterator<Item = Int>`) is the
    natural follow-on, and needs `dyn` to carry type arguments at all.
@@ -817,10 +882,20 @@ via `Module.decl_base`) and is not part of the main line.
 
 ## Known warts to clean up opportunistically
 
-- a `Float` still has no user-facing formatting control: `value_format_float`
-  picks the shortest round-tripping decimal and that is all there is. A
-  `to_string` with a precision or a width needs a real formatting story
-  (`runtime.md` "Values") — now a native away, but still needing the story
+- there is no format-spec grammar inside `{}`: a segment is a bare expression,
+  and every rendering choice is a function beside it (`std::fmt::float(f, 3)`).
+  Width, alignment and padding have nowhere to be written, and adding them
+  would mean either parsing a spec or a `pad` native — a decision deferred
+  until something needs it
+- a `Display` impl whose body is `return "{self}";` recurses until the frame
+  limit. That is exactly how `std::fmt`'s four impls are written, and it is
+  correct there only because a primitive receiver takes the built-in path —
+  the asymmetry is invisible from the source. A cycle check would have to run
+  where the impl is written, not where it is called
+- no `Display` impl ships for a container: `[T]`, `(A, B)` and `Option<T>`
+  cannot interpolate, because a std impl would be program-global (impls are
+  not module-scoped) and would pre-empt the user's own. `print` still renders
+  them structurally
 - a unit struct's name cannot be bound as a variable any more: `var Marker =
   7;` is a struct pattern against an `Int`, and the diagnostic ("expected
   struct type in struct pattern") describes the rewrite rather than the
@@ -862,9 +937,14 @@ via `Module.decl_base`) and is not part of the main line.
   checker cannot catch
 - `ObjArray` is fixed-size, so `std::array` has `len` and nothing that grows or
   mutates
-- a panic message cannot name the value that caused it: interpolation is
-  defined over primitives, so `"{e}"` on a generic `E` is an error and
-  `unwrap`'s message is a fixed string. `expect` is the way round it
+- a panic message can only name the value that caused it where the type
+  parameter is bounded: `"{e}"` needs `E: Display`, and `Option`/`Result`'s
+  `unwrap` are not bounded, so their messages stay fixed. `expect` is the way
+  round it
+- `Display` is a lang item — the one std name `TypeChecker` knows, captured by
+  module and name in `tc_register_trait`. Every other std item is anonymous to
+  the compiler, so this is the first exception to "the std/not-std difference
+  is one branch in `mod_parse`"
 - `Never` is not *checked* to diverge: unification lets it stand in for any
   type in both directions, so `fun f() -> Never { return 1; }` is accepted and
   a `var x: Never` annotation is legal. It is a promise the compiler takes on

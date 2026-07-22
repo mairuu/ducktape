@@ -1,0 +1,9 @@
+#! expect: precision must be between 0 and 30
+# `float` renders into a fixed buffer, so the precision it accepts is bounded.
+# A native reports a failure the only way it can — `ctx->error`, which the VM
+# raises at the call site — the same path `string::slice` uses.
+use std::fmt::float;
+
+fun main() {
+    float(1.0, -1);
+}

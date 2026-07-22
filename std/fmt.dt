@@ -1,0 +1,61 @@
+# std::fmt — turning a value into text.
+#
+# `Display` is the one name the compiler knows out of the whole standard
+# library. Every other std module is anonymous to it — `Option` is an ordinary
+# enum, `Ord` an ordinary trait — but interpolation has to decide *which*
+# `to_string` a `"{v}"` segment means, and that cannot be left to whatever
+# happens to be in scope. So `"{v}"` on anything but a primitive is checked
+# against this trait and rewritten into the call `v.to_string()`.
+#
+# The primitives are not routed through it: the VM has always rendered an Int,
+# Float, Bool and String itself, which is what lets a program interpolate one
+# without importing anything. The impls below exist for the *other* direction —
+# so a `T: Display` generic can be instantiated at a primitive — and each is
+# written by interpolating `self`, which is that same built-in path. That makes
+# them the one place in std where a trait impl is genuinely free.
+#
+# `print` is deliberately *not* held to `Display`: it renders any value
+# structurally, through the runtime's own walk. "Show me what this is" is a
+# debugging view the runtime can always answer; "render this for a reader" is
+# the type's own decision, and only the second needs a trait.
+
+pub trait Display {
+  fun to_string(self) -> String;
+}
+
+impl Display for Int {
+  fun to_string(self) -> String {
+    return "{self}";
+  }
+}
+
+impl Display for Float {
+  fun to_string(self) -> String {
+    return "{self}";
+  }
+}
+
+impl Display for Bool {
+  fun to_string(self) -> String {
+    return "{self}";
+  }
+}
+
+impl Display for String {
+  fun to_string(self) -> String {
+    return self;
+  }
+}
+
+# The trait as a function, for the places a method call cannot go: a value
+# passed to something expecting a `String`, or a pipe stage.
+pub fun to_string<T: Display>(value: T) -> String {
+  return value.to_string();
+}
+
+# `value` to a fixed number of decimal places, which interpolation cannot ask
+# for: `"{f}"` renders the shortest decimal that reads back as the same Float,
+# and that is the *only* rendering the VM has. A negative precision is a
+# runtime error.
+@native("fmt_float")
+pub fun float(value: Float, precision: Int) -> String;

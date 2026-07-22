@@ -176,6 +176,55 @@ ones. `std::io` used to be the exception — a no-op namespace over the builtin
 `compiler.c` and `tc_link_imports` — and it is now a real module like the rest,
 so the flag and all three of its readers are gone.
 
+### Interpolation and `Display`
+
+`"{v}"` has to turn `v` into a String, and the question that shapes the whole
+design is *who decides how*. Two answers, and both are used:
+
+- **A primitive renders itself.** Int, Float, Bool and String are handled by
+  the VM's `stringify` (`src/vm.c`), which has known how since the feature
+  existed. `check_interpol_seg` lets those four through untouched — no call is
+  emitted at all — and that is what lets a program interpolate a number without
+  importing anything.
+- **Anything else asks the type**, through `std::fmt`'s `Display`.
+
+Once the trait is what decides, the segment *is* the call `v.to_string()`. So
+that is what `check_interpol_seg` rewrites it into: it builds an
+`EXPR_METHOD_CALL` node around the segment expression and resolves it. The
+consequence is the whole point — dispatch through a trait bound, through a
+`dyn`, an inherited default body, and monomorphising the instance all arrive
+already working, and **codegen, `OP_INTERP`, the VM and the image format need
+no change at all**, because the segment now simply evaluates to a String, which
+`stringify` passes straight through.
+
+Two details make the rewrite safe:
+
+- The receiver has to be resolved *first*, to know whether it is a primitive at
+  all — so the rewrite cannot go through `resolve_method_call_expr`, which
+  starts by resolving the receiver. `resolve_method_call_typed` is that
+  function minus its first three lines, and re-resolving instead would
+  re-report the receiver's diagnostics and re-queue its instantiations.
+- The `Display` check runs *before* the rewrite rather than letting method
+  resolution fail. That is what keeps the diagnostic about interpolation
+  ("cannot interpolate a value of type 'Point': it does not implement
+  'Display'", or the bound to add for a type parameter) instead of about a
+  missing method, and it is also what stops an unrelated inherent `to_string`
+  from silently qualifying.
+
+**`Display` is the one standard-library name the compiler knows** —
+`TypeChecker.display_trait`, captured in `tc_register_trait` when the trait is
+declared by the module `<std>/fmt.dt`. Keying on the module and not just the
+spelling is deliberate: a user trait called `Display` is an ordinary trait, and
+interpolation will not route through it. When no module in the program imports
+`std::fmt` the field stays NULL, which the diagnostic reports as such rather
+than as a bound that failed.
+
+`display_satisfied` asks `impl_index_implements`, the same question a trait
+bound and a `dyn` coercion ask — so a bounded type parameter answers from its
+declared bounds and is re-checked where it is instantiated. The two abstract
+kinds the impl index has no entry for, `TY_DYN` and the `TY_TRAIT` of a default
+body, answer from the trait they name.
+
 ### Types and inference
 
 `Type` (`include/ast.h`) is a tagged union; structural types are interned so

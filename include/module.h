@@ -99,6 +99,9 @@ struct ModuleRegistry {
   Allocator *al;
 };
 
+// is this the embedded std module of that name (`mod_is_std(m, "fmt")`)?
+bool mod_is_std(const Module *m, const char *name);
+
 void modreg_init(ModuleRegistry *reg, Allocator *al);
 
 void modreg_destroy(ModuleRegistry *reg);

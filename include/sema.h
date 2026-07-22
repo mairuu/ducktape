@@ -174,6 +174,15 @@ struct TypeChecker {
 
   Type *t_int, *t_float, *t_bool, *t_string, *t_unit, *t_never, *t_poison;
 
+  // `std::fmt`'s `Display`, captured when that module registers — the one name
+  // the compiler knows out of the whole standard library. Interpolation is the
+  // only construct that needs it: `"{v}"` on a non-primitive is a call to
+  // `v.to_string()`, and *which* trait declares that method has to be decided
+  // by the language rather than by whatever happens to be in scope. NULL when
+  // no module in the program imported `std::fmt`, which is what lets the
+  // diagnostic say so.
+  TraitDef *display_trait;
+
   DiagBag *diags;
   Allocator *al;
 };

@@ -1,0 +1,88 @@
+# std::fmt — a type deciding how it renders.
+#
+# `"{v}"` on anything but a primitive is checked against `Display` and
+# rewritten into the call `v.to_string()`, so every dispatch shape a method
+# call already had works here for free: a concrete impl, a `T: Display` bound,
+# and a `dyn Display` vtable. Codegen never learned about any of it.
+#> (1, 2)
+#> (1, 2) -> (3, 4)
+#> green
+#> p=(1, 2)
+#> n=7
+#> ok=true
+#> (1, 2)
+#> - (1, 2)
+#> - red
+#> - (1, 2) -> (1, 2)
+#> 1 2.5 true s
+#> 2.500
+#> 0.3333
+#> Point { x: 9, y: 9 }
+use std::io::print;
+use std::fmt::{Display, to_string, float};
+
+struct Point { x: Int, y: Int }
+
+impl Display for Point {
+    fun to_string(self) -> String {
+        return "({self.x}, {self.y})";
+    }
+}
+
+# a Display impl interpolating a Display field: the rewrite nests, because the
+# inner segment is checked exactly the way the outer one was.
+struct Line { from: Point, to: Point }
+
+impl Display for Line {
+    fun to_string(self) -> String {
+        return "{self.from} -> {self.to}";
+    }
+}
+
+enum Colour { Red, Green }
+
+impl Display for Colour {
+    fun to_string(self) -> String {
+        match self {
+            Colour::Red => { return "red"; },
+            Colour::Green => { return "green"; },
+        }
+    }
+}
+
+# dispatch through a bound: the receiver is abstract here, so which body runs
+# is decided per instantiation.
+fun label<T: Display>(tag: String, v: T) -> String {
+    return "{tag}={v}";
+}
+
+fun main() {
+    var p = Point { x: 1, y: 2 };
+    print("{p}");
+    print("{Line { from: p, to: Point { x: 3, y: 4 } }}");
+    print("{Colour::Green}");
+
+    # the bound, instantiated at a user type and at two primitives
+    print(label("p", p));
+    print(label("n", 7));
+    print(label("ok", true));
+
+    # `to_string` as a function, for where a method call cannot go
+    print(to_string(p));
+
+    # a trait object: the vtable carries the choice a bound makes statically
+    var shapes: [dyn Display] = [p, Colour::Red, Line { from: p, to: p }];
+    for s in shapes {
+        print("- {s}");
+    }
+
+    # the primitives still render themselves, with no call emitted at all
+    print("{1} {2.5} {true} {"s"}");
+
+    # the one rendering interpolation cannot ask for
+    print(float(2.5, 3));
+    print(float(1.0 / 3.0, 4));
+
+    # `print` is deliberately not held to Display: it walks any value
+    print(Point { x: 9, y: 9 });
+}

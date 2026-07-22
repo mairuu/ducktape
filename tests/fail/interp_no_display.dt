@@ -1,0 +1,13 @@
+#! expect: cannot interpolate a value of type 'Point': it does not implement 'Display'
+# `std::fmt` is imported, so `Display` is known — this type simply has no impl.
+# `print(p)` would still work: the runtime's structural walk is a different
+# question from the type deciding how it renders.
+use std::io::print;
+use std::fmt::Display;
+
+struct Point { x: Int, y: Int }
+
+fun main() {
+    var p = Point { x: 1, y: 2 };
+    print("{p}");
+}

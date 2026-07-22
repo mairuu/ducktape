@@ -9,7 +9,11 @@ DEFS :=
 TARGET  := ducktape
 CC      := cc
 CSTD    := -std=c23
-CFLAGS  := $(CSTD) -Wall -Wextra -Wpedantic $(DEFS)
+# -Wno-overlength-strings: `build/std_data.h` embeds each std module as one
+# string literal, and ISO only requires 4095 characters to be supported. Every
+# compiler we build with handles more; the alternative would be chopping a std
+# module up to please a minimum nobody enforces.
+CFLAGS  := $(CSTD) -Wall -Wextra -Wpedantic -Wno-overlength-strings $(DEFS)
 IFLAGS  := -Iinclude -Ibuild
 LDFLAGS :=
 LIBS    := -lm

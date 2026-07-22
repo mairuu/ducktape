@@ -34,6 +34,32 @@ static Value n_io_print(NativeCtx *ctx, Value *args, int argc) {
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
+// std::fmt
+// ───────────────────────────────────────────────────────────────────────────────
+
+// A Float to a fixed number of decimals. This is the one rendering decision
+// the language cannot express: `value_format_float` picks the shortest decimal
+// that round-trips, which is the right default and the only thing `"{f}"` can
+// say. Allocating, so `args` staying on the VM stack is what roots the
+// arguments across the intern.
+static Value n_fmt_float(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  int64_t precision = args[1].as.i;
+  if (precision < 0 || precision > 30) {
+    ctx->error = "precision must be between 0 and 30";
+    return val_unit();
+  }
+  char buf[64];
+  int len = snprintf(buf, sizeof(buf), "%.*f", (int)precision, args[0].as.f);
+  if (len < 0 || (size_t)len >= sizeof(buf)) {
+    ctx->error = "formatted float is too long";
+    return val_unit();
+  }
+  ObjString *out = heap_intern(ctx->heap, buf, len);
+  return val_obj(&out->obj);
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
 // std::panic
 // ───────────────────────────────────────────────────────────────────────────────
 
@@ -86,9 +112,8 @@ typedef struct {
 } NativeEntry;
 
 static const NativeEntry natives[] = {
-    {"io_print", n_io_print},
-    {"panic_abort", n_panic_abort},
-    {"string_len", n_string_len},
+    {"fmt_float", n_fmt_float},       {"io_print", n_io_print},
+    {"panic_abort", n_panic_abort},   {"string_len", n_string_len},
     {"string_slice", n_string_slice},
 };
 

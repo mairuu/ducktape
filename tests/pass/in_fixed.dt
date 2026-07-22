@@ -6,6 +6,7 @@
 use std::io::print;
 use std::array::len;
 use std::string::slice;
+use std::fmt::Display;
 
 enum Result<T, E> {
     Ok(T),
@@ -45,6 +46,14 @@ impl<T> Drawable for Point<T> {
 impl Point<Int> {
     fun new(x: Int, y: Int) -> Self {
         return Point { x: x, y: y };
+    }
+}
+
+# a type deciding how it renders: `"{p}"` on anything but a primitive is
+# checked against `Display` and compiled as the call `p.to_string()`.
+impl Display for Point<Int> {
+    fun to_string(self) -> String {
+        return "({self.x}, {self.y})";
     }
 }
 
@@ -177,4 +186,6 @@ fun main() {
     # natives: an @intrinsic lowered to an opcode, an @native called into C
     var n = len([1, 2, 3]);
     var s = slice("showcase", 0, 4);
+    # a Display impl reached by interpolation, beside a primitive segment
+    var shown = "{Point::new(1, 2)} #{n}";
 }
