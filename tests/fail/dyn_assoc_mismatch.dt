@@ -1,0 +1,24 @@
+#! expect: it implements 'Iterator' with 'Item' = 'String'
+# Implementing the trait is no longer the whole question at a coercion: the
+# trait object states what the associated type *is*, so an impl that binds a
+# different one satisfies the trait and still cannot be this type. Reported
+# here rather than as a plain type mismatch, which could only say the two
+# types differ and not that it is the binding that disagrees.
+
+use std::io::print;
+
+trait Iterator {
+    type Item;
+    fun next(self) -> Self.Item;
+}
+
+struct Words { w: String }
+
+impl Iterator for Words {
+    type Item = String;
+    fun next(self) -> String { "{self.w}!" }
+}
+
+fun main() {
+    var it: dyn Iterator<Item = Int> = Words { w: "hi" };
+}

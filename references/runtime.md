@@ -549,7 +549,13 @@ a table; the slot is reserved *before* the table is filled, since compiling a
 method body can reach the same pair again (`mono_request` does the same).
 Note what the runtime `VTable` does **not** hold: the trait and the self type.
 Those are compiler bookkeeping the VM never reads — the serialization rule,
-one level over.
+one level over. **Nor does it hold the associated-type bindings.** A
+`dyn Iterator<Item = Int>` and a `dyn Iterator<Item = String>` are different
+types to the checker and the same shape to the VM, because an associated type
+is erased exactly as a type argument is — so naming one at a coercion site
+changed nothing in codegen, the vtable, the opcodes or the image format. The
+memo key stays `(trait, self type)`, which still determines the bindings: an
+impl binds each associated type once.
 
 Two opcodes, and deliberately no third:
 

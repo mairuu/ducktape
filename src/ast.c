@@ -60,6 +60,8 @@ static uint32_t type_hash(const Type *t) {
     break;
   case TY_DYN:
     h = h * 31 + (uint32_t)(uintptr_t)t->as.dyn.def;
+    for (int i = 0; i < t->as.dyn.assoc_type_count; i++)
+      h = h * 31 + (uint32_t)(uintptr_t)t->as.dyn.assoc_types[i];
     break;
   case TY_ASSOC:
     h = h * 31 + (uint32_t)(uintptr_t)t->as.assoc.base;
@@ -131,7 +133,14 @@ static bool type_structurally_equal(const Type *a, const Type *b) {
   case TY_TRAIT:
     return a->as.trait.def == b->as.trait.def;
   case TY_DYN:
-    return a->as.dyn.def == b->as.dyn.def;
+    if (a->as.dyn.def != b->as.dyn.def)
+      return false;
+    if (a->as.dyn.assoc_type_count != b->as.dyn.assoc_type_count)
+      return false;
+    for (int i = 0; i < a->as.dyn.assoc_type_count; i++)
+      if (a->as.dyn.assoc_types[i] != b->as.dyn.assoc_types[i])
+        return false;
+    return true;
   case TY_ASSOC:
     return a->as.assoc.base == b->as.assoc.base &&
            a->as.assoc.trait == b->as.assoc.trait &&
@@ -186,6 +195,17 @@ static inline bool type_is_internable(Type *t) {
   case TY_ENUM:
     for (int i = 0; i < t->as.enm.type_arg_count; i++) {
       if (!type_is_internable(t->as.enm.type_args[i])) {
+        return false;
+      }
+    }
+    break;
+  case TY_DYN:
+    // a binding can still be an unsolved unknown
+    // (`[dyn Iterator<Item = T>]` at a call site), and a container of a
+    // non-internable type is not internable — the same rule every case above
+    // follows.
+    for (int i = 0; i < t->as.dyn.assoc_type_count; i++) {
+      if (!type_is_internable(t->as.dyn.assoc_types[i])) {
         return false;
       }
     }
@@ -504,8 +524,14 @@ Type *ty_trait(TraitDef *def, Allocator *al) {
   return type_intern(t, al);
 }
 
-Type *ty_dyn(TraitDef *def, Allocator *al) {
-  Type probe = {.kind = TY_DYN, .as.dyn = {.def = def}};
+Type *ty_dyn(TraitDef *def, Type **assoc_types, int assoc_type_count,
+             Allocator *al) {
+  Type probe = {.kind = TY_DYN,
+                .as.dyn = {
+                    .def = def,
+                    .assoc_types = assoc_types,
+                    .assoc_type_count = assoc_type_count,
+                }};
   Type *interned = type_intern_lookup(&probe);
   if (interned) {
     return interned;
@@ -514,7 +540,22 @@ Type *ty_dyn(TraitDef *def, Allocator *al) {
   Type *t = al_alloc_zero_for(al, Type);
   t->kind = TY_DYN;
   t->as.dyn.def = def;
+  t->as.dyn.assoc_types = al_alloc(al, assoc_type_count * sizeof(Type *));
+  for (int i = 0; i < assoc_type_count; i++) {
+    t->as.dyn.assoc_types[i] = assoc_types[i];
+  }
+  t->as.dyn.assoc_type_count = assoc_type_count;
   return type_intern(t, al);
+}
+
+Type *ty_dyn_assoc(const Type *dyn, StringView name) {
+  const TraitDef *trait = dyn->as.dyn.def;
+  for (int i = 0; i < dyn->as.dyn.assoc_type_count; i++) {
+    if (sv_equal(trait->assoc_types[i].name, name)) {
+      return dyn->as.dyn.assoc_types[i];
+    }
+  }
+  return NULL;
 }
 
 // bool types_equal(const Type *a, const Type *b) { return a == b; }
@@ -707,8 +748,27 @@ int type_sprintf(const Type *t, char *buf, size_t buf_size) {
   case TY_TRAIT:
     return snprintf(buf, buf_size, SV_FMT,
                     SV_ARG(t->as.trait.def->name)); // todo: include type args
-  case TY_DYN:
-    return snprintf(buf, buf_size, "dyn " SV_FMT, SV_ARG(t->as.dyn.def->name));
+  case TY_DYN: {
+    int n = sp_bump(
+        0, buf_size,
+        snprintf(buf, buf_size, "dyn " SV_FMT, SV_ARG(t->as.dyn.def->name)));
+    // the bindings are part of the type, so a mismatch diagnostic has to show
+    // them: `dyn Iterator<Item = Int>` and `dyn Iterator<Item = String>` are
+    // two different expectations and would otherwise print the same.
+    for (int i = 0; i < t->as.dyn.assoc_type_count; i++) {
+      n = sp_bump(n, buf_size,
+                  snprintf(buf + n, buf_size - n, "%s" SV_FMT " = ",
+                           i == 0 ? "<" : ", ",
+                           SV_ARG(t->as.dyn.def->assoc_types[i].name)));
+      n = sp_bump(
+          n, buf_size,
+          type_sprintf(t->as.dyn.assoc_types[i], buf + n, buf_size - n));
+    }
+    if (t->as.dyn.assoc_type_count > 0) {
+      n = sp_bump(n, buf_size, snprintf(buf + n, buf_size - n, ">"));
+    }
+    return n;
+  }
   case TY_ARRAY: {
     int n = sp_bump(0, buf_size, snprintf(buf, buf_size, "["));
     n = sp_bump(n, buf_size,
@@ -862,6 +922,9 @@ void dump_type(const Type *t) {
     break;
   case TY_DYN:
     fprintf(stdout, "dyn " SV_FMT, SV_ARG(t->as.dyn.def->name));
+    if (t->as.dyn.assoc_type_count > 0) {
+      fprintf(stdout, "<...>");
+    }
     break;
   }
 }
@@ -887,6 +950,11 @@ static void dump_typenode(const TypeNode *tn, int indent) {
   case TYNODE_DYN:
     fprintf(stdout, "TypeNode: Dyn\n");
     dump_path(&tn->as.dyn.path, indent + 1);
+    for (int i = 0; i < tn->as.dyn.binding_count; i++) {
+      ind(indent + 1);
+      fprintf(stdout, SV_FMT " =\n", SV_ARG(tn->as.dyn.bindings[i].name));
+      dump_typenode(tn->as.dyn.bindings[i].type, indent + 2);
+    }
     break;
   case TYNODE_TUPLE:
     fprintf(stdout, "TypeNode: Tuple\n");

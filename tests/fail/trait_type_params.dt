@@ -1,0 +1,12 @@
+#! expect: trait 'Into' cannot take type parameters
+# A trait's own type parameters parse but nothing carries them, so they were
+# silently ignored and then reported as `unknown type: T` from inside the
+# signature that used one. Reported where they are written instead, and each
+# is bound as poison so the signature does not report a second time.
+
+trait Into<T> {
+    fun into(self) -> T;
+}
+
+fun main() {
+}

@@ -73,11 +73,15 @@ type           = "(" ")"                          (* unit *)
                | "(" type ( "," type )* ")"       (* tuple; single = group *)
                | "fun" "(" ( type ( "," type )* )? ")" "->" type
                | "[" type "]"                     (* array *)
-               | "dyn" typePath                   (* trait object *)
+               | "dyn" IDENT assocBindings?       (* trait object *)
                | "Self" assocSuffix?
                | typePath assocSuffix? ;
                  (* "dyn" is required: a bare trait name in type position is
                     the bound spelling (impl/where), never a value type *)
+assocBindings  = "<" IDENT "=" type ( "," IDENT "=" type )* ">" ;
+                 (* one per associated type the trait declares, all required.
+                    NOT a type-argument list: the path after "dyn" is parsed
+                    without one, so this "<" is read here *)
 typePath       = pathSeg ( "::" pathSeg )* ;
 pathSeg        = IDENT ( "::"? "<" type ( "," type )* ">" )? ;
                  (* in type position "::" before "<" is optional *)

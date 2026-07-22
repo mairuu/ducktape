@@ -489,7 +489,10 @@ on `T` — or the trait itself, for `Self.Assoc` — declares that name.
 applicable impl as soon as the base is concrete, and `infer_unify` normalises
 `TY_ASSOC` operands up front so `T.Item` and `Int` don't look like different
 kinds. While the base is still abstract the projection survives unchanged,
-which is exactly what a generic body needs.
+which is exactly what a generic body needs. A projection on a *trait object*
+never survives that long: `trait_project` reads it off the binding the `dyn`
+names, since a trait object is the one abstract receiver that says what its
+associated types are.
 
 ### Trait objects (`dyn Trait`)
 
@@ -500,13 +503,33 @@ as far as codegen is concerned (`type_is_concrete` says yes, and a `dyn Show`
 can key an instantiation exactly like a struct can). Sharing one kind would
 put two dispatch strategies behind one type.
 
-Resolution is `TYNODE_DYN` → `ty_dyn(trait)`, interned like every other
-structural type. **Object safety** is checked there — where `dyn Trait` is
-written, not at the trait declaration, because a trait is free to be
+Resolution is `TYNODE_DYN` → `ty_dyn(trait, bindings)`, interned like every
+other structural type. **Object safety** is checked there — where `dyn Trait`
+is written, not at the trait declaration, because a trait is free to be
 static-dispatch-only and only naming it as a type asks for more. A method is
 vtable-able only if a receiver and nothing else is enough to call it:
 `self` required, no method-level type parameters, and `Self` nowhere but the
 receiver (`type_mentions_self` looks past the receiver position).
+
+**`Self.Item` is exempt, and that exemption is what `TypeDyn.assoc_types`
+buys.** `Self` cannot be recovered once a value is coerced — that is what the
+coercion erased — but a projection is not the erased type, it is a *function*
+of it, and a function of an erased thing can be pinned by writing down its
+result. So a `TY_DYN` carries one type per associated type the trait declares,
+in declaration order: the same table an `ImplDef` carries, written at the use
+site instead. Total plus canonically ordered is what lets interning keep
+deciding identity by pointer, and filling it *is* the completeness check — a
+hole is a missing binding, a name matching no hole is a wrong one. The
+bindings are ordinary types, so `subst_apply`, `infer_apply`,
+`type_mentions_self`, `trait_project` and codegen's `type_is_concrete` all
+walk them the way they walk a struct's type arguments.
+
+Dispatch reads the binding through `trait_project`: with a `TY_DYN` self, a
+`Self.Item` in the method signature collapses to what the trait object says it
+is, rather than being rebased onto a self that has no impl to consult (the
+bounded-`T` case, which stays abstract as `T.Item`). That is also why a
+projection through a trait object *can* key an instantiation while one through
+a bound cannot — it is already a concrete type by the time codegen sees it.
 
 Dispatch needs nothing new: `resolve_method_call_expr` treats a `TY_DYN`
 receiver as offering exactly the one trait it names, and hands it to
@@ -527,6 +550,15 @@ asks, since a trait object is a bound whose witness travels with the value.
 A `TY_GENERIC` is allowed to coerce, because that function answers a bounded
 parameter from its own declared bounds and codegen substitutes the concrete
 type before building the vtable.
+
+Implementing the trait is not the whole question once the type carries
+bindings: each is compared against what `impl_index_assoc_type` reads off the
+applicable impl, and a disagreement is reported *here* rather than left to the
+caller, whose mismatch could only say the two types differ and not that the
+trait is implemented and only the binding is wrong. The one exception is a
+binding that is still an unsolved unknown (`[dyn Iterator<Item = T>]`): the
+impl is the only thing that knows, so that case unifies instead of comparing —
+the single place the coercion solves rather than checks.
 
 The result is recorded on the expression (`Expr.coerce_dyn`) rather than
 folded into its type, so the node keeps saying what it *is*. That is the same

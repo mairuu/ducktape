@@ -165,7 +165,15 @@ static bool type_is_concrete(const Type *t) {
   case TY_DYN:
     // concrete, unlike the TY_TRAIT above it: `dyn Show` names one runtime
     // representation (a value plus a vtable), so it can key an instantiation
-    // exactly like a struct can. That difference *is* the feature.
+    // exactly like a struct can. That difference *is* the feature. Its
+    // associated-type bindings are ordinary types and can still be abstract
+    // (`dyn Iterator<Item = T>` inside a generic), so they are asked too —
+    // the same question `Opt<T>` above answers about its type arguments.
+    for (int i = 0; i < t->as.dyn.assoc_type_count; i++) {
+      if (!type_is_concrete(t->as.dyn.assoc_types[i])) {
+        return false;
+      }
+    }
     return true;
   default:
     return true;

@@ -57,9 +57,10 @@ impl Display for Point<Int> {
     }
 }
 
-# `Drawable` is deliberately *not* object-safe (`Self.Color`), which is fine —
-# object safety is only demanded where `dyn` is written. This one is, so it can
-# be a trait object as well as a bound.
+# `Drawable` mentions `Self.Color`, which a trait object can keep by naming it:
+# `dyn Drawable<Color = String>` below. `Weigh` mentions no associated type at
+# all, so it needs no bindings — the two spellings are the same rule, since the
+# binding list is one entry per associated type the trait declares.
 trait Weigh {
     fun weight(self) -> Int;
 
@@ -94,6 +95,13 @@ pub fun total_weight(items: [dyn Weigh]) -> Int {
 # a bounded generic: the argument type must implement Drawable, and the bound
 # is also what makes `item.draw()` (and the projection `T.Color`) resolve
 pub fun render<T: Drawable>(item: T) -> T.Color {
+    return item.draw();
+}
+
+# the same method reached dynamically instead. The receiver's type is gone, so
+# `Self.Color` has nowhere to come from — unless the trait object says, which
+# is what makes a trait with an associated type object-safe at all.
+pub fun render_dyn(item: dyn Drawable<Color = String>) -> String {
     return item.draw();
 }
 
@@ -189,6 +197,8 @@ fun main() {
     var r = process_data(1);
     # coercion at a call site, mixing two concrete types in one array
     var w = total_weight([Brick { kg: 20 }, Feather { grams: 1 }, Brick { kg: 3 }]);
+    # the same coercion into a trait object that names its associated type
+    var c = render_dyn(Point::new(3, 4));
     # natives: an @intrinsic lowered to an opcode, an @native called into C
     var n = len([1, 2, 3]);
     var s = slice("showcase", 0, 4);

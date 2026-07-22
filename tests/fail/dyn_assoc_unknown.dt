@@ -1,0 +1,21 @@
+#! expect: trait 'Iterator' has no associated type 'Element'
+# The binding list is filled in by name against the trait's own declarations,
+# so a name that matches nothing is caught at the same place a missing one is.
+
+use std::io::print;
+
+trait Iterator {
+    type Item;
+    fun next(self) -> Self.Item;
+}
+
+struct Counter { n: Int }
+
+impl Iterator for Counter {
+    type Item = Int;
+    fun next(self) -> Int { self.n + 1 }
+}
+
+fun main() {
+    var it: dyn Iterator<Element = Int> = Counter { n: 1 };
+}

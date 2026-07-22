@@ -1,0 +1,111 @@
+# An associated type is the one part of a `Self`-mentioning signature a trait
+# object can keep: `Self` itself is what the coercion erased, but `Self.Item`
+# is a *function of* it, and a function of an erased thing can be pinned by
+# writing down its result. So `dyn Iterator<Item = Int>` is object-safe where
+# a bare `dyn Iterator` is not even a complete type.
+#> 42
+#> counter
+#> 42
+#> hi!
+#> hi!!
+#> 13
+#> 8
+#> x!
+#> counter
+#> 2
+#> 5
+#> true
+#> false
+
+use std::io::print;
+
+trait Iterator {
+    type Item;
+
+    fun next(self) -> Self.Item;
+    fun label(self) -> String;
+
+    # a default body whose return type is the projection: one instantiation
+    # per receiver type, and its signature differs between two trait objects
+    # of the same trait
+    fun twice(self) -> Self.Item {
+        var first = self.next();
+        return self.next();
+    }
+}
+
+struct Counter { n: Int }
+struct Words { w: String }
+
+impl Iterator for Counter {
+    type Item = Int;
+    fun next(self) -> Int { self.n + 1 }
+    fun label(self) -> String { "counter" }
+}
+
+impl Iterator for Words {
+    type Item = String;
+    fun next(self) -> String { "{self.w}!" }
+    fun label(self) -> String { "words" }
+    fun twice(self) -> String { "{self.w}!!" }
+}
+
+# a heterogeneous collection that also agrees on what it yields
+fun sum_all(xs: [dyn Iterator<Item = Int>]) -> Int {
+    var total = 0;
+    for it in xs {
+        total += it.next();
+    }
+    return total;
+}
+
+# the binding is an ordinary type, so it can be a type parameter — the impl
+# is what solves it, since it is the only thing that knows
+fun first<T>(xs: [dyn Iterator<Item = T>]) -> T {
+    return xs[0].next();
+}
+
+# a trait object in a struct field, beside a plain one
+struct Slot { it: dyn Iterator<Item = Int>, tag: Int }
+
+fun id<T>(v: T) -> T { return v; }
+
+# a projection handed to another generic. Through a *bound* that is the
+# "cannot instantiate: type argument is not known here" wart, because codegen
+# has no way to collapse `T.Item`; through a trait object the binding is
+# already concrete at the checker, so it keys the instantiation like any type.
+fun echo(d: dyn Iterator<Item = Int>) -> Int {
+    return id(d.next());
+}
+
+fun main() {
+    var it: dyn Iterator<Item = Int> = Counter { n: 41 };
+    print(it.next());
+    print(it.label());
+    print(it.twice());
+
+    # the same trait, a different binding: a different type, a different
+    # instantiation of the default body, and a different return type
+    var w: dyn Iterator<Item = String> = Words { w: "hi" };
+    print(w.next());
+    print(w.twice());
+
+    print(sum_all([Counter { n: 1 }, Counter { n: 10 }]));
+
+    print(first([Counter { n: 7 }]));
+    print(first([Words { w: "x" }]));
+
+    var slot = Slot { it: Counter { n: 0 }, tag: 3 };
+    print(slot.it.label());
+    var pair: (dyn Iterator<Item = Int>, Int) = (Counter { n: 1 }, 9);
+    print(pair.0.next());
+    print(echo(Counter { n: 4 }));
+
+    # identity still decides structurally: two coercions of one type to one
+    # trait object are equal, and the binding is part of that type
+    var a: dyn Iterator<Item = Int> = Counter { n: 1 };
+    var b: dyn Iterator<Item = Int> = Counter { n: 1 };
+    var c: dyn Iterator<Item = Int> = Counter { n: 2 };
+    print(a == b);
+    print(a == c);
+}

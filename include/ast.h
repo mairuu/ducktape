@@ -99,8 +99,20 @@ typedef struct {
 // codegen substitutes a concrete self and monomorphises. A TY_DYN receiver
 // cannot be, so the choice travels with the value as a vtable. Sharing one
 // kind would put both dispatch strategies behind one type.
+//
+// `assoc_types` is the trait's associated types written at the *use* site
+// (`dyn Iterator<Item = Int>`) — the same table an impl carries, one entry per
+// `trait->assoc_types` and in that order, so the array is total and its
+// ordering canonical. That is what lets interning keep deciding identity by
+// pointer: `dyn Iterator<Item = Int>` and `dyn Iterator<Item = String>` are
+// two types. Nothing at *runtime* reads it — an associated type is erased
+// exactly like a type argument — it exists so a caller can know what
+// `Self.Item` is once `Self` is gone, which is what makes such a method
+// object-safe at all.
 typedef struct {
   TraitDef *def;
+  Type **assoc_types; // one per def->assoc_types, in declaration order
+  int assoc_type_count;
 } TypeDyn;
 
 typedef struct {
@@ -166,7 +178,11 @@ Type *ty_assoc(Type *base, StringView assoc_name, TraitDef *trait,
 Type *ty_struct(StructDef *def, Type **args, int argc, Allocator *al);
 Type *ty_enum(EnumDef *def, Type **args, int argc, Allocator *al);
 Type *ty_trait(TraitDef *def, Allocator *al);
-Type *ty_dyn(TraitDef *def, Allocator *al);
+Type *ty_dyn(TraitDef *def, Type **assoc_types, int assoc_type_count,
+             Allocator *al);
+// the type `dyn` binds to `name`, or NULL if the trait has no such associated
+// type. Total by construction, so a NULL means the name is wrong.
+Type *ty_dyn_assoc(const Type *dyn, StringView name);
 
 static inline bool types_equal(const Type *a, const Type *b) { return a == b; }
 bool type_is_numeric(const Type *t);
@@ -473,6 +489,24 @@ typedef struct {
   TypeNode *elem;
 } TypeNodeArray;
 
+// `Item = Int` inside `dyn Iterator<Item = Int>`.
+typedef struct {
+  StringView name;
+  TypeNode *type;
+  Span span;
+} AssocBindingNode;
+
+// TYNODE_DYN — the path names the trait, and the bindings pin each of its
+// associated types. The list is *not* a type-argument list, which is why it is
+// parsed here rather than by `parse_path`: `<Item = Int>` says what
+// `Self.Item` means once `Self` is erased, and a trait's own type parameters
+// (were they supported) would be a separate question.
+typedef struct {
+  Path path;
+  AssocBindingNode *bindings;
+  int binding_count;
+} TypeNodeDyn;
+
 struct TypeNode {
   TypeNodeKind kind;
   Span span;
@@ -480,7 +514,7 @@ struct TypeNode {
 
   union {
     TypeNodeNamed named;
-    TypeNodeNamed dyn; // TYNODE_DYN — the path names the trait
+    TypeNodeDyn dyn;
     TypeNodeTuple tuple;
     TypeNodeFun fun;
     TypeNodeAssoc assoc;

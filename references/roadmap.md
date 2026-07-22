@@ -1469,6 +1469,85 @@
   direction it was not already reachable from, which is what every one of the
   last several latent bugs turned out to need.
 
+- **Object-safe traits with associated types (milestone 27)** —
+  `dyn Iterator<Item = Int>` dispatches dynamically over a trait the
+  object-safety rule used to reject outright. Design: `language.md` "Trait
+  objects", `architecture.md` "Trait objects (`dyn Trait`)", `runtime.md`
+  "Trait objects".
+
+  The observation the milestone turns on: **`Self.Item` is not `Self`.** Object
+  safety rejects `Self` outside the receiver because the coercion *erased* the
+  concrete type — a `-> Self` or an `other: Self` asks the caller for something
+  it can no longer have. A projection looks like the same problem and is not:
+  it is not the erased type, it is a *function of* it, and a function of an
+  erased thing can be pinned by writing down its result. So `dyn
+  Iterator<Item = Int>` is not a trait object with decoration — it is the
+  trait object plus the part of the signature the vtable erased, put back where
+  the caller can read it.
+
+  Three things follow, and they are the whole milestone:
+  - **A `TY_DYN` is a trait plus the impl's associated-type table, written at
+    the use site.** One entry per `trait->assoc_types`, in declaration order,
+    so the array is *total* and its ordering canonical — which is what lets
+    interning keep deciding identity by pointer, exactly as it does for a
+    struct's type arguments. Filling it is therefore also the completeness
+    check: a hole is a missing binding, a name matching no hole is a wrong one.
+    Every associated type must be bound whether or not a method mentions it,
+    because two `dyn Iterator`s that agree on the trait and nothing else are
+    not one type.
+  - **Nothing in the backend moved.** An associated type is erased at runtime
+    exactly as a type argument is, so codegen, the vtable, both opcodes and the
+    image format are untouched, and the vtable memo key stays `(trait, self)` —
+    which still determines the bindings, since an impl binds each once. This is
+    milestone 13's own observation read once more: the vtable is the
+    monomorphisation key moved into the value, and a binding is a fact about
+    the *type*, so it never had to travel.
+  - **Coercion grew a second question, and one of them is a solve.**
+    `impl_index_implements` asked whether the trait is implemented; now each
+    binding is compared against what the impl actually bound. The mismatch is
+    reported inside `check_coerce_dyn` rather than left to the caller, whose
+    diagnostic could only say the two types differ and not that the trait *is*
+    implemented and only the binding disagrees — the poison convention one
+    level up: one mistake, one message. The exception is a binding that is
+    still an unsolved unknown (`[dyn Iterator<Item = T>]`), where the impl is
+    the only thing that knows; that case unifies, and it is the one place the
+    coercion solves rather than checks.
+
+  The binding list is deliberately **not** a type-argument list, which is why
+  the path after `dyn` is parsed in a new `PATH_BARE` mode and the `<` is read
+  by `parse_assoc_bindings` instead. Handing it to `parse_type_args` would
+  report "expected '>'" at the `=`; more to the point, a trait's own type
+  parameters are a different question, still unsupported, and `dyn Into<Int>`
+  remains without meaning.
+
+  A side effect worth recording, because it narrows a listed wart rather than
+  adding one: **a projection through a trait object can key an instantiation.**
+  `id(d.next())` compiles where the same call on a bounded `T` reports "type
+  argument 'T' is not known here", because `trait_project` collapses
+  `Self.Item` against the trait object's own binding, so what reaches codegen
+  is already a concrete type. The wart survives for bounds, which is where it
+  was always the harder half.
+
+  A mistake made *inside* the milestone is worth recording next to the
+  pre-existing ones: the first draft compared bindings with `types_equal`, on
+  the stated theory that "a binding is written down on both sides, and nothing
+  here is being solved". Inside a generic that is false, and the probe that
+  found it (`first([Counter { n: 5 }])`) is now part of
+  `tests/run/dyn_assoc.dt`.
+
+  And one real pre-existing bug, found while checking what to write in the
+  "Next" list rather than by the feature itself: **a generic trait aborted the
+  compiler.** `impl Into<Int> for S` reaches `resolve_path` — a *bare* trait
+  name never does, since the type scope answers it directly — where `TY_TRAIT`
+  fell into `default: assert(false)`. So the one spelling that gets there was
+  the one nothing handled. Two diagnostics now, because they are two different
+  mistakes at two different places: declaring a trait's type parameters
+  (`trait Into<T>`, where they are silently dropped — each is now bound as
+  poison so the signature using one does not report again), and naming a trait
+  with type arguments. The second returns *successfully* with a poison type
+  rather than failing, so the caller's blanket "unresolved type" does not pile
+  on top.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -1500,10 +1579,12 @@ by appetite rather than by necessity.
      The one open question in the set is whether they take byte offsets (like
      `slice`) or characters (like `chars`), which is the same fork milestone 26
      answered for indexing and would have to answer the same way.
-2. **Object-safe traits with associated types** — the object-safety rule
-   rejects `Self.Item` outright. Allowing `dyn Iterator` with the associated
-   type *named* at the coercion site (`dyn Iterator<Item = Int>`) is the
-   natural follow-on, and needs `dyn` to carry type arguments at all.
+2. **Generic traits** — a trait may be *declared* with type parameters, but
+   nothing carries them: `TypeTrait` has no type arguments, so `T: Into<Int>`
+   and `dyn Into<Int>` both have no meaning. Milestone 27 gave `dyn` a bracket
+   list of its own (associated-type bindings), which is the shape the two
+   would have to share, so this is the next thing the trait machinery is
+   missing rather than the first.
 
 Not on the roadmap: the **REPL** is a side feature, not a milestone — it lives
 on the `feature/repl` branch (`--repl`, incremental compilation over one module
@@ -1544,13 +1625,15 @@ via `Module.decl_base`) and is not part of the main line.
 - overlapping method names across impls: bare generic paths take the first
   registered impl
 - `Point::new` vs `Point::<Int>::new`: expression paths require turbofish
-- an associated-type projection cannot key an instantiation: handing a
-  `T.Item` / `Self.Item` value to another generic (`id(v.item())`) reports
-  "cannot instantiate 'id': type argument 'T' is not known here", because
-  codegen has no `infer_apply` to collapse the projection once the base is
-  concrete — `subst_apply` passes `TY_ASSOC` through untouched and
-  `impl_index_assoc_type` is checker-side. Affects bounded generic functions
-  and trait default bodies alike
+- an associated-type projection cannot key an instantiation **through a
+  bound**: handing a `T.Item` / `Self.Item` value to another generic
+  (`id(v.item())`) reports "cannot instantiate 'id': type argument 'T' is not
+  known here", because codegen has no `infer_apply` to collapse the projection
+  once the base is concrete — `subst_apply` passes `TY_ASSOC` through untouched
+  and `impl_index_assoc_type` is checker-side. Affects bounded generic
+  functions and trait default bodies alike. Through a *trait object* it works
+  (milestone 27): `trait_project` collapses `Self.Item` against the binding the
+  `dyn` names, so codegen only ever sees a concrete type
 - an impl's own type-param bounds are checked at selection (milestone 20), but
   *coherence* is deliberately blind to them: `impl<T: Ord> Ord for Option<T>`
   and an `impl Ord for Option<Widget>` conflict even though no receiver could
@@ -1650,8 +1733,14 @@ via `Module.decl_base`) and is not part of the main line.
 - a trait object cannot be made from the abstract `Self` of a default body:
   `check_coerce_dyn` refuses a `TY_TRAIT`, so `self` inside a default body
   can't be handed on as a `dyn Trait` even when the trait is object-safe
-- no downcast from `dyn Trait` back to a concrete type, and no `dyn` with type
-  arguments (`dyn Into<Int>`) — a generic trait can only be named bare
+- no downcast from `dyn Trait` back to a concrete type
+- **a trait cannot take type parameters.** They parse, and both spellings are
+  now diagnosed rather than ignored or aborted on (milestone 27), but nothing
+  carries them: `TypeTrait` has no type arguments, so `T: Into<Int>` and
+  `dyn Into<Int>` have no meaning. An associated type is the supported way for
+  a trait to range over a type it does not fix, and since milestone 27 a `dyn`
+  can name one — `dyn Iterator<Item = Int>` is a binding list, not the
+  type-argument list a generic trait would need
 - the slot spaces are two bytes wide, so 65536 functions/structs/enums/vtables
   is a hard program-wide ceiling (reported, not silently truncated) — and every
   instantiation of a generic and every (trait, type) pair coerced spends one,

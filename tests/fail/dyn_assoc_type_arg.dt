@@ -1,0 +1,22 @@
+#! expect: a trait object binds them by name
+# `<Item = Int>` is a binding list, not a type-argument list — which is why the
+# path after `dyn` is parsed without type arguments and the '<' is read here.
+# A trait's own type parameters are a separate, still-unsupported question.
+
+use std::io::print;
+
+trait Iterator {
+    type Item;
+    fun next(self) -> Self.Item;
+}
+
+struct Counter { n: Int }
+
+impl Iterator for Counter {
+    type Item = Int;
+    fun next(self) -> Int { self.n + 1 }
+}
+
+fun main() {
+    var it: dyn Iterator<Int> = Counter { n: 1 };
+}

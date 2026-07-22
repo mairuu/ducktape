@@ -197,6 +197,21 @@ Type *subst_apply(const Subst *s, Type *t, Allocator *al) {
     Type *elem = subst_apply(s, t->as.array.elem_type, al);
     return elem != t->as.array.elem_type ? ty_array(elem, al) : t;
   }
+  case TY_DYN: {
+    // `dyn Iterator<Item = T>` inside a generic follows T, exactly as a
+    // `[T]` or an `Opt<T>` does — the bindings are ordinary types.
+    if (!t->as.dyn.assoc_type_count) {
+      return t;
+    }
+    TypeScratch args;
+    ts_init(&args, t->as.dyn.assoc_type_count, al);
+    bool changed = false;
+    for (int i = 0; i < t->as.dyn.assoc_type_count; i++) {
+      args.ptr[i] = subst_apply(s, t->as.dyn.assoc_types[i], al);
+      changed |= args.ptr[i] != t->as.dyn.assoc_types[i];
+    }
+    return changed ? ty_dyn(t->as.dyn.def, args.ptr, args.count, al) : t;
+  }
   case TY_ASSOC: {
     // `T.Item` follows T. The projection can't be collapsed here (the binding
     // lives on an impl, and subst_apply has no index); infer_apply does that
@@ -687,6 +702,22 @@ Type *infer_apply(InferCtx *ctx, Type *ty, Allocator *al) {
   case TY_ARRAY: {
     Type *elem = infer_apply(ctx, ty->as.array.elem_type, al);
     return elem != ty->as.array.elem_type ? ty_array(elem, al) : ty;
+  }
+
+  case TY_DYN: {
+    TypeDyn *d = &ty->as.dyn;
+    if (!d->assoc_type_count) {
+      return ty;
+    }
+    TypeScratch args;
+    ts_init(&args, d->assoc_type_count, al);
+    bool changed = false;
+
+    for (int i = 0; i < d->assoc_type_count; i++) {
+      args.ptr[i] = infer_apply(ctx, d->assoc_types[i], al);
+      changed |= args.ptr[i] != d->assoc_types[i];
+    }
+    return changed ? ty_dyn(d->def, args.ptr, args.count, al) : ty;
   }
 
   default:
@@ -1861,6 +1892,25 @@ static void resolve_trait_decl(ResolveCtx *rctx, Decl *decl) {
   tscope_define(rctx->tyres.tscope, sv_from_cstr("Self"), trait_ty, rctx->diags,
                 decl->span, NULL);
 
+  // A trait's *own* type parameters are parsed but nothing carries them:
+  // `TypeTrait` has no type arguments, so `Into<Int>` cannot be a type and a
+  // bound cannot name one. Reported here, where the mistake is, and each
+  // parameter is bound as poison so a signature mentioning it does not report
+  // a second time — the poison convention, one mistake one message.
+  if (trait_decl->type_param_count > 0) {
+    diag_error(rctx->diags, decl->span,
+               "trait '" SV_FMT
+               "' cannot take type parameters — declare an associated type "
+               "('type Item;') instead, which is the part of a trait a "
+               "signature and a 'dyn' can both name",
+               SV_ARG(trait_def->name));
+    for (int i = 0; i < trait_decl->type_param_count; i++) {
+      tscope_define(rctx->tyres.tscope, trait_decl->type_params[i].name,
+                    rctx->tc->t_poison, rctx->diags,
+                    trait_decl->type_params[i].span, NULL);
+    }
+  }
+
   // record associated-type names first so method signatures can project
   // `Self.Assoc`. The concrete type is supplied per-impl, so it stays NULL.
   for (int i = 0, assoc_idx = 0; i < trait_decl->item_count; i++) {
@@ -2308,6 +2358,51 @@ static bool check_coerce_dyn(CheckCtx *ctx, Expr *e, Type *actual,
   TraitDef *trait = expected->as.dyn.def;
   if (!impl_index_implements(ctx->impls, actual, trait, ctx->al)) {
     return false;
+  }
+
+  // Implementing the trait is no longer the whole question: the trait object
+  // states what each associated type *is*, so an impl that binds a different
+  // one satisfies the trait and still cannot be this type.
+  for (int i = 0; i < expected->as.dyn.assoc_type_count; i++) {
+    StringView name = trait->assoc_types[i].name;
+    Type *want =
+        infer_apply(&ctx->infer, expected->as.dyn.assoc_types[i], ctx->al);
+    Type *got = impl_index_assoc_type(ctx->impls, actual, name, ctx->al);
+    if (got == NULL || type_is_poison(want) || type_is_poison(got)) {
+      // NULL means the impl is generic enough that no binding is readable
+      // here (a bounded `T`); the coercion is re-checked where that parameter
+      // is instantiated, which is the same trust `impl_index_implements`
+      // already places in a bound.
+      continue;
+    }
+    if (want->kind == TY_UNKNOWN) {
+      // the binding is not written down after all — it is being *inferred*,
+      // as in `fun first<T>(xs: [dyn Iterator<Item = T>])`. The impl is the
+      // only thing that knows, so it decides: this is the one place the
+      // coercion solves rather than checks.
+      infer_unify(&ctx->infer, want, got, ctx->diags, e->span);
+      continue;
+    }
+    if (types_equal(got, want)) {
+      continue;
+    }
+
+    // Reported here rather than left to the caller: the mismatch the caller
+    // would print names the two *types* ("expected 'dyn Iterator<Item = Int>'
+    // but got 'Counter'") and cannot say that the trait is implemented and
+    // only the binding disagrees, which is the entire mistake.
+    char ab[64], wb[64], gb[64];
+    type_sprintf(actual, ab, sizeof(ab));
+    type_sprintf(want, wb, sizeof(wb));
+    type_sprintf(got, gb, sizeof(gb));
+    diag_error(ctx->diags, e->span,
+               "'%s' cannot be a 'dyn " SV_FMT "<" SV_FMT
+               " = %s>': it implements '" SV_FMT "' with '" SV_FMT "' = '%s'",
+               ab, SV_ARG(trait->name), SV_ARG(name), wb, SV_ARG(trait->name),
+               SV_ARG(name), gb);
+    // reported, so the caller must not add a second, vaguer diagnostic — the
+    // poison convention, one level up: one mistake, one message.
+    return true;
   }
 
   e->coerce_dyn = trait;
@@ -4834,6 +4929,15 @@ static Type *trait_project(Type *t, TraitDef *trait, Type *self_to,
   case TY_ASSOC:
     if (t->as.assoc.base->kind == TY_TRAIT &&
         t->as.assoc.base->as.trait.def == trait) {
+      if (self_to->kind == TY_DYN && self_to->as.dyn.def == trait) {
+        // a trait object *is* the binding: `Self.Item` on a
+        // `dyn Iterator<Item = Int>` receiver is `Int`, known without knowing
+        // what the receiver is. This is the case object safety was relaxed
+        // for, and it is why the projection must collapse here rather than
+        // being rebased onto a self that no longer has an impl to consult.
+        Type *bound = ty_dyn_assoc(self_to, t->as.assoc.assoc_name);
+        return bound != NULL ? bound : t;
+      }
       if (impl == NULL) {
         // no impl to read the binding from (a call through a bound): the
         // projection stays abstract, just rebased onto the new self.
@@ -4868,6 +4972,17 @@ static Type *trait_project(Type *t, TraitDef *trait, Type *self_to,
   case TY_ARRAY:
     return ty_array(
         trait_project(t->as.array.elem_type, trait, self_to, impl, al), al);
+  case TY_DYN: {
+    // a binding can mention the trait's `Self` (`-> dyn Show<T = Self.Item>`),
+    // so a trait object is projected like any other composite type.
+    TypeScratch args;
+    ts_init(&args, t->as.dyn.assoc_type_count, al);
+    for (int i = 0; i < t->as.dyn.assoc_type_count; i++) {
+      args.ptr[i] =
+          trait_project(t->as.dyn.assoc_types[i], trait, self_to, impl, al);
+    }
+    return ty_dyn(t->as.dyn.def, args.ptr, args.count, al);
+  }
   case TY_STRUCT: {
     TypeScratch args;
     ts_init(&args, t->as.struc.type_arg_count, al);
@@ -5282,8 +5397,17 @@ static bool type_mentions_self(const Type *t, const TraitDef *trait) {
   case TY_TRAIT:
     return t->as.trait.def == trait;
   case TY_ASSOC:
-    return t->as.assoc.trait == trait ||
-           type_mentions_self(t->as.assoc.base, trait);
+    // `Self.Item` is deliberately *not* a mention. `Self` itself cannot be
+    // recovered once a value is coerced — that is what the coercion erased —
+    // but a projection is not the erased type, it is a *function of* it, and
+    // a function of an erased thing can be pinned by writing down its result:
+    // `dyn Iterator<Item = Int>`. So the projection is only a problem if its
+    // base is a `Self` the trait object did *not* pin.
+    if (t->as.assoc.trait == trait && t->as.assoc.base->kind == TY_TRAIT &&
+        t->as.assoc.base->as.trait.def == trait) {
+      return false;
+    }
+    return type_mentions_self(t->as.assoc.base, trait);
   case TY_FUNCTION:
     for (int i = 0; i < t->as.fun.param_count; i++) {
       if (type_mentions_self(t->as.fun.param_types[i], trait)) {
@@ -5300,6 +5424,15 @@ static bool type_mentions_self(const Type *t, const TraitDef *trait) {
     return false;
   case TY_ARRAY:
     return type_mentions_self(t->as.array.elem_type, trait);
+  case TY_DYN:
+    // `-> dyn Show<T = Self>` hides a `Self` behind a binding, and it is no
+    // more recoverable there than anywhere else.
+    for (int i = 0; i < t->as.dyn.assoc_type_count; i++) {
+      if (type_mentions_self(t->as.dyn.assoc_types[i], trait)) {
+        return true;
+      }
+    }
+    return false;
   case TY_STRUCT:
     for (int i = 0; i < t->as.struc.type_arg_count; i++) {
       if (type_mentions_self(t->as.struc.type_args[i], trait)) {
@@ -5329,8 +5462,9 @@ static bool type_mentions_self(const Type *t, const TraitDef *trait) {
 //     need a slot, and which ones exist isn't known at the coercion site);
 //   • `Self` must not appear anywhere but the receiver — a `-> Self` or a
 //     `other: Self` parameter means the *caller* has to know the concrete
-//     type, which is precisely what the coercion erased. `Self.Item` is the
-//     same problem behind a projection.
+//     type, which is precisely what the coercion erased. `Self.Item` is
+//     exempt, because the trait object names it (`dyn Iterator<Item = Int>`):
+//     see `type_mentions_self`.
 //
 // Checked where `dyn Trait` is written rather than at the trait declaration:
 // a trait is free to be statically-dispatch-only (`tests/run/trait_default.dt`
@@ -5477,7 +5611,7 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
     break;
   }
   case TYNODE_DYN: {
-    TypeNodeNamed *dyn = &node->as.dyn;
+    TypeNodeDyn *dyn = &node->as.dyn;
 
     if (dyn->path.count != 1) {
       diag_error(r->diags, node->span,
@@ -5503,7 +5637,67 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
       break;
     }
 
-    result = ty_dyn(trait, r->al);
+    // The bindings are stored one per associated type the trait declares, in
+    // declaration order, so the table is total and its ordering canonical —
+    // which is what lets interning keep deciding identity by pointer. Filling
+    // it is therefore also the completeness check: a hole is a missing
+    // binding, and a name that matches no hole is a wrong one.
+    TypeScratch assoc_types; // ts_init zeroes, so every slot starts unbound
+    ts_init(&assoc_types, trait->assoc_type_count, r->al);
+
+    bool bad_binding = false;
+    for (int b = 0; b < dyn->binding_count; b++) {
+      AssocBindingNode *binding = &dyn->bindings[b];
+      int slot = -1;
+      for (int i = 0; i < trait->assoc_type_count; i++) {
+        if (sv_equal(trait->assoc_types[i].name, binding->name)) {
+          slot = i;
+          break;
+        }
+      }
+      if (slot < 0) {
+        diag_error(r->diags, binding->span,
+                   "trait '" SV_FMT "' has no associated type '" SV_FMT "'",
+                   SV_ARG(trait->name), SV_ARG(binding->name));
+        bad_binding = true;
+        continue;
+      }
+      if (assoc_types.ptr[slot] != NULL) {
+        diag_error(r->diags, binding->span,
+                   "associated type '" SV_FMT "' is bound twice",
+                   SV_ARG(binding->name));
+        bad_binding = true;
+        continue;
+      }
+      Type *bound = tyres_resolve(r, binding->type);
+      if (type_is_poison(bound)) {
+        bad_binding = true;
+        continue;
+      }
+      assoc_types.ptr[slot] = bound;
+    }
+
+    for (int i = 0; i < trait->assoc_type_count && !bad_binding; i++) {
+      if (assoc_types.ptr[i] == NULL) {
+        // a method mentioning it would have been rejected as unsafe without
+        // this, and a method not mentioning it still leaves the type
+        // incomplete — two `dyn Iterator`s that agree on nothing are not one
+        // type, so the binding is required either way.
+        diag_error(r->diags, node->span,
+                   "'dyn " SV_FMT "' must say what its associated type '" SV_FMT
+                   "' is — write 'dyn " SV_FMT "<" SV_FMT " = ...>'",
+                   SV_ARG(trait->name), SV_ARG(trait->assoc_types[i].name),
+                   SV_ARG(trait->name), SV_ARG(trait->assoc_types[i].name));
+        bad_binding = true;
+      }
+    }
+
+    if (bad_binding) {
+      result = r->tc->t_poison;
+      break;
+    }
+
+    result = ty_dyn(trait, assoc_types.ptr, trait->assoc_type_count, r->al);
     break;
   }
   case TYNODE_TUPLE: {
@@ -6221,6 +6415,20 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
         };
         break;
       }
+      case TY_TRAIT:
+        // a trait named *with* type arguments: `impl Into<Int> for S`, or a
+        // bound `T: Into<Int>`. A trait without them never reaches here — a
+        // single bare segment is answered by `tscope_lookup` in tyres — so
+        // this branch is exactly the unsupported spelling, and it used to
+        // abort the compiler on `default:` below.
+        diag_error(ctx->diags, path->span,
+                   "trait '" SV_FMT "' cannot take type arguments",
+                   SV_ARG(te->type->as.trait.def->name));
+        // reported, so this *succeeds* with a poison type rather than failing:
+        // a failure would add the caller's generic "unresolved type" on top,
+        // and poison is what propagates one mistake silently.
+        *out_res = (PathRes){.kind = PATHRES_TYPE, .type = ty_poison()};
+        return true;
       default:
         assert(false &&
                "unhandled type kind in cctx_resolve_path PATHRES_SCOPE");

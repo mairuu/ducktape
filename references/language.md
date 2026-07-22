@@ -54,7 +54,7 @@ case for it) — declare variables inside functions only.
 | `[T]` | array of `T` |
 | `fun(A, B) -> R` | function type |
 | `Point<Int>` | generic instance |
-| `dyn Drawable` | trait object — see "Trait objects" |
+| `dyn Drawable`, `dyn Iterator<Item = Int>` | trait object — see "Trait objects" |
 | `Self`, `Self.Color`, `Point.Color` | self type, associated types |
 
 ## Statements and blocks
@@ -164,11 +164,41 @@ coerces too, so a generic function can hand its own parameter over.
 
 Not every trait can be one. A trait is **object-safe** only if every method
 takes `self`, has no type parameters of its own, and does not mention `Self`
-outside the receiver (so no `-> Self`, no `other: Self`, no `Self.Item`) — a
-trait object has erased the concrete type, and those signatures all need it
-back. The rule is checked where `dyn Trait` is *written*, not at the trait
-declaration, so a trait may freely be static-dispatch-only and still be used
-as a bound (`tests/run/trait_default.dt` leans on all three).
+outside the receiver (so no `-> Self`, no `other: Self`) — a trait object has
+erased the concrete type, and those signatures all need it back. The rule is
+checked where `dyn Trait` is *written*, not at the trait declaration, so a
+trait may freely be static-dispatch-only and still be used as a bound
+(`tests/run/trait_default.dt` leans on all three).
+
+**A `Self.Item` is the exception, and it is named at the `dyn`:**
+
+```
+trait Iterator {
+    type Item;
+    fun next(self) -> Self.Item;
+}
+
+var it: dyn Iterator<Item = Int> = Counter { n: 41 };
+print(it.next());                              # 42
+```
+
+`Self` itself cannot be recovered — that is what the coercion threw away —
+but `Self.Item` is not the erased type, it is a *function of* it, and a
+function of an erased thing can be pinned by writing down its result. So a
+trait object is a trait plus one binding per associated type the trait
+declares. Every one is **required**, whether or not a method mentions it:
+`dyn Iterator` on its own is not an under-checked type, it is not a type
+(`tests/fail/dyn_assoc_missing.dt`).
+
+The binding is part of the type. `dyn Iterator<Item = Int>` and
+`dyn Iterator<Item = String>` are two types; a default body reached through
+each is a separate instantiation, and coercing to one needs an impl that
+binds the same type — implementing the trait is no longer enough
+(`tests/fail/dyn_assoc_mismatch.dt`). The binding may itself be a type
+parameter (`[dyn Iterator<Item = T>]`), in which case the impl is what solves
+it. `<Item = Int>` is a binding list and not a type-argument list: a trait's
+own type parameters are still not supported, so `dyn Into<Int>` has no
+meaning. See `tests/run/dyn_assoc.dt`.
 
 A default body works through a trait object like any other method, and an
 impl that overrides it wins, exactly as under static dispatch. Printing and
@@ -830,7 +860,7 @@ types".
 | a `String` that is guaranteed valid UTF-8 | it is a byte string — `slice` cuts at byte offsets, so `chars` reports a runtime error on a halved sequence |
 | width, alignment, or padding in a format | only `std::fmt::float(value, precision)`; there is no format-spec grammar inside `{}` |
 | casting a `dyn Trait` back to its concrete type | no downcast; the coercion is one-way |
-| `dyn Trait` with type arguments (`dyn Into<Int>`) | generic traits are not parameterised in `dyn` position |
+| a trait with type parameters (`trait Into<T>`) | parses, then a diagnostic at the declaration; naming one with arguments (`impl Into<Int> for S`, `T: Into<Int>`, `dyn Into<Int>`) is a second one. An associated type is the supported way for a trait to range over a type it does not fix |
 | `mod` declarations | no such keyword; `use` is what pulls a file in |
 | glob imports (`use a::*`) | not parsed; name each item |
 | module-qualified paths (`geometry::Point`) | import the item and name it directly; the diagnostic says so |

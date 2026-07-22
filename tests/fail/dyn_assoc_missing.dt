@@ -1,0 +1,23 @@
+#! expect: must say what its associated type 'Item' is
+# A trait object's bindings are total: one per associated type the trait
+# declares. A `dyn Iterator` that says nothing about `Item` is not an
+# incompletely-checked type, it is not a type at all — two of them would agree
+# on the trait and on nothing else.
+
+use std::io::print;
+
+trait Iterator {
+    type Item;
+    fun next(self) -> Self.Item;
+}
+
+struct Counter { n: Int }
+
+impl Iterator for Counter {
+    type Item = Int;
+    fun next(self) -> Int { self.n + 1 }
+}
+
+fun main() {
+    var it: dyn Iterator = Counter { n: 1 };
+}

@@ -1,0 +1,23 @@
+#! expect: trait 'Show' cannot take type arguments
+# A trait named with type arguments used to *abort the compiler*: a bare trait
+# name is answered by the type scope directly, so only this spelling reaches
+# `resolve_path`, where `TY_TRAIT` fell into a `default: assert(false)`.
+# Nothing carries a trait's type arguments — `TypeTrait` has none — so the
+# honest answer is a diagnostic. An associated type is the supported way for a
+# trait to range over a type it does not fix.
+
+use std::io::print;
+
+trait Show {
+    fun show(self) -> Int;
+}
+
+struct S { n: Int }
+
+impl Show<Int> for S {
+    fun show(self) -> Int { self.n }
+}
+
+fun main() {
+    print(S { n: 1 }.show());
+}
