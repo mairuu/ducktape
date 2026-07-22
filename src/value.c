@@ -77,6 +77,15 @@ void value_print(Value v, FILE *out) {
     case OBJ_STRING:
       fprintf(out, "%s", val_as_string(v)->chars);
       break;
+    case OBJ_STRBUF: {
+      // decorated, unlike the String above it: the whole of a StringBuf is
+      // that it is *not* one yet, so the debug view says which it is looking
+      // at. The bytes are not NUL-terminated — only `build` produces that.
+      ObjStrBuf *buf = val_as_strbuf(v);
+      fprintf(out, "StringBuf(\"%.*s\")", buf->len,
+              buf->bytes != NULL ? buf->bytes : "");
+      break;
+    }
     case OBJ_ARRAY: {
       ObjArray *arr = val_as_array(v);
       fputc('[', out);
@@ -184,6 +193,15 @@ bool value_equal(Value a, Value b) {
     switch (a.as.obj->kind) {
     case OBJ_STRING:
       return a.as.obj == b.as.obj; // interned
+    case OBJ_STRBUF: {
+      // *not* interned, so this is the one place the two kinds visibly differ:
+      // a String compares by pointer, a buffer has to compare its bytes.
+      ObjStrBuf *x = val_as_strbuf(a), *y = val_as_strbuf(b);
+      // an empty buffer has no allocation at all, so the length test comes
+      // first: memcmp is not defined on a NULL pointer even for zero bytes.
+      return x->len == y->len &&
+             (x->len == 0 || memcmp(x->bytes, y->bytes, (size_t)x->len) == 0);
+    }
     case OBJ_ARRAY: {
       ObjArray *x = val_as_array(a), *y = val_as_array(b);
       if (x->count != y->count) {

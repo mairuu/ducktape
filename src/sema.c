@@ -127,6 +127,7 @@ Type *subst_apply(const Subst *s, Type *t, Allocator *al) {
   case TY_FLOAT:
   case TY_BOOL:
   case TY_STRING:
+  case TY_STRBUF:
   case TY_UNIT:
   case TY_UNKNOWN:
   case TY_POISON:
@@ -481,6 +482,7 @@ bool infer_unify(InferCtx *ctx, Type *a, Type *b, DiagBag *diags, Span span) {
   case TY_FLOAT:
   case TY_BOOL:
   case TY_STRING:
+  case TY_STRBUF:
   case TY_UNIT:
     return true; // same kind, same singleton -> equal
 
@@ -583,6 +585,7 @@ Type *infer_apply(InferCtx *ctx, Type *ty, Allocator *al) {
   case TY_FLOAT:
   case TY_BOOL:
   case TY_STRING:
+  case TY_STRBUF:
   case TY_UNIT:
   case TY_UNKNOWN:
   case TY_POISON:
@@ -884,6 +887,7 @@ void tc_init(TypeChecker *tc, DiagBag *diags, Allocator *al) {
   tc->t_float = ty_float();
   tc->t_bool = ty_bool();
   tc->t_string = ty_string();
+  tc->t_strbuf = ty_strbuf();
   tc->t_unit = ty_unit();
   tc->t_never = ty_never();
   tc->t_poison = ty_poison();
@@ -5377,6 +5381,13 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
         break;
       } else if (sv_equal_cstr(name, "String")) {
         result = r->tc->t_string;
+        break;
+      } else if (sv_equal_cstr(name, "StringBuf")) {
+        // a builtin type whose operations live in std, exactly the arrangement
+        // `String` already has — `std::string` is where both are written. The
+        // compiler knows the *type*, not any std item, so this is not another
+        // lang item in the sense `Display` is.
+        result = r->tc->t_strbuf;
         break;
       } else if (sv_equal_cstr(name, "Unit")) {
         result = r->tc->t_unit;

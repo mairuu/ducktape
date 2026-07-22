@@ -29,6 +29,8 @@ static size_t obj_size(Obj *o) {
   switch (o->kind) {
   case OBJ_STRING:
     return sizeof(ObjString) + (size_t)((ObjString *)o)->len + 1;
+  case OBJ_STRBUF:
+    return sizeof(ObjStrBuf);
   case OBJ_ARRAY:
     return sizeof(ObjArray);
   case OBJ_TUPLE:
@@ -50,6 +52,13 @@ static size_t obj_size(Obj *o) {
 
 static void free_obj(Heap *h, Obj *o) {
   switch (o->kind) {
+  case OBJ_STRBUF: {
+    ObjStrBuf *buf = (ObjStrBuf *)o;
+    if (buf->bytes != NULL) {
+      heap_dealloc(h, buf->bytes, (size_t)buf->cap); // `cap`, like an array's
+    }
+    break;
+  }
   case OBJ_ARRAY: {
     ObjArray *arr = (ObjArray *)o;
     if (arr->items != NULL) {
@@ -200,6 +209,46 @@ ObjString *heap_concat(Heap *h, ObjString *a, ObjString *b) {
   return s;
 }
 
+// A buffer starts with no allocation at all, not an empty one: a builder that
+// is never pushed to costs one object and nothing else, the same bargain an
+// empty array literal makes.
+ObjStrBuf *heap_strbuf(Heap *h) {
+  ObjStrBuf *buf = (ObjStrBuf *)new_obj(h, OBJ_STRBUF, sizeof(ObjStrBuf));
+  buf->len = 0;
+  buf->cap = 0;
+  buf->bytes = NULL;
+  return buf;
+}
+
+#define STRBUF_MIN_CAP 16
+
+void heap_strbuf_reserve(Heap *h, ObjStrBuf *buf, int needed) {
+  if (needed <= buf->cap) {
+    return;
+  }
+  int cap = buf->cap < STRBUF_MIN_CAP ? STRBUF_MIN_CAP : buf->cap;
+  while (cap < needed) {
+    cap *= 2;
+  }
+
+  // The new buffer is allocated before anything about `buf` changes, exactly
+  // as for an array — but for a weaker reason, and the difference is worth
+  // seeing. An array's tail is *traced*, so a `count` raised past a written
+  // slot hands the collector a Value that was never stored. Bytes are payload:
+  // the collector never reads them, so all the ordering here protects is what
+  // `build` will copy. `buf` still has to be rooted across this call, since the
+  // collection it may trigger would otherwise sweep the buffer being grown.
+  char *bytes = heap_alloc(h, (size_t)cap);
+  if (buf->len > 0) {
+    memcpy(bytes, buf->bytes, (size_t)buf->len);
+  }
+  if (buf->bytes != NULL) {
+    heap_dealloc(h, buf->bytes, (size_t)buf->cap);
+  }
+  buf->bytes = bytes;
+  buf->cap = cap;
+}
+
 ObjArray *heap_array(Heap *h, int count) {
   // items first: if allocating the Obj collects, a half-built array is never
   // sitting unreachable on the object list.
@@ -334,7 +383,8 @@ static void mark_obj(Obj *o) {
   o->marked = true;
   switch (o->kind) {
   case OBJ_STRING:
-    break;
+  case OBJ_STRBUF:
+    break; // pure payload: no Value inside either one to trace
   case OBJ_ARRAY: {
     ObjArray *arr = (ObjArray *)o;
     for (int i = 0; i < arr->count; i++) {

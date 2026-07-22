@@ -139,6 +139,55 @@ static Value n_string_slice(NativeCtx *ctx, Value *args, int argc) {
   return val_obj(&out->obj);
 }
 
+// A `StringBuf` is the object a String cannot be: uninterned, so it may be
+// appended to in place. These four are the whole of what it cannot express
+// about itself — existing, growing, its length, and becoming a String — and
+// `join`/`concat`/`repeat` are ordinary ducktape on top of them.
+
+static Value n_strbuf_new(NativeCtx *ctx, Value *args, int argc) {
+  (void)args;
+  (void)argc;
+  ObjStrBuf *buf = heap_strbuf(ctx->heap);
+  return val_obj(&buf->obj);
+}
+
+// Append the bytes of a String. The buffer is `args[0]`, still on the VM stack,
+// which is what keeps it rooted across the collection `reserve` may trigger —
+// and the source string is `args[1]` for the same reason. `len` rises only
+// once the bytes are really there, mirroring `array_push`; here that is about
+// what `build` will copy rather than about what the collector will trace,
+// since bytes are never traced at all.
+static Value n_strbuf_push(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  ObjStrBuf *buf = val_as_strbuf(args[0]);
+  ObjString *s = val_as_string(args[1]);
+  if (s->len == 0) {
+    return val_unit();
+  }
+  heap_strbuf_reserve(ctx->heap, buf, buf->len + s->len);
+  memcpy(buf->bytes + buf->len, s->chars, (size_t)s->len);
+  buf->len += s->len;
+  return val_unit();
+}
+
+static Value n_strbuf_len(NativeCtx *ctx, Value *args, int argc) {
+  (void)ctx;
+  (void)argc;
+  return val_int(val_as_strbuf(args[0])->len);
+}
+
+// The one-way door: the bytes enter the intern table and stop being editable.
+// Non-destructive — the buffer is unchanged and may be pushed to again — so
+// this is a copy, which is also the only thing it *could* be: an ObjString is
+// a flexible-array allocation of its own exact length.
+static Value n_strbuf_build(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  ObjStrBuf *buf = val_as_strbuf(args[0]);
+  ObjString *out =
+      heap_intern(ctx->heap, buf->bytes != NULL ? buf->bytes : "", buf->len);
+  return val_obj(&out->obj);
+}
+
 // ───────────────────────────────────────────────────────────────────────────────
 // Tables
 // ───────────────────────────────────────────────────────────────────────────────
@@ -151,7 +200,9 @@ typedef struct {
 static const NativeEntry natives[] = {
     {"array_pop", n_array_pop},       {"array_push", n_array_push},
     {"fmt_float", n_fmt_float},       {"io_print", n_io_print},
-    {"panic_abort", n_panic_abort},   {"string_len", n_string_len},
+    {"panic_abort", n_panic_abort},   {"strbuf_build", n_strbuf_build},
+    {"strbuf_len", n_strbuf_len},     {"strbuf_new", n_strbuf_new},
+    {"strbuf_push", n_strbuf_push},   {"string_len", n_string_len},
     {"string_slice", n_string_slice},
 };
 

@@ -40,6 +40,7 @@ typedef enum {
 
   TY_BOOL,
   TY_STRING,
+  TY_STRBUF,   // StringBuf — a growable text buffer; see include/object.h
   TY_UNIT,     // ()   — functions that return nothing, empty blocks
   TY_NEVER,    // !    — diverging code (return/break); coerces to any type
   TY_FUNCTION, // fun(A, B): R
@@ -145,6 +146,7 @@ Type *ty_int(void);
 Type *ty_float(void);
 Type *ty_bool(void);
 Type *ty_string(void);
+Type *ty_strbuf(void);
 Type *ty_unit(void);
 Type *ty_never(void);
 Type *ty_range(void);

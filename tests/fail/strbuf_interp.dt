@@ -1,0 +1,13 @@
+#! expect: cannot interpolate a value of type 'StringBuf'
+# A buffer deliberately has no `Display` impl: rendering it would be `build`,
+# which allocates and interns, and that is a decision the caller should be
+# making out loud. `"{build(b)}"` is the spelling.
+use std::io::print;
+use std::fmt::Display;
+use std::string::{builder, push_str};
+
+fun main() {
+    var b = builder();
+    push_str(b, "hello");
+    print("{b}");
+}

@@ -1188,6 +1188,69 @@
   (on master it prints 49 for a value of 7), and the suite is now
   ASan-clean.
 
+- **A buildable String (milestone 24)** — `std::string::builder()` returns a
+  `StringBuf`: a growable text buffer that appends in place, so building a
+  string stops being repeated `+`. Design: `runtime.md` "Heap & GC" → "Growing
+  a string buffer", `language.md` "`std::io`, `std::array`, `std::string`",
+  `architecture.md` "Types and inference".
+
+  The observation the milestone turns on: **interning is what makes a `String`
+  immutable.** Not a choice about strings — a consequence of the table. An
+  `ObjString` is filed under the hash of its bytes and two equal strings are one
+  pointer, which is exactly what makes `==` on strings a pointer compare; bytes
+  that change cannot be in that table. Appending in place would either leave the
+  object under a hash no lookup recomputes, or re-intern the whole accumulation
+  at every step — which *is* the `+` cost being complained about. So a buffer
+  cannot be an `ObjString` at any stage. It is the object deliberately kept out
+  of the table, and `build` is the one-way door back in.
+
+  Everything about the shape follows from that:
+  - **`StringBuf` is a separate type, not a mutable `String`.** Making it a
+    flavour of one would put both invariants behind a single type, the same
+    mistake milestone 13 avoided by keeping `TY_DYN` apart from `TY_TRAIT`.
+    The checker then knows nothing else about it: it is inert in the three
+    switches it appears in, and its absence from `check_interpol_seg`'s
+    primitive list is what makes `"{b}"` an ordinary "does not implement
+    `Display`" rather than a special case.
+  - **It is a builtin type whose operations live in std — the arrangement
+    `String` already has.** So it is *not* another lang item in the sense
+    milestone 18 recorded: `TypeChecker` still knows no std item, only a type
+    name in `TYNODE_NAMED`, four lines beside `Never`.
+  - **Four natives, and the rest is ducktape.** Existing, growing, its length,
+    and becoming a String are what a buffer cannot express about itself;
+    `join`, `concat` and `repeat` are written on top. Milestone 23's rule, and
+    `repeat` is what shows the buffer earning its keep — it copies bytes
+    straight in, allocating no String per copy, which an array of parts could
+    not do.
+  - **`std::string` stays a leaf**, which is the milestone-23 cost paid back
+    the other way. `join` iterates with `for p in parts`, whose desugaring emits
+    `OP_LEN` itself, so it needs no `use std::array::len` — and therefore hands
+    a program none of the impls that import now drags in transitively.
+
+  The ordering rules are milestone 23's, and the interesting part is that only
+  half of them carries over. Allocate the new buffer before anything about the
+  object changes, and keep the object rooted across it (free for `strbuf_push`:
+  the buffer is `args[0]`, still on the VM stack) — unchanged. But "`len` rises
+  only once the bytes exist" is *not* a GC rule here: bytes are pure payload,
+  `mark_obj` does nothing for an `OBJ_STRBUF`, and an unwritten byte is garbage
+  rather than a `Value` the collector will try to read. That asymmetry is what
+  shows milestone 23's second rule was about the **collector**, not about the
+  buffer.
+
+  **The alternative considered was no new object kind at all**: a builder could
+  be a `[String]` of parts with one `concat` native at the end, which also turns
+  the quadratic `+` loop into a linear one and costs nothing anywhere in the
+  compiler. What it cannot do is append something that is not already a String —
+  every part has to be interned first, so `repeat("=", 40)` interns 40 strings
+  to throw them away, and padding (the next roadmap item) would intern one per
+  space. That is the line the new kind buys, and it is worth recording that it
+  is a *narrow* one: the O(n²) half of the wart was fixable without any of this.
+
+  Nothing else in the runtime moved. A `StringBuf` is never a chunk constant —
+  no literal syntax, only a native makes one — so the image format is untouched,
+  and `--emit-bc` round-trips `tests/run/strbuf.dt` with no serialization work
+  at all.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -1199,15 +1262,17 @@ warts" section would promote first, in the order that pays off soonest — pick
 by appetite rather than by necessity.
 
 1. **Growing std on top of the natives** — the mechanism landed in milestone
-   16 with a deliberately small registry, and milestone 23 took the half of
-   this item with a design question behind it (a growable `ObjArray`, so
-   `std::array` has `push`/`pop`). What is left is breadth, and each piece is
-   one registry entry plus a decision about the type it needs: string
-   comparison (which unlocks `impl Ord for String`), a `Char` type, and padding
-   a rendered value to a width. Padding is the one that decides something —
-   whether `{}` ever grows a format-spec grammar or stays a bare segment with
-   `std::fmt` functions beside it. A `String` that can be *built* rather than
-   concatenated is the other natural follow-on now that a buffer can grow.
+   16 with a deliberately small registry, and the two pieces with a design
+   question behind them are done: a growable `ObjArray` (milestone 23, so
+   `std::array` has `push`/`pop`) and a growable text buffer (milestone 24, so
+   a `String` can be *built* rather than concatenated). What is left is
+   breadth, and each piece is one registry entry plus a decision about the type
+   it needs: string comparison (which unlocks `impl Ord for String`) and a
+   `Char` type. Padding a rendered value to a width is the one that still
+   decides something — whether `{}` ever grows a format-spec grammar or stays a
+   bare segment with `std::fmt` functions beside it — and it now has a buffer
+   to be written on top of, which is what makes `pad` cheap enough to be worth
+   having either way.
 2. **Object-safe traits with associated types** — the object-safety rule
    rejects `Self.Item` outright. Allowing `dyn Iterator` with the associated
    type *named* at the coercion site (`dyn Iterator<Item = Int>`) is the
@@ -1291,9 +1356,20 @@ via `Module.decl_base`) and is not part of the main line.
   of it reaches `std::option` and, transitively, every impl `std::fmt` and
   `std::cmp` ship. A program that wanted `push` and its own `impl Display for
   Int` cannot have both
-- a `String` is immutable and interned, so building one is repeated `+` (each
-  step interning a whole new string). Nothing yet grows a text buffer the way
-  `push` grows an array
+- a `StringBuf` grows but never shrinks, and cannot be emptied: there is no
+  `clear`, so reusing one buffer across iterations is not expressible and each
+  round needs a fresh `builder()`. Both are one registry entry away; neither
+  has been needed yet
+- a `StringBuf` can only be appended to from a `String`, so anything else has
+  to be rendered first (`push_str(b, "{n}")` interns the digits). Byte- or
+  number-level appends — `push_int`, `push_char`, `push_slice` — are the
+  natural next entries, and are the difference that made the buffer worth a new
+  object kind in the first place
+- `std::string` spends two names on the buffer's length and emptiness
+  (`buf_len`, `buf_is_empty`) because a module cannot have two `len`s, and
+  `push_str` is named around a collision with `std::array::push`. Both are the
+  "no module-qualified paths" wart showing up in the API rather than in the
+  compiler
 - a panic message can only name the value that caused it where the type
   parameter is bounded: `"{e}"` needs `E: Display`, and `Option`/`Result`'s
   `unwrap` are not bounded, so their messages stay fixed. `expect` is the way
@@ -1332,3 +1408,9 @@ via `Module.decl_base`) and is not part of the main line.
   instructions can still crash the VM
 - an image carries no source, so a runtime error in one reports function names
   with no line information
+- the compiler is ASan-clean but **not** UBSan-clean: `arena_alloc_fn` answers a
+  zero-size request with NULL, and several callers then `memcpy` zero bytes into
+  it (`src/parser.c`, `src/sema.c`), which is UB by the letter and harmless in
+  practice. Found under `-fsanitize=undefined` while checking milestone 24's
+  growth path; left alone because the fix is a decision about the allocator's
+  zero-size contract, not a local repair

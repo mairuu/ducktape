@@ -320,14 +320,24 @@ The table is a process global, because pointer identity means two `Type *`
 compare equal only if one table produced them. Its entries — and the array —
 are compiler-arena memory, so `type_intern_reset` runs in `compiler_destroy`
 before that arena goes; nothing may hold a `Type *` across it. Singletons: Int, Float, Bool,
-String, `()` (unit), `!` (`TY_NEVER` — produced by blocks ending in `return`,
-unifies with anything), `Range` (`TY_RANGE`, Int-only), and `TY_POISON`.
+String, `StringBuf` (`TY_STRBUF`), `()` (unit), `!` (`TY_NEVER` — produced by
+blocks ending in `return`, unifies with anything), `Range` (`TY_RANGE`,
+Int-only), and `TY_POISON`.
 
 `TY_NEVER` is also writable, spelled `Never` in `TYNODE_NAMED` alongside the
 other primitives. That one line is the whole of the language support for
 `panic`: a signature can now *promise* divergence, and because unification
 already let `!` stand in for any type, `return panic(msg)` satisfies any return
 type with no coercion and no further rule (`language.md` "`std::panic`").
+
+`StringBuf` is written in `TYNODE_NAMED` the same way, and the checker knows
+nothing else about it: it is inert in every switch it appears in (a singleton
+to `subst_apply`, `infer_unify` and `infer_apply`) and is deliberately *absent*
+from `check_interpol_seg`'s primitive list, so `"{b}"` goes down the `Display`
+path and reports that a buffer has no impl. That is the same arrangement
+`String` already has — a builtin *type* whose operations live in std — so it is
+not another lang item in the sense `Display` is (see "Interpolation and
+`Display`"): the compiler knows the type, never a std item.
 
 Inference is union-find over `TY_UNKNOWN` nodes: `infer_fresh` mints
 unknowns, `infer_unify` solves (emitting "type mismatch" diags itself),

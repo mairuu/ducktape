@@ -110,6 +110,7 @@ list used by sweep):
 | `ObjKind` | Payload |
 |---|---|
 | `OBJ_STRING` | interned: `len`, cached `hash`, flexible `chars[]` (NUL-terminated) |
+| `OBJ_STRBUF` | `len` written bytes inside a buffer of `cap`, `char *bytes` — a growable text buffer, deliberately *not* interned; see "Growing a string buffer" |
 | `OBJ_ARRAY` | `count` live values inside a buffer of `cap`, `Value *items` — see "Growing an array" |
 | `OBJ_TUPLE` | `count`, `Value *items` — the same shape minus the capacity (a tuple's length is part of its type, so it can never grow), kept as a distinct kind so printing/equality read as a tuple |
 | `OBJ_STRUCT` | `StructDef *def`, `Value *fields` (`def->field_count` entries, declaration order — not necessarily the initializer's source order) |
@@ -121,6 +122,11 @@ list used by sweep):
 `StructDef`/`EnumDef`/`VariantDef` pointers are arena-owned (live for the
 whole compilation), not GC objects, so marking a struct/enum instance walks
 its `fields` array but never touches the def pointer itself.
+
+A `StringBuf` is the one object defined by what it is *not*: an `ObjString` is
+in the intern table, so its bytes cannot change (see below); a buffer is out of
+it, so they can. Nothing else about the two differs, and `std::string::build`
+is the door — one `heap_intern` of the bytes written so far.
 
 String identity is pointer identity — `heap_intern` looks up an
 open-addressing table (FNV-1a hash, linear probing, tombstone deletes)
@@ -158,12 +164,13 @@ invisible to the load factor, the table never regrew to purge them, so after
 enough collect cycles every slot was tombstoned and a miss in `table_find`
 (whose loop only terminates on a `NULL` slot) spun forever.
 
-Any allocating call (`heap_intern`, `heap_concat`, `heap_array`, `heap_tuple`,
-`heap_struct`, `heap_enum`, `heap_closure`, `heap_upvalue`,
-`heap_array_reserve`) may collect *before* the new object exists, so
-the discipline throughout codegen/VM is: keep every already-live operand
-reachable from a root (still on the VM stack, not yet popped) until the new
-object is built and pushed. See the `OP_ARRAY`/`OP_INTERP`/`OP_TUPLE`/
+Any allocating call (`heap_intern`, `heap_concat`, `heap_strbuf`, `heap_array`,
+`heap_tuple`, `heap_struct`, `heap_enum`, `heap_closure`, `heap_upvalue`,
+`heap_array_reserve`, `heap_strbuf_reserve`) may collect *before* the new
+object exists, so the discipline throughout codegen/VM is: keep every
+already-live operand reachable from a root (still on the VM stack, not yet
+popped) until the new object is built and pushed. See the
+`OP_ARRAY`/`OP_INTERP`/`OP_TUPLE`/
 `OP_STRUCT`/`OP_ENUM` handlers in `src/vm.c` for the pattern (index math into
 the stack in place, decrementing `sp` only after the result exists).
 
@@ -201,6 +208,37 @@ interned result already lived in.
 Growth reallocates, so **no raw `Value *` into `items` may be held across a
 push**. Nothing in the VM does: `args` points into the value stack, not into
 an array's buffer.
+
+### Growing a string buffer
+
+An `ObjStrBuf` holds `len` written bytes in a buffer of `cap`, and
+`heap_strbuf_reserve` doubles it from a floor of 16 exactly as the array path
+does — allocate the new buffer, copy the live prefix, free the old one through
+`heap_dealloc`. `free_obj` releases `cap` bytes, not `len`. An empty buffer has
+no allocation at all (`bytes == NULL`), which is why `build` and `value_equal`
+both test the length before reading the pointer: neither `memcpy` nor `memcmp`
+is defined on a NULL pointer, even for zero bytes.
+
+What is worth comparing is the *ordering rule*, because only half of it carries
+over:
+
+- **The new buffer is allocated before anything about the object changes**, and
+  the object must be rooted across the call — unchanged. `strbuf_push` gets that
+  for free: the buffer is `args[0]`, still on the VM stack, which is milestone
+  16's native calling convention doing its job.
+- **`len` rises only once the bytes exist** — true here too, but for a *weaker*
+  reason. An array's tail is traced, so a `count` raised past an unwritten slot
+  hands the collector a `Value` that was never stored: a real crash. Bytes are
+  pure payload; `mark_obj` does nothing for an `OBJ_STRBUF`, so all the ordering
+  protects is what `build` will copy. That asymmetry is what shows the array
+  rule was about the *collector* rather than about the buffer.
+
+Nothing else in the runtime changed for this. A `StringBuf` is never a chunk
+constant — there is no literal syntax for one, and only a native can make one —
+so the image format has nothing to carry and `src/bytecode.c` is untouched.
+`==` is the only place the kinds visibly diverge inside the VM: an `OBJ_STRING`
+compares by pointer *because* it is interned, an `OBJ_STRBUF` has to compare
+its bytes.
 
 ## Codegen shapes (`src/codegen.c`)
 

@@ -46,6 +46,7 @@ case for it) — declare variables inside functions only.
 | Syntax | Meaning |
 |---|---|
 | `Int` `Float` `Bool` `String` | primitives |
+| `StringBuf` | a growable text buffer — see "`std::string`" |
 | `()` | unit |
 | `Never` | code that does not come back — see "`std::panic`" |
 | `(A, B)` | tuple |
@@ -601,6 +602,14 @@ std::array   len<T>(xs: [T]) -> Int                 # @intrinsic (OP_LEN)
 
 std::string  len(s: String) -> Int                  # @native
              slice(s: String, from: Int, to: Int) -> String
+             builder() -> StringBuf                 # @native
+             push_str(b: StringBuf, s: String)      # @native
+             buf_len(b: StringBuf) -> Int           # @native
+             build(b: StringBuf) -> String          # @native
+             buf_is_empty(b: StringBuf) -> Bool
+             join(parts: [String], sep: String) -> String
+             concat(parts: [String]) -> String
+             repeat(s: String, n: Int) -> String
 
 std::fmt     float(value: Float, precision: Int) -> String   # @native
 ```
@@ -642,6 +651,43 @@ ducktape on top. That is what lets `pop` answer with an `Option`: a native's
 contract is "n values in, one out" and it has no handle on the `VariantDef` an
 enum instance needs, so a native *cannot* build an `Option` at all. Popping
 does not release capacity; the buffer is returned when the array is collected.
+
+**A `String` is built with a `StringBuf`.** `a + b` allocates a new String and
+interns it, so growing one a piece at a time re-interns the whole accumulation
+at every step. A buffer appends in place instead, and `build` interns once:
+
+```
+var b = builder();
+for word in words {
+    push_str(b, word);
+    push_str(b, " ");
+}
+print(build(b));
+```
+
+`StringBuf` is a *separate type* from `String`, not a mutable flavour of one,
+and the reason is interning: a String is filed in the runtime's table under the
+hash of its bytes, and two equal strings are the same pointer — which is what
+makes `==` on strings a pointer compare. Bytes that change cannot be in that
+table. So a buffer is the object deliberately kept out of it, and `build` is a
+one-way door: it copies, non-destructively, so a buffer may be built from more
+than once and appended to in between.
+
+Two smaller consequences, both visible from a program:
+
+- **A buffer is a reference**, like a `[T]`: a second name is the same object,
+  so a `push_str` through either is seen through both.
+- **A buffer has no `Display` impl**, so `"{b}"` is an error naming the type.
+  Rendering one is `build`, which allocates and interns, and that is a decision
+  worth making out loud. `print(b)` still shows it, as `StringBuf("…")` — the
+  debug view says which of the two kinds it is looking at.
+
+Only four of the functions are written in C — existing, growing, its length,
+and becoming a String — and `join`, `concat` and `repeat` are ducktape on top,
+the same split `std::array` makes. `repeat` is the one that shows what the
+buffer buys: it copies bytes straight in, allocating no String per copy.
+Unlike `std::array`, `std::string` imports nothing, so it is still a leaf: it
+hands a program no impls it did not ask for.
 
 A `Float` prints — and interpolates — as the shortest decimal that reads back
 as the same double, always carrying a `.` or an exponent so it is never

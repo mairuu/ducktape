@@ -83,6 +83,7 @@ typedef struct {
 
 typedef enum {
   OBJ_STRING,
+  OBJ_STRBUF,
   OBJ_ARRAY,
   OBJ_TUPLE,
   OBJ_STRUCT,
@@ -108,6 +109,26 @@ typedef struct {
   uint32_t hash;
   char chars[];
 } ObjString;
+
+// a growable text buffer: `len` written bytes inside a buffer of `cap`.
+//
+// It is a separate kind from ObjString rather than a mutable flavour of one
+// because *interning* is what makes a String immutable. An ObjString is filed
+// in the heap's table under the hash of its bytes, and two equal strings are
+// one pointer — appending in place would leave the object under a hash no
+// lookup recomputes, and re-interning after each append is exactly the cost
+// `+` already pays. So a buffer is the object that is deliberately *not* in
+// the table, and `std::string::build` is the one-way door: the bytes are
+// copied into an interned String and stop being editable.
+//
+// The bytes are raw payload, so unlike an ObjArray there is nothing here for
+// the collector to trace.
+typedef struct {
+  Obj obj;
+  int len;
+  int cap;
+  char *bytes;
+} ObjStrBuf;
 
 // growable: `count` live values inside a buffer of `cap`. A literal is built
 // exact-fit (`OP_ARRAY` knows how many elements it just evaluated) and only
@@ -195,6 +216,9 @@ static inline ObjClosure *val_as_closure(Value v) {
 static inline ObjString *val_as_string(Value v) {
   return (ObjString *)v.as.obj;
 }
+static inline ObjStrBuf *val_as_strbuf(Value v) {
+  return (ObjStrBuf *)v.as.obj;
+}
 static inline ObjArray *val_as_array(Value v) { return (ObjArray *)v.as.obj; }
 static inline ObjTuple *val_as_tuple(Value v) { return (ObjTuple *)v.as.obj; }
 static inline ObjStruct *val_as_struct(Value v) {
@@ -245,6 +269,7 @@ void heap_destroy(Heap *h);
 // operands on its stack until the result is pushed).
 ObjString *heap_intern(Heap *h, const char *chars, int len);
 ObjString *heap_concat(Heap *h, ObjString *a, ObjString *b);
+ObjStrBuf *heap_strbuf(Heap *h); // empty; no buffer until the first push
 ObjArray *heap_array(Heap *h, int count); // items start as unit; cap == count
 ObjTuple *heap_tuple(Heap *h, int count); // items start as unit
 ObjStruct *heap_struct(Heap *h, StructDef *def);
@@ -258,6 +283,12 @@ ObjDyn *heap_dyn(Heap *h, Value inner, VTable *vtable);
 // from a root — which for `std::array::push` it is, being an argument still
 // sitting on the VM stack.
 void heap_array_reserve(Heap *h, ObjArray *arr, int needed);
+
+// the same for a text buffer, and it may collect for the same reason. The one
+// difference is what the ordering has to protect: an ObjArray's tail is walked
+// by the collector, so `count` may only rise once the slot holds a real Value.
+// Bytes are never traced, so here the rule is only about what `build` reads.
+void heap_strbuf_reserve(Heap *h, ObjStrBuf *buf, int needed);
 
 void gc_mark_value(Value v);
 void heap_collect(Heap *h);

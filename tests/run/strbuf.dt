@@ -1,0 +1,97 @@
+# A `StringBuf` is the object a `String` cannot be: uninterned, so it can be
+# appended to in place. Interning is what makes a String immutable — two equal
+# strings are one pointer — so the two are different kinds, and `build` is the
+# one-way door between them.
+#> true
+#> 0
+#> []
+#> 12
+#> hello, world
+#> hello, world!
+#> 13
+#> StringBuf("hello, world!")
+#> 14
+#> 200
+#> abab
+#> true
+#> true
+#> false
+#> a, b, c
+#> []
+#> ab
+#> =====
+#> []
+#> 11
+#> 42
+
+use std::io::print;
+use std::string::{builder, push_str, buf_len, build, buf_is_empty};
+use std::string::{join, concat, repeat, len, slice};
+
+fun main() {
+    var b = builder();
+    print(buf_is_empty(b));
+    print(buf_len(b));
+    print("[{build(b)}]"); # an empty buffer has no allocation at all
+
+    push_str(b, "hello");
+    push_str(b, ", ");
+    push_str(b, "world");
+    print(buf_len(b));
+    print(build(b));
+
+    # `build` is a snapshot rather than a handover: the buffer is unchanged and
+    # can still be appended to
+    push_str(b, "!");
+    print(build(b));
+    print(buf_len(b));
+
+    # `print` is the debug view, so it says which of the two kinds it has —
+    # the one place the difference is visible without calling `build`
+    print(b);
+
+    # a buffer is a reference to one growable object, exactly like a `[T]`
+    var alias = b;
+    push_str(alias, "?");
+    print(buf_len(b));
+
+    # 100 pushes from a floor of 16 doubles the buffer four times, so every
+    # byte survives being copied. Nothing here allocates a String per copy,
+    # which is the difference a buffer makes.
+    var line = repeat("ab", 100);
+    print(len(line));
+    print(slice(line, 0, 4));
+
+    # equality is the other place the kinds differ: a String compares by
+    # pointer because it is interned, a buffer has to compare its bytes
+    var x = builder();
+    push_str(x, "ab");
+    var y = builder();
+    push_str(y, "ab");
+    print(x == y);
+    print(build(x) == build(y));
+    push_str(y, "c");
+    print(x == y);
+
+    var sep = ", ";
+    print(join(["a", "b", "c"], sep));
+    var none: [String] = [];
+    print("[{join(none, sep)}]");
+    print(concat(["a", "b"]));
+    print(repeat("=", 5));
+    var zero = repeat("x", 0);
+    print("[{zero}]");
+
+    # an ordinary value: it goes in containers like anything else
+    var bs = [builder(), builder()];
+    push_str(bs[0], "in an array");
+    print(buf_len(bs[0]));
+
+    # the loop the buffer exists for: with `+` this interns every prefix on
+    # the way, so it is quadratic in the bytes it touches
+    var out = builder();
+    for i in 0..26 {
+        push_str(out, "{i}");
+    }
+    print(len(build(out)));
+}

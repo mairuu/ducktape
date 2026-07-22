@@ -1,4 +1,4 @@
-# std::string — operations on `String`.
+# std::string — operations on `String`, and the buffer one is built with.
 #
 # A `String` is an interned, immutable heap object, so `slice` allocates: it
 # is the module that exercises the native calling convention's one real rule,
@@ -9,6 +9,12 @@
 # runtime error by setting `ctx->error`, which the VM turns into an error at
 # the call site — the closest thing the language has to a panic until there is
 # a real one (roadmap: `std::result`).
+#
+# Nothing below imports another module, so `std::string` is a leaf: importing
+# any of it hands a program no impls it did not ask for, which `std::array`
+# stopped being able to promise once `pop` started answering with an `Option`.
+# `join` is what that costs — it iterates with `for`, whose desugaring emits
+# the length opcode itself, rather than importing `std::array::len`.
 
 @native("string_len")
 pub fun len(s: String) -> Int;
@@ -17,3 +23,78 @@ pub fun len(s: String) -> Int;
 # the string.
 @native("string_slice")
 pub fun slice(s: String, from: Int, to: Int) -> String;
+
+# ── building a string ────────────────────────────────────────────────────────
+#
+# `a + b` allocates a whole new String and interns it, so growing one a piece
+# at a time re-interns the entire accumulation at every step. A `StringBuf` is
+# the way out, and it is a distinct *type* rather than a mutable `String`
+# because interning is precisely what makes a String immutable: two equal
+# strings are one pointer, so an object filed under the hash of its bytes
+# cannot have its bytes change underneath it.
+#
+# So a buffer is the object deliberately kept out of that table, `build` is the
+# one-way door back in, and the four functions below are the whole of what the
+# buffer cannot express about itself in ducktape. Everything after them is
+# ordinary code on top.
+
+@native("strbuf_new")
+pub fun builder() -> StringBuf;
+
+# Append the bytes of `s`, growing the buffer when it is full. Like a `[T]`, a
+# `StringBuf` is a reference to one growable object, so every name bound to it
+# sees the append — which is why this takes an ordinary `StringBuf` and needs
+# no way to spell "by reference".
+#
+# It is `push_str` rather than `push` so that a program can import it beside
+# `std::array::push`: there are no module-qualified paths, so two imported
+# names that collide have to be aliased apart at the `use`.
+@native("strbuf_push")
+pub fun push_str(b: StringBuf, s: String);
+
+# The bytes written so far. Not `len`, which this module already spends on
+# `String`.
+@native("strbuf_len")
+pub fun buf_len(b: StringBuf) -> Int;
+
+# Intern the bytes written so far into a `String`. Non-destructive: the buffer
+# is unchanged and may be appended to again, so `build` inside a loop is a
+# snapshot rather than a handover.
+@native("strbuf_build")
+pub fun build(b: StringBuf) -> String;
+
+pub fun buf_is_empty(b: StringBuf) -> Bool {
+    return buf_len(b) == 0;
+}
+
+# `sep` between each pair of parts. The buffer is what makes this one pass:
+# the same loop written with `+` would intern every prefix along the way.
+pub fun join(parts: [String], sep: String) -> String {
+    var b = builder();
+    var first = true;
+    for p in parts {
+        if not first {
+            push_str(b, sep);
+        }
+        push_str(b, p);
+        first = false;
+    }
+    return build(b);
+}
+
+pub fun concat(parts: [String]) -> String {
+    return join(parts, "");
+}
+
+# `n` copies of `s`. Nothing here allocates a String per copy — the bytes go
+# straight into the buffer — which is the difference a buffer makes that an
+# array of parts could not.
+pub fun repeat(s: String, n: Int) -> String {
+    var b = builder();
+    var i = 0;
+    while i < n {
+        push_str(b, s);
+        i = i + 1;
+    }
+    return build(b);
+}
