@@ -1296,6 +1296,71 @@
   together now — ASan's own allocation layout hid a read that UBSan named
   exactly.
 
+- **Ordered strings (milestone 25)** — `impl Ord for String`, so `max`, `min`,
+  `clamp` and a sort work on text. Design: `language.md` "`std::cmp`",
+  `runtime.md` "Heap & GC". One native, one impl, and two placement decisions
+  that turned out to be the whole content of the milestone.
+
+  The observation it turns on: **interning bought equality and nothing else.**
+  Since 5b, `==` on a String has been a pointer compare, and that has read like
+  a property of strings — it is really a property of the *table*, which
+  guarantees one object per distinct byte string. Ordering asks the table a
+  question it cannot answer: pointer order is allocation order, arbitrary and
+  not even stable between a run and its `--emit-bc` replay. So the table hands
+  `string_cmp` exactly one shortcut, the equal case, and the rest is a real walk
+  over the bytes. The gift 5b made was narrower than it looked, and this is the
+  first thing to stand outside it.
+
+  **It has to be a native**, by milestone 23's rule — the two operations a `[T]`
+  cannot express about itself — and String's version of that rule is sharper
+  than the array's, because the circularity is visible: the finest handle
+  ducktape has on a String's contents is `slice`, and comparing two one-byte
+  slices would need string ordering, which is the thing being defined. A pure-
+  ducktape `compare` is not slow, it is impossible.
+
+  **Ordering is a trait, not an operator.** `<` and `>` stay numeric opcodes and
+  `"a" < "b"` is still "comparison requires numeric types". That is not a gap
+  left open: `Ord` is already how the language spells the comparison of anything
+  that is not a number (`Money`, `Option<T>`), and teaching the operator about
+  one more primitive would make `String` the exception rather than the rule.
+
+  The decision worth recording is **where the impl lives**, because the two
+  candidates are not symmetric and the asymmetry is milestone 19's transitive
+  impl visibility, seen from the standard library's side for the first time.
+  The trait is in `std::cmp` and the native belongs in `std::string` (that is
+  where operations on `String` live), so *whichever module hosts the impl
+  imports the other* — and since 19 that import is not free: it hands every
+  dependent of the host whatever impls the imported module ships.
+
+  - impl in `std::string` → `use std::string::len;` would also deliver `impl Ord
+    for Int` and `Float`, and with them coherence's refusal to let a program
+    write its own. `std::string` would stop being a leaf, undoing milestone 24's
+    one deliberate promise.
+  - impl in `std::cmp` → `std::cmp` imports a module of free functions that
+    ships **no impls at all**, so the visible set grows by exactly the one impl
+    being added.
+
+  So: **an import's cost is measured in impls, not in code**, and a dependency
+  should point at the impl-poor module. That is the same fact milestone 23 paid
+  for in the other direction (`pop` returning `Option` made `std::array` reach
+  `std::fmt` and `std::cmp`), stated as a rule rather than as a regret. It also
+  matches a precedent already in the tree that nobody had had to justify:
+  `impl Display for String` lives in `std::fmt`, not in `std::string`. **The
+  impl goes with the trait.**
+
+  Both directions were checked rather than assumed, and the probes are worth
+  keeping in mind because coherence makes the obvious test misleading — a
+  program cannot write a conflicting `impl Ord for Int` without importing `Ord`,
+  which drags the impls in by itself. The observable question is *method
+  dispatch without importing the trait*: `use std::string::compare;` then
+  `3.lt(9)` is still "no method named 'lt'" (std::string reaches nothing), while
+  `use std::cmp::max;` then `"a".lt("b")` works, and `use std::array::push;`
+  then `3.lt(9)` works three hops out.
+
+  Nothing in the compiler or the VM moved. `string_cmp` does not allocate, so
+  it does not even exercise the native calling convention's rooting rule — the
+  one thing `std::string`'s other natives exist to demonstrate.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -1307,17 +1372,23 @@ warts" section would promote first, in the order that pays off soonest — pick
 by appetite rather than by necessity.
 
 1. **Growing std on top of the natives** — the mechanism landed in milestone
-   16 with a deliberately small registry, and the two pieces with a design
-   question behind them are done: a growable `ObjArray` (milestone 23, so
-   `std::array` has `push`/`pop`) and a growable text buffer (milestone 24, so
-   a `String` can be *built* rather than concatenated). What is left is
-   breadth, and each piece is one registry entry plus a decision about the type
-   it needs: string comparison (which unlocks `impl Ord for String`) and a
-   `Char` type. Padding a rendered value to a width is the one that still
-   decides something — whether `{}` ever grows a format-spec grammar or stays a
-   bare segment with `std::fmt` functions beside it — and it now has a buffer
-   to be written on top of, which is what makes `pad` cheap enough to be worth
-   having either way.
+   16 with a deliberately small registry, and the pieces with a design question
+   behind them are done: a growable `ObjArray` (milestone 23, so `std::array`
+   has `push`/`pop`), a growable text buffer (milestone 24, so a `String` can be
+   *built* rather than concatenated), and string ordering (milestone 25, so
+   `impl Ord for String` exists and text sorts). What is left is breadth, and
+   each piece is one registry entry plus a decision about the type it needs. Two
+   are still open:
+   - **A `Char` type**, which is the larger one: a new primitive means literal
+     syntax, a `Value` representation, checker plumbing, and a new constant kind
+     in the image format — the first since 5b. It is what would let a program
+     get *inside* a String, which milestone 25 showed is currently impossible
+     below the granularity of `slice`.
+   - **Padding a rendered value to a width**, which still decides something —
+     whether `{}` ever grows a format-spec grammar or stays a bare segment with
+     `std::fmt` functions beside it — and now has both a buffer to be written on
+     top of and an `Ord` for the strings it pads, which is what makes `pad`
+     cheap enough to be worth having either way.
 2. **Object-safe traits with associated types** — the object-safety rule
    rejects `Self.Item` outright. Allowing `dyn Iterator` with the associated
    type *named* at the coercion site (`dyn Iterator<Item = Int>`) is the
@@ -1400,7 +1471,28 @@ via `Module.decl_base`) and is not part of the main line.
 - `std::array` is no longer a leaf: `pop` returns an `Option`, so importing any
   of it reaches `std::option` and, transitively, every impl `std::fmt` and
   `std::cmp` ship. A program that wanted `push` and its own `impl Display for
-  Int` cannot have both
+  Int` cannot have both. Milestone 25 lengthened that chain by one — `std::cmp`
+  now reaches `std::string` — but not its cost, since `std::string` ships no
+  impls to inherit
+- `String` ordering is raw bytes: no locale, no case-insensitive compare, no
+  Unicode normalisation, so `"Zebra"` sorts before `"apple"` and two strings
+  that are canonically equivalent are simply different. Case folding is not
+  even expressible in std today — it needs to get *inside* a String, which is
+  the `Char` type's job
+- `Ord` ships for `Int`, `Float`, `String` and `Option<T>`, but not for `[T]` or
+  tuples, so an array of strings has no lexicographic order of its own and a
+  sort has to be written per program (`tests/run/string_ord.dt` writes one).
+  `impl<T: Ord> Ord for [T]` is writable today; nothing has needed it yet, and
+  shipping it would take the pair away from programs the same way `Display` for
+  the containers already does
+- `Ord` for `Float` inherits IEEE comparison, so `NaN.cmp(x)` answers 0 for
+  every `x`: the impl's `<` and `>` are both false and it falls through to the
+  equal case, which makes NaN compare *equal to everything* rather than
+  unordered. `max(nan, 1.0)` is `NaN` and `max(1.0, nan)` is `1.0` — the answer
+  depends on argument order — and sorting a `[Float]` containing one has no
+  defined result. A total order would have to decide where NaN goes, which is a
+  decision nothing has needed to make. `String` has no equivalent: every byte
+  string is ordered against every other
 - a `StringBuf` grows but never shrinks, and cannot be emptied: there is no
   `clear`, so reusing one buffer across iterations is not expressible and each
   round needs a fresh `builder()`. Both are one registry entry away; neither

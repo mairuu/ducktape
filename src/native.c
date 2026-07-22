@@ -123,6 +123,36 @@ static Value n_string_len(NativeCtx *ctx, Value *args, int argc) {
   return val_int(val_as_string(args[0])->len);
 }
 
+// Byte order, which is the one thing interning gives nothing towards. Two equal
+// strings are one pointer, so `==` is a pointer compare — but pointer *order*
+// is allocation order, which is arbitrary and differs run to run. So the table
+// hands this function exactly one shortcut, the equal case, and the rest is a
+// real walk over the bytes.
+//
+// `memcmp` compares as unsigned char, so this is code-point order for anything
+// well-formed in UTF-8: a multi-byte sequence's lead byte is above every ASCII
+// byte, and sorts against another lead byte the same way the code points do.
+//
+// Normalised to -1/0/1 rather than passed through: `memcmp`'s magnitude is
+// implementation-defined, and a program can print what `cmp` answers.
+static Value n_string_cmp(NativeCtx *ctx, Value *args, int argc) {
+  (void)ctx;
+  (void)argc;
+  ObjString *a = val_as_string(args[0]);
+  ObjString *b = val_as_string(args[1]);
+  if (a == b) {
+    return val_int(0);
+  }
+  int shared = a->len < b->len ? a->len : b->len;
+  int order = memcmp(a->chars, b->chars, (size_t)shared);
+  if (order == 0) {
+    // one is a prefix of the other, so the shorter sorts first. They cannot be
+    // the same length here: equal bytes at equal length would be one pointer.
+    order = a->len < b->len ? -1 : 1;
+  }
+  return val_int(order < 0 ? -1 : 1);
+}
+
 // `s[from..to)`, in bytes. Allocating, so it is the one that has to obey the
 // calling convention: `heap_intern` can collect, and it is `args` still
 // sitting on the VM stack that keeps the source string alive across it.
@@ -198,12 +228,12 @@ typedef struct {
 } NativeEntry;
 
 static const NativeEntry natives[] = {
-    {"array_pop", n_array_pop},       {"array_push", n_array_push},
-    {"fmt_float", n_fmt_float},       {"io_print", n_io_print},
-    {"panic_abort", n_panic_abort},   {"strbuf_build", n_strbuf_build},
-    {"strbuf_len", n_strbuf_len},     {"strbuf_new", n_strbuf_new},
-    {"strbuf_push", n_strbuf_push},   {"string_len", n_string_len},
-    {"string_slice", n_string_slice},
+    {"array_pop", n_array_pop},     {"array_push", n_array_push},
+    {"fmt_float", n_fmt_float},     {"io_print", n_io_print},
+    {"panic_abort", n_panic_abort}, {"strbuf_build", n_strbuf_build},
+    {"strbuf_len", n_strbuf_len},   {"strbuf_new", n_strbuf_new},
+    {"strbuf_push", n_strbuf_push}, {"string_cmp", n_string_cmp},
+    {"string_len", n_string_len},   {"string_slice", n_string_slice},
 };
 
 // An intrinsic's opcode must take **no operand bytes** and must pop exactly

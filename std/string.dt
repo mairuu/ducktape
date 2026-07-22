@@ -24,6 +24,18 @@ pub fun len(s: String) -> Int;
 @native("string_slice")
 pub fun slice(s: String, from: Int, to: Int) -> String;
 
+# Byte order: <0 if `a` sorts before `b`, 0 if equal, >0 if after. This is what
+# `impl Ord for String` is written on, and it has to be a native for the same
+# reason `push` does — it is a thing a String cannot express about itself. The
+# only handle ducktape has on a String's contents is `slice`, and comparing two
+# one-byte slices needs string ordering, which is what was being defined.
+#
+# Interning contributes nothing here beyond the equal case, which is the limit
+# of the gift it made to `==`: two equal strings are one pointer, but pointer
+# order is allocation order.
+@native("string_cmp")
+pub fun compare(a: String, b: String) -> Int;
+
 # ── building a string ────────────────────────────────────────────────────────
 #
 # `a + b` allocates a whole new String and interns it, so growing one a piece

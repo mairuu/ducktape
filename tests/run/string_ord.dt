@@ -1,0 +1,91 @@
+# `impl Ord for String` — the point where interning stops paying.
+#
+# `==` on a String is a pointer compare, because two equal strings are one
+# object in the heap's intern table. Ordering gets nothing from that table:
+# pointer order is allocation order. So the comparison is a real walk over the
+# bytes, and it is a native because ducktape has no handle on a String's
+# contents finer than `slice` — and comparing two one-byte slices would need
+# exactly the ordering being defined.
+#> 0
+#> -1
+#> 1
+#> -1
+#> 1
+#> -1
+#> true
+#> false
+#> true
+#> true
+#> false
+#> pear
+#> apple
+#> m
+#> 1
+#> [apple, cherry, fig, pear]
+#> 1
+#> -1
+
+use std::io::print;
+use std::cmp::{Ord, max, min, clamp};
+use std::array::len;
+use std::string::compare;
+
+fun main() {
+    # the raw native. Equal strings are the same pointer, which is the one
+    # shortcut the intern table hands it
+    print(compare("apple", "apple"));
+    print(compare("apple", "banana"));
+    print(compare("banana", "apple"));
+
+    # a prefix sorts before what extends it, and the empty string before
+    # everything
+    print(compare("ab", "abc"));
+    print(compare("abc", "ab"));
+    print(compare("", "a"));
+
+    # the trait: `<` and `>` stay numeric opcodes, so this is how a program
+    # compares two Strings
+    print("apple".lt("banana"));
+    print("apple".gt("banana"));
+    print("apple".le("apple"));
+    print("apple".ge("apple"));
+    print("Zebra".gt("apple")); # uppercase sorts first: byte order, not locale
+
+    # the generics of std::cmp, instantiated at String for the first time
+    print(max("apple", "pear"));
+    print(min("apple", "pear"));
+    print(clamp("z", "a", "m"));
+
+    # digits compare as text, not as numbers
+    print(compare("9", "10"));
+
+    # the thing the milestone is for: a sort. Index assignment is all it needs
+    # — the ordering is the part that did not exist.
+    var fruit = ["pear", "apple", "fig", "cherry"];
+    sort(fruit);
+    print(fruit);
+
+    # byte order is code-point order for well-formed UTF-8: a multi-byte
+    # sequence's lead byte is above every ASCII byte
+    print(compare("é", "z"));
+    print(compare("a", "é"));
+}
+
+# selection sort, so the comparison is the only interesting part
+fun sort(xs: [String]) {
+    var i = 0;
+    while i < len(xs) {
+        var least = i;
+        var j = i + 1;
+        while j < len(xs) {
+            if xs[j].lt(xs[least]) {
+                least = j;
+            }
+            j = j + 1;
+        }
+        var tmp = xs[i];
+        xs[i] = xs[least];
+        xs[least] = tmp;
+        i = i + 1;
+    }
+}

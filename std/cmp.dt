@@ -2,12 +2,28 @@
 #
 # Written in ducktape, not in C: `impl Ord for Int` is legal, so the standard
 # library can extend the primitives with the same trait machinery user code
-# uses. Nothing here needs a native.
+# uses. Only `String` reaches for a native, and it does so through
+# `std::string` rather than declaring one here.
+#
+# That import is the module's one real cost, because impl visibility is
+# transitive: importing `std::string` hands every dependent of `std::cmp`
+# whatever impls `std::string` ships. It ships none — it is a module of free
+# functions — so the set grows by exactly the `impl Ord for String` below. The
+# other direction would not have been so cheap: putting the impl in
+# `std::string` would hand a program that only wanted `len` the three impls
+# here, and with them coherence's refusal to let it write its own `impl Ord
+# for Int`. With transitive visibility an import is measured in impls, not in
+# code, so the dependency points at the impl-poor module.
+#
+# Placing the impl beside the *trait* is also what `std::fmt` already does:
+# `impl Display for String` lives there, not in `std::string`.
 #
 # `Ord` is deliberately *not* object-safe — `other: Self` means a caller has to
 # know the concrete type — so it is a bound, never a `dyn Ord`. That is the
 # rule working as intended: object safety is only demanded where `dyn` is
 # written (see language.md "Trait objects").
+
+use std::string::compare;
 
 pub trait Ord {
     # <0 if self sorts before other, 0 if equal, >0 if after.
@@ -40,6 +56,15 @@ impl Ord for Float {
             return 1;
         }
         return 0;
+    }
+}
+
+# The one impl here that is not a comparison the VM could already make. `<` and
+# `>` stay numeric-only opcodes — ordering anything else is a trait, not an
+# operator — so this is the whole of how a program compares two Strings.
+impl Ord for String {
+    fun cmp(self, other: String) -> Int {
+        return compare(self, other);
     }
 }
 

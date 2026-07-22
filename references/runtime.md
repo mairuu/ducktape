@@ -139,6 +139,20 @@ passes a String straight through, which is the whole reason `Display` cost the
 runtime nothing: the checker rewrites a non-primitive segment into a
 `to_string()` call, so by the time `OP_INTERP` sees it, it is a String.
 
+**Interning buys equality and nothing else.** `==` is a pointer compare because
+the table guarantees one object per distinct byte string, but pointer *order* is
+allocation order — arbitrary, and different between a run and a `--emit-bc`
+replay of it. So `string_cmp`, the native under `impl Ord for String`, gets
+exactly one shortcut from the table (identical pointers answer 0) and otherwise
+walks the bytes: `memcmp` over the shared prefix, then the shorter one first if
+that ties. It cannot tie *at equal length* — equal bytes at equal length would
+be one pointer — and the result is normalised to -1/0/1 because `memcmp`'s
+magnitude is implementation-defined and a program can print what `cmp` answers.
+`memcmp` compares as unsigned char, so the order is code-point order for
+anything well-formed in UTF-8. Nothing else in the runtime moved: it is a
+non-allocating native, so it does not even exercise the calling convention's
+rooting rule.
+
 **Collection** is mark-sweep, triggered from `heap_alloc` (the sole entry
 point that grows `bytes_allocated`) once it crosses `next_gc` (starts at
 1 MiB, doubles `bytes_allocated` after each cycle), or unconditionally under

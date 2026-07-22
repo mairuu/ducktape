@@ -272,7 +272,14 @@ Reachability is transitive because `pub use` can re-export a type whose impls
 live one module further away. It applies to std exactly as to anything else,
 which is worth knowing before writing your own impl for a primitive: `use
 std::array::push;` reaches `std::option` (that is what `pop` returns), and so
-`std::fmt` and `std::cmp` beyond it, so their impls are visible too.
+`std::fmt` and `std::cmp` beyond it, and `std::string` beyond *that* — so every
+impl those modules ship is visible too.
+
+That chain is why the direction of a std module's own imports is a design
+decision rather than bookkeeping: what an import costs its dependents is the
+*impls* the imported module ships, not its size. `std::cmp` can afford to
+import `std::string` because `std::string` is a leaf of free functions with no
+impls at all.
 
 Two implementations of **the same trait for overlapping types** may not be
 visible at once. Writing `impl Ord for Int` in a module that also imports
@@ -329,11 +336,42 @@ pub fun min<T: Ord>(a: T, b: T) -> T
 pub fun clamp<T: Ord>(v: T, lo: T, hi: T) -> T
 ```
 
-`Ord` is implemented for `Int` and `Float`, which is the point worth noticing:
-**a trait can be implemented for a primitive**, so the standard library extends
-the built-in types with exactly the machinery user code uses. Your own types
-join the same trait and `max`/`min` work on them unchanged
+`Ord` is implemented for `Int`, `Float` and `String`, which is the point worth
+noticing: **a trait can be implemented for a primitive**, so the standard
+library extends the built-in types with exactly the machinery user code uses.
+Your own types join the same trait and `max`/`min` work on them unchanged
 (`tests/run/std_cmp.dt`).
+
+**`String` is ordered by a trait, not by an operator.** `<` and `>` stay
+numeric — comparing two Strings is `a.lt(b)`, or `max`/`min`/`clamp`
+(`tests/run/string_ord.dt`):
+
+```
+use std::cmp::{Ord, max};
+print(max("apple", "pear"));      # pear
+print("Zebra".gt("apple"));       # false — byte order, not locale
+```
+
+The comparison is by *bytes*, which for well-formed UTF-8 is code-point order:
+a multi-byte sequence's lead byte is above every ASCII byte. A prefix sorts
+before what extends it, and there is no locale, case-folding or normalisation.
+
+The interesting part is what interning does *not* buy here. `==` on a String is
+a pointer compare because two equal strings are one object in the intern table
+— but pointer *order* is allocation order, so ordering gets nothing from the
+table beyond the equal case, and has to walk the bytes. That walk is
+`std::string::compare`, and it has to be a native for the same reason `push` is:
+the finest handle ducktape has on a String's contents is `slice`, and comparing
+two one-byte slices would need the ordering being defined.
+
+The impl lives in `std::cmp`, beside the trait, so `std::cmp` imports
+`std::string` rather than the other way round. That direction is deliberate:
+impl visibility is transitive through `use`, and `std::string` ships no impls,
+so importing it adds nothing to what a `use std::cmp::…` already delivers.
+Putting the impl in `std::string` would have handed a program that only wanted
+`len` all three `Ord` impls — and with them coherence's refusal to let it write
+its own `impl Ord for Int`. **An import's cost is measured in impls, not in
+code.** `impl Display for String` living in `std::fmt` sets the same precedent.
 
 `Ord` is deliberately *not* object-safe — `other: Self` means a caller must
 know the concrete type — so it is a bound, never a `dyn Ord`. That is the rule
@@ -601,7 +639,8 @@ std::array   len<T>(xs: [T]) -> Int                 # @intrinsic (OP_LEN)
              clear<T>(xs: [T])
 
 std::string  len(s: String) -> Int                  # @native
-             slice(s: String, from: Int, to: Int) -> String
+             slice(s: String, from: Int, to: Int) -> String   # @native
+             compare(a: String, b: String) -> Int   # @native
              builder() -> StringBuf                 # @native
              push_str(b: StringBuf, s: String)      # @native
              buf_len(b: StringBuf) -> Int           # @native
@@ -687,7 +726,8 @@ and becoming a String — and `join`, `concat` and `repeat` are ducktape on top,
 the same split `std::array` makes. `repeat` is the one that shows what the
 buffer buys: it copies bytes straight in, allocating no String per copy.
 Unlike `std::array`, `std::string` imports nothing, so it is still a leaf: it
-hands a program no impls it did not ask for.
+hands a program no impls it did not ask for. That is also what makes it safe
+for `std::cmp` to depend on it for `impl Ord for String`.
 
 A `Float` prints — and interpolates — as the shortest decimal that reads back
 as the same double, always carrying a `.` or an exponent so it is never
