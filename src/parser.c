@@ -1199,8 +1199,8 @@ static Pattern *parse_pattern(Parser *p) {
     pattern.kind = PAT_WILDCARD;
     pattern.span = previous_tok_span(p);
   } else if (check_tok(p, TOKEN_INT) || check_tok(p, TOKEN_FLOAT) ||
-             check_tok(p, TOKEN_STRING) || check_tok(p, TOKEN_TRUE) ||
-             check_tok(p, TOKEN_FALSE)) {
+             check_tok(p, TOKEN_STRING) || check_tok(p, TOKEN_CHAR) ||
+             check_tok(p, TOKEN_TRUE) || check_tok(p, TOKEN_FALSE)) {
     pattern.kind = PAT_LITERAL;
     pattern.as.literal_expr = parse_primary(p);
     pattern.span = previous_tok_span(p);
@@ -1497,6 +1497,17 @@ static Expr *parse_primary(Parser *p) {
     Expr *expr = ast_expr(EXPR_STRING, token_span(t), p->al);
     expr->as.string.value =
         (StringView){.len = t->lexeme.len - 2, .chars = t->lexeme.chars + 1};
+    return expr;
+  }
+
+  // character literal. The scanner has already validated the lexeme and
+  // reported anything wrong with it, so a failure here is one the compile is
+  // failing over anyway and the value only has to be *a* Char.
+  if (match_tok(p, TOKEN_CHAR)) {
+    Expr *expr = ast_expr(EXPR_CHAR, token_span(t), p->al);
+    uint32_t cp = 0;
+    char_literal_value(t->lexeme, &cp);
+    expr->as.char_val = cp;
     return expr;
   }
 

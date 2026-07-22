@@ -15,6 +15,7 @@ static const char *token_type_string[] = {
     [TOKEN_INT] = "INT",
     [TOKEN_FLOAT] = "FLOAT",
     [TOKEN_STRING] = "STRING",
+    [TOKEN_CHAR] = "CHAR",
     [TOKEN_INTERPOLATION] = "INTERPOLATION",
     [TOKEN_TRUE] = "TRUE",
     [TOKEN_FALSE] = "FALSE",
@@ -220,6 +221,142 @@ static Token scan_string(Scanner *s) {
   return make_token(s, TOKEN_STRING);
 }
 
+// ── Character scanning ───────────────────────────────────────────────────────
+
+static int hex_digit(char c) {
+  if (c >= '0' && c <= '9')
+    return c - '0';
+  if (c >= 'a' && c <= 'f')
+    return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F')
+    return c - 'A' + 10;
+  return -1;
+}
+
+// The escape set is the string one (`\n \t \r \\ \"`) with `\{` traded for
+// `\'`: interpolation is what `{` means inside a string and a character
+// literal has none, while a quote is what closes this one. `\u{...}` is the
+// only way to write a scalar value a keyboard cannot, and it is spelled in
+// hex because that is how the code charts spell it.
+const char *char_literal_value(StringView lexeme, uint32_t *out) {
+  const char *p = lexeme.chars + 1; // past the opening quote
+  int len = lexeme.len - 2;         // and short of the closing one
+  if (len <= 0) {
+    return "empty character literal";
+  }
+
+  uint32_t cp;
+  int used;
+
+  if (p[0] == '\\') {
+    if (len < 2) {
+      return "unterminated escape";
+    }
+    used = 2;
+    switch (p[1]) {
+    case 'n':
+      cp = '\n';
+      break;
+    case 't':
+      cp = '\t';
+      break;
+    case 'r':
+      cp = '\r';
+      break;
+    case '\\':
+      cp = '\\';
+      break;
+    case '\'':
+      cp = '\'';
+      break;
+    case '"':
+      cp = '"';
+      break;
+    case 'u': {
+      int i = 2;
+      if (i >= len || p[i] != '{') {
+        return "expected '{' after \\u";
+      }
+      uint32_t value = 0;
+      int digits = 0;
+      for (i++; i < len && p[i] != '}'; i++) {
+        int d = hex_digit(p[i]);
+        if (d < 0) {
+          return "expected hex digits in \\u{...}";
+        }
+        if (++digits > 6) {
+          return "\\u{...} takes at most six hex digits";
+        }
+        value = value * 16 + (uint32_t)d;
+      }
+      if (i >= len) {
+        return "unterminated \\u{...}";
+      }
+      if (digits == 0) {
+        return "expected hex digits in \\u{...}";
+      }
+      // rejected here rather than at encode time so the diagnostic can name
+      // the literal: a surrogate half is not a character, it is half of one.
+      if (!utf8_is_scalar(value)) {
+        return "\\u{...} is not a Unicode scalar value";
+      }
+      cp = value;
+      used = i + 1; // past the '}'
+      break;
+    }
+    default:
+      return "unknown escape";
+    }
+  } else {
+    used = utf8_decode(p, len, &cp);
+    if (used == 0) {
+      return "character literal is not valid UTF-8";
+    }
+  }
+
+  if (used != len) {
+    return "a character literal holds exactly one character";
+  }
+  *out = cp;
+  return NULL;
+}
+
+// Finding the end is the scanner's whole job here — an escape is what makes
+// that more than "scan to the next quote", since `'\''` holds one. What is
+// *inside* is `char_literal_value`'s business, so the syntax of a character
+// literal is described in one place and the parser re-reads rather than
+// re-derives it.
+static Token scan_char(Scanner *s) {
+  while (!is_at_end(s) && peek(s) != '\'' && peek(s) != '\n') {
+    if (peek(s) == '\\') {
+      advance(s); // an escaped quote does not close the literal
+      if (is_at_end(s)) {
+        break;
+      }
+    }
+    advance(s);
+  }
+
+  if (is_at_end(s) || peek(s) != '\'') {
+    return error_token(s, "unterminated character literal");
+  }
+  advance(s);
+
+  Token token = make_token(s, TOKEN_CHAR);
+  uint32_t cp;
+  const char *err = char_literal_value(token.lexeme, &cp);
+  if (err != NULL) {
+    Span span = {
+        .line = token.line,
+        .line_end = token.line,
+        .col = token.col,
+        .col_end = token.col + token.lexeme.len - 1,
+    };
+    diag_error(s->diags, span, "%s", err);
+  }
+  return token;
+}
+
 // ── Number scanning ──────────────────────────────────────────────────────────
 
 static Token scan_number(Scanner *s) {
@@ -350,6 +487,8 @@ Token scanner_next_token(Scanner *s) {
     return scan_identifier(s);
   if (c == '"')
     return scan_string(s);
+  if (c == '\'')
+    return scan_char(s);
 
   switch (c) {
   case '(':

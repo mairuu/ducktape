@@ -14,6 +14,7 @@ typedef enum {
   VAL_INT,
   VAL_FLOAT,
   VAL_BOOL,
+  VAL_CHAR, // a Unicode scalar value; see string_utils.h
   VAL_UNIT,
   VAL_RANGE,
   VAL_FUN, // top-level function (no captures)
@@ -26,6 +27,7 @@ typedef struct {
     int64_t i;
     double f;
     bool b;
+    uint32_t c;
     struct {
       int64_t start;
       int64_t end;
@@ -44,6 +46,9 @@ static inline Value val_float(double f) {
 }
 static inline Value val_bool(bool b) {
   return (Value){.kind = VAL_BOOL, .as.b = b};
+}
+static inline Value val_char(uint32_t c) {
+  return (Value){.kind = VAL_CHAR, .as.c = c};
 }
 static inline Value val_unit(void) { return (Value){.kind = VAL_UNIT}; }
 static inline Value val_fun(FunDef *fun) {

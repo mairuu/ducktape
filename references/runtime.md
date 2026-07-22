@@ -17,10 +17,22 @@ points at a GC-managed heap object (`include/object.h`):
 | `VAL_INT` | `int64_t` |
 | `VAL_FLOAT` | `double` |
 | `VAL_BOOL` | `bool` |
+| `VAL_CHAR` | `uint32_t` — a Unicode scalar value |
 | `VAL_UNIT` | — |
 | `VAL_RANGE` | start, end (`int64_t`), inclusive flag |
 | `VAL_FUN` | `FunDef *` (top-level function or method — a callable with no captures) |
 | `VAL_OBJ` | `Obj *` — string, array, tuple, struct, enum instance, or closure, see "Heap & GC" |
+
+A `Char` is a plain value, not a heap object, which is the whole of its cost in
+the runtime: no allocation, no interning, no GC involvement, and `==` is a
+comparison of two `uint32_t`. It is stored decoded — a scalar value rather than
+its UTF-8 bytes — so the encoding appears only at the two edges where a Char
+meets a String: `value_print`/`stringify` on the way out (`utf8_encode`), and
+`string_chars`/`strbuf_push_char` in the native registry. Both directions go
+through `string_utils.h`, which validates strictly: an overlong encoding, a
+surrogate half and anything past U+10FFFF are rejected rather than round-
+tripped, so a `VAL_CHAR` that exists is always encodable and no output path
+needs a failure case.
 
 `value_equal` (`src/value.c`) is the one equality used by `OP_EQ`/`OP_NEQ`:
 strings compare by pointer (interning makes that correct); arrays, tuples,
@@ -246,6 +258,13 @@ over:
   pure payload; `mark_obj` does nothing for an `OBJ_STRBUF`, so all the ordering
   protects is what `build` will copy. That asymmetry is what shows the array
   rule was about the *collector* rather than about the buffer.
+
+`strbuf_push_char` (milestone 26) is the same code with `utf8_encode` in front
+of it: one to four bytes into a stack array, then the identical reserve-copy-
+advance. That it needed no new rule is the point — a Char's bytes are bytes.
+It is also the append an array of parts could never have offered, since there
+is no String to hold one character, which is what makes `from_chars` ducktape
+rather than a native.
 
 Nothing else in the runtime changed for this. A `StringBuf` is never a chunk
 constant — there is no literal syntax for one, and only a native can make one —
@@ -781,6 +800,13 @@ names, arities, field shapes, chunks. Types, spans and the owning `Module` are
 compile-time concerns, so a loaded def has them NULL: an image has no AST
 behind it, and nothing in the VM asks for one.
 
+`BC_C_CHAR` is the first constant kind added since the format was written
+(milestone 9a), and the only one whose payload is *not* total over its bits: a
+u32 is a scalar value only if it is in range and not a surrogate, so the loader
+checks it rather than trusting it. Every other tag can decode anything it
+reads. Appending the tag rather than inserting it keeps the existing numbering,
+which costs nothing and means an older image's bytes still mean what they said.
+
 **The pool holds no raw pointers.** A string constant becomes a string-table
 index, a `VAL_FUN` constant an index into the funs section (globals, then
 closures — a nested closure function is reachable only through a constant, so
@@ -848,8 +874,9 @@ if (fun->native != NULL) {
 
 The **calling convention is a GC rule**: the arguments stay on the value stack
 across the call and are only popped once the result exists. The stack is the
-root set, so an allocating native (`string_slice` and `fmt_float` both intern)
-cannot have its own arguments swept out from under it. `OP_MAKE_DYN` already followed exactly this
+root set, so an allocating native (`string_slice`, `fmt_float` and
+`strbuf_push_char` intern or grow a buffer; `string_chars` allocates the array
+it returns) cannot have its own arguments swept out from under it. `OP_MAKE_DYN` already followed exactly this
 discipline for `heap_dyn`; getting it wrong reproduces the 5c-ii class of bug,
 something reachable-looking the collector cannot see. A native fails by
 setting `ctx->error`, which becomes a runtime error at the call site.
@@ -867,6 +894,15 @@ NUL-terminated, and `args` is still on the stack when the VM reads
 `ctx->error`, so nothing can collect in between. Aliasing the heap that way is
 only sound *because* a panic never returns; a native that wanted to fail with a
 computed message and keep running would need somewhere else to put it.
+
+**`string_chars` is the one native with two passes, and the reason is that
+rule.** It counts and validates first, then allocates an array of exactly that
+size and fills it. Filling allocates nothing — a `Char` is a value — so the
+array is complete before anything can collect, and a malformed string is
+reported before a byte has been allocated. Doing it in one pass would mean
+growing the array as it went, with a partially-filled array live across each
+growth: correct only if `count` rises exactly as the milestone-23 rule says,
+and needlessly so when the length is knowable up front.
 
 **A generic native is never monomorphised.** The runtime is uniform in type
 arguments, so one C body serves every `T` — `cg_call_target` returns the

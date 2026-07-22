@@ -193,8 +193,8 @@ struct TypeChecker {
   // nothing here is ever chosen.
   ImplIndex all_impls;
 
-  Type *t_int, *t_float, *t_bool, *t_string, *t_strbuf, *t_unit, *t_never,
-      *t_poison;
+  Type *t_int, *t_float, *t_bool, *t_char, *t_string, *t_strbuf, *t_unit,
+      *t_never, *t_poison;
 
   // `std::fmt`'s `Display`, captured when that module registers — the one name
   // the compiler knows out of the whole standard library. Interpolation is the

@@ -28,3 +28,71 @@ bool sv_equal_cstr(StringView sv, const char *cstr) {
   }
   return cstr[sv.len] == '\0';
 }
+
+int utf8_encode(uint32_t cp, char *out) {
+  if (!utf8_is_scalar(cp)) {
+    return 0;
+  }
+  if (cp < 0x80) {
+    out[0] = (char)cp;
+    return 1;
+  }
+  if (cp < 0x800) {
+    out[0] = (char)(0xC0 | (cp >> 6));
+    out[1] = (char)(0x80 | (cp & 0x3F));
+    return 2;
+  }
+  if (cp < 0x10000) {
+    out[0] = (char)(0xE0 | (cp >> 12));
+    out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+    out[2] = (char)(0x80 | (cp & 0x3F));
+    return 3;
+  }
+  out[0] = (char)(0xF0 | (cp >> 18));
+  out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+  out[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+  out[3] = (char)(0x80 | (cp & 0x3F));
+  return 4;
+}
+
+int utf8_decode(const char *p, int len, uint32_t *out) {
+  if (len <= 0) {
+    return 0;
+  }
+  unsigned char lead = (unsigned char)p[0];
+  int width;
+  uint32_t cp;
+  uint32_t least; // the smallest code point this width may legally encode
+
+  if (lead < 0x80) {
+    *out = lead;
+    return 1;
+  } else if ((lead & 0xE0) == 0xC0) {
+    width = 2, cp = lead & 0x1Fu, least = 0x80;
+  } else if ((lead & 0xF0) == 0xE0) {
+    width = 3, cp = lead & 0x0Fu, least = 0x800;
+  } else if ((lead & 0xF8) == 0xF0) {
+    width = 4, cp = lead & 0x07u, least = 0x10000;
+  } else {
+    return 0; // a continuation byte where a lead was due, or 0xF8..0xFF
+  }
+
+  if (len < width) {
+    return 0;
+  }
+  for (int i = 1; i < width; i++) {
+    unsigned char b = (unsigned char)p[i];
+    if ((b & 0xC0) != 0x80) {
+      return 0;
+    }
+    cp = (cp << 6) | (b & 0x3Fu);
+  }
+
+  // an overlong encoding spells a scalar value that a shorter sequence
+  // already spells, which would make two different byte strings one Char.
+  if (cp < least || !utf8_is_scalar(cp)) {
+    return 0;
+  }
+  *out = cp;
+  return width;
+}

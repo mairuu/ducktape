@@ -62,6 +62,15 @@ void value_print(Value v, FILE *out) {
   case VAL_BOOL:
     fprintf(out, v.as.b ? "true" : "false");
     break;
+  case VAL_CHAR: {
+    // undecorated, like the String below: `print` shows the character, not
+    // the literal that spells it. A Char is always a scalar value, so the
+    // encode cannot fail.
+    char buf[UTF8_MAX_BYTES];
+    int n = utf8_encode(v.as.c, buf);
+    fwrite(buf, 1, (size_t)n, out);
+    break;
+  }
   case VAL_UNIT:
     fprintf(out, "()");
     break;
@@ -178,6 +187,8 @@ bool value_equal(Value a, Value b) {
     return a.as.f == b.as.f;
   case VAL_BOOL:
     return a.as.b == b.as.b;
+  case VAL_CHAR:
+    return a.as.c == b.as.c;
   case VAL_UNIT:
     return true;
   case VAL_RANGE:

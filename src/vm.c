@@ -120,6 +120,9 @@ static ObjString *stringify(Heap *heap, Value v) {
   case VAL_BOOL:
     len = snprintf(buf, sizeof(buf), "%s", v.as.b ? "true" : "false");
     break;
+  case VAL_CHAR:
+    len = utf8_encode(v.as.c, buf);
+    break;
   default:
     assert(false && "interpolation segment type got past the checker");
     len = 0;

@@ -1361,6 +1361,114 @@
   it does not even exercise the native calling convention's rooting rule — the
   one thing `std::string`'s other natives exist to demonstrate.
 
+- **A `Char` type (milestone 26)** — `'a'` is a value, and a program can finally
+  get inside a String. Design: `language.md` "`std::char`, and what a `String`
+  is made of", `runtime.md` "Values" / "Native functions", `architecture.md`
+  Scanner / "Types and inference".
+
+  The observation the milestone turns on: **a `String` is bytes, and a `Char` is
+  not one.** Everything the runtime does with text has been byte-shaped —
+  `len` counts bytes, `slice` cuts at byte offsets, milestone 25's `compare` is
+  `memcmp` — and that was consistent only while nothing could look inside. A
+  Char is the first thing that has to say what a String is *made of*, and the
+  answer cannot be "a byte" without making the name a lie for text the language
+  can already hold in a literal (`"héllo"` has been legal since 5b).
+
+  So the two views stay apart, and everything follows from refusing to blur
+  them:
+  - **The bridge is a conversion, never an index.** `chars(s) -> [Char]` and
+    `from_chars` cross over; there is deliberately no `char_at(s, i)`, because
+    `i` would be a byte offset, a byte offset is not a character position, and
+    that spelling would make confusing the two the *default* rather than the
+    mistake. `len(s)` is 17 where `chars(s)` has 15 entries, and the API never
+    lets those two numbers meet.
+  - **`chars` can fail, and that is honest rather than untidy.** `slice` is
+    indexed in bytes, so a program can halve a multi-byte sequence; the result
+    is a String that is not valid UTF-8. Only a `Char` promises to be a
+    character, so the promise is enforced where one is made — at `chars`, and
+    at `from_code`, the only other way to conjure one.
+  - **A Char is stored decoded.** `VAL_CHAR` is a `uint32_t` scalar value, so
+    the encoding appears at exactly two edges: `utf8_encode` on the way out
+    (`value_print`, the VM's `stringify`) and `utf8_decode` in the two natives
+    that read a String. Strict both ways — overlong, surrogate, out of range all
+    rejected — which is what lets every *other* path take for granted that a
+    Char it holds can be written.
+
+  The second observation is milestone 23's rule, and it cuts deeper here than it
+  did for arrays: **what a Char cannot express about itself is its number.** So
+  `code`/`from_code` are the whole of `std::char`'s C surface, and `is_digit`,
+  `is_alpha`, `to_upper`, `to_lower`, `to_digit` and `impl Ord for Char` are all
+  ordinary ducktape — a code point *is* an Int, so every classification is a
+  range test and every case conversion is an addition. Four natives total, two
+  of them in `std::string` (`chars`, `push_char`), and `from_chars` is ducktape
+  because `push_char` exists.
+
+  **`push_char` is the milestone-24 wart paid off, and it explains that
+  milestone in retrospect.** "A `StringBuf` can only be appended to from a
+  `String`" was listed as a gap; the note beside it said byte- or number-level
+  appends "are the difference that made the buffer worth a new object kind in
+  the first place". This is the first one, and it is what makes `from_chars` a
+  loop rather than a fifth native — the alternative would intern a one-character
+  String per character, which is the exact cost the buffer exists to avoid.
+
+  **The checker barely noticed.** Adding a *primitive* is four lines beside
+  `Never` in `TYNODE_NAMED`, a case in `resolve_expr`, an entry in three inert
+  type switches, and the name in `check_interpol_seg`'s primitive list — the one
+  place it differs from `StringBuf`, since a Char renders itself. Nothing in
+  sema had to learn what a character is. Struct fields, generics keyed on
+  `TY_CHAR`, `dyn Display`, `Option<Char>`, patterns and closures all arrived
+  working, with no case anywhere for any of them.
+
+  The cost is instead in the three places `StringBuf` never had to go, and they
+  are what made this the larger of the two open std items:
+  - **Literal syntax.** `TOKEN_CHAR` is the one token whose *content* the
+    scanner validates rather than merely delimits. Finding the end needs escape
+    awareness anyway (`'\''` holds a quote), so a second reader would be a
+    second copy of the same knowledge: `char_literal_value` decodes a lexeme and
+    returns the message describing what is wrong, the scanner reports, and the
+    parser re-reads a lexeme it knows is good. A payload field on `Token` was
+    the alternative, and it would widen every token in the array to carry a
+    value one kind has. The escape set is the string one with `\{` traded for
+    `\'` — a character literal has no interpolation, and a quote is what closes
+    it — plus `\u{…}`, which is the only way to write a character that cannot be
+    typed.
+  - **A `Value` representation**, which was free (a plain value, no heap object,
+    no GC involvement, `==` on two `uint32_t`).
+  - **A new constant kind in the image**, the first since the format was written
+    in 9a. `BC_C_CHAR` is the only tag whose payload is *not* total over its
+    bits — every other one can decode anything it reads — so `bc_load` validates
+    it rather than trusting it. An image may not be the one place in the runtime
+    where a Char is not a scalar value. Appending the tag rather than inserting
+    it leaves the existing numbering alone, which costs nothing.
+
+  **`impl Ord for Char` confirms milestone 25's placement rule rather than
+  merely obeying it.** The impl goes with the trait, in `std::cmp`, so `std::cmp`
+  imports `std::char` — and the reason that is the cheap direction is that
+  `std::char` ships no impls, nor does the one module *it* imports
+  (`std::panic`, for `to_digit`). "An import's cost is measured in impls, not in
+  code" now has a second instance, and this one sharpens it: a dependency on an
+  impl-free module is free *no matter how much of it is used*. The contrast with
+  `String` is the interesting half — ordering a Char needs no native at all,
+  because `code` hands the comparison two Ints and `<` on an Int is an opcode,
+  whereas ordering a *string* of them was exactly the circularity that forced
+  `string_cmp` into C.
+
+  **The classifications are ASCII-only, and saying so is the design.**
+  `is_alpha('é')` is false and `to_upper('é')` is unchanged. Full Unicode case
+  mapping is a table, not a range test, and it cannot be approximated by one —
+  so the honest move is to name the limit rather than ship something right for
+  English and quietly wrong elsewhere. That leaves milestone 25's case-folding
+  wart *narrowed* rather than cleared: the language can now get inside a String,
+  which was the blocker, and what remains is a data problem rather than a
+  language one.
+
+  No pre-existing bug surfaced, which is worth recording because it breaks a run
+  of them: the suite was green and `make sanitize` clean on the first try. The
+  most plausible reason is that a Char adds a new *kind* rather than a new
+  relationship — nothing about it makes an existing path reachable from a
+  direction it was not already reachable from, which is what every one of the
+  last several latent bugs turned out to need.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -1379,16 +1487,19 @@ by appetite rather than by necessity.
    `impl Ord for String` exists and text sorts). What is left is breadth, and
    each piece is one registry entry plus a decision about the type it needs. Two
    are still open:
-   - **A `Char` type**, which is the larger one: a new primitive means literal
-     syntax, a `Value` representation, checker plumbing, and a new constant kind
-     in the image format — the first since 5b. It is what would let a program
-     get *inside* a String, which milestone 25 showed is currently impossible
-     below the granularity of `slice`.
    - **Padding a rendered value to a width**, which still decides something —
      whether `{}` ever grows a format-spec grammar or stays a bare segment with
-     `std::fmt` functions beside it — and now has both a buffer to be written on
-     top of and an `Ord` for the strings it pads, which is what makes `pad`
-     cheap enough to be worth having either way.
+     `std::fmt` functions beside it — and now has a buffer to be written on top
+     of, an `Ord` for the strings it pads, and (since milestone 26) a `Char` to
+     say what it pads *with*, which is what makes `pad` cheap enough to be worth
+     having either way.
+   - **Text operations now that a program can get inside a String**: `split`,
+     `trim`, `find`, `starts_with`, `parse_int`. Milestone 26 was the enabler
+     and deliberately shipped none of them — every one is ordinary ducktape over
+     `chars`/`from_chars` plus a `StringBuf`, so what is left really is breadth.
+     The one open question in the set is whether they take byte offsets (like
+     `slice`) or characters (like `chars`), which is the same fork milestone 26
+     answered for indexing and would have to answer the same way.
 2. **Object-safe traits with associated types** — the object-safety rule
    rejects `Self.Item` outright. Allowing `dyn Iterator` with the associated
    type *named* at the coercion site (`dyn Iterator<Item = Int>`) is the
@@ -1471,15 +1582,29 @@ via `Module.decl_base`) and is not part of the main line.
 - `std::array` is no longer a leaf: `pop` returns an `Option`, so importing any
   of it reaches `std::option` and, transitively, every impl `std::fmt` and
   `std::cmp` ship. A program that wanted `push` and its own `impl Display for
-  Int` cannot have both. Milestone 25 lengthened that chain by one — `std::cmp`
-  now reaches `std::string` — but not its cost, since `std::string` ships no
-  impls to inherit
+  Int` cannot have both. Milestones 25 and 26 lengthened that chain — `std::cmp`
+  now reaches `std::string` and `std::char`, and `std::char` reaches
+  `std::panic` — but not its cost, since none of the three ships an impl to
+  inherit
 - `String` ordering is raw bytes: no locale, no case-insensitive compare, no
   Unicode normalisation, so `"Zebra"` sorts before `"apple"` and two strings
-  that are canonically equivalent are simply different. Case folding is not
-  even expressible in std today — it needs to get *inside* a String, which is
-  the `Char` type's job
-- `Ord` ships for `Int`, `Float`, `String` and `Option<T>`, but not for `[T]` or
+  that are canonically equivalent are simply different. Since milestone 26 a
+  case-insensitive compare *is* expressible — `chars` plus `std::char::to_lower`
+  — but only for ASCII, so what is left is a data problem (the case-mapping
+  table) rather than a language one
+- `std::char`'s classifications and case conversions are **ASCII-only**:
+  `is_alpha('é')` is false, `to_upper('é')` is unchanged, and nothing warns.
+  Full Unicode case mapping is a table rather than a range test, and there is no
+  way to ship a partial one that is not silently wrong for most of the world
+- a `String` is a byte string, not guaranteed valid UTF-8: `slice` cuts at byte
+  offsets, so it can halve a multi-byte sequence, and `chars` is a runtime error
+  on the result. Making the type carry the guarantee would mean validating every
+  `slice`, which is the cost the byte-indexed API exists to avoid
+- there is no way to get a `Char` out of a String without building the whole
+  `[Char]`: `chars` is the only reader, so testing the first character of a long
+  string allocates an array as long as it. A lazy or indexed form would need the
+  byte/character question answered differently than milestone 26 answered it
+- `Ord` ships for `Int`, `Float`, `Char`, `String` and `Option<T>`, but not for `[T]` or
   tuples, so an array of strings has no lexicographic order of its own and a
   sort has to be written per program (`tests/run/string_ord.dt` writes one).
   `impl<T: Ord> Ord for [T]` is writable today; nothing has needed it yet, and
@@ -1497,11 +1622,11 @@ via `Module.decl_base`) and is not part of the main line.
   `clear`, so reusing one buffer across iterations is not expressible and each
   round needs a fresh `builder()`. Both are one registry entry away; neither
   has been needed yet
-- a `StringBuf` can only be appended to from a `String`, so anything else has
-  to be rendered first (`push_str(b, "{n}")` interns the digits). Byte- or
-  number-level appends — `push_int`, `push_char`, `push_slice` — are the
-  natural next entries, and are the difference that made the buffer worth a new
-  object kind in the first place
+- a `StringBuf` can be appended to from a `String` or (since milestone 26) a
+  `Char`, but not from anything else, so a number still has to be rendered first
+  (`push_str(b, "{n}")` interns the digits). `push_int` and `push_slice` are the
+  natural next entries; `push_char` was the one that mattered, since it is what
+  lets `from_chars` be ducktape
 - `std::string` spends two names on the buffer's length and emptiness
   (`buf_len`, `buf_is_empty`) because a module cannot have two `len`s, and
   `push_str` is named around a collision with `std::array::push`. Both are the

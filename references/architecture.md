@@ -12,6 +12,15 @@ line/col. String interpolation is lexed with a brace-depth stack
 `}` at the recorded depth resumes string scanning. Logic operators are the
 keywords `and`/`or`/`not`; `|` is `TOKEN_PIPE` (closure delimiter only).
 
+A character literal is `TOKEN_CHAR`, and it is the one token whose *content*
+the scanner validates rather than merely delimits. Finding the end needs escape
+awareness anyway (`'\''` holds a quote), and once the escapes are being read
+there is no reason for a second reader: `char_literal_value` (`scanner.h`)
+decodes a lexeme into a scalar value and returns the message describing what is
+wrong with it, so the scanner reports and the parser re-reads a lexeme it knows
+is good. The alternative — a payload field on `Token` for one token kind —
+would widen every token in the array to carry a value only this one has.
+
 ## Parser (`src/parser.c`)
 
 Recursive descent with a precedence ladder:
@@ -263,8 +272,9 @@ design is *who decides how*. Two answers, and both are used:
 
 - **A primitive renders itself.** Int, Float, Bool and String are handled by
   the VM's `stringify` (`src/vm.c`), which has known how since the feature
-  existed. `check_interpol_seg` lets those four through untouched — no call is
-  emitted at all — and that is what lets a program interpolate a number without
+  existed — Char joined them in milestone 26, rendered by `utf8_encode`.
+  `check_interpol_seg` lets those five through untouched — no call is emitted
+  at all — and that is what lets a program interpolate a number without
   importing anything.
 - **Anything else asks the type**, through `std::fmt`'s `Display`.
 
@@ -320,15 +330,24 @@ The table is a process global, because pointer identity means two `Type *`
 compare equal only if one table produced them. Its entries — and the array —
 are compiler-arena memory, so `type_intern_reset` runs in `compiler_destroy`
 before that arena goes; nothing may hold a `Type *` across it. Singletons: Int, Float, Bool,
-String, `StringBuf` (`TY_STRBUF`), `()` (unit), `!` (`TY_NEVER` — produced by
-blocks ending in `return`, unifies with anything), `Range` (`TY_RANGE`,
-Int-only), and `TY_POISON`.
+`Char` (`TY_CHAR`), String, `StringBuf` (`TY_STRBUF`), `()` (unit), `!`
+(`TY_NEVER` — produced by blocks ending in `return`, unifies with anything),
+`Range` (`TY_RANGE`, Int-only), and `TY_POISON`.
 
 `TY_NEVER` is also writable, spelled `Never` in `TYNODE_NAMED` alongside the
 other primitives. That one line is the whole of the language support for
 `panic`: a signature can now *promise* divergence, and because unification
 already let `!` stand in for any type, `return panic(msg)` satisfies any return
 type with no coercion and no further rule (`language.md` "`std::panic`").
+
+`Char` is written in `TYNODE_NAMED` the same way, and is the cheaper half of
+the milestone that introduced it: adding a *primitive* to the checker is four
+lines beside `Never`, a case in `resolve_expr`, an entry in the three inert
+type switches, and its name in `check_interpol_seg`'s primitive list — which is
+the one place it differs from `StringBuf` below, since a Char renders itself.
+Everything else about the milestone is in the scanner, the value
+representation, and the image format; nothing in the checker had to learn what
+a character *is*.
 
 `StringBuf` is written in `TYNODE_NAMED` the same way, and the checker knows
 nothing else about it: it is inert in every switch it appears in (a singleton

@@ -1,0 +1,102 @@
+# std::char — a Unicode scalar value.
+#
+# A `String` is bytes and a `Char` is a character, and those are two different
+# things: `std::string::len` counts bytes, `slice` cuts at byte offsets, and
+# `compare` walks bytes. That was consistent while nothing could look *inside*
+# a String, and a Char is the first thing that can — so the two views stay
+# apart and the crossing between them is `std::string::chars`, a conversion,
+# never an index. There is deliberately no `char_at(s, i)`: a byte offset is
+# not a character position, and that spelling would make confusing the two the
+# default rather than the mistake.
+#
+# What a Char cannot express about itself is its *number*, so `code` and
+# `from_code` are the whole of this module's C surface and everything below
+# them is ordinary ducktape. That is milestone 23's rule, and it cuts deeper
+# here than it did for arrays: a code point is an Int, so every classification
+# is a range test and every case conversion is an addition. Nothing in this
+# file needed a native, and nothing in it needed the compiler to know anything
+# about `Char` beyond the name of the type.
+#
+# `std::char` ships **no impls**, and the one module it imports (`std::panic`,
+# for `to_digit`) ships none either. That is what makes it the cheap thing for
+# `std::cmp` to depend on for `impl Ord for Char` — an import's cost is
+# measured in impls rather than in code (see the note there), so a dependency
+# on an impl-free module is free no matter how much of it is used.
+#
+# **The classifications are ASCII-only.** `is_alpha('é')` is false and
+# `to_upper('é')` is `'é'` unchanged. Full Unicode case mapping is a table
+# large enough to be its own project, and it is not one a range test can
+# approximate: the honest thing is to say the limit out loud rather than to
+# ship something that is right for English and quietly wrong elsewhere.
+
+use std::panic::panic;
+
+# The scalar value, as a number: 'A' is 65, '😀' is 128512.
+@native("char_code")
+pub fun code(c: Char) -> Int;
+
+# The inverse. A runtime error if `n` is not a Unicode scalar value — negative,
+# past U+10FFFF, or one half of a surrogate pair, none of which is a character.
+# That check is what lets every other part of the runtime take for granted that
+# a Char it holds can be encoded.
+@native("char_from_code")
+pub fun from_code(n: Int) -> Char;
+
+pub fun is_ascii(c: Char) -> Bool {
+    return code(c) < 128;
+}
+
+pub fun is_digit(c: Char) -> Bool {
+    var n = code(c);
+    return n >= code('0') and n <= code('9');
+}
+
+pub fun is_lower(c: Char) -> Bool {
+    var n = code(c);
+    return n >= code('a') and n <= code('z');
+}
+
+pub fun is_upper(c: Char) -> Bool {
+    var n = code(c);
+    return n >= code('A') and n <= code('Z');
+}
+
+pub fun is_alpha(c: Char) -> Bool {
+    return is_lower(c) or is_upper(c);
+}
+
+pub fun is_alnum(c: Char) -> Bool {
+    return is_alpha(c) or is_digit(c);
+}
+
+pub fun is_whitespace(c: Char) -> Bool {
+    return c == ' ' or c == '\t' or c == '\n' or c == '\r';
+}
+
+# ASCII case conversion; anything else is returned unchanged. The distance
+# between the two alphabets is a constant, which is the whole implementation —
+# and also the whole reason this cannot be generalised, since no other script
+# is laid out that obligingly.
+pub fun to_upper(c: Char) -> Char {
+    if is_lower(c) {
+        return from_code(code(c) - code('a') + code('A'));
+    }
+    return c;
+}
+
+pub fun to_lower(c: Char) -> Char {
+    if is_upper(c) {
+        return from_code(code(c) - code('A') + code('a'));
+    }
+    return c;
+}
+
+# The digit a character spells, or a runtime error if it spells none. `'7'` is
+# 55 as a code point and 7 as a digit; nothing but subtraction tells them
+# apart, which is why this is a function rather than a cast.
+pub fun to_digit(c: Char) -> Int {
+    if not is_digit(c) {
+        return panic("not a digit");
+    }
+    return code(c) - code('0');
+}

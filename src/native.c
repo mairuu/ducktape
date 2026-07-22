@@ -71,6 +71,36 @@ static Value n_array_pop(NativeCtx *ctx, Value *args, int argc) {
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
+// std::char
+// ───────────────────────────────────────────────────────────────────────────────
+
+// The one thing a `Char` cannot express about itself is its number, so these
+// two are the whole of `std::char`'s C surface. `is_digit`, `to_upper` and the
+// rest are ordinary ducktape arithmetic on top of them — milestone 23's rule,
+// and here it cuts deeper than usual, because a code point *is* an Int and
+// every classification is a range test over one.
+
+static Value n_char_code(NativeCtx *ctx, Value *args, int argc) {
+  (void)ctx;
+  (void)argc;
+  return val_int(args[0].as.c);
+}
+
+// The inverse, and the only place a Char can be conjured from nothing, so it
+// is where the scalar-value invariant is enforced: a surrogate half and
+// anything past U+10FFFF are not characters, and letting one through would
+// mean `utf8_encode` could fail somewhere that cannot report it.
+static Value n_char_from_code(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  int64_t code = args[0].as.i;
+  if (code < 0 || code > 0x10FFFF || !utf8_is_scalar((uint32_t)code)) {
+    ctx->error = "not a Unicode scalar value";
+    return val_unit();
+  }
+  return val_char((uint32_t)code);
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
 // std::fmt
 // ───────────────────────────────────────────────────────────────────────────────
 
@@ -153,6 +183,46 @@ static Value n_string_cmp(NativeCtx *ctx, Value *args, int argc) {
   return val_int(order < 0 ? -1 : 1);
 }
 
+// The crossing between the two views of text: a String is bytes, a Char is a
+// scalar value, and this is where one becomes the other. It is a *conversion*
+// rather than an index on purpose — there is no `char_at(s, i)`, because a
+// byte offset is not a character position and offering that spelling would
+// make confusing the two the API's default.
+//
+// Two passes: the first counts and validates, so a malformed string is
+// reported before anything is allocated, and the second fills an array whose
+// size is then already known. `heap_array` may collect, but the source string
+// is `args[0]` and still on the VM stack; nothing after it allocates at all,
+// since a Char is a value.
+static Value n_string_chars(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  ObjString *s = val_as_string(args[0]);
+
+  int count = 0;
+  for (int i = 0; i < s->len;) {
+    uint32_t cp;
+    int width = utf8_decode(s->chars + i, s->len - i, &cp);
+    if (width == 0) {
+      // reachable from ducktape: `slice` is indexed in bytes, so it can cut a
+      // multi-byte sequence in half. A String is a byte string; only a Char
+      // promises to be a scalar value.
+      ctx->error = "string is not valid UTF-8";
+      return val_unit();
+    }
+    i += width;
+    count++;
+  }
+
+  ObjArray *out = heap_array(ctx->heap, count);
+  int at = 0;
+  for (int i = 0; i < s->len;) {
+    uint32_t cp;
+    i += utf8_decode(s->chars + i, s->len - i, &cp);
+    out->items[at++] = val_char(cp);
+  }
+  return val_obj(&out->obj);
+}
+
 // `s[from..to)`, in bytes. Allocating, so it is the one that has to obey the
 // calling convention: `heap_intern` can collect, and it is `args` still
 // sitting on the VM stack that keeps the source string alive across it.
@@ -200,6 +270,23 @@ static Value n_strbuf_push(NativeCtx *ctx, Value *args, int argc) {
   return val_unit();
 }
 
+// Append one Char's UTF-8 bytes. This is the append a `[String]` of parts
+// could never have offered — the reason a buffer was worth a new object kind
+// at all — since it puts bytes in without interning a String to hold them.
+// It is also what lets `from_chars` be ordinary ducktape rather than a fifth
+// native: a String is built out of Chars the same way it is built out of
+// anything else.
+static Value n_strbuf_push_char(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  ObjStrBuf *buf = val_as_strbuf(args[0]);
+  char bytes[UTF8_MAX_BYTES];
+  int n = utf8_encode(args[1].as.c, bytes); // a Char is always a scalar value
+  heap_strbuf_reserve(ctx->heap, buf, buf->len + n);
+  memcpy(buf->bytes + buf->len, bytes, (size_t)n);
+  buf->len += n;
+  return val_unit();
+}
+
 static Value n_strbuf_len(NativeCtx *ctx, Value *args, int argc) {
   (void)ctx;
   (void)argc;
@@ -228,12 +315,14 @@ typedef struct {
 } NativeEntry;
 
 static const NativeEntry natives[] = {
-    {"array_pop", n_array_pop},     {"array_push", n_array_push},
-    {"fmt_float", n_fmt_float},     {"io_print", n_io_print},
-    {"panic_abort", n_panic_abort}, {"strbuf_build", n_strbuf_build},
-    {"strbuf_len", n_strbuf_len},   {"strbuf_new", n_strbuf_new},
-    {"strbuf_push", n_strbuf_push}, {"string_cmp", n_string_cmp},
-    {"string_len", n_string_len},   {"string_slice", n_string_slice},
+    {"array_pop", n_array_pop},       {"array_push", n_array_push},
+    {"char_code", n_char_code},       {"char_from_code", n_char_from_code},
+    {"fmt_float", n_fmt_float},       {"io_print", n_io_print},
+    {"panic_abort", n_panic_abort},   {"strbuf_build", n_strbuf_build},
+    {"strbuf_len", n_strbuf_len},     {"strbuf_new", n_strbuf_new},
+    {"strbuf_push", n_strbuf_push},   {"strbuf_push_char", n_strbuf_push_char},
+    {"string_chars", n_string_chars}, {"string_cmp", n_string_cmp},
+    {"string_len", n_string_len},     {"string_slice", n_string_slice},
 };
 
 // An intrinsic's opcode must take **no operand bytes** and must pop exactly
@@ -286,7 +375,7 @@ static const char *join_names(char *buf, size_t cap, const char *const *names,
 }
 
 const char *native_names(void) {
-  static char buf[256];
+  static char buf[512];
   const char *names[COUNT_OF(natives)];
   for (int i = 0; i < COUNT_OF(natives); i++) {
     names[i] = natives[i].name;
@@ -295,7 +384,7 @@ const char *native_names(void) {
 }
 
 const char *intrinsic_names(void) {
-  static char buf[256];
+  static char buf[512];
   const char *names[COUNT_OF(intrinsics)];
   for (int i = 0; i < COUNT_OF(intrinsics); i++) {
     names[i] = intrinsics[i].name;

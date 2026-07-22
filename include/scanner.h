@@ -11,6 +11,7 @@ typedef enum {
   TOKEN_INT,
   TOKEN_FLOAT,
   TOKEN_STRING,
+  TOKEN_CHAR,
   TOKEN_INTERPOLATION,
   TOKEN_TRUE,
   TOKEN_FALSE,
@@ -112,5 +113,11 @@ typedef struct {
 void scanner_init(Scanner *s, const char *source, DiagBag *diags);
 
 Token scanner_next_token(Scanner *s);
+
+// The value of a TOKEN_CHAR, decoded from its lexeme (quotes included).
+// Returns NULL on success, or the message describing what is wrong with the
+// literal — which the scanner reports and the parser can then assume away,
+// so the syntax of a character literal is known in exactly one place.
+const char *char_literal_value(StringView lexeme, uint32_t *out);
 
 int scanner_tokenise_all(Scanner *s, Token **out_tokens, Allocator *al);

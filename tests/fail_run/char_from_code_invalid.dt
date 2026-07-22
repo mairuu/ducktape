@@ -1,0 +1,9 @@
+#! expect: not a Unicode scalar value
+# `from_code` is the only place a Char can be conjured out of a number, so it
+# is where the scalar-value invariant is enforced. 55296 is U+D800, a surrogate.
+use std::io::print;
+use std::char::from_code;
+
+fun main() {
+    print(from_code(55296));
+}

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "allocator.h"
+#include <stdint.h>
 #include <string.h>
 
 // ============================================================================
@@ -46,3 +47,26 @@ static inline StringView sv_from_cstr(const char *cstr) {
 bool sv_equal(StringView a, StringView b);
 
 bool sv_equal_cstr(StringView sv, const char *cstr);
+
+// ============================================================================
+// UTF-8
+//
+// A `String` is bytes and a `Char` is a Unicode scalar value, so these two
+// functions are the only bridge between the two views. Both are strict: an
+// overlong encoding, a surrogate and anything past U+10FFFF are rejected
+// rather than round-tripped, so a `Char` that exists is always a scalar value
+// and `utf8_encode` on one always succeeds.
+
+#define UTF8_MAX_BYTES 4
+
+static inline bool utf8_is_scalar(uint32_t cp) {
+  return cp <= 0x10FFFF && (cp < 0xD800 || cp > 0xDFFF);
+}
+
+// writes 1..4 bytes into `out`; returns how many, or 0 if `cp` is not a
+// scalar value.
+int utf8_encode(uint32_t cp, char *out);
+
+// reads one scalar value from `p[0..len)`; returns how many bytes it spanned,
+// or 0 if the sequence is malformed or truncated.
+int utf8_decode(const char *p, int len, uint32_t *out);

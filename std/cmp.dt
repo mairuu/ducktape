@@ -24,6 +24,7 @@
 # written (see language.md "Trait objects").
 
 use std::string::compare;
+use std::char::code;
 
 pub trait Ord {
     # <0 if self sorts before other, 0 if equal, >0 if after.
@@ -65,6 +66,28 @@ impl Ord for Float {
 impl Ord for String {
     fun cmp(self, other: String) -> Int {
         return compare(self, other);
+    }
+}
+
+# Code-point order, which is what a Char *is*: unlike `String` this needs no
+# native at all, because `std::char::code` already hands the comparison two
+# Ints and `<` is a numeric opcode. The import costs nothing beyond the
+# function — `std::char` ships no impls, and neither does what it imports.
+#
+# It agrees with `impl Ord for String` on one-character strings, since UTF-8
+# byte order and code-point order are the same order. It disagrees with a
+# reader's expectations in the same places: 'Z' sorts before 'a'.
+impl Ord for Char {
+    fun cmp(self, other: Char) -> Int {
+        var a = code(self);
+        var b = code(other);
+        if a < b {
+            return 0 - 1;
+        }
+        if a > b {
+            return 1;
+        }
+        return 0;
     }
 }
 

@@ -1,0 +1,10 @@
+#! expect: string is not valid UTF-8
+# Reachable from ducktape, which is why it is a runtime error rather than an
+# invariant: `slice` is indexed in bytes, so it can cut a multi-byte sequence
+# in half. A String is a byte string; only a Char promises to be a character.
+use std::io::print;
+use std::string::{chars, slice};
+
+fun main() {
+    print(chars(slice("é", 0, 1)));
+}

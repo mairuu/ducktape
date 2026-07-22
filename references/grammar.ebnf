@@ -118,7 +118,8 @@ postfixOp      = "(" ( expr ( "," expr )* )? ")"        (* call *)
                | "as" type                              (* cast *)
                | "?" ;                                  (* propagate *)
 
-primary        = INT | FLOAT | STRING | interpString | "true" | "false"
+primary        = INT | FLOAT | CHAR | STRING | interpString
+               | "true" | "false"
                | "(" ")"                                (* unit *)
                | "(" expr ( "," expr )* ","? ")"        (* tuple / group *)
                | "[" ( expr ( "," expr )* ","? )? "]"   (* array literal *)
@@ -147,7 +148,7 @@ matchExpr      = "match" expr "{" ( matchArm ","? )* "}" ;
 matchArm       = pattern ( "if" expr )? "=>" expr ;
 
 pattern        = "_"
-               | INT | FLOAT | STRING | "true" | "false"
+               | INT | FLOAT | CHAR | STRING | "true" | "false"
                | "(" pattern ( "," pattern )* ")"
                | path ( "(" pattern ( "," pattern )* ")"
                       | "{" fieldPat ( "," fieldPat )* ","? "}" )?
@@ -167,8 +168,18 @@ EXPONENT       = ( "e" | "E" ) ( "+" | "-" )? DIGIT+ ;
                  (* an exponent with no digits is not consumed: `1e` scans as
                     INT 1 then IDENT e *)
 
-(* ── strings ──────────────────────────────────────────────────────────── *)
+(* ── strings and characters ───────────────────────────────────────────── *)
 
 interpString   = '"' ( TEXT | "{" expr "}" )* '"' ;
-                 (* segments must be Int/Float/Bool/String; escapes:
+                 (* segments must be Int/Float/Bool/Char/String, or a type
+                    implementing std::fmt::Display; escapes:
                     \n \t \r \" \\ \{ *)
+
+CHAR           = "'" ( UTF8CHAR | CHARESCAPE ) "'" ;
+CHARESCAPE     = "\" ( "n" | "t" | "r" | "\\" | "'" | '"' )
+               | "\u{" HEXDIGIT{1,6} "}" ;
+                 (* exactly one Unicode scalar value: a surrogate half or
+                    anything past U+10FFFF is rejected by the scanner. The
+                    escape set is the string one with \{ traded for \' —
+                    a character literal has no interpolation, and a quote is
+                    what closes it *)

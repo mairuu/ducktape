@@ -57,6 +57,7 @@ typedef enum {
   BC_C_RANGE,
   BC_C_FUN,
   BC_C_STR,
+  BC_C_CHAR,
 } BcConstTag;
 
 // a tuple field has an index where a named one has a name; no string.
@@ -173,6 +174,10 @@ static void w_const(BcWriter *w, Value v) {
   case VAL_BOOL:
     w_u8(w, BC_C_BOOL);
     w_u8(w, v.as.b ? 1 : 0);
+    break;
+  case VAL_CHAR:
+    w_u8(w, BC_C_CHAR);
+    w_u32(w, v.as.c);
     break;
   case VAL_UNIT:
     w_u8(w, BC_C_UNIT);
@@ -460,6 +465,18 @@ static Value r_const(BcReader *r) {
     return val_float(r_f64(r));
   case BC_C_BOOL:
     return val_bool(r_u8(r) != 0);
+  case BC_C_CHAR: {
+    // validated rather than trusted: every other tag's payload is total over
+    // its bits, and this one is not — a Char is a scalar value everywhere
+    // else in the runtime, so an image may not be the one place it is not.
+    uint32_t cp = r_u32(r);
+    if (r->ok && !utf8_is_scalar(cp)) {
+      r->ok =
+          bc_error("bytecode image: U+%04X is not a Unicode scalar value", cp);
+      return val_unit();
+    }
+    return val_char(cp);
+  }
   case BC_C_UNIT:
     return val_unit();
   case BC_C_RANGE: {

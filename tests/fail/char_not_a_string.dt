@@ -1,0 +1,9 @@
+#! expect: expected 'String' but got 'Char'
+# Distinct types: a String is a byte string on the heap and a Char is a scalar
+# value, so a one-character String and the Char it holds are not the same
+# thing. `std::string::from_chars` is the way across.
+use std::string::len;
+
+fun main() {
+    var n = len('a');
+}

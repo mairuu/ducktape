@@ -1696,6 +1696,11 @@ static void compile_expr_inner(Cg *cg, Expr *expr) {
   case EXPR_STRING:
     emit_const(cg, val_obj(&cg_decode_string(cg, expr->as.string.value)->obj));
     break;
+  case EXPR_CHAR:
+    // already decoded by the parser, which is the difference from a String:
+    // a Char is a value, so it needs no heap object and no intern.
+    emit_const(cg, val_char(expr->as.char_val));
+    break;
 
   case EXPR_INTERPOLATED: {
     ExprInterpolated *interp = &expr->as.interpolated;

@@ -287,6 +287,11 @@ Type *ty_bool(void) {
   return &bool_type;
 }
 
+Type *ty_char(void) {
+  static Type char_type = {.kind = TY_CHAR};
+  return &char_type;
+}
+
 Type *ty_string(void) {
   static Type string_type = {.kind = TY_STRING};
   return &string_type;
@@ -535,6 +540,8 @@ int type_name_sprintf(const Type *t, char *buf, size_t buf_size) {
     return snprintf(buf, buf_size, "Float");
   case TY_BOOL:
     return snprintf(buf, buf_size, "Bool");
+  case TY_CHAR:
+    return snprintf(buf, buf_size, "Char");
   case TY_STRING:
     return snprintf(buf, buf_size, "String");
   case TY_STRBUF:
@@ -610,6 +617,8 @@ int type_sprintf(const Type *t, char *buf, size_t buf_size) {
     return snprintf(buf, buf_size, "Float");
   case TY_BOOL:
     return snprintf(buf, buf_size, "Bool");
+  case TY_CHAR:
+    return snprintf(buf, buf_size, "Char");
   case TY_STRING:
     return snprintf(buf, buf_size, "String");
   case TY_STRBUF:
@@ -783,6 +792,9 @@ void dump_type(const Type *t) {
     break;
   case TY_BOOL:
     fprintf(stdout, "Bool");
+    break;
+  case TY_CHAR:
+    fprintf(stdout, "Char");
     break;
   case TY_STRING:
     fprintf(stdout, "String");
@@ -1013,6 +1025,9 @@ void dump_expr(const Expr *e, int indent) {
     break;
   case EXPR_BOOL:
     fprintf(stdout, "Bool: %s\n", e->as.bool_val ? "true" : "false");
+    break;
+  case EXPR_CHAR:
+    fprintf(stdout, "Char: U+%04X\n", e->as.char_val);
     break;
   case EXPR_STRING:
     fprintf(stdout, "String: \"" SV_FMT "\"\n", STR_ARG(e->as.string.value));

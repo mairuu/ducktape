@@ -36,6 +36,18 @@ pub fun slice(s: String, from: Int, to: Int) -> String;
 @native("string_cmp")
 pub fun compare(a: String, b: String) -> Int;
 
+# The characters `s` is made of, in order. This is the one crossing between
+# the two views of text the language has — bytes here, scalar values in
+# `std::char` — and it is a *conversion* on purpose: there is no `char_at(s,
+# i)`, because `i` would be a byte offset and a byte offset is not a character
+# position. Offering that spelling would make confusing the two the default.
+#
+# A runtime error if `s` is not valid UTF-8, which a program can reach: `slice`
+# cuts at byte offsets, so it can halve a multi-byte sequence. A String is a
+# byte string; only a Char promises to be a character.
+@native("string_chars")
+pub fun chars(s: String) -> [Char];
+
 # ── building a string ────────────────────────────────────────────────────────
 #
 # `a + b` allocates a whole new String and interns it, so growing one a piece
@@ -63,6 +75,13 @@ pub fun builder() -> StringBuf;
 # names that collide have to be aliased apart at the `use`.
 @native("strbuf_push")
 pub fun push_str(b: StringBuf, s: String);
+
+# Append one character's UTF-8 bytes. This is the append that an array of
+# parts could never have offered, and so the one that shows why a buffer was
+# worth a new object kind: the bytes go straight in, with no String interned
+# along the way to carry them.
+@native("strbuf_push_char")
+pub fun push_char(b: StringBuf, c: Char);
 
 # The bytes written so far. Not `len`, which this module already spends on
 # `String`.
@@ -96,6 +115,18 @@ pub fun join(parts: [String], sep: String) -> String {
 
 pub fun concat(parts: [String]) -> String {
     return join(parts, "");
+}
+
+# `chars` the other way round. Ordinary ducktape rather than a fifth native,
+# because `push_char` already put the one operation a buffer could not express
+# within reach: a String is built out of Chars exactly the way it is built out
+# of anything else.
+pub fun from_chars(cs: [Char]) -> String {
+    var b = builder();
+    for c in cs {
+        push_char(b, c);
+    }
+    return build(b);
 }
 
 # `n` copies of `s`. Nothing here allocates a String per copy — the bytes go

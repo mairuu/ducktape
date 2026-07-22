@@ -39,6 +39,8 @@ typedef enum {
   TY_FLOAT,
 
   TY_BOOL,
+  TY_CHAR, // a Unicode scalar value; a String is bytes, so the two are
+           // bridged by a conversion and never by an index
   TY_STRING,
   TY_STRBUF,   // StringBuf — a growable text buffer; see include/object.h
   TY_UNIT,     // ()   — functions that return nothing, empty blocks
@@ -145,6 +147,7 @@ struct Type {
 Type *ty_int(void);
 Type *ty_float(void);
 Type *ty_bool(void);
+Type *ty_char(void);
 Type *ty_string(void);
 Type *ty_strbuf(void);
 Type *ty_unit(void);
@@ -589,6 +592,7 @@ typedef enum {
   EXPR_FLOAT,  // 3.14
   EXPR_BOOL,   // true / false
   EXPR_STRING, // "hello {name}"
+  EXPR_CHAR,   // 'a'
   EXPR_UNIT,   // ()
 
   // ── Variables / paths (pass 1+) ───────────────────────
@@ -865,6 +869,7 @@ struct Expr {
     int64_t int_val;
     double float_val;
     bool bool_val;
+    uint32_t char_val;
     ExprString string;
 
     ExprInterpolated interpolated;

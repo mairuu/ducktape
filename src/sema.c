@@ -130,6 +130,7 @@ Type *subst_apply(const Subst *s, Type *t, Allocator *al) {
   case TY_INT:
   case TY_FLOAT:
   case TY_BOOL:
+  case TY_CHAR:
   case TY_STRING:
   case TY_STRBUF:
   case TY_UNIT:
@@ -490,6 +491,7 @@ bool infer_unify(InferCtx *ctx, Type *a, Type *b, DiagBag *diags, Span span) {
   case TY_INT:
   case TY_FLOAT:
   case TY_BOOL:
+  case TY_CHAR:
   case TY_STRING:
   case TY_STRBUF:
   case TY_UNIT:
@@ -593,6 +595,7 @@ Type *infer_apply(InferCtx *ctx, Type *ty, Allocator *al) {
   case TY_INT:
   case TY_FLOAT:
   case TY_BOOL:
+  case TY_CHAR:
   case TY_STRING:
   case TY_STRBUF:
   case TY_UNIT:
@@ -895,6 +898,7 @@ void tc_init(TypeChecker *tc, DiagBag *diags, Allocator *al) {
   tc->t_int = ty_int();
   tc->t_float = ty_float();
   tc->t_bool = ty_bool();
+  tc->t_char = ty_char();
   tc->t_string = ty_string();
   tc->t_strbuf = ty_strbuf();
   tc->t_unit = ty_unit();
@@ -3812,6 +3816,7 @@ static void check_interpol_seg(CheckCtx *ctx, InterpolSeg *seg) {
   case TY_INT:
   case TY_FLOAT:
   case TY_BOOL:
+  case TY_CHAR:
   case TY_STRING:
     return; // rendered by the VM; no call is emitted at all
   default:
@@ -3894,6 +3899,9 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     break;
   case EXPR_STRING:
     result = ctx->tc->t_string;
+    break;
+  case EXPR_CHAR:
+    result = ctx->tc->t_char;
     break;
   case EXPR_BLOCK: {
     ExprBlock *block = &expr->as.block;
@@ -5400,6 +5408,11 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
         break;
       } else if (sv_equal_cstr(name, "Bool")) {
         result = r->tc->t_bool;
+        break;
+      } else if (sv_equal_cstr(name, "Char")) {
+        // a builtin type, like `StringBuf` below it: the compiler knows the
+        // name, and every operation on a Char lives in `std::char`.
+        result = r->tc->t_char;
         break;
       } else if (sv_equal_cstr(name, "String")) {
         result = r->tc->t_string;

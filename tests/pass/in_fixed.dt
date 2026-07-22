@@ -109,6 +109,12 @@ pub fun process_data<T>(data: T) -> Result<Int, String> {
     var Wrapper(inner, tag) = Wrapper(true, 7);
     var (nested, (deep, _)) = (a, (px, tag));
     var unit_val: () = ();
+    # a Char is a primitive like Int or Bool: a literal, an annotation, an
+    # equality, and interpolation with no `Display` impl in sight
+    var initial: Char = 'd';
+    var newline = '\n';
+    var snowman = '\u{2603}';
+    var greeting = "{initial}{snowman} is a {initial == 'd'}";
 
     var count = 0;
     count += 1;

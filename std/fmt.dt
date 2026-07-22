@@ -41,6 +41,12 @@ impl Display for Bool {
   }
 }
 
+impl Display for Char {
+  fun to_string(self) -> String {
+    return "{self}";
+  }
+}
+
 impl Display for String {
   fun to_string(self) -> String {
     return self;

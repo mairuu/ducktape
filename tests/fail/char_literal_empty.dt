@@ -1,0 +1,6 @@
+#! expect: empty character literal
+# A character literal holds exactly one character, so there is no such thing as
+# an empty one — unlike a String, whose emptiness is an ordinary length.
+fun main() {
+    var c = '';
+}

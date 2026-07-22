@@ -1,0 +1,7 @@
+#! expect: comparison requires numeric types
+# Ordering a Char is `Ord`, not `<` — the same rule `String` follows since
+# milestone 25. `<` and `>` stay numeric opcodes, and teaching them about one
+# more primitive would make the trait the exception rather than the rule.
+fun main() {
+    var b = 'a' < 'b';
+}

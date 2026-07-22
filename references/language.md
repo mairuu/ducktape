@@ -46,6 +46,7 @@ case for it) — declare variables inside functions only.
 | Syntax | Meaning |
 |---|---|
 | `Int` `Float` `Bool` `String` | primitives |
+| `Char` | one Unicode scalar value — see "`std::char`" |
 | `StringBuf` | a growable text buffer — see "`std::string`" |
 | `()` | unit |
 | `Never` | code that does not come back — see "`std::panic`" |
@@ -278,8 +279,8 @@ impl those modules ship is visible too.
 That chain is why the direction of a std module's own imports is a design
 decision rather than bookkeeping: what an import costs its dependents is the
 *impls* the imported module ships, not its size. `std::cmp` can afford to
-import `std::string` because `std::string` is a leaf of free functions with no
-impls at all.
+import `std::string` and `std::char` because both are modules of free functions
+with no impls at all.
 
 Two implementations of **the same trait for overlapping types** may not be
 visible at once. Writing `impl Ord for Int` in a module that also imports
@@ -307,8 +308,9 @@ directory. `std::` never touches the filesystem, so a local `std.dt` is
 unreachable. Where ducktape cannot express the operation, a module declares a
 bodyless function bound to C (see "Native functions" below); `std::cmp`,
 `std::option` and `std::result` need none, `std::io` and `std::panic` are
-nothing but, and `std::array` is the mixed case — two natives, and every other
-function written on top of them in ducktape. `std::fmt::Display` is the only
+nothing but, and `std::array`, `std::string` and `std::char` are the mixed
+case — a handful of natives, and every other function written on top of them
+in ducktape. `std::fmt::Display` is the only
 std name the *compiler* knows.
 
 **There is no prelude.** Every std name, `print` included, has to be imported.
@@ -336,7 +338,7 @@ pub fun min<T: Ord>(a: T, b: T) -> T
 pub fun clamp<T: Ord>(v: T, lo: T, hi: T) -> T
 ```
 
-`Ord` is implemented for `Int`, `Float` and `String`, which is the point worth
+`Ord` is implemented for `Int`, `Float`, `Char` and `String`, which is the point worth
 noticing: **a trait can be implemented for a primitive**, so the standard
 library extends the built-in types with exactly the machinery user code uses.
 Your own types join the same trait and `max`/`min` work on them unchanged
@@ -364,12 +366,18 @@ table beyond the equal case, and has to walk the bytes. That walk is
 the finest handle ducktape has on a String's contents is `slice`, and comparing
 two one-byte slices would need the ordering being defined.
 
+`Char` is ordered the same way, and by the same rule about where the impl
+goes: `std::cmp` imports `std::char` for it. That one needs no native at all —
+`std::char::code` hands the comparison two Ints, and `<` on an Int is an
+opcode — which is the difference between ordering a character and ordering a
+string of them.
+
 The impl lives in `std::cmp`, beside the trait, so `std::cmp` imports
-`std::string` rather than the other way round. That direction is deliberate:
+`std::string` (and `std::char`) rather than the other way round. That direction is deliberate:
 impl visibility is transitive through `use`, and `std::string` ships no impls,
 so importing it adds nothing to what a `use std::cmp::…` already delivers.
 Putting the impl in `std::string` would have handed a program that only wanted
-`len` all three `Ord` impls — and with them coherence's refusal to let it write
+`len` every `Ord` impl — and with them coherence's refusal to let it write
 its own `impl Ord for Int`. **An import's cost is measured in impls, not in
 code.** `impl Display for String` living in `std::fmt` sets the same precedent.
 
@@ -638,17 +646,28 @@ std::array   len<T>(xs: [T]) -> Int                 # @intrinsic (OP_LEN)
              is_empty<T>(xs: [T]) -> Bool
              clear<T>(xs: [T])
 
-std::string  len(s: String) -> Int                  # @native
+std::string  len(s: String) -> Int                  # @native, in bytes
              slice(s: String, from: Int, to: Int) -> String   # @native
              compare(a: String, b: String) -> Int   # @native
+             chars(s: String) -> [Char]             # @native
              builder() -> StringBuf                 # @native
              push_str(b: StringBuf, s: String)      # @native
+             push_char(b: StringBuf, c: Char)       # @native
              buf_len(b: StringBuf) -> Int           # @native
              build(b: StringBuf) -> String          # @native
              buf_is_empty(b: StringBuf) -> Bool
              join(parts: [String], sep: String) -> String
              concat(parts: [String]) -> String
              repeat(s: String, n: Int) -> String
+             from_chars(cs: [Char]) -> String
+
+std::char    code(c: Char) -> Int                   # @native
+             from_code(n: Int) -> Char              # @native
+             is_ascii/is_digit/is_lower/is_upper(c: Char) -> Bool
+             is_alpha/is_alnum/is_whitespace(c: Char) -> Bool
+             to_upper(c: Char) -> Char              # ASCII only
+             to_lower(c: Char) -> Char              # ASCII only
+             to_digit(c: Char) -> Int
 
 std::fmt     float(value: Float, precision: Int) -> String   # @native
 ```
@@ -721,19 +740,80 @@ Two smaller consequences, both visible from a program:
   worth making out loud. `print(b)` still shows it, as `StringBuf("…")` — the
   debug view says which of the two kinds it is looking at.
 
-Only four of the functions are written in C — existing, growing, its length,
-and becoming a String — and `join`, `concat` and `repeat` are ducktape on top,
-the same split `std::array` makes. `repeat` is the one that shows what the
+Only five of the functions are written in C — existing, growing (from a String
+or from a Char), its length, and becoming a String — and `join`, `concat`,
+`repeat` and `from_chars` are ducktape on top, the same split `std::array`
+makes. `repeat` is the one that shows what the
 buffer buys: it copies bytes straight in, allocating no String per copy.
 Unlike `std::array`, `std::string` imports nothing, so it is still a leaf: it
 hands a program no impls it did not ask for. That is also what makes it safe
-for `std::cmp` to depend on it for `impl Ord for String`.
+for `std::cmp` to depend on it for `impl Ord for String`. `push_char` and
+`chars` — added when `Char` arrived — keep both properties: neither imports
+anything, and `from_chars` is written on top of them rather than in C.
 
 A `Float` prints — and interpolates — as the shortest decimal that reads back
 as the same double, always carrying a `.` or an exponent so it is never
 mistaken for an `Int`: `1.0`, `0.3333333333333333`, `300.0`, `1e+18`, `1e-07`,
 `-0.0`, `inf`, `-inf`, `NaN`. Exponent form takes over below `1e-5` and at
 `1e17`; every form printed is also a literal the scanner accepts.
+
+### `std::char`, and what a `String` is made of
+
+A `Char` is **one Unicode scalar value** — a code point that is not a surrogate
+half — written between single quotes:
+
+```
+var a = 'x';
+var accented = 'é';        # a multi-byte character, written directly
+var newline = '\n';
+var snowman = '\u{2603}';  # for one that cannot be typed
+```
+
+The escape set is the string one with `\{` traded for `\'`: a character literal
+has no interpolation, and a quote is what closes it. `\u{…}` takes one to six
+hex digits. A literal holding no character (`''`), more than one (`'ab'`), or a
+value that is not a scalar value (`'\u{D800}'`) is a scanner error.
+
+A `Char` is a **primitive**, so it behaves like an `Int` throughout: it is a
+value rather than a heap object, `==` compares scalar values, `"{c}"` renders
+it with no `Display` impl involved, and `match c { 'q' => …, _ => … }` works
+the way an `Int` match does — a wildcard is required, since the domain is far
+too large to enumerate.
+
+**A `String` is bytes and a `Char` is a character, and the language keeps the
+two apart.** `std::string::len` counts *bytes*, `slice` cuts at *byte* offsets,
+and `compare` walks bytes; `std::string::chars` is the only crossing:
+
+```
+var s = "héllo";
+len(s);              # 6 — bytes
+alen(chars(s));      # 5 — characters
+from_chars(chars(s)) == s;   # true
+```
+
+There is deliberately **no `char_at(s, i)`**. The index would be a byte offset,
+a byte offset is not a character position, and offering that spelling would
+make confusing the two the default rather than the mistake. The crossing is a
+conversion in both directions, and `from_chars` goes back through a
+`StringBuf`, which `push_char` is what makes possible.
+
+`chars` is a **runtime error if the string is not valid UTF-8**, which a
+program can provoke: `slice` cuts at byte offsets, so it can halve a multi-byte
+sequence. A String is a byte string; only a `Char` promises to be a character.
+
+Everything else in `std::char` is ordinary ducktape over `code`/`from_code` —
+the one thing a Char cannot say about itself is its number, and once it can,
+every classification is a range test and every case conversion is an addition.
+**The classifications are ASCII-only**: `is_alpha('é')` is false and
+`to_upper('é')` is `'é'` unchanged. Full Unicode case mapping is a table, not a
+range test, and shipping a range test under that name would be right for
+English and quietly wrong elsewhere.
+
+`impl Ord for Char` (in `std::cmp`, beside the trait) is code-point order, so
+`'Z'` sorts before `'a'` — the same order `impl Ord for String` gives, since
+UTF-8 byte order and code-point order agree. As with `String`, ordering is the
+trait and not the operator: `'a' < 'b'` is still "comparison requires numeric
+types".
 
 ## Not yet implemented
 
@@ -745,6 +825,9 @@ mistaken for an `Int`: `1.0`, `0.3333333333333333`, `300.0`, `1e+18`, `1e-07`,
 | recovering from a panic (`catch`, unwinding) | a panic reports at the call site and stops; there is no `catch` |
 | `Display` for a tuple of arity other than 2 | arity is part of a tuple's type and nothing is generic over it, so each needs its own impl; only `(A, B)` ships |
 | writing your own `Display` for a container | rejected as a conflict with the std impl, which naming the trait makes visible |
+| Unicode case mapping, folding, or normalisation | `std::char`'s classifications and `to_upper`/`to_lower` are ASCII-only; `String` comparison is raw bytes |
+| indexing a `String` by character (`s[i]`) | there is none: `chars(s)` converts, because a byte offset is not a character position |
+| a `String` that is guaranteed valid UTF-8 | it is a byte string — `slice` cuts at byte offsets, so `chars` reports a runtime error on a halved sequence |
 | width, alignment, or padding in a format | only `std::fmt::float(value, precision)`; there is no format-spec grammar inside `{}` |
 | casting a `dyn Trait` back to its concrete type | no downcast; the coercion is one-way |
 | `dyn Trait` with type arguments (`dyn Into<Int>`) | generic traits are not parameterised in `dyn` position |
