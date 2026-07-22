@@ -5,6 +5,7 @@
   "patterns": [
     { "include": "#comment" },
     { "include": "#attribute" },
+    { "include": "#char" },
     { "include": "#string" },
     { "include": "#number" },
     { "include": "#keyword" },
@@ -52,8 +53,35 @@
       ]
     },
 
+    "char": {
+      "patterns": [
+        {
+          "name": "constant.character.ducktape",
+          "match": "(')(\\\\u\\{[0-9A-Fa-f]{1,6}\\}|\\\\[ntr'\"\\\\])(')",
+          "captures": {
+            "1": { "name": "punctuation.definition.char.begin.ducktape" },
+            "2": { "name": "constant.character.escape.ducktape" },
+            "3": { "name": "punctuation.definition.char.end.ducktape" }
+          }
+        },
+        {
+          "name": "constant.character.ducktape",
+          "match": "(')([^'\\\\\\n])(')",
+          "captures": {
+            "1": { "name": "punctuation.definition.char.begin.ducktape" },
+            "3": { "name": "punctuation.definition.char.end.ducktape" }
+          }
+        },
+        {
+          "name": "invalid.illegal.character.ducktape",
+          "match": "'[^'\\n]*'"
+        }
+      ]
+    },
+
     "number": {
       "patterns": [
+        { "name": "constant.numeric.float.ducktape", "match": "\\b[0-9]+(\\.[0-9]+)?[eE][+-]?[0-9]+\\b" },
         { "name": "constant.numeric.float.ducktape", "match": "\\b[0-9]+\\.[0-9]+\\b" },
         { "name": "constant.numeric.integer.ducktape", "match": "\\b[0-9]+\\b" }
       ]
