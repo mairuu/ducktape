@@ -82,7 +82,7 @@ static void cg_error(Cg *cg, Span span, const char *what) {
   cg->ok = false;
 }
 
-// ── monomorphisation ─────────────────────────────────────────────────────────
+// ── monomorphisation, and the reachability walk it already was ───────────────
 //
 // The runtime is uniform in type arguments: instance layouts are field slots
 // in declaration order, variant tags are per enum, and no opcode inspects a
@@ -98,6 +98,20 @@ static void cg_error(Cg *cg, Span span, const char *what) {
 // generic body is instantiated by pushing the caller's own bindings through
 // them — `cg->subst` — which is what makes the queue reach a fixpoint instead
 // of stopping one level down.
+//
+// Read the other way round, that queue *is* a reachability walk: a generic
+// definition nothing asks for is never compiled and costs no slot. A
+// non-generic definition is the same thing with nothing to specialise, so it
+// arrives the same way — `mono_reach` is `mono_request` with an empty key and
+// no copy, and the walk starts at `main` (`mono_seed`). Nothing is compiled
+// because it was *written*; everything is compiled because something *named*
+// it. Two consequences worth stating:
+//   - slot pressure is a property of what a program uses, not of what its
+//     imports declare. `use std::cmp::max;` no longer spends slots on the
+//     `Int::cmp`/`Float::cmp` that `max` happens not to reach.
+//   - a body nothing reaches is never handed to codegen, so a construct the VM
+//     refuses inside one goes unreported. That was already true of every
+//     generic; it is now true uniformly, which is the honest price.
 
 static bool exe_add_global(Executable *exe, FunDef *fun);
 static bool exe_too_many(const char *what, int count);
@@ -172,6 +186,25 @@ static bool inst_matches(const Instance *it, const FunDef *origin,
   return true;
 }
 
+// append a body to the worklist. The caller has already given `instance` its
+// slot, which is what makes a self- or mutually-recursive request terminate:
+// the memo is in place before the body that would ask again is compiled.
+static void mono_enqueue(Mono *mono, FunDef *origin, FunDef *instance, Subst s,
+                         int depth, ImplIndex *impls) {
+  if (mono->count == mono->cap) {
+    int new_cap = mono->cap == 0 ? 8 : mono->cap * 2;
+    mono->insts =
+        al_realloc(mono->al, mono->insts, sizeof(Instance) * (size_t)mono->cap,
+                   sizeof(Instance) * (size_t)new_cap);
+    mono->cap = new_cap;
+  }
+  mono->insts[mono->count++] = (Instance){.origin = origin,
+                                          .instance = instance,
+                                          .subst = s,
+                                          .depth = depth,
+                                          .impls = impls};
+}
+
 // find or create the copy of `origin` compiled under `s`, queueing it for
 // compilation on first request. `depth` is the requesting body's depth plus
 // one — only paid on a miss, since a repeat request (a recursive generic
@@ -191,20 +224,40 @@ static FunDef *mono_request(Mono *mono, FunDef *origin, Subst s, int depth,
   if (!exe_add_global(mono->exe, instance)) {
     return NULL;
   }
-
-  if (mono->count == mono->cap) {
-    int new_cap = mono->cap == 0 ? 8 : mono->cap * 2;
-    mono->insts =
-        al_realloc(mono->al, mono->insts, sizeof(Instance) * (size_t)mono->cap,
-                   sizeof(Instance) * (size_t)new_cap);
-    mono->cap = new_cap;
-  }
-  mono->insts[mono->count++] = (Instance){.origin = origin,
-                                          .instance = instance,
-                                          .subst = s,
-                                          .depth = depth,
-                                          .impls = impls};
+  mono_enqueue(mono, origin, instance, s, depth, impls);
   return instance;
+}
+
+// the non-generic half of the same operation: `fun` has nothing to specialise,
+// so it *is* its own instance — no copy, an empty key, and `slot` itself is
+// the memo. First reach hands out the slot and queues the body; every later
+// one just reads the slot back.
+//
+// The impl set is the *defining* module's, not the requester's, and that is
+// the one place this differs from `mono_request`: a bound's witness travels
+// with a type argument because the argument is chosen at the call site, but a
+// non-generic body selects impls entirely from where it was written — the same
+// set the checker used on it. So who reaches it first cannot change what it
+// compiles to.
+//
+// A native is reached like anything else (it needs a slot to be callable and
+// first-class) but has no body to queue — one C function serves every
+// instantiation, which is why this path takes generic natives too.
+static FunDef *mono_reach(Mono *mono, FunDef *fun) {
+  if (fun->slot != SLOT_NONE) {
+    return fun;
+  }
+  if (!exe_add_global(mono->exe, fun)) {
+    return NULL;
+  }
+  if (!fun_is_native(fun)) {
+    mono_enqueue(mono, fun, fun, subst_empty(), 0, &fun->module->visible_impls);
+  }
+  return fun;
+}
+
+bool mono_seed(Mono *mono, FunDef *entry) {
+  return mono_reach(mono, entry) != NULL;
 }
 
 // what the call site instantiated one type parameter with, made concrete:
@@ -278,27 +331,26 @@ static bool cg_inst_key(Cg *cg, FunDef *fun, const Subst *primary,
 // diagnostic already reported) when there is none to emit.
 static FunDef *cg_call_target(Cg *cg, FunDef *fun, const Subst *primary,
                               const Subst *fallback, Span span) {
-  if (fun_is_native(fun)) {
-    // A native needs no monomorphisation even when its signature is generic:
-    // the runtime is uniform in type arguments, so one C body serves every
-    // `T`. `print<T>` is the whole of that case.
-    if (fun->native_kind == ATTR_INTRINSIC) {
-      // ... but an intrinsic has no body at all — it *is* an opcode, which a
-      // global slot cannot address. A direct call is lowered inline by
-      // compile_call; anything else reaches here.
-      diag_error(cg->diags, span,
-                 "'" SV_FMT "' is an intrinsic and can only be called "
-                 "directly, not used as a value",
-                 SV_ARG(fun->name));
-      cg->ok = false;
-      return NULL;
-    }
-    assert(fun->slot != FUN_SLOT_NONE && "native never linked");
-    return fun;
+  if (fun->native_kind == ATTR_INTRINSIC) {
+    // an intrinsic has no body at all — it *is* an opcode, which a global slot
+    // cannot address. A direct call is lowered inline by compile_call;
+    // anything else reaches here.
+    diag_error(cg->diags, span,
+               "'" SV_FMT "' is an intrinsic and can only be called "
+               "directly, not used as a value",
+               SV_ARG(fun->name));
+    cg->ok = false;
+    return NULL;
   }
-  if (!fun_is_generic(fun)) {
-    assert(fun->slot != FUN_SLOT_NONE && "non-generic definition never linked");
-    return fun;
+  // A native needs no monomorphisation even when its signature is generic: the
+  // runtime is uniform in type arguments, so one C body serves every `T`.
+  // `print<T>` is the whole of that case.
+  if (fun_is_native(fun) || !fun_is_generic(fun)) {
+    FunDef *target = mono_reach(cg->mono, fun);
+    if (target == NULL) {
+      cg->ok = false; // slot space exhausted; exe_add_global reported it
+    }
+    return target;
   }
 
   Subst key;
@@ -1231,12 +1283,49 @@ static void compile_propagate(Cg *cg, Expr *expr) {
   patch_jump(cg, end_jump);
 }
 
+// A struct or an enum reaches its slot space the same way a function does:
+// when something *constructs* one. Neither is reached by being declared, nor
+// by being matched — a pattern tests a tag and reads fields by index, and
+// neither operand names the definition. So a type a program only ever takes
+// apart costs nothing in either space.
+static bool cg_reach_struct(Cg *cg, StructDef *def) {
+  if (def->slot != SLOT_NONE) {
+    return true;
+  }
+  if (cg->exe->struct_count == cg->exe->struct_cap) {
+    exe_too_many("structs", cg->exe->struct_count + 1);
+    cg->ok = false;
+    return false;
+  }
+  def->slot = cg->exe->struct_count;
+  cg->exe->structs[cg->exe->struct_count++] = def;
+  return true;
+}
+
+static bool cg_reach_enum(Cg *cg, EnumDef *def) {
+  if (def->slot != SLOT_NONE) {
+    return true;
+  }
+  if (cg->exe->enum_count == cg->exe->enum_cap) {
+    exe_too_many("enums", cg->exe->enum_count + 1);
+    cg->ok = false;
+    return false;
+  }
+  def->slot = cg->exe->enum_count;
+  cg->exe->enums[cg->exe->enum_count++] = def;
+  return true;
+}
+
 // compiles field values in *declaration* order (matching the runtime
 // instance layout), not the initializer's source order.
 static void compile_struct_init(Cg *cg, Expr *expr) {
   ExprStructInit *init = &expr->as.struct_init;
   StructDef *def = init->resolved_struct->as.struc.def;
 
+  if (!cg_reach_struct(cg, def)) {
+    emit(cg, OP_UNIT);
+    return;
+  }
   for (int i = 0; i < def->field_count; i++) {
     FieldInit *fi = find_field_init(init->fields, init->field_count,
                                     def->is_tuple, def->fields[i].ident);
@@ -1250,6 +1339,10 @@ static void compile_variant_init(Cg *cg, Expr *expr) {
   EnumDef *enum_def = init->resolved_enum->as.enm.def;
   VariantDef *variant = init->resolved_variant;
 
+  if (!cg_reach_enum(cg, enum_def)) {
+    emit(cg, OP_UNIT);
+    return;
+  }
   for (int i = 0; i < variant->field_count; i++) {
     FieldInit *fi =
         find_field_init(init->fields, init->field_count, variant->is_tuple,
@@ -1882,118 +1975,31 @@ static bool exe_add_global(Executable *exe, FunDef *fun) {
   return true;
 }
 
-// a generic definition has no single body, so it gets no slot: it is
-// addressed only through the instances the monomorphiser derives from it.
-static bool exe_slot_fun(Executable *exe, FunDef *fun) {
-  if (fun->native_kind == ATTR_INTRINSIC) {
-    // an opcode is not addressable; there is nothing to point a slot at.
-    fun->slot = FUN_SLOT_NONE;
-    return true;
-  }
-  // a native takes an ordinary slot even when generic — one C body serves
-  // every instantiation — which is what makes it first-class for free:
-  // OP_GET_GLOBAL works on it, so it can be passed, stored and captured.
-  if (fun->native_kind == ATTR_NATIVE) {
-    return exe_add_global(exe, fun);
-  }
-  if (fun_is_generic(fun)) {
-    fun->slot = FUN_SLOT_NONE;
-    return true;
-  }
-  return exe_add_global(exe, fun);
-}
-
-bool exe_link(Executable *exe, ModuleRegistry *reg, Allocator *al) {
-  // pass 1: size the tables. impl methods share the globals space with
-  // top-level funs, so OP_GET_GLOBAL addresses either with one operand. The
-  // globals table is sized to the whole operand space rather than to the
-  // count, since monomorphisation appends to it during codegen.
-  int structs = 0, enums = 0;
-  for (int i = 0; i < reg->module_count; i++) {
-    Module *m = reg->modules[i];
-    structs += m->struct_count;
-    enums += m->enum_count;
-  }
-  if (structs > CG_MAX_SLOTS) {
-    return exe_too_many("structs", structs);
-  }
-  if (enums > CG_MAX_SLOTS) {
-    return exe_too_many("enums", enums);
-  }
-
+void exe_link(Executable *exe, ModuleRegistry *reg, Allocator *al) {
+  // Every table is sized to the whole operand space and left empty: which
+  // definitions a program spends its slots on is discovered by codegen, not
+  // counted here. Impl methods share the globals space with top-level funs, so
+  // OP_GET_GLOBAL addresses either with one operand.
   exe->global_cap = CG_MAX_SLOTS;
   exe->globals = al_alloc_zero(al, sizeof(FunDef *) * (size_t)CG_MAX_SLOTS);
-  // vtables, like monomorphised globals, are discovered while compiling, so
-  // the table is sized to the whole operand space up front.
   exe->vtable_cap = CG_MAX_SLOTS;
   exe->vtables = al_alloc_zero(al, sizeof(VTable *) * (size_t)CG_MAX_SLOTS);
-  exe->structs = al_alloc_zero(al, sizeof(StructDef *) * (size_t)structs);
-  exe->enums = al_alloc_zero(al, sizeof(EnumDef *) * (size_t)enums);
+  exe->struct_cap = CG_MAX_SLOTS;
+  exe->structs = al_alloc_zero(al, sizeof(StructDef *) * (size_t)CG_MAX_SLOTS);
+  exe->enum_cap = CG_MAX_SLOTS;
+  exe->enums = al_alloc_zero(al, sizeof(EnumDef *) * (size_t)CG_MAX_SLOTS);
 
-  // pass 2: hand out the slots, in topological order — a dependency is
-  // numbered before anything that imports it, which is only cosmetic (all
-  // slots exist before any chunk is compiled) but keeps a trace readable.
+  // The one thing that is *not* demand-driven: a variant tag is not a slot. It
+  // is an index within its own enum, fixed by declaration order and bounded by
+  // the variant count, and a `match` reads it off an enum the program may
+  // never construct — so it cannot wait for a reference that might not come.
   for (int i = 0; i < reg->module_count; i++) {
-    Module *m = modreg_topo(reg, i);
-
-    for (int j = 0; j < m->fun_count; j++) {
-      if (!exe_slot_fun(exe, m->funs[j])) {
-        return false;
-      }
-    }
-    for (int j = 0; j < m->impl_count; j++) {
-      ImplDef *impl = m->impls[j];
-      for (int k = 0; k < impl->method_count; k++) {
-        if (!exe_slot_fun(exe, impl->methods[k].fun)) {
-          return false;
-        }
-      }
-    }
-
-    for (int j = 0; j < m->struct_count; j++) {
-      m->structs[j]->slot = exe->struct_count;
-      exe->structs[exe->struct_count++] = m->structs[j];
-    }
+    Module *m = reg->modules[i];
     for (int j = 0; j < m->enum_count; j++) {
       EnumDef *def = m->enums[j];
-      def->slot = exe->enum_count;
-      exe->enums[exe->enum_count++] = def;
       for (int k = 0; k < def->variant_count; k++) {
-        def->variants[k].tag = (uint8_t)k; // tags are per enum, not global
+        def->variants[k].tag = (uint8_t)k;
       }
     }
   }
-
-  return true;
-}
-
-// walks the module's definition tables rather than its AST: a FunDef carries
-// its own body and span now, and `ImplDef.methods[]` is the only place an impl
-// method's FunDef lives (the impl item's `DeclFun.def` is never set).
-bool codegen_module(Module *m, Mono *mono, DiagBag *diags) {
-  bool ok = true;
-  for (int i = 0; i < m->fun_count; i++) {
-    FunDef *fun = m->funs[i];
-    if (fun_is_native(fun)) {
-      continue; // the body is in C; there is nothing to compile
-    }
-    if (!fun_is_generic(fun)) {
-      compile_fun_body(mono, fun, fun, subst_empty(), 0, &m->visible_impls,
-                       diags, &ok);
-    }
-    // generic: no single body to compile — one copy per instantiation instead,
-    // enqueued on `mono` by whatever calls it, so an uncalled generic costs
-    // nothing and is not an error either.
-  }
-  for (int i = 0; i < m->impl_count; i++) {
-    ImplDef *impl = m->impls[i];
-    for (int j = 0; j < impl->method_count; j++) {
-      FunDef *fun = impl->methods[j].fun;
-      if (!fun_is_generic(fun)) {
-        compile_fun_body(mono, fun, fun, subst_empty(), 0, &m->visible_impls,
-                         diags, &ok);
-      }
-    }
-  }
-  return ok;
 }

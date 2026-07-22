@@ -37,27 +37,32 @@ typedef struct {
 // OP_GET_GLOBAL/OP_STRUCT/OP_ENUM each carry a single operand byte, and a
 // chunk compiled from one module routinely names a definition from another
 // (an imported function, a struct built by its constructor), so the operand
-// cannot mean "index into my module". `exe_link` flattens every module's
-// definitions into these program-wide tables — in topological order, so a
-// dependency's slots are stable before anything that uses them compiles —
-// and writes the assigned index back into each def's `slot`. Codegen then
-// only ever emits `def->slot`, whichever module the def came from.
+// cannot mean "index into my module". These are the program-wide tables those
+// operands index; codegen only ever emits `def->slot`, whichever module the
+// def came from.
 //
-// Generic definitions get no slot at link time: they have no single body to
-// address. Codegen appends one copy per instantiation to `globals` as it
-// discovers call sites, which is why the table has spare capacity.
+// Every one of them is filled *on demand*, as codegen discovers references —
+// `exe_link` only sizes them. A definition nothing reaches never enters a
+// table and keeps `SLOT_NONE`, so what a program spends of the one-byte
+// operand space is a property of what it uses rather than of what its imports
+// happen to declare. Generic definitions have always behaved this way (they
+// have no single body to address, so only their instances are entered); the
+// rest of the program simply follows the same rule.
 typedef struct {
-  // OP_GET_GLOBAL operand space: each module's top-level funs, then its impl
-  // methods, then the next module's; monomorphised instances after all of it.
+  // OP_GET_GLOBAL operand space: top-level funs, impl methods and
+  // monomorphised instances alike, in the order the walk from `main` reaches
+  // them.
   FunDef **globals;
   int global_count;
   int global_cap;
 
   StructDef **structs; // OP_STRUCT operand space
   int struct_count;
+  int struct_cap;
 
   EnumDef **enums; // OP_ENUM operand space
   int enum_count;
+  int enum_cap;
 
   // nested closure functions, appended by codegen. Not addressable by any
   // opcode (they're built at runtime via OP_CLOSURE, from a chunk constant),

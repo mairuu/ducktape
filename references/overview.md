@@ -78,11 +78,12 @@ Driver: `compiler_run` in `src/compiler.c`. Phases, in order:
 
 With `--run`, `compiler_execute` (`src/compiler.c`) additionally runs:
 
-6. **link** — `exe_link` (`src/codegen.c`): flatten every module's non-generic
-   funs, methods, structs and enums into one program-wide slot space
-7. **codegen** — `src/codegen.c`: AST → bytecode `Chunk` per function, per
-   module, then one more per instantiation of each generic definition
-   (`Mono`, drained until it reaches a fixpoint)
+6. **link** — `exe_link` (`src/codegen.c`): size the program-wide slot spaces
+   (funs + methods, structs, enums, vtables) and fix every enum's variant tags
+7. **codegen** — `src/codegen.c`: AST → bytecode `Chunk`, demand-driven from
+   `main` outwards (`Mono`, drained until it reaches a fixpoint). A definition
+   takes a slot and a chunk when something *reaches* it; one nothing reaches
+   costs neither, generic or not
 8. **vm** — `src/vm.c`: stack VM executes the root module's `main()`
 
 `--emit-bc` stops after 7 and serializes the linked program instead

@@ -250,54 +250,11 @@ bool compiler_run(Compiler *c, const char *path) {
   return true;
 }
 
-// link and compile every checked module to bytecode, reporting the root
-// module's `main`. on success the caller owns `heap` and must destroy it.
-static bool compiler_codegen(Compiler *c, Executable *exe, Heap *heap,
-                             bool gc_stress, FunDef **main_out) {
-  // linking precedes codegen, not the other way round: a chunk can name a
-  // definition from any module, so every slot must exist before the first
-  // instruction is emitted — and the heap roots off the linked tables, since
-  // codegen interns strings as it goes and may collect mid-compile.
-  if (!exe_link(exe, &c->mod_reg, &c->al)) {
-    fprintf(stderr, "compilation failed during linking.\n");
-    return false;
-  }
-
-  heap_init(heap, exe, gc_stress);
-
-  Mono mono;
-  mono_init(&mono, exe, heap, &c->al);
-
-  bool ok = true;
-  for (int i = 0; i < c->mod_reg.module_count; i++) {
-    Module *mod = modreg_topo(&c->mod_reg, i);
-    diag_clear(&c->diags);
-
-    ok &= codegen_module(mod, &mono, &c->diags);
-    // per module, so a diagnostic is reported against its own source.
-    if (diag_has_diags(&c->diags)) {
-      diag_report(&c->diags, mod->file_path.chars, mod->source.chars, stderr);
-    }
-  }
-
-  // then the monomorphised copies the walk above discovered. Compiling one can
-  // discover more (a generic body calling another generic), so this drains
-  // rather than iterating a fixed list. Each instance is reported against the
-  // module its body was written in, not the one that instantiated it.
-  for (Module *mod; (mod = mono_pending_module(&mono)) != NULL;) {
-    diag_clear(&c->diags);
-    ok &= mono_compile_next(&mono, &c->diags);
-    if (diag_has_diags(&c->diags)) {
-      diag_report(&c->diags, mod->file_path.chars, mod->source.chars, stderr);
-    }
-  }
-
-  if (!ok) {
-    fprintf(stderr, "compilation failed during code generation.\n");
-    heap_destroy(heap);
-    return false;
-  }
-
+// the root module's `main`, checked for the two shapes that cannot be an entry
+// point. Found before codegen rather than after, because it *is* codegen's
+// starting point: nothing else in the program is compiled except through what
+// it reaches.
+static FunDef *compiler_find_main(Compiler *c) {
   Module *m = c->root_module;
   FunDef *main_fn = NULL;
   for (int i = 0; i < m->fun_count; i++) {
@@ -308,21 +265,58 @@ static bool compiler_codegen(Compiler *c, Executable *exe, Heap *heap,
   }
   if (main_fn == NULL) {
     fprintf(stderr, "error: no 'main' function to run\n");
-    heap_destroy(heap);
-    return false;
+    return NULL;
   }
   if (fun_is_native(main_fn)) {
-    // the VM enters a frame over `main`'s chunk, and a native has none. Worth
-    // its own message rather than the generic one below: an @intrinsic main
-    // also has no slot, but "must not be generic" would be a lie.
+    // the VM enters a frame over `main`'s chunk, and a native has none.
     fprintf(stderr, "error: 'main' must not be native\n");
-    heap_destroy(heap);
+    return NULL;
+  }
+  if (fun_is_generic(main_fn)) {
+    // a generic definition has no body of its own, only the copies its call
+    // sites ask for — and nothing calls the entry point.
+    fprintf(stderr, "error: 'main' must not be generic\n");
+    return NULL;
+  }
+  return main_fn;
+}
+
+// link and compile the reachable part of the program to bytecode, reporting
+// the root module's `main`. on success the caller owns `heap` and must destroy
+// it.
+static bool compiler_codegen(Compiler *c, Executable *exe, Heap *heap,
+                             bool gc_stress, FunDef **main_out) {
+  FunDef *main_fn = compiler_find_main(c);
+  if (main_fn == NULL) {
     return false;
   }
-  if (main_fn->slot == FUN_SLOT_NONE) {
-    // a generic definition has no compiled body of its own, only the copies
-    // its call sites ask for — and nothing calls the entry point.
-    fprintf(stderr, "error: 'main' must not be generic\n");
+
+  // linking precedes codegen, not the other way round: the heap roots off
+  // these tables, and codegen interns strings as it goes so it may collect
+  // mid-compile. They start empty — codegen fills them as it discovers what
+  // the program actually names.
+  exe_link(exe, &c->mod_reg, &c->al);
+  heap_init(heap, exe, gc_stress);
+
+  Mono mono;
+  mono_init(&mono, exe, heap, &c->al);
+
+  // Seed the walk with `main` and drain. Compiling one body discovers more —
+  // its calls, the vtables its coercions build, the generics it instantiates —
+  // so this is a worklist rather than a pass over the registry, and a module
+  // no reachable body names is never visited at all. Each body is reported
+  // against the module it was *written* in, not the one that reached it.
+  bool ok = mono_seed(&mono, main_fn);
+  for (Module *mod; (mod = mono_pending_module(&mono)) != NULL;) {
+    diag_clear(&c->diags);
+    ok &= mono_compile_next(&mono, &c->diags);
+    if (diag_has_diags(&c->diags)) {
+      diag_report(&c->diags, mod->file_path.chars, mod->source.chars, stderr);
+    }
+  }
+
+  if (!ok) {
+    fprintf(stderr, "compilation failed during code generation.\n");
     heap_destroy(heap);
     return false;
   }

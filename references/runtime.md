@@ -2,7 +2,7 @@
 
 `./build/ducktape --run file.dt` compiles the checked AST to bytecode and
 executes `main()`. Entry: `compiler_execute` (`src/compiler.c`) → `exe_link`
-then `codegen_module` per module (`src/codegen.c`) → `vm_run` (`src/vm.c`). `--gc-stress`
+then `mono_seed(main)` and drain (`src/codegen.c`) → `vm_run` (`src/vm.c`). `--gc-stress`
 collects on every heap allocation instead of on the usual size threshold —
 useful for shaking out missed GC roots; not part of `make test` since it's
 too slow to run every time.
@@ -87,7 +87,7 @@ needs a string case.
 ## Heap & GC (`include/object.h`, `src/object.c`)
 
 `Heap` (one instance, created in `compiler_execute`, threaded through both
-`codegen_module` and `vm_run`) owns every runtime object. Every object starts
+codegen and `vm_run`) owns every runtime object. Every object starts
 with an intrusive `Obj` header (`kind`, `marked`, `next` — the all-objects
 list used by sweep):
 
@@ -271,18 +271,16 @@ with `is_self` set, at whatever position it was declared (checked
 generically, not assumed to be first) — so they compile exactly like
 top-level functions (`compile_fun_body`, shared by both).
 
-`codegen_module` walks the module's *definition tables* (`Module.funs[]`,
-then each `ImplDef.methods[]`), not its AST. A `FunDef` carries its own body
-and span, which is what monomorphisation needs — a call site in another
-module reaches a generic definition through the `FunDef` alone and has no
-`Decl` to consult. It also removes the old lockstep pairing between
-`impl_decl->items` and `impl_def->methods[]`, which was needed only because
-an impl item's `Decl` is never linked back to its `FunDef`
+Codegen reaches a method through the `FunDef` alone, never through a `Decl`:
+a `FunDef` carries its own body and span, which is what both monomorphisation
+and the reachability walk need — a call site in another module has no `Decl`
+to consult. That is also why there is no lockstep pairing between
+`impl_decl->items` and `impl_def->methods[]`, which would only be needed
+because an impl item's `Decl` is never linked back to its `FunDef`
 (`item->fun_decl->as.fun_decl.def` is never set).
 
-Methods and top-level functions share one `OP_GET_GLOBAL` slot space
-(`exe_link` numbers a module's methods right after its funs — see "Linking"),
-so calling one needs no new opcode:
+Methods and top-level functions share one `OP_GET_GLOBAL` slot space (see
+"Linking"), so calling one needs no new opcode:
 
 - `obj.method(args)` (`compile_method_call`): the checker elides `self` from
   `mc->args` (`mc->object` holds it instead) and validates arguments against
@@ -318,18 +316,24 @@ their slots stay shared across every instantiation.
 An instantiation is a `(FunDef, type arguments)` pair; a `Mono` (`Instance[]`
 plus a cursor) memoises them and doubles as the worklist:
 
-- `exe_link` gives a generic definition **no slot** — there is no single body
-  to address — and `codegen_module` skips it. An uncalled generic therefore
-  costs nothing and is not an error.
+- A generic definition gets **no slot** — there is no single body to address.
+  An uncalled generic therefore costs nothing and is not an error.
 - A call site whose target is generic asks `mono_request` for the copy keyed
   by its type arguments. First request allocates a `FunDef` clone (same body,
   params and name; its own slot appended to `exe->globals`, its own chunk)
   and queues it; later requests return the same one, which is what makes a
   recursive generic terminate.
-- The queue is drained after every module has been walked. Draining can
-  enqueue more, so the driver loops on `mono_pending_module` until empty, and
-  reports each instance against the module its *body* was written in, not the
-  one that instantiated it.
+- The queue is drained until empty (`mono_pending_module` / `mono_compile_next`),
+  each body reported against the module it was *written* in, not the one that
+  reached it. Draining can enqueue more, so it is a fixpoint rather than a
+  one-level expansion.
+
+That queue is the program's whole reachability walk, and non-generic
+definitions ride it too: an `Instance` with `origin == instance` and an empty
+`subst` is a definition with nothing to specialise, which is precisely what a
+non-generic one is (`mono_reach`; see "Linking" → "Reachability"). Nothing is
+compiled because it was *written* — everything is compiled because something
+*named* it.
 
 The type arguments come from the checker: `resolve_callee`,
 `resolve_method_call_expr` and `check_trait_method_call` each stash the
@@ -538,47 +542,87 @@ function, a struct whose constructor it calls. But every slot operand is a
 single byte, so it cannot mean "index into my own module": `OP_GET_GLOBAL 3`
 has to identify one function in the whole program.
 
-`exe_link` (`src/codegen.c`) builds that flat namespace into an `Executable`
-(`include/object.h`) before any code is generated:
+That flat namespace lives in an `Executable` (`include/object.h`):
 
 | Table | Contents | Operand of |
 |---|---|---|
-| `globals[]` | per module: its top-level funs, then its impl methods; then monomorphised instances | `OP_GET_GLOBAL` |
-| `structs[]` | every module's structs | `OP_STRUCT` |
-| `enums[]` | every module's enums (variant tags stay per enum) | `OP_ENUM` |
+| `globals[]` | every reached top-level fun, impl method, native and monomorphised instance | `OP_GET_GLOBAL` |
+| `structs[]` | every struct something constructs | `OP_STRUCT` |
+| `enums[]` | every enum something constructs a variant of (variant tags stay per enum) | `OP_ENUM` |
+| `vtables[]` | one per (trait, concrete type) pair coerced | `OP_MAKE_DYN` |
 | `closures[]` | nested closure `FunDef`s, appended during codegen | nothing — GC roots only |
 
-Each definition's assigned index is written back into its `slot`, so codegen
+Each assigned index is written back into the definition's `slot`, so codegen
 only ever emits `def->slot` and never asks which module a definition came
-from. Modules are numbered in topological order; that is cosmetic (every slot
-exists before the first chunk is compiled) but keeps a stack trace readable.
-More than 256 functions, structs, or enums exceeds the operand width and is
-reported as an error against the program rather than any one declaration.
+from. More than 256 of any of them exceeds the operand width and is reported
+against the program rather than against any one declaration.
 
-`globals[]` is the one table sized to the whole operand space rather than to
-its contents: generic definitions get `FUN_SLOT_NONE` here and their
-instances are appended during codegen (see "Monomorphisation"), so the count
-is not known until compilation is over.
+### Reachability
 
-Two things must happen in this order, and both are why linking is a separate
-step rather than something `codegen_module` does on its way past:
+Every table is filled **on demand**. `exe_link` (`src/codegen.c`) only sizes
+them — each to the whole operand space, since none of the counts is known
+until compilation is over — and fixes the variant tags, which are the one
+thing here that is not a slot: a tag is an index within its own enum, fixed by
+declaration order, and a `match` reads it off an enum the program may never
+construct, so it cannot wait for a reference that may not come.
 
-- **All slots before any chunk.** Compiling module A can emit a slot for a
-  definition in module B, so B's numbers must already be final — a
-  compile-as-you-go scheme would need a patch-up pass over emitted bytecode.
-- **The heap roots off the linked tables.** Codegen interns string literals,
-  which can trigger a collection while most chunks are still empty. A `FunDef`
-  in the tables with a NULL chunk is a root with nothing to mark; one missing
+Slots are then handed out by codegen, as it discovers references:
+
+- `compiler_codegen` finds `main`, calls `mono_seed` to give it slot 0 and
+  queue its body, and drains the worklist. Compiling a body slots and queues
+  whatever it names — its calls, the vtables its coercions build, the generics
+  it instantiates — so this is a worklist, not a pass over the registry, and a
+  module no reachable body names is never visited at all.
+- `cg_call_target` is the single funnel for a function reference (`OP_GET_GLOBAL`
+  is emitted in exactly one place). `mono_reach` handles the non-generic case:
+  no copy, an empty key, and `slot != SLOT_NONE` is the memo — which is what
+  makes a recursive call terminate, exactly as `mono_request`'s memo does.
+- `cg_reach_struct` / `cg_reach_enum` do the same for the other two spaces, at
+  the constructor. Neither is reached by being declared, nor by being matched:
+  a pattern tests a tag and reads fields by index, and neither operand names
+  the definition.
+
+**A non-generic body uses its own module's impl set, not the requester's.** A
+bound's witness travels with a type argument because the argument is chosen at
+the call site (see "Monomorphisation"); a non-generic body has no bound to
+witness and selects impls entirely from where it was written — the same set
+the checker used on it. So who reaches it first cannot change what it compiles
+to.
+
+The consequence is that **slot pressure is a property of what a program uses,
+not of what its imports declare**. `use std::result::Result;` no longer spends
+globals on the combinators the program never calls: `tests/run/std_result.dt`
+went from 24 globals to 16, `std_option.dt` from 24 to 17. A program that
+imports everything and uses everything is unchanged (`std_cmp.dt`: 16 either
+way). `tests/run/unused_defs/` declares 260 functions and links because it
+calls three.
+
+The price is stated plainly in `tests/run/unreachable_body.dt`: **a body
+nothing reaches is never handed to codegen**, so a construct the VM refuses
+inside one goes unreported. This was already true of every generic definition
+— an uncalled one has no body to compile — and is now true uniformly. Only
+codegen is demand-driven; the checker still sees every function in every
+module, so a compile-only run (`./build/ducktape file.dt`) is unaffected.
+
+Two ordering constraints survive, and both are why linking is still a separate
+step rather than something the first body does on its way past:
+
+- **The tables exist before any chunk.** Compiling module A can emit a slot
+  for a definition in module B, so the space they share must already be
+  allocated — a compile-as-you-go scheme would need a patch-up pass over
+  emitted bytecode.
+- **The heap roots off those tables.** Codegen interns string literals, which
+  can trigger a collection while most chunks are still empty. A `FunDef` in
+  the tables with a NULL chunk is a root with nothing to mark; one missing
   from the tables is not a root at all, and its already-interned constants
-  would be swept.
+  would be swept. This is why a slot is handed out *before* the body that
+  earns it is compiled.
 
-Codegen then runs per module (in topological order, purely so diagnostics
-come out dependency-first), each reporting against its own source file, and
-the monomorphisation queue is drained afterwards. A construct the VM doesn't
-support fails the whole program even in a module the root never calls into —
-codegen compiles every non-generic definition whether or not it is reachable.
-A *generic* definition is the exception: it is only compiled where it is
-instantiated, so one nobody calls is never looked at.
+Name resolution stays module-local: a bare `foo()` is compiled from
+`ExprPath.resolved_fun`, the `FunDef` the *checker* picked, because the name
+may be an alias (`use lib::helper as h;`) or belong to another module
+entirely — a search over the enclosing module's own `funs[]` would find
+neither.
 
 Name resolution stays module-local: a bare `foo()` is compiled from
 `ExprPath.resolved_fun`, the `FunDef` the *checker* picked, because the name

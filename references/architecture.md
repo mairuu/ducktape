@@ -40,7 +40,8 @@ AST (`include/ast.h`): `Decl`/`Stmt`/`Expr`/`Pattern`/`TypeNode` tagged
 unions, plus semantic def tables (`FunDef`, `StructDef`, `EnumDef`,
 `TraitDef`, `ImplDef`) that later passes fill in. `Expr.resolved_type` and
 `TypeNode.resolved` are stamped by the checker; `FunDef.chunk` is filled by
-codegen and the `slot` fields by `exe_link` before it (`runtime.md`).
+codegen, which also hands out the `slot` fields as it reaches definitions
+(`runtime.md`).
 
 ## Semantic analysis (`src/sema.c`, `include/sema.h`)
 
@@ -503,7 +504,7 @@ Neither `*_define` detects duplicates and both lookups return the *first*
 match, so anything that can collide has to check first — see "Modules" and
 `tc_check_duplicate_decls`.
 `VarEntry.slot` is meaningless for a module-level binding, imported or not:
-the runtime slot lives on the `FunDef` (assigned program-wide by `exe_link`)
+the runtime slot lives on the `FunDef` (assigned program-wide by codegen)
 and travels with the copied `ve->as`, which is also what codegen reads back
 off `ExprPath.resolved_fun` — a name may be an alias for a function in
 another module.

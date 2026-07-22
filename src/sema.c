@@ -944,7 +944,7 @@ static void tc_register_fun(TypeChecker *tc, Module *m, Decl *decl) {
   // stub
   def->is_pub = decl->is_pub;
   def->name = fun_decl->name;
-  def->slot = FUN_SLOT_NONE;
+  def->slot = SLOT_NONE;
   def->body = fun_decl->body;
   def->span = decl->span;
   def->param_count = fun_decl->param_count;
@@ -971,6 +971,7 @@ static void tc_register_struct(TypeChecker *tc, Module *m, Decl *decl) {
   def->is_pub = decl->is_pub;
   def->is_tuple = struct_decl->is_tuple;
   def->name = struct_decl->name;
+  def->slot = SLOT_NONE;
   def->field_count = struct_decl->field_count;
   def->fields =
       al_alloc_zero(tc->al, sizeof(FieldDef) * struct_decl->field_count);
@@ -995,6 +996,7 @@ static void tc_register_enum(TypeChecker *tc, Module *m, Decl *decl) {
   // stub
   def->is_pub = decl->is_pub;
   def->name = enum_decl->name;
+  def->slot = SLOT_NONE;
   def->variant_count = enum_decl->variant_count;
   def->variants =
       al_alloc_zero(tc->al, sizeof(VariantDef) * enum_decl->variant_count);
@@ -1683,7 +1685,7 @@ static void resolve_impl_decl(ResolveCtx *rctx, Decl *decl) {
       fun_def->impl = impl_def;
       fun_def->body = fun_decl->body;
       fun_def->span = item->span;
-      fun_def->slot = FUN_SLOT_NONE;
+      fun_def->slot = SLOT_NONE;
 
       // resolve method type parameters
       fun_def->type_param_count = fun_decl->type_param_count;
@@ -1776,7 +1778,7 @@ static FunDef *resolve_trait_default_impl(ResolveCtx *rctx, TraitDef *trait_def,
   fun->module = trait_def->module;
   fun->body = item->default_body;
   fun->span = item->span;
-  fun->slot = FUN_SLOT_NONE;
+  fun->slot = SLOT_NONE;
 
   // `Self` first, then the method's own parameters — the order cg_inst_key
   // walks them in does not matter (the key is name-addressed), but a body can
@@ -3653,7 +3655,7 @@ static Type *resolve_closure_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   FunDef *def = al_alloc_zero_for(ctx->al, FunDef);
   def->is_closure = true;
   def->module = ctx->fun != NULL ? ctx->fun->module : NULL;
-  def->slot = FUN_SLOT_NONE; // closures are built by OP_CLOSURE, not addressed
+  def->slot = SLOT_NONE; // closures are built by OP_CLOSURE, not addressed
   def->body = closure->body;
   def->span = expr->span;
   def->param_count = closure->param_count;

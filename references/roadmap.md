@@ -954,6 +954,81 @@
   will meet, and unreadable for the `[T]` case where the note names the bound
   to add.
 
+- **Reachability-based linking (milestone 21)** — a definition costs a slot
+  when something *reaches* it, not when it is written. Design: `runtime.md`
+  "Linking" → "Reachability", `overview.md` pipeline steps 6–7.
+
+  The observation the milestone turns on: **the monomorphisation queue was
+  already the reachability walk.** Milestone 10 built `Mono` because a generic
+  definition has no single body — so it is compiled once per *request*, and one
+  nobody calls costs nothing and is not an error. Every non-generic definition
+  around it was linked and compiled unconditionally. Reading the queue the other
+  way round makes that the anomaly rather than the norm: a non-generic
+  definition is an instantiation with nothing to specialise, so it arrives the
+  same way. `mono_reach` is `mono_request` with an empty key and no copy,
+  `mono_seed(main)` is the root, and `codegen_module` — the pass over the
+  registry — is gone.
+
+  So this is a deletion, not a mechanism. `exe_link` no longer hands out a
+  single slot; it sizes the tables and fixes the variant tags, and the whole
+  two-pass walk over `reg->modules` collapses. `exe_slot_fun`'s three rules
+  (an intrinsic gets no slot, a native gets one even when generic, a generic
+  gets none) move into `cg_call_target`, which already had to state all three
+  from the other side — they were duplicated, and now they are said once.
+
+  Three things follow, and they are the whole diff:
+  - **`slot != SLOT_NONE` is the memo**, so no second table is needed and a
+    recursive call terminates for exactly the reason a recursive *generic*
+    already did: the slot is handed out before the body that would ask again is
+    compiled. Which is also the GC ordering constraint from milestone 8 read
+    again — a `FunDef` in the tables with a NULL chunk is a root with nothing to
+    mark, but one missing from the tables is not a root at all.
+  - **A non-generic body uses its own module's impl set, not the requester's.**
+    That is the one place `mono_reach` differs from `mono_request`, and it is
+    milestone 19's rule stated precisely: a bound's witness travels with a type
+    argument because the argument is chosen at the call site, but a non-generic
+    body has no bound to witness and selects entirely from where it was written.
+    So who reaches it first cannot change what it compiles to — closing, for
+    non-generics, the half of the "whichever requested it first decides the
+    body" wart that visibility alone could not.
+  - **Structs and enums follow the same rule, at the constructor.** Neither is
+    reached by being declared nor by being matched — a pattern tests a tag and
+    reads fields by index, and neither operand names the definition. A variant
+    *tag*, though, is not a slot: it is an index within its own enum, so it
+    stays eager, which is the one thing `exe_link` still does over the registry.
+
+  Measured on the test suite: `tests/run/std_result.dt` went from 24 globals to
+  16, `std_option.dt` from 24 to 17, `fmt_containers.dt` from 25 to 19 (images
+  11–15% smaller); `std_cmp.dt` is unchanged at 16, because it uses everything
+  it imports. `tests/run/unused_defs/` declares 260 functions across two modules
+  and links because it calls three — on master it failed with "the program has
+  261 functions and methods".
+
+  **The price is a real one and has its own test.** A body nothing reaches is
+  never handed to codegen, so a construct the VM refuses inside one goes
+  unreported (`tests/run/unreachable_body.dt` names an `@intrinsic` as a value
+  and runs, purely because nothing calls it). That was already true of every
+  generic definition; it is now true uniformly. Only *codegen* is demand-driven
+  — the checker still sees every function in every module, so a compile-only
+  run is unaffected, which is what keeps the trade acceptable.
+
+  Net +12 lines across `src/` and `include/` (253 added, 241 removed), most of
+  it prose — which, after milestone 16's lesson about predicting diff size, is
+  worth stating as an observation rather than a claim: an eager pass and a
+  demand-driven one are close to the same size, and what changed is which one
+  the rest of the compiler has to agree with.
+
+  Also cleared: `TraitDef.slot` and `ImplDef.slot` were dead fields — neither a
+  trait nor an impl was ever addressable — and `FUN_SLOT_NONE` is now
+  `SLOT_NONE`, since it is the initial state of four `slot` fields rather than
+  a fact about functions.
+
+  Worth recording as a limit found while testing: the struct and enum slot
+  spaces cannot actually be *reached* today. `TYPE_INTERN_CAP` is 256 with a
+  70% load assert, so a program cannot name more than ~179 distinct types at
+  all — the intern table binds long before 256 structs do. The on-demand rule
+  is right for them, but the pressure it relieves is entirely in `globals[]`.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -973,24 +1048,18 @@ by appetite rather than by necessity.
    type are each one entry plus a decision about the type they need — and
    padding is the one that would decide whether `{}` ever grows a format-spec
    grammar or stays a bare segment with `std::fmt` functions beside it.
-2. **Wider slot spaces** — 256 functions/structs/enums program-wide, now
-   reached by *use* of generics rather than by how many are written, by
-   trait-object vtables on top of that, and by natives once they take slots
-   too — three independent pressures on one byte. A two-byte operand (or a
+2. **Wider slot spaces** — 256 globals program-wide. Milestone 21 took the
+   cheap half of this (nothing unreached is spent), so what remains is genuine
+   use: instantiations of generics, trait-object vtables, and the natives
+   beside them, all drawing on one operand byte. A two-byte operand (or a
    wide-operand opcode pair) lifts it.
 
-   Worth weighing first, though: **reachability-based linking** may buy more
-   for less. `exe_link` currently gives every non-generic definition a slot
-   whether or not anything calls it, which is why importing `std::cmp` spends
-   two slots on `Int::cmp`/`Float::cmp` even when only one is used, and why
-   `use std::fmt::Display;` spends four on primitive impls a program may never
-   instantiate — and why a growing std taxes every program that touches it.
-   Generic definitions already behave the right way (an uncalled one is never
-   compiled and costs nothing), so making non-generics match is the *consistent*
-   fix rather than a new mechanism. It needs a reachability walk from `main`
-   through calls,
-   vtables, closures and `?`, which is real work — but it shrinks the pressure
-   instead of just moving the ceiling.
+   The **type intern table** is worth pricing in the same session:
+   `TYPE_INTERN_CAP` is 256 with a 70% load assert and no growth path, so a
+   program aborts the compiler at ~179 distinct types — a *lower* ceiling than
+   the slot space, reached by a program that merely declares a lot of structs.
+   Widening the operand while leaving that in place would move the failure
+   rather than remove it, and an assert is a worse failure than a diagnostic.
 3. **Object-safe traits with associated types** — the object-safety rule
    rejects `Self.Item` outright. Allowing `dyn Iterator` with the associated
    type *named* at the coercion site (`dyn Iterator<Item = Int>`) is the
@@ -1028,13 +1097,18 @@ via `Module.decl_base`) and is not part of the main line.
 - `pub` is rejected outright on an impl item (`pub fun` inside an `impl`
   block is "expected impl item"), though it is parsed and ignored on a struct
   field. Method visibility is not a thing, so std impls simply omit it
+- a definition nothing reaches is never compiled, so a construct the VM
+  refuses inside one goes unreported — the diagnostic arrives only if
+  something calls it (`tests/run/unreachable_body.dt`). The checker is
+  unaffected; this is codegen only
+- the type intern table is fixed at 256 entries and asserts at 70% load, so a
+  program naming more than ~179 distinct types *aborts the compiler* instead
+  of reporting anything. It is a lower ceiling than any slot space
 - overlapping method names across impls: bare generic paths take the first
   registered impl
 - `Point::new` vs `Point::<Int>::new`: expression paths require turbofish
-- every instantiation takes a global slot, so the 256-function ceiling is now
-  reached by *use* of generics, not just by how many are written
-- a generic definition's diagnostics are only seen where it is instantiated,
-  so an unsupported construct inside an uncalled generic goes unreported
+- every instantiation takes a global slot, so the 256-function ceiling is
+  reached by *use* of generics, not by how many are written
 - an associated-type projection cannot key an instantiation: handing a
   `T.Item` / `Self.Item` value to another generic (`id(v.item())`) reports
   "cannot instantiate 'id': type argument 'T' is not known here", because
@@ -1051,9 +1125,11 @@ via `Module.decl_base`) and is not part of the main line.
   and the receiver reports "no method named 'foo'"
 - two impls of one trait for one type can still coexist in a program, as long
   as no single module sees both — and if two such modules instantiate the same
-  generic at the same type, `mono_request` memoises one copy and whichever
+  *generic* at the same type, `mono_request` memoises one copy and whichever
   requested it first decides the body. Keying instances on the visible set as
-  well would fix it, at the cost of a copy per module
+  well would fix it, at the cost of a copy per module. Non-generic bodies are
+  not affected: since milestone 21 they compile against their own module's
+  impl set, which no requester can change
 - an `@intrinsic` cannot be used as a value (it is an opcode, so there is no
   body for a global slot to address) — reported at codegen, unlike the
   `@native` beside it which is fully first-class
@@ -1080,9 +1156,6 @@ via `Module.decl_base`) and is not part of the main line.
 - a panic does not unwind — no `catch`, and no way for a program to observe one
   and keep running. `Never` is only a *type*; the runtime behaviour behind it is
   "print the frames and stop"
-- importing `std::cmp` spends two global slots on `Int::cmp`/`Float::cmp` even
-  if only one is used — non-generic definitions are linked whether called or
-  not, unlike the generics around them
 - a trait object cannot be made from the abstract `Self` of a default body:
   `check_coerce_dyn` refuses a `TY_TRAIT`, so `self` inside a default body
   can't be handed on as a `dyn Trait` even when the trait is object-safe

@@ -1,0 +1,20 @@
+# The price of reachability-based linking, stated as a test rather than left
+# implicit: a body nothing reaches is never handed to codegen, so a construct
+# the VM refuses inside one goes unreported. `sleeping` names an @intrinsic as
+# a value, which is exactly what tests/fail_run/intrinsic_as_value.dt rejects —
+# and it compiles and runs here purely because nothing calls it.
+#
+# This was already true of every generic definition (an uncalled one has no
+# body to compile). It is now true uniformly, which is the whole trade: the
+# checker still sees every function, only codegen is demand-driven.
+use std::io::print;
+use std::array::len;
+
+fun sleeping() {
+  var f = len::<Int>;
+}
+
+fun main() {
+  print("awake");
+}
+#> awake

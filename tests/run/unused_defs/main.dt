@@ -1,0 +1,21 @@
+# 260 functions live across this file and `funs.dt` — more than the 256 an
+# OP_GET_GLOBAL operand byte can address — and the program links anyway,
+# because it only *uses* three of them. A definition costs a slot when
+# something reaches it, not when it is written, so what a program spends is a
+# property of what it does rather than of what its imports declare.
+#
+# Before reachability-based linking this failed with "the program has 261
+# functions and methods; the VM addresses at most 256".
+use std::io::print;
+use funs::answer;
+
+struct Point { x: Int }
+
+fun show(p: Point) { print(p.x); }
+
+fun main() {
+  print(answer());
+  show(Point { x: 1 });
+}
+#> 42
+#> 1

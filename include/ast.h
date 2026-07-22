@@ -236,7 +236,7 @@ struct StructDef {
   int field_count;
   bool is_tuple;
 
-  int slot;
+  int slot; // OP_STRUCT operand; SLOT_NONE until something constructs one
 };
 
 struct VariantDef {
@@ -260,7 +260,7 @@ struct EnumDef {
   VariantDef *variants;
   int variant_count;
 
-  int slot;
+  int slot; // OP_ENUM operand; SLOT_NONE until something constructs a variant
 };
 
 typedef struct {
@@ -300,8 +300,6 @@ struct TraitDef {
 
   AssocTypeDef *assoc_types;
   int assoc_type_count;
-
-  int slot;
 };
 
 struct ImplDef {
@@ -320,8 +318,6 @@ struct ImplDef {
   AssocTypeDef *assoc_types;
   int assoc_type_count;
   int assoc_type_cap;
-
-  int slot;
 };
 
 typedef struct {
@@ -386,7 +382,10 @@ struct FunDef {
   uint8_t intrinsic_op; // ATTR_INTRINSIC: the OpCode a call lowers to
   StringView native_name;
 
-  int slot; // FUN_SLOT_NONE until exe_link (or never, if generic)
+  // SLOT_NONE until codegen *reaches* this definition — a slot is what a
+  // reference costs, not what a declaration costs. A generic never takes one
+  // at all: its instances do.
+  int slot;
 };
 
 // a function whose body is in C rather than in ducktape. Never monomorphised
@@ -396,7 +395,9 @@ static inline bool fun_is_native(const FunDef *f) {
   return f->native_kind != ATTR_NONE;
 }
 
-#define FUN_SLOT_NONE (-1)
+// "no slot handed out": the initial state of every `slot` field above, and
+// permanently the state of anything nothing reaches.
+#define SLOT_NONE (-1)
 
 // a definition whose body can only be compiled once its type parameters — its
 // own and any its impl introduces — are bound to concrete types.
