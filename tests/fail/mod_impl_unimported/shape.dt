@@ -1,0 +1,7 @@
+pub trait Show {
+  fun show(self) -> Int;
+}
+
+pub struct S {
+  v: Int,
+}

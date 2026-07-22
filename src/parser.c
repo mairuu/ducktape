@@ -2945,10 +2945,14 @@ static Decl *parse_decl(Parser *p) {
     }
   }
 
+  bool is_pub = match_tok(p, TOKEN_PUB);
+
   if (check_tok(p, TOKEN_USE)) {
+    // `pub use` re-exports: the alias becomes an item of *this* module, so an
+    // importer may name it without knowing where it originally came from.
     decl = parse_use_decl(p);
+    decl->is_pub = is_pub;
   } else {
-    bool is_pub = match_tok(p, TOKEN_PUB);
     if (check_tok(p, TOKEN_VAR)) {
       decl = parse_var_decl(p, is_pub);
     } else if (check_tok(p, TOKEN_FUN)) {

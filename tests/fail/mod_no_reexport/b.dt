@@ -1,4 +1,4 @@
-# b imports X, but importing it does not re-export it: there is no `pub use`.
+# b imports X, but a plain `use` does not re-export it: only `pub use` does.
 use a::X;
 
 pub fun make() -> X {

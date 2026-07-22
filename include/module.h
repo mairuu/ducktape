@@ -67,6 +67,18 @@ struct Module {
   ImplDef **impls;
   int impl_count, impl_cap;
 
+  // every impl this module may select from: its own, plus those of every
+  // module reachable through `use`, transitively. An impl is not an item with
+  // a name, so it cannot be imported one at a time — reachability is the only
+  // handle a module has on it, and it must be transitive because `pub use`
+  // re-exports a type whose impls live one module further away.
+  //
+  // A *union* rather than a filter over one global list, so every
+  // impl_index_* lookup keeps the signature it had and only its argument
+  // changes. Built in topological order by tc_import_impls, then extended
+  // with the module's own as resolution reaches each `impl` block.
+  ImplIndex visible_impls;
+
   ValueScope vscope; // module-level values: functions, global vars
   TypeScope tscope;  // module-level types: structs, enums, traits
 };

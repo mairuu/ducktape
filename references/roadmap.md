@@ -826,6 +826,68 @@
   4095-character literal ISO requires support for) is suppressed in the
   Makefile with a note, so the build is warning-free again.
 
+- **Module-granular impls and `pub use` (milestone 19)** — an `impl` applies
+  where its module is reachable, and two implementations of one trait for one
+  type may no longer be silently visible at once. Design: `architecture.md`
+  "Where an `impl` applies", `runtime.md` "Monomorphisation", `language.md`
+  "Modules".
+
+  The observation the milestone turns on: **an `impl` has no name, so it cannot
+  travel through `use` one item at a time — reachability is the only handle a
+  module has on it.** Everything follows from taking that as the rule rather
+  than as an excuse to keep the index global:
+  - The visible set is a **union, not a filter**: `Module.visible_impls` is the
+    module's own impls plus each dependency's *visible* set, deduped by pointer
+    and built in topological order alongside `tc_link_imports`. So every
+    `impl_index_*` lookup kept the signature it had — the diff is the argument
+    changing from `&tc->impl_index` to a context field, in eleven places.
+  - It is **transitive**, because `pub use` re-exports a type whose impls live
+    one module further away. Which also means the *root* module still sees
+    every impl in the program: the rule only bites between siblings, which is
+    exactly where it should.
+  - **Codegen needs the requesting module's set, not the defining module's.**
+    `std::cmp::max<T: Ord>` needs `impl Ord for P`, written where `max` is
+    called; `std::cmp` cannot see it. So `Instance.impls` travels beside
+    `Instance.subst` — a bound's witness and its type argument are both written
+    at the call site, and milestone 10's "push the caller's bindings through"
+    is the same move one field over. Transitivity is what makes it sound: a
+    request that starts in M only reaches modules M reaches, so M's set is a
+    superset of every set below it.
+
+  **Coherence replaces first-registration-wins.** Visibility alone does not fix
+  the wart it was promoted for: a user's `impl Ord for Int` and `std::cmp`'s are
+  *both* visible the moment `std::cmp` is imported, so scoping only changes
+  which arbitrary winner is picked. `impl_defs_conflict` asks selection's own
+  question — same trait, and either impl's `impl_applies` accepts the other's
+  self type — and a conflicting pair is now an error at the two places a pair
+  can first meet: a module's own impl meeting an imported one
+  (`resolve_impl_decl`), and one `use` making two dependencies' impls visible
+  at once (`tc_import_impls`). Both spans lie in the module being compiled,
+  which is not a detail: diagnostics are printed against that module's source,
+  so the span of the *offending impl* would have pointed into the wrong file.
+
+  **The feature is only usable because the failure explains itself.** Making
+  impls module-granular turns a program that used to work into "no method named
+  'show' found for type 'S'" — technically true and completely useless. So
+  `TypeChecker.all_impls` survives as the one program-wide list, *never selected
+  from*, consulted only by `find_unimported_impl` to append "an applicable impl
+  exists in module 'owner.dt', but this module does not import it" to three
+  diagnostics: missing method, unsatisfied bound, and non-`Display`
+  interpolation. That note is most of what makes the milestone land.
+
+  `pub use` is then almost free, and that is the second observation: **the
+  re-export was one lookup away the whole time.** `tc_link_imports` already
+  scanned the dependency's decls rather than its scopes — precisely so that a
+  plain `use` would *not* re-export — so adding `mod_find_use_alias` beside
+  `mod_find_own_decl` and reading `Decl.is_pub` off the `DECL_USE` node is the
+  entire feature. The parser change is moving `pub` in front of the `use`
+  branch. The two failures get different wordings, because they are different
+  mistakes: "is private in module 'a'" hides something that exists, while "is
+  imported by module 'b' but not re-exported" was never offered.
+
+  Deliberately not done: glob imports and module-qualified paths, both still
+  listed as gaps. Neither is needed to make imports compose.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -836,14 +898,15 @@ Nothing on the main line is *blocked*: every construct the checker accepts in
 warts" section would promote first, in the order that pays off soonest — pick
 by appetite rather than by necessity.
 
-1. **Module-granular impls and `pub use`** — `ImplIndex` lives on the
-   `TypeChecker`, so an impl applies even where its module was never
-   imported, and imports don't compose (no re-export, no glob, no qualified
-   paths). Now also the reason a user's `impl Ord for Int` collides with
-   `std::cmp`'s. Fixing the first is a scoping change; the second is parser
-   plus `tc_link_imports`. Now also where a `Display` impl for `[T]`,
-   `(A, B)` or `Option<T>` would have to live: std cannot ship one without it
-   applying program-wide and pre-empting the user's own.
+1. **`Display` for the containers, now that std can ship one** — milestone 19
+   removed the reason `[T]`, `(A, B)` and `Option<T>` have no `Display` impl: a
+   std impl is no longer program-global, so it only reaches a module that
+   imports `std::fmt`, and a user writing their own now gets a conflict rather
+   than a silent loss. What is left to decide is the *shape*: an impl for `[T]`
+   needs `T: Display` on the impl itself (bounds on an impl's type params are
+   resolved but never checked against the receiver at selection time), and
+   rendering a container means choosing separators and nesting — the first
+   formatting decision the language has had to make rather than defer.
 2. **Growing std on top of the natives** — the mechanism landed in milestone
    16 with a deliberately small registry (`print`, array `len`, string
    `len`/`slice`, `fmt` `float`). What it does not yet reach is anything that
@@ -893,9 +956,9 @@ via `Module.decl_base`) and is not part of the main line.
   the asymmetry is invisible from the source. A cycle check would have to run
   where the impl is written, not where it is called
 - no `Display` impl ships for a container: `[T]`, `(A, B)` and `Option<T>`
-  cannot interpolate, because a std impl would be program-global (impls are
-  not module-scoped) and would pre-empt the user's own. `print` still renders
-  them structurally
+  cannot interpolate. Since milestone 19 nothing structural prevents one —
+  what is missing is a decision about separators and about bounds on an impl's
+  own type params. `print` still renders them structurally
 - a unit struct's name cannot be bound as a variable any more: `var Marker =
   7;` is a struct pattern against an `Int`, and the diagnostic ("expected
   struct type in struct pattern") describes the rewrite rather than the
@@ -922,10 +985,15 @@ via `Module.decl_base`) and is not part of the main line.
   concrete — `subst_apply` passes `TY_ASSOC` through untouched and
   `impl_index_assoc_type` is checker-side. Affects bounded generic functions
   and trait default bodies alike
-- trait impls are program-global: an impl applies even if its module was never
-  imported (`ImplIndex` lives on the `TypeChecker`, not the `Module`) — which
-  also means a user's `impl Ord for Int` silently loses to `std::cmp`'s once
-  that module is imported, first registration winning
+- a trait impl's own type params carry bounds that are resolved but never
+  checked when the impl is *selected*: `impl<T: Ord> Ord for Option<T>` applies
+  to `Option<P>` for any `P`, and the bound is only felt inside the body. This
+  is what an impl for `[T]` would have to face first
+- two impls of one trait for one type can still coexist in a program, as long
+  as no single module sees both — and if two such modules instantiate the same
+  generic at the same type, `mono_request` memoises one copy and whichever
+  requested it first decides the body. Keying instances on the visible set as
+  well would fix it, at the cost of a copy per module
 - an `@intrinsic` cannot be used as a value (it is an opcode, so there is no
   body for a global slot to address) — reported at codegen, unlike the
   `@native` beside it which is fully first-class
@@ -965,7 +1033,8 @@ via `Module.decl_base`) and is not part of the main line.
 - an unsupported construct inside a trait method is reported at the coercion
   site that builds the vtable, since that is where the body is first demanded
   — the same "only seen where it is instantiated" limitation generics have
-- no `pub use` re-export, no glob `use a::*`, no module-qualified paths
+- no glob `use a::*` and no module-qualified paths; `pub use` re-export exists,
+  but only for named items, so a façade module has to list them
 - `pub` on impls/methods/fields is parsed and ignored — visibility is
   per-item at module granularity only
 - module dedup is lexical, so one file reached by two different spellings

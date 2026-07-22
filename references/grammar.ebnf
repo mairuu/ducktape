@@ -7,9 +7,8 @@ program        = decl* ;
 
 (* ── declarations ─────────────────────────────────────────────────────── *)
 
-decl           = useDecl
-               | attribute? "pub"? ( varDecl | funDecl | structDecl | enumDecl
-                                   | traitDecl | implDecl ) ;
+decl           = attribute? "pub"? ( useDecl | varDecl | funDecl | structDecl
+                                   | enumDecl | traitDecl | implDecl ) ;
                  (* an attribute is only accepted on a funDecl — parsed here
                     and rejected on anything else, so the mistake is reported
                     rather than reparsed *)
@@ -22,7 +21,9 @@ useDecl        = "use" usePath ";" ;
 usePath        = path ( "::" "{" useItem ( "," useItem )* ","? "}" )? ;
 useItem        = IDENT ( "as" IDENT )? ;
                  (* leading segments name the file, the last segment or the
-                    brace group names the items — language.md "Modules" *)
+                    brace group names the items. `pub use` re-exports each
+                    alias as an item of the importing module — language.md
+                    "Modules" *)
 
 varDecl        = "var" pattern ( ":" type )? "=" expr ";" ;
                  (* the pattern must be irrefutable — checked, not parsed;

@@ -1,0 +1,8 @@
+#! expect: an applicable impl exists in module
+use std::io::print;
+use owner::tag;
+use user::biggest;
+
+fun main() {
+  print(biggest());
+}

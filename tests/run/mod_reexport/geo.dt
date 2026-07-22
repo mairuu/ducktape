@@ -1,0 +1,13 @@
+# `pub use` re-exports: from the outside, Point and mk are items of geo.
+pub use inner::{Point, mk};
+
+# a plain `use` is not a re-export — `hidden` stays geo's own business.
+use inner::hidden;
+
+pub fun sum(p: Point) -> Int {
+  return p.x + p.y;
+}
+
+pub fun offset() -> Int {
+  return hidden();
+}

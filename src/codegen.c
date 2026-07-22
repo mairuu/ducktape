@@ -43,8 +43,9 @@ typedef struct CgLoop {
 } CgLoop;
 
 typedef struct Cg {
-  Module *m;       // the module being compiled (name lookups are module-local)
-  Executable *exe; // the linked program (slot spaces, closure registry)
+  Module *m;        // the module being compiled (name lookups are module-local)
+  ImplIndex *impls; // the impl set this body may select from — see Instance
+  Executable *exe;  // the linked program (slot spaces, closure registry)
   Heap *heap;
   Mono *mono; // the monomorphisation queue; generic callees are enqueued here
   Chunk *chunk;
@@ -101,9 +102,8 @@ static void cg_error(Cg *cg, Span span, const char *what) {
 static bool exe_add_global(Executable *exe, FunDef *fun);
 static bool exe_too_many(const char *what, int count);
 
-void mono_init(Mono *mono, Executable *exe, Heap *heap, ImplIndex *impls,
-               Allocator *al) {
-  *mono = (Mono){.exe = exe, .heap = heap, .impls = impls, .al = al};
+void mono_init(Mono *mono, Executable *exe, Heap *heap, Allocator *al) {
+  *mono = (Mono){.exe = exe, .heap = heap, .al = al};
 }
 
 // does `t` still mention a type parameter or an unsolved inference variable?
@@ -177,7 +177,8 @@ static bool inst_matches(const Instance *it, const FunDef *origin,
 // one — only paid on a miss, since a repeat request (a recursive generic
 // calling itself at the same types) returns the copy already queued and so
 // never deepens. NULL if the program has run out of slots.
-static FunDef *mono_request(Mono *mono, FunDef *origin, Subst s, int depth) {
+static FunDef *mono_request(Mono *mono, FunDef *origin, Subst s, int depth,
+                            ImplIndex *impls) {
   for (int i = 0; i < mono->count; i++) {
     if (inst_matches(&mono->insts[i], origin, &s)) {
       return mono->insts[i].instance;
@@ -198,8 +199,11 @@ static FunDef *mono_request(Mono *mono, FunDef *origin, Subst s, int depth) {
                    sizeof(Instance) * (size_t)new_cap);
     mono->cap = new_cap;
   }
-  mono->insts[mono->count++] = (Instance){
-      .origin = origin, .instance = instance, .subst = s, .depth = depth};
+  mono->insts[mono->count++] = (Instance){.origin = origin,
+                                          .instance = instance,
+                                          .subst = s,
+                                          .depth = depth,
+                                          .impls = impls};
   return instance;
 }
 
@@ -309,7 +313,8 @@ static FunDef *cg_call_target(Cg *cg, FunDef *fun, const Subst *primary,
     cg->ok = false;
     return NULL;
   }
-  FunDef *target = mono_request(cg->mono, fun, key, cg->inst_depth + 1);
+  FunDef *target =
+      mono_request(cg->mono, fun, key, cg->inst_depth + 1, cg->impls);
   if (target == NULL) {
     cg->ok = false; // slot space exhausted; exe_add_global reported it
   }
@@ -998,7 +1003,7 @@ static FunDef *cg_dyn_slot_target(Cg *cg, Type *self, StringView name,
                                   Span span) {
   ImplMatch match;
   MethodDef *method =
-      impl_index_method(cg->mono->impls, self, name, &match, /*infer=*/NULL,
+      impl_index_method(cg->impls, self, name, &match, /*infer=*/NULL,
                         /*bare_path=*/false, span, cg->al);
   if (method != NULL) {
     return cg_call_target(cg, method->fun, &match.subst, NULL, span);
@@ -1008,7 +1013,7 @@ static FunDef *cg_dyn_slot_target(Cg *cg, Type *self, StringView name,
   TraitDef *via_trait = NULL;
   Subst via_subst = subst_empty();
   TraitMethodDef *inherited = impl_index_default_method(
-      cg->mono->impls, self, name, &via_impl, &via_trait, &via_subst, cg->al);
+      cg->impls, self, name, &via_impl, &via_trait, &via_subst, cg->al);
   if (inherited == NULL || inherited->default_impl == NULL) {
     return NULL;
   }
@@ -1157,7 +1162,7 @@ static void compile_method_call(Cg *cg, Expr *expr) {
 
     ImplMatch match;
     MethodDef *method = impl_index_method(
-        cg->mono->impls, self, mc->method_name, &match,
+        cg->impls, self, mc->method_name, &match,
         /*infer=*/NULL, /*bare_path=*/false, expr->span, cg->al);
     if (method != NULL) {
       fun = method->fun;
@@ -1170,8 +1175,8 @@ static void compile_method_call(Cg *cg, Expr *expr) {
       TraitDef *via_trait = NULL;
       Subst via_subst = subst_empty();
       TraitMethodDef *inherited =
-          impl_index_default_method(cg->mono->impls, self, mc->method_name,
-                                    &via_impl, &via_trait, &via_subst, cg->al);
+          impl_index_default_method(cg->impls, self, mc->method_name, &via_impl,
+                                    &via_trait, &via_subst, cg->al);
       if (inherited == NULL || inherited->default_impl == NULL) {
         cg_error(cg, expr->span, "this method call");
         return;
@@ -1757,8 +1762,10 @@ static void compile_expr_inner(Cg *cg, Expr *expr) {
 // FunDef except for an instance, which shares its origin's body) and `subst`
 // binds the type params that body mentions.
 static void compile_fun_body(Mono *mono, FunDef *fun, FunDef *body_of,
-                             Subst subst, int depth, DiagBag *diags, bool *ok) {
+                             Subst subst, int depth, ImplIndex *impls,
+                             DiagBag *diags, bool *ok) {
   Cg cg = {.m = body_of->module,
+           .impls = impls,
            .exe = mono->exe,
            .heap = mono->heap,
            .mono = mono,
@@ -1801,6 +1808,7 @@ static void compile_closure(Cg *cg, Expr *expr) {
   assert(fun != NULL && "closure not resolved before codegen");
 
   Cg child = {.m = cg->m,
+              .impls = cg->impls, // as with .subst: the same instantiation
               .exe = cg->exe,
               .heap = cg->heap,
               .mono = cg->mono,
@@ -1842,8 +1850,8 @@ Module *mono_pending_module(Mono *mono) {
 bool mono_compile_next(Mono *mono, DiagBag *diags) {
   Instance *it = &mono->insts[mono->compiled++];
   bool ok = true;
-  compile_fun_body(mono, it->instance, it->origin, it->subst, it->depth, diags,
-                   &ok);
+  compile_fun_body(mono, it->instance, it->origin, it->subst, it->depth,
+                   it->impls, diags, &ok);
   return ok;
 }
 
@@ -1970,7 +1978,8 @@ bool codegen_module(Module *m, Mono *mono, DiagBag *diags) {
       continue; // the body is in C; there is nothing to compile
     }
     if (!fun_is_generic(fun)) {
-      compile_fun_body(mono, fun, fun, subst_empty(), 0, diags, &ok);
+      compile_fun_body(mono, fun, fun, subst_empty(), 0, &m->visible_impls,
+                       diags, &ok);
     }
     // generic: no single body to compile — one copy per instantiation instead,
     // enqueued on `mono` by whatever calls it, so an uncalled generic costs
@@ -1981,7 +1990,8 @@ bool codegen_module(Module *m, Mono *mono, DiagBag *diags) {
     for (int j = 0; j < impl->method_count; j++) {
       FunDef *fun = impl->methods[j].fun;
       if (!fun_is_generic(fun)) {
-        compile_fun_body(mono, fun, fun, subst_empty(), 0, diags, &ok);
+        compile_fun_body(mono, fun, fun, subst_empty(), 0, &m->visible_impls,
+                         diags, &ok);
       }
     }
   }

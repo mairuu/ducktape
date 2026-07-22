@@ -53,8 +53,16 @@ struct ImplIndex {
 void impl_index_init(ImplIndex *idx, Allocator *al);
 
 // register an impl in the index. call once the impl's self_type and methods
-// are fully resolved.
+// are fully resolved. no-op if `impl` is already present, which is what makes
+// unioning two dependency sets idempotent for a diamond import.
 void impl_index_add(ImplIndex *idx, ImplDef *impl);
+
+// would `a` and `b` both apply to some receiver, for the same trait? Two such
+// impls in one visible set make method selection order-dependent, which is
+// exactly the silent breakage module-granular impls exist to prevent.
+// Inherent impls never conflict: splitting a type's methods across several
+// `impl` blocks is ordinary.
+bool impl_defs_conflict(ImplDef *a, ImplDef *b, Allocator *al);
 
 // find a method named `name` applicable to `self_type`, trying every
 // registered impl. on a match, *out_match is filled with the impl and the
@@ -147,7 +155,9 @@ void infer_finalize(InferCtx *ctx, DiagBag *diags);
 
 // After infer_finalize: ensure every solved type parameter that carried trait
 // bounds was instantiated with a type implementing them.
-void infer_check_bounds(InferCtx *ctx, ImplIndex *idx, DiagBag *diags,
+// `tc` is only consulted to explain a failure: the bound is checked against
+// ctx->impls, the enclosing module's visible set.
+void infer_check_bounds(InferCtx *ctx, TypeChecker *tc, DiagBag *diags,
                         Allocator *al);
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -170,7 +180,13 @@ struct TypeChecker {
   FunDef **funs;
   int fun_count, fun_cap;
 
-  ImplIndex impl_index;
+  // Which impls a module may *select* from is Module.visible_impls; there is
+  // deliberately no program-wide index to select from. This list is every
+  // impl in the program and exists for one purpose: so a failed lookup can
+  // say "an implementation exists in module X, but this module does not
+  // import it" instead of "no method named 'show'". Diagnostics only —
+  // nothing here is ever chosen.
+  ImplIndex all_impls;
 
   Type *t_int, *t_float, *t_bool, *t_string, *t_unit, *t_never, *t_poison;
 
@@ -200,6 +216,15 @@ void tc_register_module(TypeChecker *tc, Module *m);
 // m's own signatures resolve against the imports this puts in place. That is
 // why linking is not a standalone pass.
 void tc_link_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg);
+
+// seed m->visible_impls with every impl reachable through its `use`
+// declarations, and report any pair that conflicts.
+//
+// runs in topological order alongside tc_link_imports, and for the same
+// reason: a dependency's own impls are only registered as *it* is resolved.
+// m's own impls are appended later, by resolution, as each `impl` block is
+// reached — so the union is complete only once tc_resolve_module(m) returns.
+void tc_import_impls(TypeChecker *tc, Module *m, ModuleRegistry *reg);
 
 bool tc_resolve_module(TypeChecker *tc, Module *m);
 
@@ -303,7 +328,8 @@ TypeScope *tscope_open_params(TypeScope *parent, TypeParamNode *params,
 struct TypeResolver {
   TypeChecker *tc;
   TypeScope *tscope;
-  InferCtx *infer; // null during resolve, non-null during check
+  ImplIndex *impls; // the enclosing module's visible set
+  InferCtx *infer;  // null during resolve, non-null during check
   DiagBag *diags;
   Allocator *al;
 };
@@ -317,6 +343,8 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node);
 
 struct ResolveCtx {
   TypeChecker *tc;
+  Module *m;        // the module being resolved
+  ImplIndex *impls; // == &m->visible_impls
 
   TypeResolver tyres;
 
@@ -324,7 +352,7 @@ struct ResolveCtx {
   Allocator *al;
 };
 
-void rctx_init(ResolveCtx *rctx, TypeChecker *tc, DiagBag *diags,
+void rctx_init(ResolveCtx *rctx, TypeChecker *tc, Module *m, DiagBag *diags,
                Allocator *al);
 
 static inline Type *rctx_resolve(ResolveCtx *ctx, TypeNode *node) {
@@ -337,6 +365,7 @@ static inline Type *rctx_resolve(ResolveCtx *ctx, TypeNode *node) {
 
 struct CheckCtx {
   TypeChecker *tc;
+  ImplIndex *impls; // the enclosing module's visible set
 
   // current function
   int loop_depth; // 0 when not in a loop, > 0 inside for/while bodies

@@ -128,11 +128,19 @@ Linking finds the item by **scanning the dependency's own top-level decls**
 (`mod_find_own_decl`), not by looking in its scopes, then copies the resolved
 entry out of the scopes. Scanning the AST is what makes `Decl.is_pub`
 readable — visibility is checked here and nowhere else, off the `Decl` rather
-than the `*Def` copies — and it is also what stops re-export: a dependency's
-scopes also hold *its* imports, so a bare `tscope_lookup`
-would silently give `use b::X` the meaning of `pub use`. The alternative,
-tagging every `VarEntry`/`TypeEntry` with visibility, would have touched 30+
-define sites.
+than the `*Def` copies — and it is also what keeps re-export *deliberate*: a
+dependency's scopes also hold *its* imports, so a bare `tscope_lookup` would
+give every `use b::X` the meaning of `pub use`. The alternative, tagging every
+`VarEntry`/`TypeEntry` with visibility, would have touched 30+ define sites.
+
+**`pub use` is then one extra lookup on the same footing.** When
+`mod_find_own_decl` misses, `mod_find_use_alias` scans the dependency's
+`DECL_USE` nodes for one binding that alias; `Decl.is_pub` on the *use* decl is
+what distinguishes a re-export from a private import, so the same visibility
+rule applies unchanged and the two failures get different wordings ("is private
+in module" vs "is imported by module ... but not re-exported"). Nothing else
+moves: the entry being copied is already in the dependency's scopes, put there
+when *it* was linked, which topological order guarantees has happened.
 
 `tc_link_imports` also does its **own conflict checking**, because
 `vscope_define`/`tscope_define` don't detect duplicates and both lookups return
@@ -141,9 +149,41 @@ import silently win over the module's own declaration. There is only one import
 kind to check: a std module is an ordinary registry entry, vetted by the same
 `pub` rule as any dependency.
 
-Trait impls are deliberately *not* module-scoped: `ImplIndex` lives on the
-`TypeChecker`, shared by every module, so an impl applies program-wide whether
-or not its module was imported.
+### Where an `impl` applies
+
+An impl has no name, so it cannot travel through `use` one item at a time.
+**Reachability is the handle instead**: `Module.visible_impls` holds every impl
+the module may select from — its own, plus those of every module reachable
+through `use`, transitively.
+
+It is a **union, not a filter**. `tc_import_impls` copies each dependency's
+*visible* set into the importer (deduped by `ImplDef` pointer, so a diamond
+import adds nothing twice), running alongside `tc_link_imports` in topological
+order and for the same reason: a dependency's own impls are only registered as
+*it* is resolved. Building a set per module rather than filtering one global
+list is what lets every `impl_index_*` lookup keep the signature it had — only
+the argument changed, from `&tc->impl_index` to a `ResolveCtx`/`CheckCtx` field.
+The set is transitive because `pub use` can re-export a type whose impls live
+one module further away.
+
+**Coherence replaces first-registration-wins.** `impl_defs_conflict` asks
+whether two impls head the same trait *and* either one's `impl_applies` accepts
+the other's self type — selection's own question, asked from both sides, so
+`Ord for Option<T>` conflicts with `Ord for Option<Int>`. A conflict is
+reported twice over, at the two places a pair can first meet: in
+`resolve_impl_decl` when a module's own impl meets an imported one, and in
+`tc_import_impls` when one `use` makes two dependencies' impls visible at once.
+Both spans lie in the module being compiled, which is required — diagnostics
+are reported against that module's source. Inherent impls are exempt: splitting
+a type's methods across several blocks is ordinary.
+
+`TypeChecker.all_impls` is the one program-wide list that survives, and it is
+**never selected from**. It exists so a failure can explain itself:
+`find_unimported_impl` looks for an impl that would have applied but is not in
+the visible set, and three diagnostics (missing method, unsatisfied bound,
+non-`Display` interpolation) append "an applicable impl exists in module 'x',
+but this module does not import it". Without it, making impls module-granular
+would have turned a working program into "no method named 'show'".
 
 ### The embedded standard library
 

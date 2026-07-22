@@ -1,0 +1,11 @@
+use shape::{Show, S};
+
+impl Show for S {
+  fun show(self) -> Int {
+    return self.v;
+  }
+}
+
+pub fun from_a() -> Int {
+  return 1;
+}

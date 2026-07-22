@@ -1,0 +1,12 @@
+pub struct Point {
+  x: Int,
+  y: Int,
+}
+
+pub fun mk(x: Int, y: Int) -> Point {
+  return Point { x: x, y: y };
+}
+
+pub fun hidden() -> Int {
+  return 99;
+}

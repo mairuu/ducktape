@@ -1,0 +1,11 @@
+use std::io::print;
+# Point and mk arrive through geo, which does not define either.
+use geo::{Point, mk, sum, offset};
+
+pub fun main() {
+  var p: Point = mk(3, 4);
+  print(sum(p));
+#> 7
+  print(offset());
+#> 99
+}

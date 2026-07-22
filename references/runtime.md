@@ -353,7 +353,23 @@ Two call shapes need more than the recorded arguments:
   `bound_trait` and `bound_self`. Codegen substitutes `bound_self` into a
   concrete type and re-runs `impl_index_method` to find the body, falling back
   to `impl_index_default_method` when the impl inherited it. This is the one
-  place codegen consults the impl index, and it is why `Mono` holds one.
+  place codegen consults an impl index — and since impls became
+  module-granular, *which* index is a question of its own.
+
+**The impl set travels with the instantiation, not with the definition.**
+`std::cmp::max<T: Ord>` needs `impl Ord for P`, and that impl is written
+wherever `max` is called — `std::cmp` itself cannot see it, and must not have
+to. So `Instance.impls` records the *requesting* module's `visible_impls`
+(seeded from `Cg.impls`, propagated into every instantiation the body enqueues
+and into nested closures) exactly as `Instance.subst` records the requesting
+module's type arguments. The two travel together for the same reason: a bound's
+witness and its type argument are both written at the call site.
+
+This is sound because reachability is transitive. A request that starts in
+module M can only reach definitions in modules M reaches, so M's visible set is
+a superset of every set the bodies below it could need — and any ambiguity
+inside it would already have been refused by the coherence check
+(`architecture.md` "Where an `impl` applies").
 
 **Inherited default bodies** ride the same machinery. A trait method's default
 body gets a `FunDef` of its own at resolve time

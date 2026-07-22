@@ -236,14 +236,53 @@ pub struct Point { x: Int, y: Int }  # importable
 fun helper() -> Int { 1 }            # private: `use m::helper;` is an error
 ```
 
-Imports are **not** transitive. If `b.dt` does `use a::X;`, that does not
-re-export `X` — `use b::X;` from a third module is an error. There is no
-`pub use`.
+A plain `use` does not re-export. If `b.dt` does `use a::X;`, then `use b::X;`
+from a third module is an error — "imported by module 'b.dt' but not
+re-exported". Writing `pub use` makes the alias an item of `b` like any other:
+
+```
+# geo.dt
+pub use inner::{Point, mk};   # Point and mk are now items of geo
+use inner::hidden;            # geo's own business; not importable through geo
+```
+
+An importer never needs to know where a re-exported item was originally
+written, which is what lets a module present a façade over the files behind it.
 
 A path is never module-qualified: once imported, an item is named directly
-(`Point`, not `geometry::Point`). Trait `impl`s are the exception to all of
-this — they are program-wide and apply wherever their type is used, whether or
-not the defining module was imported.
+(`Point`, not `geometry::Point`).
+
+### Where an `impl` applies
+
+An `impl` has no name, so it cannot be imported one item at a time.
+**Reachability is the handle instead: an `impl` applies in a module if it is
+written there, or in any module reachable from it through `use`,
+transitively.** A module that never reaches the defining module does not see
+the impl, and the diagnostic says so rather than merely reporting a missing
+method:
+
+```
+error: no method named 'show' found for type 'S'
+> note: an applicable impl exists in module 'owner.dt', but this module does
+        not import it
+```
+
+Reachability is transitive because `pub use` can re-export a type whose impls
+live one module further away.
+
+Two implementations of **the same trait for overlapping types** may not be
+visible at once. Writing `impl Ord for Int` in a module that also imports
+`std::cmp` is an error, not a silent override:
+
+```
+error: conflicting implementations of trait 'Ord' for type 'Int'
+> note: the other one is in module '<std>/cmp.dt'
+```
+
+Two modules that cannot see each other may each implement the same trait for
+the same type; the conflict is reported at whatever `use` first makes both
+visible. Inherent (`impl Point`) blocks never conflict — splitting a type's
+methods across several is ordinary.
 
 A cycle in the import graph is an error, reported with the chain of modules
 involved.
@@ -538,16 +577,16 @@ mistaken for an `Int`: `1.0`, `0.3333333333333333`, `300.0`, `1e+18`, `1e-07`,
 | casting a `dyn Trait` back to its concrete type | no downcast; the coercion is one-way |
 | `dyn Trait` with type arguments (`dyn Into<Int>`) | generic traits are not parameterised in `dyn` position |
 | `mod` declarations | no such keyword; `use` is what pulls a file in |
-| `pub use` re-export | imports are not transitive; a third module can't reach through an importer |
 | glob imports (`use a::*`) | not parsed; name each item |
 | module-qualified paths (`geometry::Point`) | import the item and name it directly; the diagnostic says so |
 | `pub` on impls, methods, and fields | parsed and ignored — a public type's fields and methods are all visible |
+| overlap rules finer than "same trait, matching self types" | there is no orphan rule and no specialization: an impl may be written for any type, and two overlapping ones are simply refused wherever both are visible |
 | visibility below module granularity (`pub(crate)` &c.) | `pub` is the only modifier |
 | two spellings of one file (symlinks, unusual paths) | dedup is lexical, so the file would load twice and collide |
 | top-level `var` (globals) | parses, then a registration diagnostic: move it into a function |
 | tuple-struct struct-patterns `Pair { a, b }` | write the constructor spelling `Pair(a, b)` — "matching tuple struct with struct pattern syntax is not allowed" |
 | variable shadowing diagnostics | a `var` may silently shadow an earlier one in the same scope (top-level *item* names do collide — that is an error) |
-| overlapping method names across impls of one type | bare paths pick the first registered impl |
+| overlapping method names across impls of one type | bare paths pick the first registered impl (inherent impls do not conflict; only trait impls are checked for overlap) |
 | capturing a `for` loop variable in a closure | runs, but the closure sees the loop variable's *final* value (one shared cell), not a per-iteration copy — `runtime.md` "Closures & upvalues" |
 | infinitely deep generic instantiation | `fun grow<T>(v: T) { grow([v]) }` type-checks but names a new instantiation at every level; codegen stops at 32 and reports it (`runtime.md` "Monomorphisation") |
 | more than 256 functions, counting one per instantiation | each instantiation takes a global slot, so a heavily generic program can outgrow the one-byte operand space |

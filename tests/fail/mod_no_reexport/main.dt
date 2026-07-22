@@ -1,4 +1,4 @@
-#! expect: has no item named 'X'
+#! expect: but not re-exported
 use b::X;
 
 fun main() {}

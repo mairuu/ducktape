@@ -1,0 +1,7 @@
+#! expect: two implementations of trait 'Show' for type 'S' visible at once
+# Neither a nor b can see the other's impl, so each is fine on its own. The
+# conflict exists only here, and is reported at the import that creates it.
+use a::from_a;
+use b::from_b;
+
+fun main() {}

@@ -1,0 +1,8 @@
+# Rank does implement Ord — but the impl lives in owner.dt, which this module
+# never imports, so `max`'s bound is not satisfied here.
+use std::cmp::max;
+use shape::{Rank, mk};
+
+pub fun biggest() -> Int {
+  return max(mk(1), mk(2)).v;
+}

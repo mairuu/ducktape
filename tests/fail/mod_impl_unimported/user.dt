@@ -1,0 +1,7 @@
+# `owner` is in the program, but this module does not import it, so its
+# `impl Show for S` does not apply here.
+use shape::{Show, S};
+
+pub fun peek(s: S) -> Int {
+  return s.show();
+}

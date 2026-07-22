@@ -142,6 +142,7 @@ Module *mod_new(StringView file_path, Allocator *al) {
   m->file_path = file_path;
   vscope_init(&m->vscope, NULL, al);
   tscope_init(&m->tscope, NULL, al);
+  impl_index_init(&m->visible_impls, al);
   return m;
 }
 

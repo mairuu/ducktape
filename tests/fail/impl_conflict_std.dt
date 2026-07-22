@@ -1,0 +1,12 @@
+#! expect: conflicting implementations of trait 'Ord' for type 'Int'
+# std::cmp already implements Ord for Int. Before impls became module-granular
+# this silently lost to std's, whichever registered first.
+use std::cmp::Ord;
+
+impl Ord for Int {
+  fun cmp(self, other: Int) -> Int {
+    return 0;
+  }
+}
+
+fun main() {}

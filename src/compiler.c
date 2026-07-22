@@ -188,9 +188,10 @@ static bool compiler_phase_resolve(Compiler *c) {
     Module *m = modreg_topo(&c->mod_reg, i);
     diag_clear(&c->diags);
 
-    // every dependency precedes m in topological order, so its scopes are
-    // already populated by the time we copy names out of them.
+    // every dependency precedes m in topological order, so its scopes and its
+    // visible impl set are already populated by the time we copy out of them.
     tc_link_imports(&c->tc, m, &c->mod_reg);
+    tc_import_impls(&c->tc, m, &c->mod_reg);
     tc_resolve_module(&c->tc, m);
     if (diag_has_diags(&c->diags)) {
       diag_report(&c->diags, m->file_path.chars, m->source.chars, stderr);
@@ -265,7 +266,7 @@ static bool compiler_codegen(Compiler *c, Executable *exe, Heap *heap,
   heap_init(heap, exe, gc_stress);
 
   Mono mono;
-  mono_init(&mono, exe, heap, &c->tc.impl_index, &c->al);
+  mono_init(&mono, exe, heap, &c->al);
 
   bool ok = true;
   for (int i = 0; i < c->mod_reg.module_count; i++) {

@@ -209,6 +209,7 @@ static Type *impl_index_assoc_type(ImplIndex *idx, Type *self_type,
                                    StringView name, Allocator *al);
 static bool impl_applies(ImplDef *impl, Type *self_type, Subst *out_subst,
                          Allocator *al);
+static TraitDef *impl_trait_def(ImplDef *impl);
 
 static void infer_note_explicit_bound(InferCtx *ctx, Type *param, Type *arg,
                                       Span span) {
@@ -701,13 +702,72 @@ void infer_finalize(InferCtx *ctx, DiagBag *diags) {
   }
 }
 
+// An impl that would have applied had `m` imported it. Since impls became
+// module-granular this is the likeliest reason a lookup fails, and it is the
+// one thing the visible set cannot tell you — so a "diagnostics only" list of
+// every impl in the program is consulted here and nowhere else. `pred` asks
+// whether a candidate is the one being missed.
+static ImplDef *find_unimported_impl(TypeChecker *tc, ImplIndex *visible,
+                                     bool (*pred)(ImplDef *, void *),
+                                     void *ctx) {
+  for (int i = 0; i < tc->all_impls.count; i++) {
+    ImplDef *impl = tc->all_impls.all[i];
+    bool seen = false;
+    for (int j = 0; j < visible->count && !seen; j++) {
+      seen = visible->all[j] == impl;
+    }
+    if (!seen && pred(impl, ctx)) {
+      return impl;
+    }
+  }
+  return NULL;
+}
+
+static void note_unimported_impl(DiagBag *diags, ImplDef *impl) {
+  if (impl == NULL) {
+    return;
+  }
+  diag_note(diags, (Span){0},
+            "an applicable impl exists in module '" SV_FMT
+            "', but this module does not import it",
+            SV_ARG(impl->module->file_path));
+}
+
+typedef struct {
+  Type *self_type;
+  TraitDef *trait;   // NULL to match any
+  StringView method; // empty to match any
+  Allocator *al;
+} ImplQuery;
+
+static bool impl_query_matches(ImplDef *impl, void *raw) {
+  ImplQuery *q = raw;
+  if (q->trait != NULL && impl_trait_def(impl) != q->trait) {
+    return false;
+  }
+  Subst ignored;
+  if (!impl_applies(impl, q->self_type, &ignored, q->al)) {
+    return false;
+  }
+  if (q->method.len == 0) {
+    return true;
+  }
+  for (int i = 0; i < impl->method_count; i++) {
+    if (sv_equal(impl->methods[i].name, q->method)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // After inference is solved, enforce that every bounded type parameter was
 // instantiated with a type implementing each of its trait bounds. A bounded
 // unknown carries its source TY_GENERIC in `.bound` (see infer_open_generics);
 // unsolved unknowns are left to infer_finalize.
 // report every bound of `param` (a TY_GENERIC) that `arg` fails to implement.
-static void check_bounds_satisfied(ImplIndex *idx, Type *param, Type *arg,
-                                   DiagBag *diags, Span span, Allocator *al) {
+static void check_bounds_satisfied(TypeChecker *tc, ImplIndex *idx, Type *param,
+                                   Type *arg, DiagBag *diags, Span span,
+                                   Allocator *al) {
   for (int b = 0; b < param->as.generic.bound_count; b++) {
     TraitDef *trait = param->as.generic.bounds[b];
     if (!impl_index_implements(idx, arg, trait, al)) {
@@ -715,12 +775,16 @@ static void check_bounds_satisfied(ImplIndex *idx, Type *param, Type *arg,
       type_sprintf(arg, buf, sizeof(buf));
       diag_error(diags, span, "type '%s' does not implement trait '" SV_FMT "'",
                  buf, SV_ARG(trait->name));
+      ImplQuery q = {.self_type = arg, .trait = trait, .al = al};
+      note_unimported_impl(
+          diags, find_unimported_impl(tc, idx, impl_query_matches, &q));
     }
   }
 }
 
-void infer_check_bounds(InferCtx *ctx, ImplIndex *idx, DiagBag *diags,
+void infer_check_bounds(InferCtx *ctx, TypeChecker *tc, DiagBag *diags,
                         Allocator *al) {
+  ImplIndex *idx = ctx->impls; // the enclosing module's visible set
   for (uint32_t id = 0; id < ctx->next_id; id++) {
     Type *node = ctx->nodes[id];
     Type *g = node->as.unknown.bound;
@@ -735,7 +799,8 @@ void infer_check_bounds(InferCtx *ctx, ImplIndex *idx, DiagBag *diags,
     if (type_is_poison(sol)) {
       continue;
     }
-    check_bounds_satisfied(idx, g, sol, diags, node->as.unknown.intro_span, al);
+    check_bounds_satisfied(tc, idx, g, sol, diags, node->as.unknown.intro_span,
+                           al);
   }
 
   // and the type arguments written out explicitly, which never became unknowns
@@ -745,7 +810,7 @@ void infer_check_bounds(InferCtx *ctx, ImplIndex *idx, DiagBag *diags,
     if (type_is_poison(arg) || arg->kind == TY_UNKNOWN) {
       continue;
     }
-    check_bounds_satisfied(idx, eb->param, arg, diags, eb->span, al);
+    check_bounds_satisfied(tc, idx, eb->param, arg, diags, eb->span, al);
   }
 }
 
@@ -767,7 +832,7 @@ void tc_init(TypeChecker *tc, DiagBag *diags, Allocator *al) {
   tc->diags = diags;
   tc->al = al;
 
-  impl_index_init(&tc->impl_index, al);
+  impl_index_init(&tc->all_impls, al);
 }
 
 void tc_destroy(TypeChecker *tc) { (void)tc; }
@@ -1061,10 +1126,11 @@ void tc_register_module(TypeChecker *tc, Module *m) {
 // find `name` among m's *own* top-level declarations.
 //
 // deliberately an AST scan rather than a scope lookup. m's scopes also hold
-// m's own imports and the builtins, so looking there would silently give
-// `use b::X` the meaning of Rust's `pub use` (re-export). Scanning the decls
-// also puts `Decl.is_pub` in reach, which is what makes visibility checkable
-// without adding a flag to every scope entry.
+// m's own imports, so looking there would give *every* `use b::X` the meaning
+// of `pub use` — re-export has to be something the source asked for, which is
+// `mod_find_use_alias` below. Scanning the decls also puts `Decl.is_pub` in
+// reach, which is what makes visibility checkable without adding a flag to
+// every scope entry.
 static Decl *mod_find_own_decl(Module *m, StringView name) {
   for (int i = 0; i < m->ast->decl_count; i++) {
     Decl *decl = m->ast->decls[i];
@@ -1119,12 +1185,37 @@ static bool link_name_taken(TypeChecker *tc, Module *m, const UseAlias *a) {
   return false;
 }
 
+// find the `use` declaration in `m` that binds `name`. A `pub use` is the
+// re-export: from outside, the alias is an item of `m` like any other, and the
+// entry is already in m's scopes — linking copied it there when *m* was
+// resolved, which topological order guarantees has happened.
+static Decl *mod_find_use_alias(Module *m, StringView name) {
+  for (int i = 0; i < m->ast->decl_count; i++) {
+    Decl *decl = m->ast->decls[i];
+    if (decl->kind != DECL_USE) {
+      continue;
+    }
+    UseTarget *target = &decl->as.use_decl.target;
+    for (int j = 0; j < target->count; j++) {
+      if (sv_equal(target->aliases[j].alias, name)) {
+        return decl;
+      }
+    }
+  }
+  return NULL;
+}
+
 // bring one `use`d item into `m` under its alias. There is one import kind:
 // a std module is an ordinary registry entry, vetted by the same `pub` rule
 // as any other dependency.
 static void link_import_item(TypeChecker *tc, Module *m, Module *dep,
                              const UseAlias *a) {
   Decl *d = mod_find_own_decl(dep, a->name);
+  bool via_reexport = false;
+  if (d == NULL) {
+    d = mod_find_use_alias(dep, a->name);
+    via_reexport = d != NULL;
+  }
   if (d == NULL) {
     diag_error(tc->diags, a->span,
                "module '" SV_FMT "' has no item named '" SV_FMT "'",
@@ -1132,6 +1223,16 @@ static void link_import_item(TypeChecker *tc, Module *m, Module *dep,
     return;
   }
   if (!d->is_pub) {
+    // an import that isn't re-exported is *not* an item of the module, so the
+    // wording has to differ: nothing is being hidden, it was never offered.
+    if (via_reexport) {
+      diag_error(tc->diags, a->span,
+                 "'" SV_FMT "' is imported by module '" SV_FMT
+                 "' but not re-exported",
+                 SV_ARG(a->name), SV_ARG(dep->file_path));
+      diag_note(tc->diags, (Span){0}, "add 'pub' to its 'use' declaration");
+      return;
+    }
     diag_error(tc->diags, a->span,
                "'" SV_FMT "' is private in module '" SV_FMT "'",
                SV_ARG(a->name), SV_ARG(dep->file_path));
@@ -1159,6 +1260,45 @@ void tc_link_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
     UseTarget *target = &imp->decl->as.use_decl.target;
     for (int j = 0; j < target->count; j++) {
       link_import_item(tc, m, dep, &target->aliases[j]);
+    }
+  }
+}
+
+void tc_import_impls(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
+  for (int i = 0; i < m->import_count; i++) {
+    ModImport *imp = &m->imports[i];
+    if (imp->module_index < 0) {
+      continue;
+    }
+    // the dependency's *visible* set, not its own list: reachability is
+    // transitive, so importing a module brings whatever it could itself see.
+    // That is what makes a `pub use`d type usable — its impls live in the
+    // module the re-export came from, one step further away.
+    ImplIndex *dep = &reg->modules[imp->module_index]->visible_impls;
+
+    for (int j = 0; j < dep->count; j++) {
+      ImplDef *impl = dep->all[j];
+      for (int k = 0; k < m->visible_impls.count; k++) {
+        ImplDef *other = m->visible_impls.all[k];
+        if (other == impl || !impl_defs_conflict(impl, other, tc->al)) {
+          continue;
+        }
+        // reported at the `use` that made the pair collide, because that is
+        // the only span of the three modules involved that lies in *this*
+        // module's source — and diagnostics are printed against it.
+        char buf[64];
+        type_sprintf(impl->self_type, buf, sizeof(buf));
+        diag_error(tc->diags, imp->decl->as.use_decl.path.span,
+                   "this import makes two implementations of trait '" SV_FMT
+                   "' for type '%s' visible at once",
+                   SV_ARG(impl_trait_def(impl)->name), buf);
+        diag_note(tc->diags, (Span){0}, "  one is in module '" SV_FMT "'",
+                  SV_ARG(impl->module->file_path));
+        diag_note(tc->diags, (Span){0}, "  the other in module '" SV_FMT "'",
+                  SV_ARG(other->module->file_path));
+        break;
+      }
+      impl_index_add(&m->visible_impls, impl);
     }
   }
 }
@@ -1433,9 +1573,27 @@ static void resolve_impl_decl(ResolveCtx *rctx, Decl *decl) {
     }
   }
 
-  // register in the impl index before resolving items so `Self.Assoc` inside
-  // this impl's own methods can be looked up
-  impl_index_add(&rctx->tc->impl_index, impl_def);
+  // register in the module's visible set before resolving items so
+  // `Self.Assoc` inside this impl's own methods can be looked up. The set
+  // already holds every imported impl (tc_import_impls ran first), so this is
+  // also where a local impl meets an imported one.
+  for (int i = 0; i < rctx->impls->count; i++) {
+    ImplDef *other = rctx->impls->all[i];
+    if (!impl_defs_conflict(impl_def, other, rctx->al)) {
+      continue;
+    }
+    char buf[64];
+    type_sprintf(impl_def->self_type, buf, sizeof(buf));
+    diag_error(rctx->diags, decl->span,
+               "conflicting implementations of trait '" SV_FMT
+               "' for type '%s'",
+               SV_ARG(impl_trait_def(impl_def)->name), buf);
+    diag_note(rctx->diags, (Span){0}, "the other one is in module '" SV_FMT "'",
+              SV_ARG(other->module->file_path));
+    break;
+  }
+  impl_index_add(rctx->impls, impl_def);
+  impl_index_add(&rctx->tc->all_impls, impl_def);
 
   // resolve associated types before methods so a method signature can
   // reference `Self.Assoc`
@@ -1725,7 +1883,7 @@ static void resolve_decl(ResolveCtx *rctx, Decl *decl) {
 
 bool tc_resolve_module(TypeChecker *tc, Module *m) {
   ResolveCtx rctx;
-  rctx_init(&rctx, tc, tc->diags, tc->al);
+  rctx_init(&rctx, tc, m, tc->diags, tc->al);
 
   for (int i = 0; i < m->ast->decl_count; i++) {
     Decl *decl = m->ast->decls[i];
@@ -2069,7 +2227,7 @@ static bool check_coerce_dyn(CheckCtx *ctx, Expr *e, Type *actual,
   }
 
   TraitDef *trait = expected->as.dyn.def;
-  if (!impl_index_implements(&ctx->tc->impl_index, actual, trait, ctx->al)) {
+  if (!impl_index_implements(ctx->impls, actual, trait, ctx->al)) {
     return false;
   }
 
@@ -3170,7 +3328,7 @@ static Type *resolve_method_call_typed(CheckCtx *ctx, Expr *expr,
 
   ImplMatch match;
   MethodDef *method =
-      impl_index_method(&ctx->tc->impl_index, self_ty, mc->method_name, &match,
+      impl_index_method(ctx->impls, self_ty, mc->method_name, &match,
                         &ctx->infer, /*bare_path=*/false, expr->span, ctx->al);
   if (!method) {
     // no impl defines it — the receiver may still inherit a trait's default
@@ -3178,9 +3336,9 @@ static Type *resolve_method_call_typed(CheckCtx *ctx, Expr *expr,
     ImplDef *via_impl = NULL;
     TraitDef *via_trait = NULL;
     Subst via_subst = subst_empty();
-    TraitMethodDef *inherited = impl_index_default_method(
-        &ctx->tc->impl_index, self_ty, mc->method_name, &via_impl, &via_trait,
-        &via_subst, ctx->al);
+    TraitMethodDef *inherited =
+        impl_index_default_method(ctx->impls, self_ty, mc->method_name,
+                                  &via_impl, &via_trait, &via_subst, ctx->al);
     if (inherited != NULL) {
       mc->resolved_impl = via_impl;
       mc->resolved_default = inherited->default_impl;
@@ -3193,6 +3351,11 @@ static Type *resolve_method_call_typed(CheckCtx *ctx, Expr *expr,
     diag_error(ctx->diags, expr->span,
                "no method named '" SV_FMT "' found for type '%s'",
                SV_ARG(mc->method_name), self_buf);
+    ImplQuery q = {
+        .self_type = self_ty, .method = mc->method_name, .al = ctx->al};
+    note_unimported_impl(
+        ctx->diags,
+        find_unimported_impl(ctx->tc, ctx->impls, impl_query_matches, &q));
     return ctx->tc->t_poison;
   }
 
@@ -3548,7 +3711,7 @@ static bool display_satisfied(CheckCtx *ctx, Type *type) {
     // the abstract `Self` of a default body, which offers its own trait only
     return type->as.trait.def == display;
   }
-  return impl_index_implements(&ctx->tc->impl_index, type, display, ctx->al);
+  return impl_index_implements(ctx->impls, type, display, ctx->al);
 }
 
 static void check_interpol_seg(CheckCtx *ctx, InterpolSeg *seg) {
@@ -3599,6 +3762,11 @@ static void check_interpol_seg(CheckCtx *ctx, InterpolSeg *seg) {
                "cannot interpolate a value of type '%s': it does not "
                "implement 'Display'",
                buf);
+    ImplQuery q = {
+        .self_type = seg_ty, .trait = ctx->tc->display_trait, .al = ctx->al};
+    note_unimported_impl(
+        ctx->diags,
+        find_unimported_impl(ctx->tc, ctx->impls, impl_query_matches, &q));
     return;
   }
 
@@ -4543,7 +4711,7 @@ static void tc_check_fun(TypeChecker *tc, Decl *decl) {
   cctx.tyres.tscope = tscope_pop(cctx.tyres.tscope);
 
   infer_finalize(&cctx.infer, cctx.diags);
-  infer_check_bounds(&cctx.infer, &tc->impl_index, cctx.diags, cctx.al);
+  infer_check_bounds(&cctx.infer, tc, cctx.diags, cctx.al);
   cctx_solve_insts(&cctx);
 }
 
@@ -4761,7 +4929,7 @@ static void tc_check_impl(TypeChecker *tc, Decl *decl) {
   cctx.tyres.tscope = tscope_pop(cctx.tyres.tscope);
 
   infer_finalize(&cctx.infer, cctx.diags);
-  infer_check_bounds(&cctx.infer, &tc->impl_index, cctx.diags, cctx.al);
+  infer_check_bounds(&cctx.infer, tc, cctx.diags, cctx.al);
   cctx_solve_insts(&cctx);
 }
 
@@ -4828,7 +4996,7 @@ static void tc_check_trait(TypeChecker *tc, Decl *decl) {
   cctx.tyres.tscope = tscope_pop(cctx.tyres.tscope);
 
   infer_finalize(&cctx.infer, cctx.diags);
-  infer_check_bounds(&cctx.infer, &tc->impl_index, cctx.diags, cctx.al);
+  infer_check_bounds(&cctx.infer, tc, cctx.diags, cctx.al);
   cctx_solve_insts(&cctx);
 }
 
@@ -5310,8 +5478,7 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
       break;
     }
 
-    result = impl_index_assoc_type(&r->tc->impl_index, base, assoc->assoc_name,
-                                   r->al);
+    result = impl_index_assoc_type(r->impls, base, assoc->assoc_name, r->al);
     if (result == NULL) {
       char buf[64];
       type_sprintf(base, buf, sizeof(buf));
@@ -5344,6 +5511,11 @@ void impl_index_init(ImplIndex *idx, Allocator *al) {
 }
 
 void impl_index_add(ImplIndex *idx, ImplDef *impl) {
+  for (int i = 0; i < idx->count; i++) {
+    if (idx->all[i] == impl) {
+      return; // already reachable by another path — a diamond import
+    }
+  }
   if (idx->count >= idx->cap) {
     int new_cap = idx->cap == 0 ? 4 : idx->cap * 2;
     idx->all = al_realloc(idx->al, idx->all, sizeof(ImplDef *) * idx->cap,
@@ -5526,6 +5698,34 @@ static bool impl_applies(ImplDef *impl, Type *self_type, Subst *out_subst,
   return matched;
 }
 
+// The trait an impl heads, or NULL for an inherent impl.
+static TraitDef *impl_trait_def(ImplDef *impl) {
+  if (impl->trait_type == NULL || impl->trait_type->kind != TY_TRAIT) {
+    return NULL;
+  }
+  return impl->trait_type->as.trait.def;
+}
+
+bool impl_defs_conflict(ImplDef *a, ImplDef *b, Allocator *al) {
+  TraitDef *trait = impl_trait_def(a);
+  if (trait == NULL || trait != impl_trait_def(b)) {
+    return false;
+  }
+  if (a->self_type == NULL || b->self_type == NULL ||
+      type_is_poison(a->self_type) || type_is_poison(b->self_type)) {
+    return false; // already diagnosed; don't pile on
+  }
+
+  // Overlap is asked the same way selection asks it, from both sides: does
+  // either impl apply to the other's self type? For two non-generic impls
+  // that is plain identity; for `Ord for Option<T>` against
+  // `Ord for Option<Int>` the generic one matches the concrete one's self
+  // type, which is the case a receiver would find ambiguous.
+  Subst ignored;
+  return impl_applies(a, b->self_type, &ignored, al) ||
+         impl_applies(b, a->self_type, &ignored, al);
+}
+
 // A trait method the receiver inherits rather than defines: some
 // `impl Trait for <self_type>` exists, the trait declares `name` with a default
 // body, and the impl didn't override it (if it had, impl_index_method would
@@ -5541,14 +5741,14 @@ TraitMethodDef *impl_index_default_method(ImplIndex *idx, Type *self_type,
   }
   for (int i = 0; i < idx->count; i++) {
     ImplDef *impl = idx->all[i];
-    if (impl->trait_type == NULL || impl->trait_type->kind != TY_TRAIT) {
+    TraitDef *trait = impl_trait_def(impl);
+    if (trait == NULL) {
       continue;
     }
     Subst subst;
     if (!impl_applies(impl, self_type, &subst, al)) {
       continue;
     }
-    TraitDef *trait = impl->trait_type->as.trait.def;
     for (int j = 0; j < trait->method_count; j++) {
       if (!trait->methods[j].has_default ||
           !sv_equal(trait->methods[j].name, name)) {
@@ -5650,8 +5850,7 @@ bool impl_index_implements(ImplIndex *idx, Type *type, TraitDef *trait,
   }
   for (int i = 0; i < idx->count; i++) {
     ImplDef *impl = idx->all[i];
-    if (impl->trait_type == NULL || impl->trait_type->kind != TY_TRAIT ||
-        impl->trait_type->as.trait.def != trait) {
+    if (impl_trait_def(impl) != trait) {
       continue;
     }
     Subst subst;
@@ -5666,17 +5865,20 @@ bool impl_index_implements(ImplIndex *idx, Type *type, TraitDef *trait,
 // ResolveCtx
 // ═══════════════════════════════════════════════════════════════════════════════
 
-void rctx_init(ResolveCtx *rctx, TypeChecker *tc, DiagBag *diags,
+void rctx_init(ResolveCtx *rctx, TypeChecker *tc, Module *m, DiagBag *diags,
                Allocator *al) {
   memset(rctx, 0, sizeof(*rctx));
 
   rctx->tc = tc;
+  rctx->m = m;
+  rctx->impls = &m->visible_impls;
   rctx->diags = diags;
   rctx->al = al;
 
   rctx->tyres = (TypeResolver){
       .tc = tc,
       .tscope = NULL,
+      .impls = &m->visible_impls,
       .diags = diags,
       .al = al,
   };
@@ -5689,15 +5891,17 @@ void rctx_init(ResolveCtx *rctx, TypeChecker *tc, DiagBag *diags,
 void cctx_init(CheckCtx *cctx, TypeChecker *tc, Module *m, DiagBag *diags,
                Allocator *al) {
   memset(cctx, 0, sizeof(*cctx));
-  infer_init(&cctx->infer, &tc->impl_index, al);
+  infer_init(&cctx->infer, &m->visible_impls, al);
 
   cctx->tc = tc;
+  cctx->impls = &m->visible_impls;
   cctx->diags = diags;
   cctx->al = al;
 
   cctx->tyres = (TypeResolver){
       .tc = tc,
       .tscope = NULL,
+      .impls = &m->visible_impls,
       .diags = diags,
       .infer = &cctx->infer,
       .al = al,
@@ -5919,8 +6123,8 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
 
       ImplMatch match;
       MethodDef *method = impl_index_method(
-          &ctx->tyres->tc->impl_index, struct_ty, segment, &match,
-          ctx->tyres->infer, /*bare_path=*/true, path->span, ctx->al);
+          ctx->tyres->impls, struct_ty, segment, &match, ctx->tyres->infer,
+          /*bare_path=*/true, path->span, ctx->al);
       if (!method) {
         char ty_buf[64];
         type_sprintf(struct_ty, ty_buf, sizeof(ty_buf));

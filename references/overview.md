@@ -71,7 +71,8 @@ Driver: `compiler_run` in `src/compiler.c`. Phases, in order:
    top-level declarations, and bind each `@native`/`@intrinsic` declaration to
    C's registry (`src/native.c`)
 4. **link imports + resolve** — per module in topological order:
-   `tc_link_imports` copies each `use`d item into the module's scopes, then
+   `tc_link_imports` copies each `use`d item into the module's scopes,
+   `tc_import_impls` unions each dependency's visible impls into it, then
    `tc_resolve_module` resolves signatures, types, impls
 5. **check** — `tc_check_module`: type-check function bodies with inference
 

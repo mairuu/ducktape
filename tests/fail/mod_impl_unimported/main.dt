@@ -1,0 +1,8 @@
+#! expect: but this module does not import it
+use std::io::print;
+use owner::mk;
+use user::peek;
+
+fun main() {
+  print(peek(mk()));
+}

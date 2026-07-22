@@ -1,0 +1,16 @@
+use shape::Show;
+
+pub struct Pair {
+  a: Int,
+  b: Int,
+}
+
+impl Show for Pair {
+  fun show(self) -> Int {
+    return self.a + self.b;
+  }
+}
+
+pub fun mk(a: Int, b: Int) -> Pair {
+  return Pair { a: a, b: b };
+}

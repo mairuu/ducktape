@@ -25,6 +25,15 @@ typedef struct {
   FunDef *instance; // the copy that owns this instantiation's slot and chunk
   Subst subst;      // origin's type params (its impl's first) → concrete types
   int depth;        // instances traversed to get here; see MONO_MAX_DEPTH
+
+  // the impl set to select from while compiling this copy: the *requesting*
+  // module's, not the defining module's. `std::cmp::max<T: Ord>` needs
+  // `impl Ord for P`, and that impl is written where max is called — the
+  // witness for a bound travels with the instantiation, exactly as its type
+  // arguments do (`subst` above). A requester always reaches every module
+  // along the chain it started, so its set is a superset of every set the
+  // bodies below it could need.
+  ImplIndex *impls;
 } Instance;
 
 // How far a chain of instantiations may run. `fun grow<T>(v: T) { grow([v]) }`
@@ -53,7 +62,6 @@ typedef struct {
 typedef struct {
   Executable *exe;
   Heap *heap;
-  ImplIndex *impls; // to re-select an impl once a bound's receiver is concrete
   Allocator *al;
 
   Instance *insts;
@@ -64,8 +72,7 @@ typedef struct {
   int vtable_count, vtable_cap;
 } Mono;
 
-void mono_init(Mono *mono, Executable *exe, Heap *heap, ImplIndex *impls,
-               Allocator *al);
+void mono_init(Mono *mono, Executable *exe, Heap *heap, Allocator *al);
 
 // compile every non-generic top-level function and impl method of `m` into
 // bytecode (FunDef->chunk). string literals are interned into the heap as they
