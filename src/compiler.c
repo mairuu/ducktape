@@ -24,11 +24,16 @@ void compiler_init(Compiler *c, Allocator *al) {
 
 void compiler_destroy(Compiler *c, Allocator *al) {
   (void)al;
-  arena_destroy(&c->arena);
-
+  // every one of these owns memory *from* the arena, so the arena has to
+  // outlive them: `diag_destroy` walks the diag array to free each message,
+  // and both live in `c->al`. Tearing the arena down first is a use-after-free
+  // — one that only shows when the last phase leaves diagnostics behind, since
+  // each phase clears the bag at the top of its loop rather than the bottom.
   diag_destroy(&c->diags);
   modreg_destroy(&c->mod_reg);
   tc_destroy(&c->tc);
+
+  arena_destroy(&c->arena);
 }
 
 // phase 0: discover and parse every source file reachable from the root.

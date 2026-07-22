@@ -4,13 +4,8 @@
 # is an ordinary generic enum, its methods are an ordinary generic inherent
 # impl, and the combinators take ordinary closures.
 #
-# `unwrap` is deliberately missing. A method that aborts the program on `None`
-# needs a way to *fail* at runtime. Natives brought half of one — a native can
-# set `ctx->error` — but a `panic` that a ducktape function can raise, carrying
-# a message, is still unbuilt. Every accessor here therefore names what to do
-# instead: `unwrap_or`, `unwrap_or_else`.
-
 use std::cmp::Ord;
+use std::panic::panic;
 
 pub enum Option<T> {
     Some(T),
@@ -35,6 +30,27 @@ impl<T> Option<T> {
         match self {
             Option::Some(v) => { return v; },
             Option::None => { return fallback; },
+        }
+    }
+
+    # The contained value, or a panic. This is the accessor that waited for
+    # `std::panic`: producing a `T` from a `None` has nowhere to go but out.
+    # `panic` returns `Never`, which stands in for any type, so the arm
+    # type-checks like any other.
+    fun unwrap(self) -> T {
+        match self {
+            Option::Some(v) => { return v; },
+            Option::None => {
+                return panic("called 'unwrap' on a 'None' value");
+            },
+        }
+    }
+
+    # `unwrap` with a message of your own, saying what was expected.
+    fun expect(self, message: String) -> T {
+        match self {
+            Option::Some(v) => { return v; },
+            Option::None => { return panic(message); },
         }
     }
 

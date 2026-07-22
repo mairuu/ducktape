@@ -1,0 +1,13 @@
+#! expect: expected a parsed port number
+# `expect` carries the caller's own message, which is the part the frame list
+# beneath it cannot recover. The message is an ordinary String, so it can be
+# built by interpolation at the call site.
+use std::result::Result;
+
+fun parse(s: String) -> Result<Int, String> {
+    return Result::Err("not a number: {s}");
+}
+
+fun main() {
+    var port = parse("http").expect("expected a parsed port number");
+}

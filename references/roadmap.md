@@ -712,6 +712,52 @@
   *fail*: a native sets `ctx->error` and the VM raises it at the call site —
   the closest thing to a panic until there is one.
 
+- **`std::result`, and a real panic (milestone 17)** — `Option::unwrap` exists.
+  Design: `language.md` "`std::panic`" / "`std::result`", `runtime.md` "Native
+  functions".
+
+  The observation the milestone turns on: **the panic was already built; only
+  its type was missing.** A native could already fail — `ctx->error` becomes a
+  runtime error at the call site, and `string::slice` had used it since
+  milestone 16. What no ducktape function could do is *call* that and still
+  type-check, because an accessor returning `T` has to produce a `T` on every
+  path. `TY_NEVER` was exactly the answer and had existed since the checker
+  learned about `return`; it simply had no name a signature could write.
+
+  So the language change is four lines in `TYNODE_NAMED` — `Never` alongside
+  `Int`/`Bool`/`Unit` — plus one registry entry. `infer_unify` already let
+  `TY_NEVER` stand in for any type, so `return panic(msg)` satisfies any return
+  type with no new rule, no coercion node, and no VM change whatsoever. The
+  three roadmap questions answered themselves once put that way: a ducktape
+  function *can* raise one (it is an ordinary call), the message is a `String`
+  the caller builds, and the unwinding story is that there is none.
+
+  `std::result` is then unremarkable, which is the point: `Result<T, E>` is an
+  ordinary generic enum that happens to match the shape `?` has recognised
+  structurally since 5c-ii, so propagation worked before the module existed and
+  the module is only the combinators plus the two accessors a panic unlocks.
+  `Option` gained the same `unwrap`/`expect` pair, and its file no longer opens
+  by explaining why it can't have them.
+
+  The one limit worth recording is where the design stops: a panic message
+  cannot *name* the value that caused it. `"{e}"` on a generic `E` is "cannot
+  interpolate a value of type 'E'" — printing an arbitrary value needs a
+  `to_string`, which needs the formatting story the `Float` wart has been
+  waiting on. `unwrap`'s message is therefore fixed and `expect` takes one from
+  the caller, which is a smaller loss than it looks: the caller knows what it
+  expected, and the frame list is printed either way.
+
+  Also fixed a pre-existing bug this surfaced, and a nasty one — a
+  **use-after-free at teardown**. `compiler_destroy` called `arena_destroy`
+  *first*, then `diag_destroy`, which walks the diag array to free each
+  message: both the array and the messages live in that arena. Every phase
+  clears the bag at the *top* of its loop rather than the bottom, so the last
+  module's diagnostics survive into teardown — meaning any failing compile was
+  reading freed memory, and had been for as long as the arena has existed. It
+  only faulted once enough modules were loaded to lay the arena out unluckily,
+  which is why a single-file failure never showed it and
+  `tests/fail/interp_generic.dt` has to `use` a std module to reproduce.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -722,13 +768,15 @@ Nothing on the main line is *blocked*: every construct the checker accepts in
 warts" section would promote first, in the order that pays off soonest — pick
 by appetite rather than by necessity.
 
-1. **`std::result`, and a real panic** — `?` already recognises a
-   "Result-like" enum structurally, so the type it is named after should be in
-   the library next to `Option`. Natives unblocked half of it: a native can now
-   fail by setting `ctx->error`, which is enough for `unwrap`/`expect` to abort
-   with a message. What is still missing is a *language-level* panic — an
-   unwinding story, a message carrying the value, and a decision about whether
-   a ducktape function can raise one at all, or only C can.
+1. **A formatting story** — now the most-requested thing the library cannot
+   express, and it blocks three separate items. Interpolation is defined over
+   primitives, so a generic value cannot be printed: `Result::unwrap` panics
+   without naming the error, `Float` has no precision or width, and no user
+   type can decide how it renders. `value_print` already walks every value
+   shape, so the mechanism is a sink abstraction over it plus a
+   `to_string<T>(v: T) -> String` native — the design question is whether a
+   user type overrides it through a `Display` trait, which is the part that
+   needs a decision rather than code.
 2. **Module-granular impls and `pub use`** — `ImplIndex` lives on the
    `TypeChecker`, so an impl applies even where its module was never
    imported, and imports don't compose (no re-export, no glob, no qualified
@@ -814,6 +862,16 @@ via `Module.decl_base`) and is not part of the main line.
   checker cannot catch
 - `ObjArray` is fixed-size, so `std::array` has `len` and nothing that grows or
   mutates
+- a panic message cannot name the value that caused it: interpolation is
+  defined over primitives, so `"{e}"` on a generic `E` is an error and
+  `unwrap`'s message is a fixed string. `expect` is the way round it
+- `Never` is not *checked* to diverge: unification lets it stand in for any
+  type in both directions, so `fun f() -> Never { return 1; }` is accepted and
+  a `var x: Never` annotation is legal. It is a promise the compiler takes on
+  trust, which is fine while `std::panic` is the only thing making it
+- a panic does not unwind — no `catch`, and no way for a program to observe one
+  and keep running. `Never` is only a *type*; the runtime behaviour behind it is
+  "print the frames and stop"
 - importing `std::cmp` spends two global slots on `Int::cmp`/`Float::cmp` even
   if only one is used — non-generic definitions are linked whether called or
   not, unlike the generics around them

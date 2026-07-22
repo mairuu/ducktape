@@ -1,0 +1,73 @@
+# std::result — the enum `?` was named after, and the accessors a panic unlocks.
+#> Ok(6)
+#> Err(division by zero)
+#> true
+#> false
+#> Some(6)
+#> None
+#> None
+#> Some(division by zero)
+#> 6
+#> 0
+#> 16
+#> Ok(3)
+#> Err(division by zero)
+#> Err(bad: division by zero)
+#> Ok(1)
+#> Err(division by zero)
+#> 42
+#> 7
+#> ok
+
+use std::io::print;
+use std::result::Result;
+use std::option::Option;
+use std::string::len;
+
+fun divide(a: Int, b: Int) -> Result<Int, String> {
+    if b == 0 {
+        return Result::Err("division by zero");
+    }
+    return Result::Ok(a / b);
+}
+
+# `?` recognises Result structurally — it is not special-cased to this module,
+# it just happens to be the shape std::result declares.
+fun ratio_of_sum(a: Int, b: Int, d: Int) -> Result<Int, String> {
+    var q = divide(a + b, d)?;
+    return Result::Ok(q + 1);
+}
+
+fun main() {
+    var ok = divide(12, 2);
+    var bad = divide(12, 0);
+    print(ok);
+    print(bad);
+
+    print(ok.is_ok());
+    print(bad.is_ok());
+
+    # a Result becomes an Option in either direction
+    print(ok.ok());
+    print(bad.ok());
+    print(ok.err());
+    print(bad.err());
+
+    print(ok.unwrap_or(0));
+    print(bad.unwrap_or(0));
+    # unlike Option's, the fallback is handed the error
+    print(bad.unwrap_or_else(|e| => len(e)));
+
+    print(ok.map(|x| => x / 2));
+    print(bad.map(|x| => x / 2));
+    print(bad.map_err(|e| => "bad: {e}"));
+
+    print(ok.and_then(|x| => divide(x, 6)));
+    print(bad.and_then(|x| => divide(x, 6)));
+
+    print(ratio_of_sum(80, 3, 2).unwrap());
+    print(ratio_of_sum(1, 1, 0).unwrap_or(7));
+
+    # Option gained the same pair
+    print(Option::Some("ok").unwrap());
+}

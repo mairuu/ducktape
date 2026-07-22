@@ -5046,6 +5046,14 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
       } else if (sv_equal_cstr(name, "Unit")) {
         result = r->tc->t_unit;
         break;
+      } else if (sv_equal_cstr(name, "Never")) {
+        // the type of code that does not come back. It already existed as the
+        // type `return`/`break` give an expression; naming it is what lets a
+        // signature promise divergence, which is the whole of `panic`'s
+        // contract — `infer_unify` lets it stand in for any type, so
+        // `return panic(msg)` satisfies any return type.
+        result = r->tc->t_never;
+        break;
       } else if (sv_equal_cstr(name, "_")) {
         if (!r->infer) {
           diag_error(r->diags, node->span,

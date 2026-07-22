@@ -1,0 +1,11 @@
+#! expect: called 'unwrap' on a 'None' value
+# a panic is a native setting ctx->error, so it surfaces as the same runtime
+# error a failing native does — reported at the call site, with the frames
+# beneath it, and then the program stops. There is no unwinding and no catch.
+use std::io::print;
+use std::option::Option;
+
+fun main() {
+    var none: Option<Int> = Option::None;
+    print(none.unwrap());
+}

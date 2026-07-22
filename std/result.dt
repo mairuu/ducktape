@@ -1,0 +1,117 @@
+# std::result — a value, or the reason there isn't one.
+#
+# `Result<T, E>` is the type `?` was always named after. The operator does not
+# know this module: it recognises a "Result-like" enum *structurally* — exactly
+# two single-field tuple variants called `Ok` and `Err` — so a program could
+# always write its own and propagate through it. What this module adds is the
+# one everybody would otherwise write, plus the combinators, plus the two
+# accessors that were impossible before `std::panic`.
+#
+# `unwrap` and `expect` are the reason this module waited for a panic: an
+# accessor that has to produce a `T` from an `Err` has nowhere to go but out.
+# `return panic(..)` is how — `panic` returns `Never`, which stands in for any
+# type, so the arm type-checks like any other.
+
+use std::option::Option;
+use std::panic::panic;
+
+pub enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
+
+impl<T, E> Result<T, E> {
+    fun is_ok(self) -> Bool {
+        match self {
+            Result::Ok(v) => { return true; },
+            Result::Err(e) => { return false; },
+        }
+    }
+
+    fun is_err(self) -> Bool {
+        return not self.is_ok();
+    }
+
+    # Discard the error, keeping only whether there was a value. The pair with
+    # `err` is how a `Result` becomes an `Option` in either direction.
+    fun ok(self) -> Option<T> {
+        match self {
+            Result::Ok(v) => { return Option::Some(v); },
+            Result::Err(e) => { return Option::None; },
+        }
+    }
+
+    fun err(self) -> Option<E> {
+        match self {
+            Result::Ok(v) => { return Option::None; },
+            Result::Err(e) => { return Option::Some(e); },
+        }
+    }
+
+    fun unwrap_or(self, fallback: T) -> T {
+        match self {
+            Result::Ok(v) => { return v; },
+            Result::Err(e) => { return fallback; },
+        }
+    }
+
+    # Unlike `Option`'s, this one hands the error to the fallback — recovering
+    # from a failure usually wants to know what it was.
+    fun unwrap_or_else(self, fallback: fun(E) -> T) -> T {
+        match self {
+            Result::Ok(v) => { return v; },
+            Result::Err(e) => { return fallback(e); },
+        }
+    }
+
+    # The contained value, or a panic. Prefer `unwrap_or` and friends anywhere
+    # the failure is expected; this is for the case where it would be a bug.
+    #
+    # The message cannot name the error it found: interpolating a value
+    # requires a primitive, and `E` is any type at all. Printing one would need
+    # a `to_string` over arbitrary values — a formatting story the language
+    # does not have yet — so `expect` is how a caller says what it wanted.
+    fun unwrap(self) -> T {
+        match self {
+            Result::Ok(v) => { return v; },
+            Result::Err(e) => {
+                return panic("called 'unwrap' on an 'Err' value");
+            },
+        }
+    }
+
+    # `unwrap` with a message of your own — the message says what the caller
+    # was expecting, which is the part a stack trace cannot recover.
+    fun expect(self, message: String) -> T {
+        match self {
+            Result::Ok(v) => { return v; },
+            Result::Err(e) => { return panic(message); },
+        }
+    }
+
+    fun map<U>(self, f: fun(T) -> U) -> Result<U, E> {
+        match self {
+            Result::Ok(v) => { return Result::Ok(f(v)); },
+            Result::Err(e) => { return Result::Err(e); },
+        }
+    }
+
+    # The mirror: rewrite the failure and leave the success alone. This is what
+    # lets `?` propagate across two error types, since the operator itself
+    # requires the enclosing function to return the very same enum.
+    fun map_err<F>(self, f: fun(E) -> F) -> Result<T, F> {
+        match self {
+            Result::Ok(v) => { return Result::Ok(v); },
+            Result::Err(e) => { return Result::Err(f(e)); },
+        }
+    }
+
+    # `map` for an `f` that may itself fail — the two `Err`s collapse instead
+    # of nesting into `Result<Result<U, E>, E>`.
+    fun and_then<U>(self, f: fun(T) -> Result<U, E>) -> Result<U, E> {
+        match self {
+            Result::Ok(v) => { return f(v); },
+            Result::Err(e) => { return Result::Err(e); },
+        }
+    }
+}

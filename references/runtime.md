@@ -665,8 +665,21 @@ root set, so an allocating native (`string_slice` interns) cannot have its own
 arguments swept out from under it. `OP_MAKE_DYN` already followed exactly this
 discipline for `heap_dyn`; getting it wrong reproduces the 5c-ii class of bug,
 something reachable-looking the collector cannot see. A native fails by
-setting `ctx->error` to a static string, which becomes a runtime error at the
-call site.
+setting `ctx->error`, which becomes a runtime error at the call site.
+
+**Panic is that failure path, named.** `std::panic`'s `panic_abort` sets
+`ctx->error` and nothing else, so a ducktape-level panic and a failing native
+are the same event — `runtime_error` prints the message and the frames beneath
+it, and `vm_run` returns false. There is no unwinding: no `catch`, no
+destructor to run, no value carried out. What makes it usable from ducktape is
+purely a *checker* fact, that the declared return type `Never` stands in for
+any type (`language.md` "`std::panic`"); the VM needed no change at all.
+
+The message is the argument's own bytes rather than a copy — an `ObjString` is
+NUL-terminated, and `args` is still on the stack when the VM reads
+`ctx->error`, so nothing can collect in between. Aliasing the heap that way is
+only sound *because* a panic never returns; a native that wanted to fail with a
+computed message and keep running would need somewhere else to put it.
 
 **A generic native is never monomorphised.** The runtime is uniform in type
 arguments, so one C body serves every `T` — `cg_call_target` returns the

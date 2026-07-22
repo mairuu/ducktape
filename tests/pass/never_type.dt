@@ -1,0 +1,33 @@
+# `Never` is nameable in a signature. It was always the type `return` and
+# `break` gave an expression; naming it is what lets a function *promise* it
+# does not come back, which is the whole of `panic`'s contract.
+#
+# Because `infer_unify` lets `Never` stand in for any type, one diverging
+# helper satisfies every return type without a cast.
+use std::panic::panic;
+use std::option::Option;
+
+fun unreachable() -> Never {
+    return panic("unreachable");
+}
+
+fun an_int() -> Int {
+    return unreachable();
+}
+
+fun a_string() -> String {
+    return unreachable();
+}
+
+fun an_option<T>(present: Bool, v: T) -> Option<T> {
+    if present {
+        return Option::Some(v);
+    }
+    return unreachable();
+}
+
+fun main() {
+    var a = an_int();
+    var b = a_string();
+    var c = an_option(true, 1);
+}

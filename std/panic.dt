@@ -1,0 +1,15 @@
+# std::panic — stopping on purpose.
+#
+# `panic` is the first std function that promises never to come back. Its
+# return type is `Never`, the type `return` and `break` already had; naming it
+# in a signature is what makes the promise checkable, and `Never` standing in
+# for any type is what makes `return panic(msg)` satisfy any return type. That
+# is the whole reason `Option::unwrap` can exist.
+#
+# There is no unwinding and no `catch`: a panic sets the same error a failing
+# native sets, so the VM reports it at the call site and stops. Recovering
+# from one would need a story for what a half-finished frame leaves behind,
+# and the language has none — so it does the honest thing and ends.
+
+@native("panic_abort")
+pub fun panic(message: String) -> Never;

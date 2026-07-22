@@ -34,6 +34,23 @@ static Value n_io_print(NativeCtx *ctx, Value *args, int argc) {
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
+// std::panic
+// ───────────────────────────────────────────────────────────────────────────────
+
+// The whole of a panic: set `ctx->error` and let the VM report it at the call
+// site. There is no unwinding, so this is the last thing the program does.
+//
+// The message is the argument's own bytes rather than a copy: an ObjString is
+// NUL-terminated, and `args` still sits on the VM stack when the VM reads
+// `ctx->error` — nothing can collect in between. Aliasing the heap is only
+// safe *because* a panic never returns.
+static Value n_panic_abort(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  ctx->error = val_as_string(args[0])->chars;
+  return val_unit();
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
 // std::string
 // ───────────────────────────────────────────────────────────────────────────────
 
@@ -70,6 +87,7 @@ typedef struct {
 
 static const NativeEntry natives[] = {
     {"io_print", n_io_print},
+    {"panic_abort", n_panic_abort},
     {"string_len", n_string_len},
     {"string_slice", n_string_slice},
 };

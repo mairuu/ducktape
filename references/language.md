@@ -47,6 +47,7 @@ case for it) — declare variables inside functions only.
 |---|---|
 | `Int` `Float` `Bool` `String` | primitives |
 | `()` | unit |
+| `Never` | code that does not come back — see "`std::panic`" |
 | `(A, B)` | tuple |
 | `[T]` | array of `T` |
 | `fun(A, B) -> R` | function type |
@@ -206,9 +207,10 @@ therefore always need a `_` or a binding arm.
 `expr?` is structural: the operand must be an enum with exactly two
 single-field tuple variants named `Ok` and `Err`, and the enclosing function
 (or closure) must return the *same* enum; the `Err` payload types must unify.
-The result is the `Ok` payload. There is no built-in `Result` — declare your
-own (`tests/pass/propagate.dt`). This rule will move to a `Try` trait once
-traits are fully checked.
+The result is the `Ok` payload. Nothing about the rule is tied to a particular
+enum, so you may declare your own (`tests/pass/propagate.dt`); `std::result`
+declares the one that fits it. This rule will move to a `Try` trait once traits
+are fully checked.
 
 ## Modules
 
@@ -252,8 +254,9 @@ involved.
 `use std::cmp;` needs no install path, environment variable or search
 directory. `std::` never touches the filesystem, so a local `std.dt` is
 unreachable. Where ducktape cannot express the operation, a module declares a
-bodyless function bound to C (see "Native functions" below); `std::cmp` and
-`std::option` need none, `std::io` is nothing but.
+bodyless function bound to C (see "Native functions" below); `std::cmp`,
+`std::option` and `std::result` need none, `std::io` and `std::panic` are
+nothing but.
 
 **There is no prelude.** Every std name, `print` included, has to be imported.
 
@@ -298,6 +301,8 @@ pub enum Option<T> { Some(T), None }
 impl<T> Option<T> {
     fun is_some(self) -> Bool
     fun is_none(self) -> Bool
+    fun unwrap(self) -> T                # panics on None
+    fun expect(self, message: String) -> T
     fun unwrap_or(self, fallback: T) -> T
     fun unwrap_or_else(self, fallback: fun() -> T) -> T
     fun map<U>(self, f: fun(T) -> U) -> Option<U>
@@ -313,16 +318,86 @@ An ordinary generic enum with an ordinary generic inherent impl — nothing
 about it is known to the compiler, and `Option` is not in scope until it is
 imported (`use std::option::Option;`). It is not a prelude.
 
-Two things are missing on purpose. There is **no `unwrap`**: a method that
-aborts on `None` needs a way to fail at runtime, and the language has neither
-a panic nor native functions, so every accessor here names what to do instead.
-And the `or` combinator is spelled `otherwise`, because `or` is a keyword; by
-the naming convention the rest of the module follows, `or_else` would be the
+The `or` combinator is spelled `otherwise`, because `or` is a keyword; by the
+naming convention the rest of the module follows, `or_else` would be the
 closure-taking form, which does not exist yet.
+
+`unwrap`/`expect` arrived with `std::panic` — they are the accessors that
+cannot be written without a way to fail, and every other one here exists to
+name what to do instead.
 
 `impl<T: Ord> Ord for Option<T>` is the first place one std module imports
 another — it is an ordinary `use std::cmp::Ord;`, and the registry deduplicates
 it against a program's own import of `std::cmp` (`tests/run/std_option.dt`).
+
+### `std::panic`
+
+```
+@native("panic_abort")
+pub fun panic(message: String) -> Never;
+```
+
+`panic` is the only std function that promises never to come back, and `Never`
+is the type that says so. It is not a new type — it is the one `return` and
+`break` already gave an expression — but until this module nothing could *name*
+it in a signature.
+
+Naming it is what makes the promise usable. `infer_unify` lets `Never` stand in
+for any type, so `return panic(msg)` satisfies any return type at all:
+
+```
+fun unwrap(self) -> T {
+    match self {
+        Option::Some(v) => { return v; },
+        Option::None => { return panic("called 'unwrap' on a 'None' value"); },
+    }
+}
+```
+
+That single rule is the whole of what `std::result` and `Option::unwrap` needed
+(`tests/pass/never_type.dt`).
+
+**There is no unwinding and no `catch`.** A panic sets the same error a failing
+native sets, so the VM reports it at the call site, prints the frames beneath
+it, and stops. Recovering would need a story for what a half-finished frame
+leaves behind, and the language has none.
+
+The message is an ordinary `String`, so a call site can build one by
+interpolation — but a panic *inside* a generic cannot name the value that
+caused it, since interpolation is defined over primitives and there is no
+`to_string` over arbitrary values. That is why `unwrap`'s message is fixed and
+`expect` takes one from the caller.
+
+### `std::result`
+
+```
+pub enum Result<T, E> { Ok(T), Err(E) }
+
+impl<T, E> Result<T, E> {
+    fun is_ok(self) -> Bool
+    fun is_err(self) -> Bool
+    fun ok(self) -> Option<T>            # discard the error
+    fun err(self) -> Option<E>
+    fun unwrap(self) -> T                # panics on Err
+    fun expect(self, message: String) -> T
+    fun unwrap_or(self, fallback: T) -> T
+    fun unwrap_or_else(self, fallback: fun(E) -> T) -> T
+    fun map<U>(self, f: fun(T) -> U) -> Result<U, E>
+    fun map_err<F>(self, f: fun(E) -> F) -> Result<T, F>
+    fun and_then<U>(self, f: fun(T) -> Result<U, E>) -> Result<U, E>
+}
+```
+
+The type `?` is named after. The operator does **not** know this module — it
+recognises the shape structurally (see "`?` propagation"), which is why a
+program could always propagate through an enum of its own. What the module adds
+is the one everybody would otherwise write, its combinators, and the two
+accessors `std::panic` unlocked (`tests/run/std_result.dt`).
+
+`unwrap_or_else` hands the closure the *error*, unlike `Option`'s, which takes
+none: recovering from a failure usually wants to know what it was. `map_err` is
+the mirror of `map` and is what lets a caller cross two error types, since `?`
+itself requires the enclosing function to return the very same enum.
 
 ### Native functions
 
@@ -399,6 +474,8 @@ mistaken for an `Int`: `1.0`, `0.3333333333333333`, `300.0`, `1e+18`, `1e-07`,
 | extra (non-trait) methods in a trait impl | tolerated as inherent methods (Rust rejects them) |
 | `dyn Trait` for a non-object-safe trait | rejected where `dyn` is written, naming the method and the reason |
 | coercing the abstract `Self` of a default body to `dyn Trait` | not offered — `self` inside a default body cannot be handed over as a trait object |
+| recovering from a panic (`catch`, unwinding) | a panic reports at the call site and stops; there is no `catch` |
+| formatting a non-primitive value (`to_string`, `{v}` on a generic) | interpolation is defined over primitives — "cannot interpolate a value of type 'T'", which is why `unwrap`'s panic message cannot name the error |
 | casting a `dyn Trait` back to its concrete type | no downcast; the coercion is one-way |
 | `dyn Trait` with type arguments (`dyn Into<Int>`) | generic traits are not parameterised in `dyn` position |
 | `mod` declarations | no such keyword; `use` is what pulls a file in |

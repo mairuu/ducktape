@@ -1,0 +1,15 @@
+#! expect: cannot interpolate a value of type 'T'
+# interpolation is defined over primitives, so a generic value cannot be
+# formatted — printing one would need a `to_string` over arbitrary values,
+# which is why `Result::unwrap`'s panic message cannot name the error it found.
+#
+# Also the regression test for a use-after-free at teardown: each compiler
+# phase clears the diag bag at the *top* of its loop, so a failing last module
+# leaves diagnostics in a bag whose messages live in the arena — which
+# `compiler_destroy` used to free first. It takes a multi-module program (the
+# `use` below) to lay the arena out so the read faults.
+use std::option::Option;
+
+fun show<T>(v: T) -> String {
+    return "{v}";
+}

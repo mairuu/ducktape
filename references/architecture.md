@@ -183,6 +183,12 @@ identity is pointer equality (`types_equal`). Singletons: Int, Float, Bool,
 String, `()` (unit), `!` (`TY_NEVER` — produced by blocks ending in `return`,
 unifies with anything), `Range` (`TY_RANGE`, Int-only), and `TY_POISON`.
 
+`TY_NEVER` is also writable, spelled `Never` in `TYNODE_NAMED` alongside the
+other primitives. That one line is the whole of the language support for
+`panic`: a signature can now *promise* divergence, and because unification
+already let `!` stand in for any type, `return panic(msg)` satisfies any return
+type with no coercion and no further rule (`language.md` "`std::panic`").
+
 Inference is union-find over `TY_UNKNOWN` nodes: `infer_fresh` mints
 unknowns, `infer_unify` solves (emitting "type mismatch" diags itself),
 `infer_find`/`infer_apply` chase and deep-substitute solutions,
