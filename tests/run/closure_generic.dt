@@ -1,0 +1,98 @@
+# A closure inside a generic body is compiled once per instantiation, and each
+# copy is a different program — a call on `self` or on a `T` inside it resolves
+# through that instantiation's type arguments. So the closure needs its own
+# FunDef per instance, exactly as the body around it does; sharing the AST
+# node's def let the last instantiation compiled win for every earlier one.
+#> 7
+#> 9
+#> 7
+#> 9
+#> 7
+#> 9
+#> 14
+#> 18
+#> a
+#> 1
+#> 7
+#> 9
+use std::io::print;
+
+trait Show {
+    fun show(self) -> Int;
+
+    # the default body is a generic function whose first type parameter is
+    # `Self`, so this closure is instantiated per receiver type
+    fun via_closure(self) -> Int {
+        var f: fun() -> Int = || => self.show();
+        return f();
+    }
+
+    # a closure inside a closure: both copies have to follow
+    fun via_nested(self) -> Int {
+        var outer: fun() -> Int = || => {
+            var inner: fun() -> Int = || => self.show();
+            return inner();
+        };
+        return outer();
+    }
+}
+
+struct A(Int)
+
+impl Show for A {
+    fun show(self) -> Int {
+        return self.0;
+    }
+}
+
+# a different field count, so reading the wrong impl's field index is a read
+# past the end of the struct rather than merely a wrong answer
+struct B {
+    x: Int,
+    y: Int,
+}
+
+impl Show for B {
+    fun show(self) -> Int {
+        return self.y;
+    }
+}
+
+# the same shape without a trait: a closure in a plain generic function, whose
+# call target is only known once T is concrete
+fun doubled<T: Show>(v: T) -> Int {
+    var f: fun() -> Int = || => v.show() + v.show();
+    return f();
+}
+
+# a closure over a value of the type parameter, returned from the generic body
+# that made it — so the instance's chunk outlives the frame that built it
+fun getter<T>(v: T) -> fun() -> T {
+    return || => v;
+}
+
+fun main() {
+    var a = A(7);
+    var b = B { x: 1, y: 9 };
+
+    print(a.show());
+    print(b.show());
+
+    print(a.via_closure());
+    print(b.via_closure());
+
+    print(a.via_nested());
+    print(b.via_nested());
+
+    print(doubled(a));
+    print(doubled(b));
+
+    var gs = getter("a");
+    var gi = getter(1);
+    print(gs());
+    print(gi());
+
+    # instantiating in the other order reaches the same bodies
+    print(b.via_closure() - 2);
+    print(a.via_closure() + 2);
+}

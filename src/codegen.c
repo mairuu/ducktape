@@ -1945,6 +1945,24 @@ static void compile_closure(Cg *cg, Expr *expr) {
   FunDef *fun = closure->def;
   assert(fun != NULL && "closure not resolved before codegen");
 
+  // A closure inside a *generic* body is compiled once per instantiation, and
+  // each copy is a different program: `self.show()` in it resolves through
+  // `cg->subst` exactly as it does in the body around it. So it needs its own
+  // FunDef, for the same reason `mono_request` copies the enclosing one —
+  // `closure->def` is the AST node's, one for every instantiation, and writing
+  // a chunk into it lets the last instantiation compiled win for all of them.
+  // (The `VAL_FUN` constant the earlier chunks already hold names that shared
+  // def, so they would go on to build closures over someone else's body.)
+  //
+  // A non-generic body has an empty subst and is compiled once, so it keeps
+  // the AST's def and pays nothing.
+  if (cg->subst.count > 0) {
+    FunDef *instance = al_alloc_zero_for(cg->al, FunDef);
+    *instance = *fun; // same body, params and name; its own chunk
+    instance->chunk = NULL;
+    fun = instance;
+  }
+
   Cg child = {.m = cg->m,
               .impls = cg->impls, // as with .subst: the same instantiation
               .exe = cg->exe,

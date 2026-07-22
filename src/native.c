@@ -34,6 +34,43 @@ static Value n_io_print(NativeCtx *ctx, Value *args, int argc) {
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
+// std::array
+// ───────────────────────────────────────────────────────────────────────────────
+
+// The two operations a `[T]` cannot express about itself: a slot that did not
+// exist before, and one fewer than there was. Everything else `std::array`
+// offers is written in ducktape on top of these — which is why `pop` here is
+// the raw, panicking one and the `Option`-returning `pop` lives in the .dt.
+
+static Value n_array_push(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  ObjArray *arr = val_as_array(args[0]);
+  // reserve may collect; both the array and the value being pushed are still
+  // on the VM stack as `args`, which is the whole of the calling convention.
+  // `count` rises only once the slot is really there.
+  heap_array_reserve(ctx->heap, arr, arr->count + 1);
+  arr->items[arr->count++] = args[1];
+  return val_unit();
+}
+
+// Lowering `count` is what drops the value, so the array no longer roots it.
+// It survives because the VM pushes the result with nothing allocating in
+// between — the same window `string_slice`'s freshly interned result lives in.
+//
+// The empty check is this function's own contract rather than a diagnostic a
+// program can reach: `pop_last` is private to `std::array`, whose only caller
+// tests the length first so it can answer `None`.
+static Value n_array_pop(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  ObjArray *arr = val_as_array(args[0]);
+  if (arr->count == 0) {
+    ctx->error = "pop from an empty array";
+    return val_unit();
+  }
+  return arr->items[--arr->count];
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
 // std::fmt
 // ───────────────────────────────────────────────────────────────────────────────
 
@@ -112,6 +149,7 @@ typedef struct {
 } NativeEntry;
 
 static const NativeEntry natives[] = {
+    {"array_pop", n_array_pop},       {"array_push", n_array_push},
     {"fmt_float", n_fmt_float},       {"io_print", n_io_print},
     {"panic_abort", n_panic_abort},   {"string_len", n_string_len},
     {"string_slice", n_string_slice},

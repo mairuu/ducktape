@@ -1112,6 +1112,82 @@
   first drafts all had 300-statement `main`s, so all four died in the parser
   and only the last ceiling was really under test.
 
+- **Growable arrays (milestone 23)** — `[T]` stops being fixed-size:
+  `std::array::push` appends, `pop` removes, and the buffer underneath doubles.
+  Design: `runtime.md` "Heap & GC" → "Growing an array", `language.md`
+  "`std::io`, `std::array`, `std::string`".
+
+  The observation the milestone turns on: **only two of the operations are
+  things an array cannot express about itself** — a slot that did not exist
+  before, and one fewer than there was. So those two are the whole C surface,
+  and `pop`, `first`, `last`, `is_empty` and `clear` are ordinary ducktape on
+  top. That is milestone 16's "the signature is the only part that has to be in
+  ducktape" read from the other end, and it is what buys the API its shape:
+  `pop` returns an `Option<T>`, which a native *cannot* do at all, since its
+  contract is "n values in, one out" and it has no handle on the `VariantDef`
+  an enum instance needs. The raw remove-last is therefore private, panics on
+  empty, and exists only to be wrapped
+  (`tests/fail/array_pop_last_private.dt`).
+
+  **The language surface did not change.** No new type, no new syntax, no new
+  opcode, no image change, and not one line in the checker — `push` is an
+  ordinary generic native and `[T]` gained a field the language cannot name.
+  The whole milestone is below the checker, which is the honest reason it is a
+  small one: what the roadmap called "a real allocator question" turned out to
+  be a real *GC* question, and the answer was already written down.
+
+  The ordering rules are milestone 8's, one level down, and both directions
+  matter:
+  - **The new buffer is allocated before anything about the array changes**, so
+    the collection that allocation may trigger still finds `count` live values
+    in the old `items`. The array is rooted (for `push`, by being an argument
+    still on the VM stack — milestone 16's calling convention, unchanged), so
+    the collector *will* walk it; what it walks has to be the buffer that is
+    actually there.
+  - **`count` rises only once the slot exists.** Raising it first points the
+    collector at a `Value` never written — the same class of bug as a `FunDef`
+    missing from `exe->globals`, or `heap_collect` never walking
+    `module->methods[]` in 5c-ii: something reachable-looking that the
+    collector cannot read correctly. Popping is the mirror, and it makes the
+    convention's second half visible for the first time: lowering `count` drops
+    the value, which survives only because the VM pushes the result with
+    nothing allocating in between.
+
+  `free_obj` releasing `cap` rather than `count` is the one place the split
+  leaks out of `object.c`; everything else about a `[T]` — `OP_ARRAY`,
+  `OP_INDEX_GET`/`SET`, `OP_LEN`, the `for` desugaring, `value_print`,
+  structural `==` — reads `count` and did not change.
+
+  The cost worth recording is a **transitive one, and it is the design
+  working rather than a wart**: `pop` returning `Option` makes `std::array`
+  depend on `std::option`, and since milestone 19 impl visibility is transitive
+  through `use`. So `use std::array::push;` now hands a program `std::fmt`'s
+  and `std::cmp`'s impls as well, and with them coherence's refusal to let it
+  write its own `impl Display for Int`. `std::array` used to be a leaf. The
+  alternative was a panicking `pop`, which trades a worse API for a shallower
+  graph — not a trade worth making, but worth saying out loud, because it is
+  the first time a std module's *dependencies* are part of its public contract.
+
+  **Also fixed a pre-existing bug, and this one was not surfaced by the
+  feature** — it was found by running the suite under AddressSanitizer to check
+  the new growth path, which is worth recording as its own lesson: the array
+  work was clean, and the sweep found something else. **A closure inside a
+  generic body was compiled into the `FunDef` on the AST node**, which is one
+  node for every instantiation, so each instantiation overwrote the last one's
+  chunk — and the earlier chunks' `VAL_FUN` constants went on naming it, so
+  they built closures over somebody else's body. `mono_request` has cloned the
+  enclosing `FunDef` per instantiation since milestone 10; `compile_closure`
+  never did the same for the closure inside it.
+
+  It read as a heap-buffer-overflow because the wrong body indexes fields by
+  the wrong layout: a one-field `A` handed to a two-field `B`'s method reads
+  `fields[1]` off the end of the struct. The tell is that
+  `tests/run/trait_default.dt` has been *passing on the wrong answer* — its
+  `bigger` default body compares two garbage reads, and the branch it happened
+  to take was the right one. `tests/run/closure_generic.dt` pins it directly
+  (on master it prints 49 for a value of 7), and the suite is now
+  ASan-clean.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -1123,14 +1199,15 @@ warts" section would promote first, in the order that pays off soonest — pick
 by appetite rather than by necessity.
 
 1. **Growing std on top of the natives** — the mechanism landed in milestone
-   16 with a deliberately small registry (`print`, array `len`, string
-   `len`/`slice`, `fmt` `float`). What it does not yet reach is anything that
-   *mutates* or *grows* a heap object: `push` needs `ObjArray` to stop being
-   fixed-size, which is a real allocator question rather than another table
-   entry. String comparison, padding a rendered value to a width, and a `Char`
-   type are each one entry plus a decision about the type they need — and
-   padding is the one that would decide whether `{}` ever grows a format-spec
-   grammar or stays a bare segment with `std::fmt` functions beside it.
+   16 with a deliberately small registry, and milestone 23 took the half of
+   this item with a design question behind it (a growable `ObjArray`, so
+   `std::array` has `push`/`pop`). What is left is breadth, and each piece is
+   one registry entry plus a decision about the type it needs: string
+   comparison (which unlocks `impl Ord for String`), a `Char` type, and padding
+   a rendered value to a width. Padding is the one that decides something —
+   whether `{}` ever grows a format-spec grammar or stays a bare segment with
+   `std::fmt` functions beside it. A `String` that can be *built* rather than
+   concatenated is the other natural follow-on now that a buffer can grow.
 2. **Object-safe traits with associated types** — the object-safety rule
    rejects `Self.Item` outright. Allowing `dyn Iterator` with the associated
    type *named* at the coercion site (`dyn Iterator<Item = Int>`) is the
@@ -1205,8 +1282,18 @@ via `Module.decl_base`) and is not part of the main line.
 - a native's C signature is not checked against its ducktape one — the registry
   knows only "n values in, one out", so a mismatch is a std bug that the
   checker cannot catch
-- `ObjArray` is fixed-size, so `std::array` has `len` and nothing that grows or
-  mutates
+- an array grows but never shrinks its buffer: `pop` and `clear` leave the
+  capacity where it got to, and it is released only when the array is collected
+- `for x in xs` re-reads the length each iteration, so pushing to the array
+  being iterated extends the loop instead of iterating a snapshot. There is no
+  borrow checker to forbid it, and nothing diagnoses it
+- `std::array` is no longer a leaf: `pop` returns an `Option`, so importing any
+  of it reaches `std::option` and, transitively, every impl `std::fmt` and
+  `std::cmp` ship. A program that wanted `push` and its own `impl Display for
+  Int` cannot have both
+- a `String` is immutable and interned, so building one is repeated `+` (each
+  step interning a whole new string). Nothing yet grows a text buffer the way
+  `push` grows an array
 - a panic message can only name the value that caused it where the type
   parameter is bounded: `"{e}"` needs `E: Display`, and `Option`/`Result`'s
   `unwrap` are not bounded, so their messages stay fixed. `expect` is the way

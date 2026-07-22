@@ -110,8 +110,8 @@ list used by sweep):
 | `ObjKind` | Payload |
 |---|---|
 | `OBJ_STRING` | interned: `len`, cached `hash`, flexible `chars[]` (NUL-terminated) |
-| `OBJ_ARRAY` | `count`, growable `Value *items` |
-| `OBJ_TUPLE` | `count`, `Value *items` — same shape as `OBJ_ARRAY`, kept as a distinct kind purely so printing/equality read as a tuple |
+| `OBJ_ARRAY` | `count` live values inside a buffer of `cap`, `Value *items` — see "Growing an array" |
+| `OBJ_TUPLE` | `count`, `Value *items` — the same shape minus the capacity (a tuple's length is part of its type, so it can never grow), kept as a distinct kind so printing/equality read as a tuple |
 | `OBJ_STRUCT` | `StructDef *def`, `Value *fields` (`def->field_count` entries, declaration order — not necessarily the initializer's source order) |
 | `OBJ_ENUM` | `VariantDef *variant`, `Value *fields` (`variant->field_count` entries, declaration order) |
 | `OBJ_CLOSURE` | `FunDef *fun`, `ObjUpvalue **upvalues` (`upvalue_count` entries) — a capturing function value |
@@ -159,13 +159,48 @@ enough collect cycles every slot was tombstoned and a miss in `table_find`
 (whose loop only terminates on a `NULL` slot) spun forever.
 
 Any allocating call (`heap_intern`, `heap_concat`, `heap_array`, `heap_tuple`,
-`heap_struct`, `heap_enum`, `heap_closure`, `heap_upvalue`) may collect
-*before* the new object exists, so
+`heap_struct`, `heap_enum`, `heap_closure`, `heap_upvalue`,
+`heap_array_reserve`) may collect *before* the new object exists, so
 the discipline throughout codegen/VM is: keep every already-live operand
 reachable from a root (still on the VM stack, not yet popped) until the new
 object is built and pushed. See the `OP_ARRAY`/`OP_INTERP`/`OP_TUPLE`/
 `OP_STRUCT`/`OP_ENUM` handlers in `src/vm.c` for the pattern (index math into
 the stack in place, decrementing `sp` only after the result exists).
+
+### Growing an array
+
+An `ObjArray` holds `count` live values in a buffer of `cap`.
+`heap_array` — the only thing `OP_ARRAY` calls, and it already knows how many
+elements it just evaluated — builds an exact fit (`cap == count`), so an array
+literal costs nothing extra and only `std::array::push` ever grows one.
+`heap_array_reserve` doubles the buffer (from a floor of 8), copies the live
+prefix, fills the tail with unit and frees the old buffer through
+`heap_dealloc` so `bytes_allocated` stays honest. `free_obj` releases `cap`
+values, not `count`: past the first push the two differ.
+
+`count` is the whole of what is live — the mark phase walks exactly
+`[0, count)` and nothing reads past it — and that is what fixes the ordering:
+
+- **The new buffer is allocated before anything about the array changes.** The
+  collection `heap_alloc` may trigger therefore finds `count` live values in
+  the old `items`, which is a consistent array. Both halves matter: the array
+  is reachable (its owner keeps it rooted, which for `push` means it is still
+  an argument on the VM stack), so the collector *will* walk it, and what it
+  walks has to be the buffer that is actually there.
+- **`count` rises only once the slot exists.** Raising it first would point the
+  collector at a `Value` that has never been written — the same class of bug as
+  a `FunDef` missing from `exe->globals` (milestone 8) or `module->methods[]`
+  going unscanned (5c-ii): something reachable-looking the collector cannot
+  read correctly.
+
+Popping is the mirror. Lowering `count` is what drops the value, so the array
+stops rooting it; it survives only because the VM pushes the native's result
+with nothing allocating in between — the same window `string_slice`'s freshly
+interned result already lived in.
+
+Growth reallocates, so **no raw `Value *` into `items` may be held across a
+push**. Nothing in the VM does: `args` points into the value stack, not into
+an array's buffer.
 
 ## Codegen shapes (`src/codegen.c`)
 
@@ -486,6 +521,18 @@ A closure expression (`|x| => body`) is compiled the crafting-interpreters
 way: its body goes into its own `Chunk` via a *child* `Cg` whose `parent`
 points at the enclosing function's `Cg`, and the enclosing chunk emits
 `OP_CLOSURE` to build the runtime `ObjClosure` from the captured cells.
+
+The child `Cg` inherits `subst` and `impls` from its parent — a closure body
+sees the enclosing body's type parameters and selects impls from the same set
+— which makes a closure inside a *generic* body **a different program per
+instantiation**, since `v.show()` inside it resolves through those type
+arguments exactly as it does outside. So it gets its own `FunDef` clone
+whenever `cg->subst` is non-empty, for the same reason and in the same shape as
+`mono_request` cloning the body around it. `ExprClosure.def` is the AST node's,
+one for every instantiation; writing a chunk straight into it lets the last
+instantiation compiled win for all of them, including the earlier chunks whose
+`VAL_FUN` constant already names it. A non-generic body has an empty `subst`
+and is compiled once, so it keeps the AST's def and pays nothing.
 
 **Resolving a name** (in `EXPR_PATH` and assignment targets) now tries, in
 order: a local of this function (`OP_GET_LOCAL`), an *upvalue*

@@ -53,7 +53,9 @@ static void free_obj(Heap *h, Obj *o) {
   case OBJ_ARRAY: {
     ObjArray *arr = (ObjArray *)o;
     if (arr->items != NULL) {
-      heap_dealloc(h, arr->items, sizeof(Value) * (size_t)arr->count);
+      // `cap`, not `count`: past the first push the two differ, and the
+      // buffer is the size it was asked for rather than the part in use.
+      heap_dealloc(h, arr->items, sizeof(Value) * (size_t)arr->cap);
     }
     break;
   }
@@ -210,8 +212,39 @@ ObjArray *heap_array(Heap *h, int count) {
   }
   ObjArray *arr = (ObjArray *)new_obj(h, OBJ_ARRAY, sizeof(ObjArray));
   arr->count = count;
+  arr->cap = count; // exact fit; growth is `push`'s business alone
   arr->items = items;
   return arr;
+}
+
+#define ARRAY_MIN_CAP 8
+
+void heap_array_reserve(Heap *h, ObjArray *arr, int needed) {
+  if (needed <= arr->cap) {
+    return;
+  }
+  int cap = arr->cap < ARRAY_MIN_CAP ? ARRAY_MIN_CAP : arr->cap;
+  while (cap < needed) {
+    cap *= 2;
+  }
+
+  // The new buffer is allocated *before* anything about `arr` changes, so the
+  // collection heap_alloc may trigger still finds a consistent array: `count`
+  // live values in the old `items`. Both halves of that matter — the array is
+  // reachable (its owner keeps it rooted), so the collector will walk it, and
+  // what it walks has to be the buffer that is actually there.
+  Value *items = heap_alloc(h, sizeof(Value) * (size_t)cap);
+  if (arr->count > 0) { // an empty array has no buffer at all, not an empty one
+    memcpy(items, arr->items, sizeof(Value) * (size_t)arr->count);
+  }
+  for (int i = arr->count; i < cap; i++) {
+    items[i] = val_unit(); // the tail is never marked, but is never garbage
+  }
+  if (arr->items != NULL) {
+    heap_dealloc(h, arr->items, sizeof(Value) * (size_t)arr->cap);
+  }
+  arr->items = items;
+  arr->cap = cap;
 }
 
 ObjTuple *heap_tuple(Heap *h, int count) {

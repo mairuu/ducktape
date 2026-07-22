@@ -104,8 +104,8 @@ phase aborts mid-file. Error recovery uses a poison type/expr convention (see
   `language.md` for the precise rules and the not-yet-implemented list.
 - **Executes (`--run`):** nearly all of it — arithmetic, control flow,
   recursion, first-class function values and closures with upvalues, native
-  functions (`std::io::print`, `std::array::len`, `std::string`),
-  GC-backed strings and arrays, structs/enums/tuples with full match
+  functions (`std::io::print`, `std::array`, `std::string`),
+  GC-backed strings and growable arrays, structs/enums/tuples with full match
   compilation, methods and `?`, multi-module programs, and generic code via
   monomorphisation (including dispatch through a trait bound and inherited
   trait default bodies). What is left is listed in `language.md`'s

@@ -109,14 +109,23 @@ typedef struct {
   char chars[];
 } ObjString;
 
-// fixed-size once built (no push operation in the language yet).
+// growable: `count` live values inside a buffer of `cap`. A literal is built
+// exact-fit (`OP_ARRAY` knows how many elements it just evaluated) and only
+// `std::array::push` ever grows one, so a program that never pushes pays
+// nothing for the capacity field but its four bytes.
+//
+// `count` is the whole of what is live: the mark phase walks exactly
+// `[0, count)` and the slots past it are never read, which is why growth may
+// only raise `count` *after* the slot it names exists.
 typedef struct {
   Obj obj;
   int count;
+  int cap;
   Value *items;
 } ObjArray;
 
-// (a, b, c) — same shape as ObjArray, kept as a distinct ObjKind so
+// (a, b, c) — same shape as ObjArray minus the capacity (a tuple's length is
+// part of its type, so it can never grow), kept as a distinct ObjKind so
 // printing/equality read as a tuple rather than an array.
 typedef struct {
   Obj obj;
@@ -236,13 +245,19 @@ void heap_destroy(Heap *h);
 // operands on its stack until the result is pushed).
 ObjString *heap_intern(Heap *h, const char *chars, int len);
 ObjString *heap_concat(Heap *h, ObjString *a, ObjString *b);
-ObjArray *heap_array(Heap *h, int count); // items start as unit
+ObjArray *heap_array(Heap *h, int count); // items start as unit; cap == count
 ObjTuple *heap_tuple(Heap *h, int count); // items start as unit
 ObjStruct *heap_struct(Heap *h, StructDef *def);
 ObjEnum *heap_enum(Heap *h, VariantDef *variant);
 ObjClosure *heap_closure(Heap *h, FunDef *fun, int upvalue_count);
 ObjUpvalue *heap_upvalue(Heap *h, Value *slot);
 ObjDyn *heap_dyn(Heap *h, Value inner, VTable *vtable);
+
+// widen `arr` so it can hold `needed` values, doubling its buffer. Like every
+// constructor above it may collect, so `arr` itself must already be reachable
+// from a root — which for `std::array::push` it is, being an argument still
+// sitting on the VM stack.
+void heap_array_reserve(Heap *h, ObjArray *arr, int needed);
 
 void gc_mark_value(Value v);
 void heap_collect(Heap *h);

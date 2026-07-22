@@ -1,0 +1,9 @@
+#! expect: 'pop_last' is private in module
+# The raw remove-last native is deliberately not exported: `std::array::pop`
+# is the public spelling, and it answers with an `Option` instead of failing.
+use std::array::pop_last;
+
+fun main() {
+    var xs = [1];
+    pop_last(xs);
+}

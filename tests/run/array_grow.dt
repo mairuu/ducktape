@@ -1,0 +1,93 @@
+# `[T]` is growable: push/pop, the buffer doubling underneath, and the fact
+# that every name bound to one array is a name for the same object.
+#> true
+#> 0
+#> 40
+#> 0
+#> 1521
+#> [1, 2, 3, 4, 5]
+#> 5
+#> 4
+#> [1, 2, 3]
+#> 1
+#> 3
+#> 99
+#> 0
+#> true
+#> -1
+#> [ann, bo, cy]
+#> 3
+#> 12
+#> 11
+#> [0, 1, 4, 9]
+
+use std::io::print;
+use std::array::{len, push, pop, first, last, is_empty, clear};
+
+fun squares(n: Int) -> [Int] {
+    var out: [Int] = [];
+    var i = 0;
+    while i < n {
+        push(out, i * i);
+        i = i + 1;
+    }
+    return out;
+}
+
+fun main() {
+    var empty: [Int] = [];
+    print(is_empty(empty));
+    print(len(empty));
+
+    # 40 pushes takes the buffer 0 -> 8 -> 16 -> 32 -> 64, so the growth path
+    # runs four times and every element has to survive being copied.
+    var xs = squares(40);
+    print(len(xs));
+    print(xs[0]);
+    print(xs[39]);
+
+    # a literal is built exact-fit, so its first push is also a growth
+    var ys = [1, 2, 3];
+    push(ys, 4);
+    push(ys, 5);
+    print("{ys}");
+
+    print(pop(ys).unwrap());
+    print(pop(ys).unwrap());
+    print("{ys}");
+
+    print(first(ys).unwrap());
+    print(last(ys).unwrap());
+
+    # an array is a reference: `alias` and `ys` are one object, so a push
+    # through either is seen through both
+    var alias = ys;
+    push(alias, 99);
+    print(ys[3]);
+    clear(ys);
+    print(len(alias));
+
+    # popping past the end answers with None rather than failing — which is
+    # the whole reason the public `pop` is ducktape and only the raw one is C
+    print(pop(ys).is_none());
+    print(pop(ys).unwrap_or(0 - 1));
+
+    # heap elements, so the copy in the growth path moves live references
+    var names = ["ann"];
+    push(names, "bo");
+    push(names, "cy");
+    print("{names}");
+    print(len(names));
+
+    # arrays of arrays: the inner ones are reachable only through the outer,
+    # so a collection during the outer's growth has to walk it to find them
+    var grid: [[Int]] = [];
+    var r = 0;
+    while r < 12 {
+        push(grid, squares(r));
+        r = r + 1;
+    }
+    print(len(grid));
+    print(len(grid[11]));
+    print("{grid[4]}");
+}

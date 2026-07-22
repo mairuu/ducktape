@@ -268,7 +268,10 @@ error: no method named 'show' found for type 'S'
 ```
 
 Reachability is transitive because `pub use` can re-export a type whose impls
-live one module further away.
+live one module further away. It applies to std exactly as to anything else,
+which is worth knowing before writing your own impl for a primitive: `use
+std::array::push;` reaches `std::option` (that is what `pop` returns), and so
+`std::fmt` and `std::cmp` beyond it, so their impls are visible too.
 
 Two implementations of **the same trait for overlapping types** may not be
 visible at once. Writing `impl Ord for Int` in a module that also imports
@@ -296,7 +299,9 @@ directory. `std::` never touches the filesystem, so a local `std.dt` is
 unreachable. Where ducktape cannot express the operation, a module declares a
 bodyless function bound to C (see "Native functions" below); `std::cmp`,
 `std::option` and `std::result` need none, `std::io` and `std::panic` are
-nothing but. `std::fmt::Display` is the only std name the *compiler* knows.
+nothing but, and `std::array` is the mixed case — two natives, and every other
+function written on top of them in ducktape. `std::fmt::Display` is the only
+std name the *compiler* knows.
 
 **There is no prelude.** Every std name, `print` included, has to be imported.
 
@@ -587,6 +592,12 @@ attribute by module would add a rule without adding a guarantee.
 std::io      print<T>(value: T)                     # @native
 
 std::array   len<T>(xs: [T]) -> Int                 # @intrinsic (OP_LEN)
+             push<T>(xs: [T], value: T)             # @native
+             pop<T>(xs: [T]) -> Option<T>
+             first<T>(xs: [T]) -> Option<T>
+             last<T>(xs: [T]) -> Option<T>
+             is_empty<T>(xs: [T]) -> Bool
+             clear<T>(xs: [T])
 
 std::string  len(s: String) -> Int                  # @native
              slice(s: String, from: Int, to: Int) -> String
@@ -601,6 +612,36 @@ ordinary "cannot find 'print' in this scope" error. There is no prelude.
 `std::string::slice` and `std::fmt::float` are the std functions that can fail
 without a `Result`: a native reports a runtime error by setting `ctx->error`,
 and the VM raises it at the call site, exactly as `std::panic::panic` does.
+
+**An array grows.** `push` appends, reallocating the buffer behind the array
+when it is full; an array literal starts exact-fit, so `[1, 2, 3]` and `[]` are
+both ordinary starting points:
+
+```
+var xs: [Int] = [];
+push(xs, 1);
+push(xs, 2);
+print(pop(xs).unwrap());   # 2
+```
+
+Two consequences follow from what an array already was, rather than from
+growth itself:
+
+- **An array is a reference.** Assignment binds a second name to the same
+  object, so a push through either is seen through both — which has been true
+  of `xs[0] = v` since arrays existed, and there is no way to spell "by
+  reference" because there is nothing else to spell.
+- **`for x in xs` re-reads the length each iteration**, so pushing to the array
+  being iterated extends the loop rather than iterating a snapshot. Nothing
+  prevents it; there is no borrow checker.
+
+Only `push` is written in C, alongside a private raw remove-last. They are the
+two things an array cannot express about itself — a slot that did not exist
+before, and one fewer than there was — and everything else in the module is
+ducktape on top. That is what lets `pop` answer with an `Option`: a native's
+contract is "n values in, one out" and it has no handle on the `VariantDef` an
+enum instance needs, so a native *cannot* build an `Option` at all. Popping
+does not release capacity; the buffer is returned when the array is collected.
 
 A `Float` prints — and interpolates — as the shortest decimal that reads back
 as the same double, always carrying a `.` or an exponent so it is never
