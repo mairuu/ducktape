@@ -22,10 +22,14 @@ typedef struct {
 
 static void ts_init(TypeScratch *ts, int count, Allocator *al) {
   ts->count = count;
-  ts->ptr = count <= TYPE_SCRATCH_CAP ? count == 0 ? NULL : ts->buf
+  // an empty scratch still points at `buf` rather than at NULL: `ptr` is only
+  // ever read within [0, count) and handed to a `ty_*` constructor with its
+  // count, so what an empty one has to be is *valid*, not non-empty. The same
+  // rule the allocator follows for a zero-size request.
+  ts->ptr = count <= TYPE_SCRATCH_CAP ? ts->buf
                                       : al_alloc(al, sizeof(Type *) * count);
   memset(ts->ptr, 0, sizeof(Type *) * count);
-  assert((count == 0 || ts->ptr) && "out of memory");
+  assert(ts->ptr && "out of memory");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -230,9 +234,9 @@ static void infer_note_explicit_bound(InferCtx *ctx, Type *param, Type *arg,
 // build a substitution mapping generic type parameters to either fresh unknowns
 // or concrete types if provided. the caller is responsible for unifying the
 // unknowns
-Subst infer_open_generics(InferCtx *ctx, Type **params,
-                          Type **concretes /* nullable */, int count, Span span,
-                          Allocator *al) {
+Subst infer_open_generics(InferCtx *ctx, Type **params, int count,
+                          Type **concretes /* nullable */, int concrete_count,
+                          Span span, Allocator *al) {
   if (count == 0) {
     return subst_empty();
   }
@@ -244,7 +248,12 @@ Subst infer_open_generics(InferCtx *ctx, Type **params,
     // a bounded param carries its source TY_GENERIC as the unknown's `bound`,
     // so infer_check_bounds can enforce the trait bounds once it's solved.
     Type *bound = params[i]->as.generic.bound_count > 0 ? params[i] : NULL;
-    if (concretes && concretes[i]) {
+    // `i < concrete_count` is the whole guard: a call with no turbofish passes
+    // an *empty* array against several type parameters, so the loop bound and
+    // the array's length are different numbers. This used to test `concretes`
+    // for NULL instead, which only worked while an empty array happened to be
+    // spelled NULL — a length's job given to a sentinel.
+    if (i < concrete_count && concretes[i]) {
       args[i] = concretes[i];
       // an explicit type argument bypasses inference entirely; queue its
       // bounds so infer_check_bounds still gets to see them.
@@ -2207,8 +2216,9 @@ static Type *resolve_callee(CheckCtx *ctx, Expr *expr, Subst *subst) {
       return ctx->tc->t_poison;
     }
 
-    *subst = infer_open_generics(&ctx->infer, def->type_params, type_args.ptr,
-                                 def->type_param_count, callee->span, ctx->al);
+    *subst = infer_open_generics(&ctx->infer, def->type_params,
+                                 def->type_param_count, type_args.ptr,
+                                 type_args.count, callee->span, ctx->al);
 
     // the instantiation covers the impl's type params too: `r.type` already
     // has the impl subst applied, so `*subst` alone need not, but the body
@@ -2442,8 +2452,9 @@ static bool check_struct_pattern(CheckCtx *ctx, Pattern *pattern,
   Subst subst = subst_empty();
   if (is_generic) {
     subst = infer_open_generics(
-        &ctx->infer, struct_def->type_params, expected_ty->as.struc.type_args,
-        struct_def->type_param_count, pattern->span, ctx->al);
+        &ctx->infer, struct_def->type_params, struct_def->type_param_count,
+        expected_ty->as.struc.type_args, expected_ty->as.struc.type_arg_count,
+        pattern->span, ctx->al);
   }
 
   bool sub_pattern_error = false;
@@ -2555,8 +2566,9 @@ static bool check_variant_pattern(CheckCtx *ctx, Pattern *pattern,
 
   if (enum_def->type_param_count > 0) {
     subst = infer_open_generics(
-        &ctx->infer, enum_def->type_params, expected_ty->as.enm.type_args,
-        enum_def->type_param_count, pattern->span, ctx->al);
+        &ctx->infer, enum_def->type_params, enum_def->type_param_count,
+        expected_ty->as.enm.type_args, expected_ty->as.enm.type_arg_count,
+        pattern->span, ctx->al);
   }
 
   for (int i = 0; i < check_n; i++) {
@@ -3256,9 +3268,9 @@ static Type *check_trait_method_call(CheckCtx *ctx, Expr *expr, TraitDef *trait,
   // the method's own type params first (subst_apply matches TY_GENERIC by
   // name), only then `Self` — otherwise a method type param sharing the
   // receiver parameter's name would capture the just-projected receiver.
-  Subst subst =
-      infer_open_generics(&ctx->infer, tm->type_params, explicit_type_args.ptr,
-                          tm->type_param_count, expr->span, ctx->al);
+  Subst subst = infer_open_generics(
+      &ctx->infer, tm->type_params, tm->type_param_count,
+      explicit_type_args.ptr, explicit_type_args.count, expr->span, ctx->al);
   bool is_generic = subst.count > 0;
 
   if (impl == NULL) {
@@ -3468,9 +3480,9 @@ static Type *resolve_method_call_typed(CheckCtx *ctx, Expr *expr,
   // subst, so subst_apply sees every generic that can appear in fun->fun_type
   // in one pass — and so the instantiation recorded for codegen binds all of
   // them, which is what compiling the body needs.
-  Subst method_subst =
-      infer_open_generics(&ctx->infer, fun->type_params, explicit_type_args.ptr,
-                          fun->type_param_count, expr->span, ctx->al);
+  Subst method_subst = infer_open_generics(
+      &ctx->infer, fun->type_params, fun->type_param_count,
+      explicit_type_args.ptr, explicit_type_args.count, expr->span, ctx->al);
   bool is_generic = method_subst.count > 0;
 
   Subst impl_subst = subst_exclude_shadowed(match.subst, fun->type_params,
@@ -3618,17 +3630,19 @@ static Type *resolve_propagate_expr(CheckCtx *ctx, Expr *expr) {
   Type *ret_err_payload = op_err->fields[0].type;
 
   if (def->type_param_count > 0) {
-    Subst op_subst = infer_open_generics(
-        &ctx->infer, def->type_params, op_ty->as.enm.type_args,
-        def->type_param_count, expr->span, ctx->al);
+    Subst op_subst =
+        infer_open_generics(&ctx->infer, def->type_params,
+                            def->type_param_count, op_ty->as.enm.type_args,
+                            op_ty->as.enm.type_arg_count, expr->span, ctx->al);
     ok_payload = infer_apply(
         &ctx->infer, subst_apply(&op_subst, ok_payload, ctx->al), ctx->al);
     op_err_payload = infer_apply(
         &ctx->infer, subst_apply(&op_subst, op_err_payload, ctx->al), ctx->al);
 
-    Subst ret_subst = infer_open_generics(
-        &ctx->infer, def->type_params, ret_ty->as.enm.type_args,
-        def->type_param_count, expr->span, ctx->al);
+    Subst ret_subst =
+        infer_open_generics(&ctx->infer, def->type_params,
+                            def->type_param_count, ret_ty->as.enm.type_args,
+                            ret_ty->as.enm.type_arg_count, expr->span, ctx->al);
     ret_err_payload =
         infer_apply(&ctx->infer,
                     subst_apply(&ret_subst, ret_err_payload, ctx->al), ctx->al);
@@ -3731,16 +3745,19 @@ static Type *resolve_closure_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
 // no field to solve `T` from, and neither does a bare `Wrap`. Seeding only —
 // a hint that disagrees with the fields is still a mismatch, reported where
 // the value is used.
-static Type **hint_type_args(Type *hint, Type *self_type) {
+static Type **hint_type_args(Type *hint, Type *self_type, int *out_count) {
+  *out_count = 0;
   if (hint == NULL || hint == self_type) {
     return NULL;
   }
   if (hint->kind == TY_ENUM && self_type->kind == TY_ENUM &&
       hint->as.enm.def == self_type->as.enm.def) {
+    *out_count = hint->as.enm.type_arg_count;
     return hint->as.enm.type_args;
   }
   if (hint->kind == TY_STRUCT && self_type->kind == TY_STRUCT &&
       hint->as.struc.def == self_type->as.struc.def) {
+    *out_count = hint->as.struc.type_arg_count;
     return hint->as.struc.type_args;
   }
   return NULL;
@@ -4097,9 +4114,9 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
         return ctx->tc->t_poison;
       }
 
-      Subst subst =
-          infer_open_generics(&ctx->infer, def->type_params, type_args.ptr,
-                              def->type_param_count, expr->span, ctx->al);
+      Subst subst = infer_open_generics(&ctx->infer, def->type_params,
+                                        def->type_param_count, type_args.ptr,
+                                        type_args.count, expr->span, ctx->al);
       cctx_record_inst(ctx, &expr->as.path_expr.inst, subst);
 
       ty = subst_apply(&subst, ty, ctx->al);
@@ -4170,10 +4187,13 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
 
     if (is_generic) {
       bool had_explicit_args = struct_ty != def->self_type;
-      Type **args = had_explicit_args ? struct_ty->as.struc.type_args
-                                      : hint_type_args(hint, def->self_type);
-      subst = infer_open_generics(&ctx->infer, def->type_params, args,
-                                  def->type_param_count, expr->span, ctx->al);
+      int arg_count = struct_ty->as.struc.type_arg_count;
+      Type **args = had_explicit_args
+                        ? struct_ty->as.struc.type_args
+                        : hint_type_args(hint, def->self_type, &arg_count);
+      subst = infer_open_generics(&ctx->infer, def->type_params,
+                                  def->type_param_count, args, arg_count,
+                                  expr->span, ctx->al);
     }
 
     // check fields
@@ -4246,12 +4266,13 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
 
     if (is_generic) {
       bool had_explicit_args = resolved_enum_ty != enum_def->self_type;
+      int arg_count = resolved_enum_ty->as.enm.type_arg_count;
       Type **args = had_explicit_args
                         ? resolved_enum_ty->as.enm.type_args
-                        : hint_type_args(hint, enum_def->self_type);
-      subst =
-          infer_open_generics(&ctx->infer, enum_def->type_params, args,
-                              enum_def->type_param_count, expr->span, ctx->al);
+                        : hint_type_args(hint, enum_def->self_type, &arg_count);
+      subst = infer_open_generics(&ctx->infer, enum_def->type_params,
+                                  enum_def->type_param_count, args, arg_count,
+                                  expr->span, ctx->al);
     }
 
     // check fields
@@ -4323,9 +4344,10 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       Subst subst = subst_empty();
       bool is_generic = def->type_param_count > 0;
       if (is_generic) {
-        subst = infer_open_generics(&ctx->infer, def->type_params,
-                                    base_ty->as.struc.type_args,
-                                    def->type_param_count, expr->span, ctx->al);
+        subst = infer_open_generics(
+            &ctx->infer, def->type_params, def->type_param_count,
+            base_ty->as.struc.type_args, base_ty->as.struc.type_arg_count,
+            expr->span, ctx->al);
       }
 
       FieldDef *field_def =
@@ -5916,8 +5938,9 @@ MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, StringView name,
 
         Subst subst = subst_empty();
         if (impl->type_param_count > 0) {
-          subst = infer_open_generics(infer, impl->type_params, NULL,
-                                      impl->type_param_count, span, al);
+          subst =
+              infer_open_generics(infer, impl->type_params,
+                                  impl->type_param_count, NULL, 0, span, al);
         }
         if (out_match) {
           out_match->impl = impl;

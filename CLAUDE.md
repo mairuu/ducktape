@@ -12,7 +12,12 @@ make test          # build + full test suite (must stay green)
 ./build/ducktape --emit-bc out.dtbc file.dt   # compile to a bytecode image
 ./build/ducktape --run out.dtbc               # execute an image
 make format        # clang-format over src/ and include/
+make sanitize      # rebuild under ASan+UBSan and run the suite
 ```
+
+A sanitizer finding is not a test failure — `make test` stays green while the
+binary does something undefined — so run `make sanitize` after touching memory
+management (the arena, the heap, any raw buffer) and before landing it.
 
 ## Documentation
 

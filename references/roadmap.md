@@ -1251,6 +1251,51 @@
   and `--emit-bc` round-trips `tests/run/strbuf.dt` with no serialization work
   at all.
 
+- **An empty thing is still a thing (post-24 cleanup)** — the compiler is
+  UBSan-clean, and getting there turned up a real bug. `make sanitize` rebuilds
+  under ASan+UBSan and runs the suite.
+
+  Every report was one idea: **a zero-length thing was being described by a NULL
+  sentinel instead of by its count**, and `memcpy`/`memcmp`/`memset` require a
+  valid pointer even for zero bytes. Three producers, and the fix belongs in a
+  different place for each — which is the part worth recording, because the
+  first two look identical from the report:
+  - **An allocator hands out an address.** All three `Allocator` implementations
+    answered a zero-size request with NULL, so `memcpy(xs, src, sizeof(T) * n)`
+    — correct-looking code, over an `xs` allocated for exactly that many — was
+    undefined for `n == 0`. Now a zero-size request returns a valid pointer that
+    must not be dereferenced, which is also what `malloc` is permitted to do and
+    what glibc does, and it keeps NULL meaning one thing: allocation failed. Ten
+    call sites across `parser.c`/`sema.c`/`codegen.c` stopped being UB without
+    being touched.
+  - **A view points into something.** A `StringView` has no address of its own,
+    so an empty one legitimately points nowhere (`(StringView){0}` is how an
+    absent name is spelled). The fix there is at the *comparison*: `sv_equal`
+    tests the length first, because there is no pointer to fix.
+  - **A scratch buffer is valid when empty.** `ts_init` (sema's `TypeScratch`)
+    special-cased zero to NULL; it now points at its own inline buffer, like
+    every other length.
+
+  **That last one was what exposed the real bug**, and it is the kind this
+  project keeps finding: `infer_open_generics` decided whether a call supplied
+  explicit type arguments by testing `concretes` for NULL, then indexed it up to
+  the number of type *parameters* — two different counts. A call with no
+  turbofish supplies zero arguments against a definition with several
+  parameters, so the loop ran off the end of an empty array and read whatever
+  followed it as a `Type *`. It was unreachable only because every empty
+  argument list happened to be spelled NULL: correct by accident, not by
+  construction. Both arrays now carry their own length and the guard is
+  `i < concrete_count`, which is the same lesson as the allocator's one level
+  up — *an empty array is described by its length, never by its pointer*.
+
+  The symptom is worth recording too, because it argues for the sanitizer run
+  more than the fix does: a wild `Type *` read out of a mapped library region,
+  surfacing as an assert in `type_sprintf` (a switch that is exhaustive, so a
+  garbage `kind` falls off the end) at a call site three phases away from the
+  cause. It also **disappeared under ASan**, which is why both sanitizers run
+  together now — ASan's own allocation layout hid a read that UBSan named
+  exactly.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -1408,9 +1453,6 @@ via `Module.decl_base`) and is not part of the main line.
   instructions can still crash the VM
 - an image carries no source, so a runtime error in one reports function names
   with no line information
-- the compiler is ASan-clean but **not** UBSan-clean: `arena_alloc_fn` answers a
-  zero-size request with NULL, and several callers then `memcpy` zero bytes into
-  it (`src/parser.c`, `src/sema.c`), which is UB by the letter and harmless in
-  practice. Found under `-fsanitize=undefined` while checking milestone 24's
-  growth path; left alone because the fix is a decision about the allocator's
-  zero-size contract, not a local repair
+- `make sanitize` is a separate run, not part of `make test`: a sanitizer
+  finding is not a test failure, so the suite stays green while the binary is
+  doing something undefined. Nothing enforces that it is run before a commit

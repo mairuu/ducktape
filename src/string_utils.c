@@ -11,7 +11,13 @@ void str_destroy(String *str, Allocator *al) {
 }
 
 bool sv_equal(StringView a, StringView b) {
-  return a.len == b.len && memcmp(a.chars, b.chars, a.len) == 0;
+  // The length test has to come first, and not only as a shortcut: an *empty*
+  // view may legitimately point nowhere — `(StringView){0}` is how an absent
+  // name is spelled (a closure's, a fresh unknown's) — and `memcmp` is not
+  // defined on a NULL pointer even for zero bytes. Unlike an allocation, a
+  // view has no address of its own to fall back on: it is a pointer *into*
+  // something, and when there is nothing, there is no pointer.
+  return a.len == b.len && (a.len == 0 || memcmp(a.chars, b.chars, a.len) == 0);
 }
 
 bool sv_equal_cstr(StringView sv, const char *cstr) {

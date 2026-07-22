@@ -33,11 +33,12 @@ static size_t align_up(size_t n) {
 // ────────────────────────────────────────────────
 
 static void *arena_alloc_fn(void *ctx, size_t size) {
-  if (size == 0) {
-    return NULL;
-  }
   Arena *a = ctx;
-  size = align_up(size);
+  // a zero-size request still gets an address of its own — one alignment unit,
+  // since `align_up(0)` is 0 and a bump of nothing would hand out the *next*
+  // allocation's address. See the contract in allocator.h: NULL means failure
+  // here and nothing else.
+  size = size == 0 ? align_up(1) : align_up(size);
 
   if (a->current && a->current->used + size <= a->current->capacity) {
     void *ptr = a->current->data + a->current->used;

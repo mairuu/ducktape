@@ -345,7 +345,11 @@ unknowns, `infer_unify` solves (emitting "type mismatch" diags itself),
 `infer_finalize` reports unsolved unknowns ("cannot infer type"). Generic
 instantiation goes through `infer_open_generics`, which builds a `Subst`
 (name → type) mapping type params to fresh unknowns or explicit args;
-`subst_apply` rewrites types under it.
+`subst_apply` rewrites types under it. Both of its arrays carry their own
+length, and the *explicit-argument* one is the load-bearing count: a call with
+no turbofish supplies zero arguments against however many type parameters the
+definition has, so the two are routinely different and an argument slot exists
+only where `i < type_arg_count`.
 
 A generic constructor with no explicit type arguments normally opens them into
 fresh unknowns and lets its *fields* solve them, which is why `Opt::Some(1)`

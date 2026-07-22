@@ -112,6 +112,20 @@ run: all
 test: all
 	@sh scripts/run_tests.sh $(BUILDDIR)/$(TARGET)
 
+# the suite under AddressSanitizer + UndefinedBehaviorSanitizer. Both have
+# caught real bugs the plain build cannot see — a per-instantiation chunk being
+# overwritten (milestone 23), and a zero-length array described by a NULL
+# sentinel instead of a count (post-24) — and neither shows up as a test
+# failure, so this has to be its own run rather than something `test` does.
+# It rebuilds from scratch: the sanitizer flags change every object file.
+SANFLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
+
+.PHONY: sanitize
+sanitize:
+	@$(MAKE) clean
+	@$(MAKE) DEFS="$(SANFLAGS)" LDFLAGS="$(SANFLAGS)"
+	@sh scripts/run_tests.sh $(BUILDDIR)/$(TARGET)
+
 .PHONY: clean
 clean:
 	$(RM) -r $(BUILDDIR) $(CCJSON)
@@ -134,6 +148,8 @@ help:
 	@echo "targets:"
 	@echo "  all     - build $(TARGET) and generate compile_commands.json (default)"
 	@echo "  run     - build and run"
+	@echo "  test    - build and run the test suite"
+	@echo "  sanitize- rebuild under ASan+UBSan and run the suite"
 	@echo "  clean   - remove build artifacts and compile_commands.json"
 	@echo "  format  - run clang-format over all sources"
 	@echo "  tidy    - run clang-tidy (requires compile_commands.json)"

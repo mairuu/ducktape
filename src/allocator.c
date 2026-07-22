@@ -4,22 +4,18 @@
 #include <string.h>
 
 void *_allocate_zero(Allocator *al, size_t size) {
-  if (size == 0) {
-    return NULL;
-  }
   void *ptr = al_alloc(al, size);
   if (ptr) {
-    memset(ptr, 0, size);
+    memset(ptr, 0, size); // valid, and a no-op, when size is 0
   }
   return ptr;
 }
 
 static void *_heap_alloc(void *ctx, size_t size) {
   (void)ctx; // unused
-  if (size == 0) {
-    return NULL;
-  }
-  return malloc(size);
+  // one byte for a zero-size request: `malloc(0)` is allowed to answer NULL,
+  // and NULL is reserved for failure here (see the contract in allocator.h).
+  return malloc(size == 0 ? 1 : size);
 }
 
 static void *_heap_realloc(void *ctx, void *ptr, size_t old_size,

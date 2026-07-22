@@ -2,6 +2,18 @@
 
 #include <stddef.h>
 
+// The one contract every implementation owes its callers, beyond the obvious:
+// **a zero-size request still returns a valid pointer**, not NULL. It may not
+// be dereferenced, but it may be handed to `memcpy`/`memcmp`/`memset` with a
+// length of zero — which those functions require even then, and which is
+// exactly how a zero-length allocation is normally used:
+//
+//     T *xs = al_alloc(al, sizeof(T) * n);
+//     memcpy(xs, src, sizeof(T) * n);       // correct for every n, 0 included
+//
+// Answering NULL instead would make that natural spelling undefined behaviour
+// for `n == 0` and push a guard onto every caller, forever. It also keeps NULL
+// meaning one thing — allocation failed — rather than two.
 typedef struct {
   void *(*alloc)(void *ctx, size_t size);
   void *(*realloc)(void *ctx, void *ptr, size_t old_size, size_t new_size);

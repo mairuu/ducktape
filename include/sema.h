@@ -30,8 +30,13 @@ Type *subst_apply(const Subst *s, Type *t, Allocator *al);
 // a fresh TY_UNKNOWN or use the provided type argument (in case of explicit
 // type arguments) and build a Subst. after unification, apply infer_apply to
 // the substituted return type to read out the inferred type arguments.
-Subst infer_open_generics(InferCtx *ctx, Type **type_params,
-                          Type **type_args /* nullable */, int param_count,
+//
+// Each array carries its own length, and `type_arg_count` is the one that
+// matters: a call with no turbofish supplies *zero* type arguments against a
+// definition with several type parameters, so the two counts are routinely
+// different and `type_args` may only be indexed within its own.
+Subst infer_open_generics(InferCtx *ctx, Type **type_params, int param_count,
+                          Type **type_args /* nullable */, int type_arg_count,
                           Span span, Allocator *al);
 
 // ═══════════════════════════════════════════════════════════════════════════════
