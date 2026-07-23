@@ -1,0 +1,15 @@
+#! expect: no associated item named 'from' found for type parameter 'T'
+# A path qualified by a type parameter resolves through that parameter's
+# *bounds* — nothing else can say what `T` offers, since a type parameter names
+# no definition of its own. With no bounds at all there is nothing to search,
+# which the note says rather than leaving the reader to infer it.
+
+use std::io::print;
+
+fun make<T>() -> T {
+    return T::from(1);
+}
+
+fun main() {
+    print(0);
+}

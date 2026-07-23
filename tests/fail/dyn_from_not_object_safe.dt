@@ -1,0 +1,17 @@
+#! expect: trait 'From' is not object-safe
+# `From` is a bound, never a `dyn`, and for the reason object safety exists:
+# `from` produces a `Self`, and a trait object has erased which type that is.
+# `Into` is the other half of the same relation and *is* object-safe, since it
+# only consumes its receiver — which is exactly why the pair is written from
+# two ends rather than as one trait.
+
+use std::io::print;
+use std::convert::From;
+
+fun take(v: dyn From<Int>) -> Int {
+    return 0;
+}
+
+fun main() {
+    print(0);
+}

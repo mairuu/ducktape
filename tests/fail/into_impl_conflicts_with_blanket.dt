@@ -1,0 +1,23 @@
+#! expect: conflicting implementations of trait 'Into' for type 'S'
+# What importing `std::convert` costs: the blanket `impl<T, U: From<T>> Into<U>
+# for T` applies to every self type, and coherence is deliberately blind to an
+# impl's own bounds — so it overlaps any `Into` impl a program could write.
+#
+# That is the rule working as designed rather than a wart of it: the free
+# direction is free because there is exactly one implementation of it. A
+# program writes `From` and gets `Into`.
+
+use std::io::print;
+use std::convert::{From, Into};
+
+struct S { n: Int }
+
+impl Into<Int> for S {
+    fun into(self) -> Int {
+        return self.n;
+    }
+}
+
+fun main() {
+    print(0);
+}

@@ -474,6 +474,13 @@ Two call shapes need more than the recorded arguments:
   the method's own shadow by name — the same rule `subst_exclude_shadowed`
   applies in the checker, and for the same reason (`subst_apply` matches by
   name and takes the first hit).
+
+  Which of the two recorded substitutions an impl parameter is read from is
+  therefore load-bearing: a call through a bound records the *trait's*
+  arguments, and `impl<T: Tag> Boxed<Int> for T` against `trait Boxed<T>` has
+  two live meanings for `T`. An impl parameter is read from the impl match
+  first, because nothing else can speak for it; a method's own parameter keeps
+  reading the call's arguments first.
 - **A call through a trait bound.** The checker resolved `v.show()` against
   the trait *signature*, so there is no `MethodDef` on the node — only
   `bound_trait` (the trait *reference*, so a generic trait's arguments come
@@ -484,6 +491,11 @@ Two call shapes need more than the recorded arguments:
   `impl Into<String> for S`, which the receiver alone cannot. This is the one
   place codegen consults an impl index — and since impls became
   module-granular, *which* index is a question of its own.
+
+  A path qualified by a type parameter (`T::make(1)`) is the same shape with
+  the receiver removed: `bound_trait`/`bound_self` sit on the `ExprPath`
+  instead, and both branches call `cg_bound_target`. Nothing else differs —
+  an associated function is an ordinary global once its body is chosen.
 
 **The impl set travels with the instantiation, not with the definition.**
 `std::cmp::max<T: Ord>` needs `impl Ord for P`, and that impl is written

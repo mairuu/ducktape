@@ -7,6 +7,7 @@ use std::io::print;
 use std::array::len;
 use std::string::slice;
 use std::fmt::Display;
+use std::convert::{From, Into};
 
 enum Result<T, E> {
     Ok(T),
@@ -116,6 +117,32 @@ impl Pack<String> for Brick {
 
 pub fun packed<P: Pack<Int>>(packer: P) -> Int {
     return packer.pack_two(1, 2);
+}
+
+# a trait may declare an *associated function* — no `self`, so there is no
+# receiver to say which impl runs. A path qualified by the type parameter says
+# it instead, and which body that means waits for `M` to be concrete, exactly
+# as a method call on a bounded receiver does.
+trait Mark {
+    fun blank() -> Self;
+    fun weight(self) -> Int;
+}
+
+impl Mark for Brick {
+    fun blank() -> Brick { return Brick { kg: 0 }; }
+    fun weight(self) -> Int { return self.kg; }
+}
+
+pub fun blank_weight<M: Mark>() -> Int {
+    var m: M = M::blank();
+    return m.weight();
+}
+
+# `Float::from(7)` — a builtin type qualifies a path like a declared one, which
+# is what makes the conversions `std::convert` ships for the primitives
+# reachable by name as well as through `into`.
+pub fun widened(n: Int) -> Float {
+    return Float::from(n);
 }
 
 # a bounded generic: the argument type must implement Drawable, and the bound
@@ -231,4 +258,9 @@ fun main() {
     var s = slice("showcase", 0, 4);
     # a Display impl reached by interpolation, beside a primitive segment
     var shown = "{Point::new(1, 2)} #{n}";
+    # an associated function through a bound, and the conversion the blanket
+    # `impl<T, U: From<T>> Into<U> for T` supplies — pinned by the annotation,
+    # since a conversion is the one call its receiver cannot decide
+    var blank = blank_weight::<Brick>();
+    var wide: Float = 7.into();
 }

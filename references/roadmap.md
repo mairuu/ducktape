@@ -1613,6 +1613,82 @@
   `TraitDef *` it replaced — can still be an unsolved unknown when the
   coercion is discovered.
 
+- **`std::convert`, and the call it needed (milestone 29)** — `From` and `Into`
+  are one relation written from two ends, and a program writes only the first.
+  Design: `language.md` "`std::convert`", `architecture.md` "Calls through a
+  trait bound" / "An impl parameter the head does not pin", `runtime.md`
+  "Monomorphisation".
+
+  The observation the milestone turns on: **what a value converts into is not a
+  fact about the value.** Every dispatch the language had rested on the
+  opposite — a receiver names its impl, or a bound names the reference — and a
+  conversion is exactly the case where neither can. So the two ends of the
+  relation are two traits, and each supplies the half the other cannot:
+  `From` is qualified by the type it *produces*, and `Into` is pinned by the
+  type its result *flows into*.
+
+  Three things follow, and they are the whole milestone:
+  - **An associated function is a method with no receiver, so the path
+    dispatches instead.** `impl<T, U: From<T>> Into<U> for T` needs
+    `U::from(self)`, and a trait signature with no `self` has nothing to
+    dispatch on — which is why `T::from(v)` reached `resolve_path`'s
+    `default: assert(false)` and **aborted the compiler**. It is now the same
+    dispatch a bounded receiver gets, with `bound_trait`/`bound_self` moved
+    onto the `ExprPath`: the bounds are searched exactly as
+    `resolve_bound_method_call` searches a receiver's, and codegen's two
+    branches share `cg_bound_target`. A `self` parameter is not special there —
+    the signature is taken whole, so `T::value(v)` passes the receiver as an
+    ordinary first argument, which is the reading a method call is sugar for.
+  - **An impl parameter the head cannot pin is pinned by the expected type.**
+    `impl_applies` demanded every parameter be bound by the self type or the
+    trait reference; the blanket's `U` is bound by neither. So
+    `impl_index_method` splits the question — `impl_match_head`, then the
+    candidate method's return type against `ret_hint`, then
+    `impl_head_complete`. It stays a hole-filler rather than a selection rule:
+    with the head already total the hint is milestone 28's tie-break unchanged,
+    and what the hole is filled with is *verified* by the impl's own
+    `U: From<T>` bound, not trusted. That is what makes `26.into()` and
+    `'a'.into()` reach different `From` impls for one `Steps`.
+  - **The blanket is what makes the pair honest, and it costs the language a
+    rule.** Coherence is deliberately blind to an impl's bounds, so
+    `impl<T, U: From<T>> Into<U> for T` overlaps every `Into` impl that could
+    ever be written: importing `std::convert` means you write `From` and never
+    `Into`. That is Rust's rule arrived at from the same direction. The
+    reflexive `impl<T> From<T> for T` is absent for the same reason one step
+    worse — it would leave a trait nobody could implement.
+
+  Two pre-existing bugs surfaced, both latent since milestone 28 gave a trait
+  type arguments and neither reachable before a blanket impl of a generic
+  trait existed to reach them:
+  - **an impl's own bound was checked unsubstituted.** `impl_bounds_satisfied`
+    asked whether `Meters` implements a literal `From<T>` — the impl's own
+    parameter, not the type the head had just pinned it to — so a bound
+    naming another parameter of the same impl could never be satisfied. This
+    is the check milestone 28 already fixed one level over, for a *function's*
+    bounds (`infer_open_generics` rewriting the stashed bound); the impl half
+    had no such shape to exercise it until now.
+  - **a `Subst` is keyed by name, and a name had two live meanings.** For
+    `impl<T: Tag> Boxed<Int> for T` against `trait Boxed<T>`, the trait's
+    argument and the impl's parameter are both "T", and `cg_inst_key` read the
+    call's recorded arguments first — so the impl parameter silently took the
+    trait's value and the body compiled against the wrong type. Renaming the
+    impl's parameter made it work, which is what identified it. An impl
+    parameter now reads the impl match first, because nothing else can speak
+    for it.
+
+  Also cleared, because the module needs it: **a builtin type may qualify a
+  path** (`Float::from(7)`). The struct path context carried only a `Type`, so
+  it became `PATHRES_CTX_TYPE`, and the builtin names moved into one
+  `type_named_builtin` shared with `TYNODE_NAMED` so the two spellings cannot
+  drift. Without it an impl written for a primitive would have been reachable
+  only through `into`.
+
+  The limit worth recording is where selection still does not look: two `From`
+  impls for one type are told apart by the *receiver* under `into`, and not at
+  all under `Meters::from(7)`, which takes the first registered impl. Selection
+  reads a self type, a trait reference and now a return type — never an
+  argument.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -1644,14 +1720,15 @@ by appetite rather than by necessity.
      The one open question in the set is whether they take byte offsets (like
      `slice`) or characters (like `chars`), which is the same fork milestone 26
      answered for indexing and would have to answer the same way.
-2. **A `std::convert`, now that `Into<T>` is writable** — milestone 28 made
-   generic traits work and deliberately shipped no std module using one, since
-   an import's cost to its dependents is measured in the impls it carries and
-   a conversion trait would want several. What it would decide is which
-   primitives convert into which, and whether `From` exists as well as `Into`
-   (in Rust one is a blanket impl of the other, which needs an impl whose self
-   type is a bare type parameter — writable today, and the one shape
-   `IMPL_BOUND_MAX_DEPTH` is known to cut off).
+2. **Selection by argument type** — the one thing impl selection still does not
+   read. `Meters::from(7)` and `Meters::from('a')` are the same question to it,
+   so the first registered impl wins and the mismatch is reported against it.
+   Milestone 29 left this deliberately: the `into` spelling has no such gap
+   (the receiver pins the source type before the impl's bound is asked), so the
+   gap is confined to the qualified spelling of a trait that is implemented
+   several times for one type. Fixing it means resolving a callee *after* its
+   arguments, or a second pass — which is why it is its own item rather than
+   part of the milestone that found it.
 
 Not on the roadmap: the **REPL** is a side feature, not a milestone — it lives
 on the `feature/repl` branch (`--repl`, incremental compilation over one module
@@ -1673,6 +1750,11 @@ via `Module.decl_base`) and is not part of the main line.
   means a program can no longer write its own for those: naming the trait makes
   the std impl visible and coherence rejects the pair. A tuple of any other
   arity has no impl, since nothing can be generic over a tuple's length
+- `std::convert`'s blanket `impl<T, U: From<T>> Into<U> for T` is the same wart
+  taken to its limit: it applies to *every* self type, so importing the module
+  takes `Into` impls away from a program entirely. That is Rust's rule and the
+  price of the free direction being free, but it is the widest thing coherence's
+  blindness to bounds has cost so far
 - a unit struct's name cannot be bound as a variable any more: `var Marker =
   7;` is a struct pattern against an `Int`, and the diagnostic ("expected
   struct type in struct pattern") describes the rewrite rather than the
@@ -1810,14 +1892,24 @@ via `Module.decl_base`) and is not part of the main line.
   by the *expected* type, and by first-registered-impl when there is none. So
   `print(c.into())` is not the same question as `var f: Fahrenheit =
   c.into()`, and only the second has an answer. A trait-qualified call syntax
-  (`Into::<Fahrenheit>::into(c)`) is what would settle it, and there is none
+  (`Into::<Fahrenheit>::into(c)`) is what would settle it, and there is none.
+  Since milestone 29 the expected type also *pins* an impl parameter the
+  receiver cannot reach, which sharpens the failure rather than removing it:
+  where that was the only way to pin it, no impl applies at all and the
+  diagnostic is "no method named 'into'"
+- impl selection never reads an **argument** type: a self type, a trait
+  reference and (since 29) a return type are the whole of what decides an
+  impl, so two `From` impls for one type are indistinguishable at
+  `Meters::from(x)` however different `x` is
 - a bound may name an earlier type parameter of the same list
   (`<T, U: Into<T>>`) but not a later one — bounds resolve left to right, so a
   forward reference is "unknown type: T" rather than a second pass
 - a *generic* trait's parameters cannot themselves be pinned by the receiver
   in an impl head: `impl<T> Into<T> for S` type-checks, but nothing solves `T`
-  from an `S`, so the impl applies only where a bound or a `dyn` names the
-  argument
+  from an `S`, so the impl applies only where a bound, a `dyn`, or (since
+  milestone 29) the *expected type* names the argument. The last is what makes
+  the `From`/`Into` blanket work, and it is the only one that is inference
+  rather than a written-down reference
 - the slot spaces are two bytes wide, so 65536 functions/structs/enums/vtables
   is a hard program-wide ceiling (reported, not silently truncated) — and every
   instantiation of a generic and every (trait, type) pair coerced spends one,

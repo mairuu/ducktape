@@ -1,0 +1,68 @@
+# An associated function dispatched through a bound (milestone 29): a trait
+# method with no `self` has no receiver to say which impl runs, so the *path*
+# says it — `T::make()`, or `Self::make()` inside a default body. Which body
+# that means waits for `T` to be concrete, exactly as a method call on a
+# bounded receiver does.
+
+#> 7
+#> 0
+#> 14
+#> 5
+#> 41
+
+use std::io::print;
+
+trait Make {
+    fun make(n: Int) -> Self;
+    fun blank() -> Self;
+    fun value(self) -> Int;
+
+    # a default body over an associated function: `Self` is an ordinary type
+    # parameter here, so this is a call through a bound like any other.
+    fun doubled(n: Int) -> Self {
+        return Self::make(n + n);
+    }
+}
+
+struct Box { n: Int }
+
+impl Make for Box {
+    fun make(n: Int) -> Box { return Box { n: n }; }
+    fun blank() -> Box { return Box { n: 0 }; }
+    fun value(self) -> Int { return self.n; }
+}
+
+# the whole shape: no argument mentions `T`, so the bound and the turbofish are
+# the only things that decide which impl this compiles against.
+fun built<T: Make>(n: Int) -> Int {
+    var v: T = T::make(n);
+    return v.value();
+}
+
+fun blank_value<T: Make>() -> Int {
+    return T::blank().value();
+}
+
+# through the trait's *default* body, which the impl above does not override.
+fun doubled_value<T: Make>(n: Int) -> Int {
+    var v: T = T::doubled(n);
+    return v.value();
+}
+
+# a method reached by the same spelling, with the receiver passed explicitly:
+# a method is an associated function whose first parameter is `self`, and the
+# path form is where that is visible.
+fun explicit<T: Make>(v: T) -> Int {
+    return T::value(v);
+}
+
+fun main() {
+    print(built::<Box>(7));
+    print(blank_value::<Box>());
+    print(doubled_value::<Box>(7));
+    print(explicit(Box { n: 5 }));
+
+    # the receiver still decides where it can: an inherent associated function
+    # on a concrete type needs no bound at all.
+    print(Box::make(41).value());
+}

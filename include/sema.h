@@ -419,6 +419,11 @@ typedef enum {
   PATHRES_TYPE,
   PATHRES_VAR,
   PATHRES_VARIANT,
+  // an item reached through a *type parameter* (`T::from(v)`, `Self::from(v)`
+  // in a default body): the trait's signature is all that is known here, and
+  // which impl supplies the body waits for monomorphisation — the same answer
+  // a method call on a bounded receiver gets.
+  PATHRES_TRAIT_ITEM,
 } PathResKind;
 
 typedef struct {
@@ -433,6 +438,11 @@ typedef struct {
       EnumDef *enum_def;
       VariantDef *def;
     } variant;
+    struct {
+      Type *trait_ref; // TY_TRAIT — the bound the name was found on
+      Type *self_type; // the type parameter the path was qualified by
+      TraitMethodDef *def;
+    } trait_item;
   } as;
 } PathRes;
 

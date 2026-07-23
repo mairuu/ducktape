@@ -114,7 +114,18 @@ ending in `return` has type `!` (never), which unifies with anything.
   turbofish in expression position: `Point::<Int>::new(1, 2)`. A bare
   `Point::new(..)` on a generic type selects the impl by method name and
   infers the type arguments from the call (first name match wins if several
-  impls define the same name).
+  impls define the same name). A builtin type qualifies a path like any
+  declared one (`Float::from(7)`, `Int::from('A')`), which is what makes an
+  impl written for a primitive reachable by name.
+- A path may also be qualified by a **type parameter**: `T::make(1)`, or
+  `Self::make(1)` inside a trait default body. The parameter names no
+  definition, so the item is looked up on its *bounds* — first bound declaring
+  the name wins, as for a method call — and which impl supplies the body waits
+  until `T` is concrete. This is how a trait's *associated functions* (a
+  signature with no `self`, so there is no receiver to dispatch on) are
+  called at all. A method may be called the same way with the receiver passed
+  explicitly (`T::value(v)`), since a method is an associated function whose
+  first parameter is `self` (`tests/run/assoc_bound_call.dt`).
 - Method calls: `p.draw()`, `p.x`, tuple access `t.0`. A method an impl
   omitted but whose trait gives a default body is inherited: the call checks
   against the trait's signature, projected into the impl's terms, and runs a
@@ -396,11 +407,11 @@ involved.
 directory. `std::` never touches the filesystem, so a local `std.dt` is
 unreachable. Where ducktape cannot express the operation, a module declares a
 bodyless function bound to C (see "Native functions" below); `std::cmp`,
-`std::option` and `std::result` need none, `std::io` and `std::panic` are
-nothing but, and `std::array`, `std::string` and `std::char` are the mixed
-case — a handful of natives, and every other function written on top of them
-in ducktape. `std::fmt::Display` is the only
-std name the *compiler* knows.
+`std::convert`, `std::option` and `std::result` need none, `std::io` and
+`std::panic` are nothing but, and `std::array`, `std::string` and `std::char`
+are the mixed case — a handful of natives, and every other function written on
+top of them in ducktape. `std::fmt::Display` is the only std name the
+*compiler* knows.
 
 **There is no prelude.** Every std name, `print` included, has to be imported.
 
@@ -473,6 +484,57 @@ code.** `impl Display for String` living in `std::fmt` sets the same precedent.
 `Ord` is deliberately *not* object-safe — `other: Self` means a caller must
 know the concrete type — so it is a bound, never a `dyn Ord`. That is the rule
 working as designed: object safety is only demanded where `dyn` is written.
+
+### `std::convert`
+
+```
+pub trait From<T> { fun from(value: T) -> Self; }
+pub trait Into<T> { fun into(self) -> T; }
+
+impl<T, U: From<T>> Into<U> for T { .. }        # the blanket
+
+impl From<Int> for Float                        # widening
+impl From<Char> for Int                         # the scalar value
+```
+
+Two traits and one relation: a type that can be made *from* an `Int` is an
+`Int` that goes *into* it. **A program writes `From` impls and never writes
+`Into`** — the blanket supplies the other direction for every one of them.
+
+```
+use std::convert::{From, Into};
+
+impl From<Celsius> for Fahrenheit { fun from(c: Celsius) -> Fahrenheit { .. } }
+
+var f = Fahrenheit::from(c);            # the direction that names its answer
+var g: Fahrenheit = c.into();           # the same conversion, annotated
+```
+
+The two spellings are not interchangeable, and the difference is the whole
+reason the pair is written from two ends. `from` is qualified by the type it
+produces, so nothing else has to say what the conversion is. `into` is a
+method whose *receiver cannot decide the answer* — `7.into()` could produce
+anything — so the impl is pinned by the type the result flows into: an
+annotation, a parameter, a return type. With none of those it is an error
+("no method named 'into' found for type 'Int'",
+`tests/fail/into_without_expected_type.dt`); a bound that names the reference
+(`fun scaled<T: Into<Float>>`) needs no hint at all, since the reference is
+written down.
+
+Importing the module **costs a program its own `Into` impls**: coherence is
+blind to an impl's bounds, so the blanket overlaps every `impl Into<X> for Y`
+that could be written (`tests/fail/into_impl_conflicts_with_blanket.dt`).
+The reflexive `impl<T> From<T> for T` is deliberately absent for the same
+reason one step worse — it would overlap every `From` impl, leaving a trait
+nobody could implement.
+
+Only two conversions ship, and the restraint is the point: an import's cost is
+measured in impls (see `std::cmp`). Both are lossless. There is no
+`From<T> for String` — rendering is `Display`'s question and `to_string`
+already answers it — and no `From<Float> for Int`, since `as Int` truncates
+and which way it should round is a question a fallible conversion would have
+to ask. `From` is not object-safe (it produces a `Self`), while `Into` is; see
+`tests/run/convert.dt`.
 
 ### `std::fmt`
 
@@ -919,7 +981,8 @@ types".
 | a `String` that is guaranteed valid UTF-8 | it is a byte string — `slice` cuts at byte offsets, so `chars` reports a runtime error on a halved sequence |
 | width, alignment, or padding in a format | only `std::fmt::float(value, precision)`; there is no format-spec grammar inside `{}` |
 | casting a `dyn Trait` back to its concrete type | no downcast; the coercion is one-way |
-| a trait's type arguments at a bare method call | the expected type breaks the tie between two impls of one generic trait; with no expected type the first impl wins, and the mismatch it then reports names the types rather than the ambiguity |
+| a trait's type arguments at a bare method call | the expected type breaks the tie between two impls of one generic trait, and pins an impl parameter the receiver cannot reach (`impl<T, U: From<T>> Into<U> for T`); with no expected type the first impl wins — or, where the parameter was only pinnable that way, no impl applies at all |
+| choosing between two `From` impls for one type by argument (`Meters::from(7)` vs `Meters::from('a')`) | selection does not look at arguments, so the first registered impl wins and the mismatch is reported against it. The `into` spelling has no such gap: the receiver pins the source type before the impl's bound is asked |
 | a bound naming a *later* type parameter (`fun f<U: Into<T>, T>`) | "unknown type: T" — bounds resolve left to right |
 | `mod` declarations | no such keyword; `use` is what pulls a file in |
 | glob imports (`use a::*`) | not parsed; name each item |

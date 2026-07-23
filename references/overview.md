@@ -108,8 +108,9 @@ phase aborts mid-file. Error recovery uses a poison type/expr convention (see
   GC-backed strings (and the `StringBuf` that builds one) and growable arrays,
   structs/enums/tuples with full match compilation, methods and `?`,
   multi-module programs, and generic code via
-  monomorphisation (including dispatch through a trait bound and inherited
-  trait default bodies). What is left is listed in `language.md`'s
+  monomorphisation (including dispatch through a trait bound — by a receiver
+  or by a path qualified with a type parameter — and inherited trait default
+  bodies). What is left is listed in `language.md`'s
   not-yet-implemented table — nothing on it is a construct
   `tests/pass/in_fixed.dt` reaches. See `runtime.md`.
 - **Showcase program:** `tests/pass/in_fixed.dt` exercises most of the checked

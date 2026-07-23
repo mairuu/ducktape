@@ -2394,6 +2394,65 @@ static bool resolve_path_segment_args(PathSegment *seg, TypeResolver *tyres,
   return true;
 }
 
+// A path qualified by a type parameter: `T::from(v)`, or `Self::from(v)`
+// inside a trait default body. The trait's signature is the whole of what is
+// known here — which impl supplies the body depends on what `T` is
+// instantiated with, so codegen redoes the lookup, exactly as it does for a
+// method call on a bounded receiver. The only difference is that there is no
+// receiver to carry the abstract self type, so the *path* carries it.
+//
+// A `self` parameter is not special: the signature is taken whole, so
+// `T::cmp(a, b)` passes the receiver as an ordinary first argument. That is
+// the uniform reading a method call is sugar for, and it is what lets one
+// branch serve an associated function and a method alike.
+static Type *check_trait_item_path(CheckCtx *ctx, Expr *callee, PathRes *r,
+                                   Subst *subst) {
+  ExprPath *p = &callee->as.path_expr;
+  TraitMethodDef *tm = r->as.trait_item.def;
+  Type *trait_ref = r->as.trait_item.trait_ref;
+  Type *self_ty = r->as.trait_item.self_type;
+  TraitDef *trait = trait_ref->as.trait.def;
+
+  TypeScratch type_args;
+  if (!resolve_path_segment_args(&p->path.segments[p->path.count - 1],
+                                 &ctx->tyres, ctx->al, &type_args)) {
+    return ctx->tc->t_poison;
+  }
+  if (type_args.count > 0 && type_args.count != tm->type_param_count) {
+    diag_error(ctx->diags, callee->span,
+               "expected %d type arguments but got %d", tm->type_param_count,
+               type_args.count);
+    return ctx->tc->t_poison;
+  }
+
+  *subst = infer_open_generics(&ctx->infer, tm->type_params,
+                               tm->type_param_count, type_args.ptr,
+                               type_args.count, callee->span, ctx->al);
+
+  p->bound_trait = trait_ref;
+  p->bound_self = self_ty;
+
+  // the trait's own type parameters are parameters of every signature it
+  // declares (milestone 28), and the reference is what binds them — dropped
+  // where a method type parameter reuses the name, as everywhere else.
+  Subst trait_subst =
+      subst_exclude_shadowed(trait_ref_subst(trait_ref, ctx->al),
+                             tm->type_params, tm->type_param_count, ctx->al);
+
+  // `Self` alongside them: together they are the type parameters of the
+  // trait's default body, the one definition this call can reach whose
+  // signature is written in the receiver's terms rather than an impl's.
+  cctx_record_inst(ctx, &p->inst,
+                   subst_with_self(subst_concat(trait_subst, *subst, ctx->al),
+                                   self_ty, ctx->al));
+
+  Type *fun_ty = subst_apply(subst, tm->method_type, ctx->al);
+  if (trait_subst.count > 0) {
+    fun_ty = subst_apply(&trait_subst, fun_ty, ctx->al);
+  }
+  return trait_project(fun_ty, trait, self_ty, /*impl=*/NULL, ctx->al);
+}
+
 static Type *resolve_callee(CheckCtx *ctx, Expr *expr, Subst *subst) {
   assert(expr->kind == EXPR_CALL);
   Expr *callee = expr->as.call.callee;
@@ -2432,6 +2491,10 @@ static Type *resolve_callee(CheckCtx *ctx, Expr *expr, Subst *subst) {
     rewrite_tuple_variant_call(ctx, expr, r.type, r.as.variant.enum_def,
                                r.as.variant.def);
     return r.type;
+  }
+
+  if (r.kind == PATHRES_TRAIT_ITEM) {
+    return check_trait_item_path(ctx, callee, &r, subst);
   }
 
   switch (r.type->kind) {
@@ -3007,6 +3070,12 @@ static bool check_pattern(CheckCtx *ctx, Pattern *pattern, Type *expected_ty) {
                                   r.type->as.struc.def);
     }
 
+    if (r.kind != PATHRES_VARIANT) {
+      diag_error(ctx->diags, pattern->span,
+                 "expected an enum variant in this pattern");
+      return false;
+    }
+
     return check_variant_pattern(ctx, pattern, expected_ty,
                                  r.as.variant.enum_def, r.as.variant.def);
   }
@@ -3031,6 +3100,14 @@ static bool check_pattern(CheckCtx *ctx, Pattern *pattern, Type *expected_ty) {
       *pattern = new;
       return check_variant_pattern(ctx, pattern, expected_ty,
                                    r.as.variant.enum_def, r.as.variant.def);
+    }
+
+    // a path can now resolve to something that is neither: `T::item` names a
+    // trait item, which has no fields to match on.
+    if (r.kind != PATHRES_TYPE || r.type->kind != TY_STRUCT) {
+      diag_error(ctx->diags, pattern->span,
+                 "expected a struct in struct pattern");
+      return false;
     }
 
     return check_struct_pattern(ctx, pattern, expected_ty,
@@ -5801,6 +5878,47 @@ static bool trait_check_object_safe(TypeResolver *r, TraitDef *trait,
   return true;
 }
 
+// The types the compiler knows by name rather than by declaration. NULL for
+// anything else, which sends the name to the type scope.
+//
+// `StringBuf` and `Char` are builtins in exactly the sense the others are: the
+// compiler knows the *type*, while every operation on one lives in std. That is
+// not a lang item in the sense `Display` is — no std *item* is named here.
+//
+// `Never` is the type of code that does not come back. It already existed as
+// what `return`/`break` give an expression; naming it is what lets a signature
+// promise divergence, which is the whole of `panic`'s contract.
+//
+// This is also what a path may be qualified by (`Float::from(7)`), so the one
+// list has to serve both spellings or the two would drift.
+static Type *type_named_builtin(TypeChecker *tc, StringView name) {
+  if (sv_equal_cstr(name, "Int")) {
+    return tc->t_int;
+  }
+  if (sv_equal_cstr(name, "Float")) {
+    return tc->t_float;
+  }
+  if (sv_equal_cstr(name, "Bool")) {
+    return tc->t_bool;
+  }
+  if (sv_equal_cstr(name, "Char")) {
+    return tc->t_char;
+  }
+  if (sv_equal_cstr(name, "String")) {
+    return tc->t_string;
+  }
+  if (sv_equal_cstr(name, "StringBuf")) {
+    return tc->t_strbuf;
+  }
+  if (sv_equal_cstr(name, "Unit")) {
+    return tc->t_unit;
+  }
+  if (sv_equal_cstr(name, "Never")) {
+    return tc->t_never;
+  }
+  return NULL;
+}
+
 Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
   if (node->resolved) {
     return node->resolved;
@@ -5828,42 +5946,13 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
     if (named->path.count == 1 && named->path.segments[0].type_arg_count == 0) {
       StringView name = named->path.segments[0].name;
 
-      if (sv_equal_cstr(name, "Int")) {
-        result = r->tc->t_int;
+      Type *builtin = type_named_builtin(r->tc, name);
+      if (builtin != NULL) {
+        result = builtin;
         break;
-      } else if (sv_equal_cstr(name, "Float")) {
-        result = r->tc->t_float;
-        break;
-      } else if (sv_equal_cstr(name, "Bool")) {
-        result = r->tc->t_bool;
-        break;
-      } else if (sv_equal_cstr(name, "Char")) {
-        // a builtin type, like `StringBuf` below it: the compiler knows the
-        // name, and every operation on a Char lives in `std::char`.
-        result = r->tc->t_char;
-        break;
-      } else if (sv_equal_cstr(name, "String")) {
-        result = r->tc->t_string;
-        break;
-      } else if (sv_equal_cstr(name, "StringBuf")) {
-        // a builtin type whose operations live in std, exactly the arrangement
-        // `String` already has — `std::string` is where both are written. The
-        // compiler knows the *type*, not any std item, so this is not another
-        // lang item in the sense `Display` is.
-        result = r->tc->t_strbuf;
-        break;
-      } else if (sv_equal_cstr(name, "Unit")) {
-        result = r->tc->t_unit;
-        break;
-      } else if (sv_equal_cstr(name, "Never")) {
-        // the type of code that does not come back. It already existed as the
-        // type `return`/`break` give an expression; naming it is what lets a
-        // signature promise divergence, which is the whole of `panic`'s
-        // contract — `infer_unify` lets it stand in for any type, so
-        // `return panic(msg)` satisfies any return type.
-        result = r->tc->t_never;
-        break;
-      } else if (sv_equal_cstr(name, "_")) {
+      }
+
+      if (sv_equal_cstr(name, "_")) {
         if (!r->infer) {
           diag_error(r->diags, node->span,
                      "'_' is not allowed in this context");
@@ -6321,6 +6410,18 @@ static bool impl_bounds_satisfied(ImplDef *impl, Type **args, int n,
     return false;
   }
   impl_bound_depth++;
+
+  // a bound may name another of the impl's parameters (`impl<T, U: From<T>>`),
+  // so it has to be read in the terms the head just pinned: asking whether
+  // `Meters` implements a literal `From<T>` answers no, however many impls
+  // there are. Same move `infer_open_generics` makes for a function's bounds.
+  StringView *names = al_alloc(al, sizeof(StringView) * (size_t)n);
+  for (int j = 0; j < n; j++) {
+    names[j] = impl->type_params[j]->as.generic.name;
+  }
+  Subst subst;
+  subst_init(&subst, names, args, n);
+
   bool ok = true;
   for (int j = 0; ok && j < n; j++) {
     Type *param = impl->type_params[j];
@@ -6328,7 +6429,11 @@ static bool impl_bounds_satisfied(ImplDef *impl, Type **args, int n,
       continue;
     }
     for (int b = 0; ok && b < param->as.generic.bound_count; b++) {
-      ok = impl_index_implements(idx, args[j], param->as.generic.bounds[b], al);
+      // partial: the bound may also mention the *enclosing* definition's
+      // parameters, which this substitution has nothing to say about.
+      Type *bound = subst_apply_(&subst, param->as.generic.bounds[b],
+                                 /*total=*/false, al);
+      ok = impl_index_implements(idx, args[j], bound, al);
     }
   }
   impl_bound_depth--;
@@ -6353,6 +6458,41 @@ static bool impl_bounds_satisfied(ImplDef *impl, Type **args, int n,
 // and a trait reference — and both halves may pin the impl's own parameters:
 // `impl<T> Into<T> for Wrap<T>` is selected by its receiver, while
 // `impl<T: Display> Into<String> for T` is selected by both.
+// The head match alone: does `impl`'s self type (and, when asked, its trait
+// reference) match, binding whatever impl parameters they mention? Split out
+// from `impl_applies` because a parameter the head does not mention is not
+// necessarily a failure — see `impl_head_complete`.
+//
+// `names`/`args`/`bound` are caller-owned arrays of `impl->type_param_count`
+// entries; `bound` must start zeroed.
+static bool impl_match_head(ImplDef *impl, Type *self_type, Type *trait_ref,
+                            StringView *names, Type **args, bool *bound) {
+  int n = impl->type_param_count;
+  for (int j = 0; j < n; j++) {
+    names[j] = impl->type_params[j]->as.generic.name;
+  }
+  if (!impl_type_match(impl->self_type, self_type, names, n, args, bound)) {
+    return false;
+  }
+  if (trait_ref != NULL) {
+    return impl_type_match(impl->trait_type, trait_ref, names, n, args, bound);
+  }
+  return true;
+}
+
+// Every parameter pinned, and every declared bound satisfied by what pinned it.
+static bool impl_head_complete(ImplDef *impl, Type **args, bool *bound,
+                               ImplIndex *bounds_idx, Allocator *al) {
+  int n = impl->type_param_count;
+  for (int j = 0; j < n; j++) {
+    if (!bound[j]) {
+      return false;
+    }
+  }
+  return bounds_idx == NULL ||
+         impl_bounds_satisfied(impl, args, n, bounds_idx, al);
+}
+
 static bool impl_applies(ImplDef *impl, Type *self_type, Type *trait_ref,
                          Subst *out_subst, ImplIndex *bounds_idx,
                          Allocator *al) {
@@ -6374,26 +6514,13 @@ static bool impl_applies(ImplDef *impl, Type *self_type, Type *trait_ref,
   StringView *names = al_alloc(al, sizeof(StringView) * n);
   Type **args = al_alloc(al, sizeof(Type *) * n);
   bool *bound = al_alloc_zero(al, sizeof(bool) * n);
-  for (int j = 0; j < n; j++) {
-    names[j] = impl->type_params[j]->as.generic.name;
-  }
 
-  bool matched =
-      impl_type_match(impl->self_type, self_type, names, n, args, bound);
-  if (matched && trait_ref != NULL) {
-    matched =
-        impl_type_match(impl->trait_type, trait_ref, names, n, args, bound);
+  if (!impl_match_head(impl, self_type, trait_ref, names, args, bound) ||
+      !impl_head_complete(impl, args, bound, bounds_idx, al)) {
+    return false;
   }
-  for (int j = 0; matched && j < n; j++) {
-    matched = bound[j];
-  }
-  if (matched && bounds_idx != NULL) {
-    matched = impl_bounds_satisfied(impl, args, n, bounds_idx, al);
-  }
-  if (matched) {
-    subst_init(out_subst, names, args, n);
-  }
-  return matched;
+  subst_init(out_subst, names, args, n);
+  return true;
 }
 
 // The trait an impl heads, or NULL for an inherent impl.
@@ -6519,38 +6646,90 @@ MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, Type *trait_ref,
   MethodDef *first = NULL;
   for (int i = 0; i < idx->count; i++) {
     ImplDef *impl = idx->all[i];
-    Subst subst;
-    if (!impl_applies(impl, self_type, trait_ref, &subst, idx, al)) {
+    if (impl->self_type == NULL || type_is_poison(impl->self_type)) {
+      continue;
+    }
+    if (trait_ref != NULL &&
+        (impl->trait_type == NULL || impl->trait_type->kind != TY_TRAIT)) {
       continue;
     }
 
+    // the method is looked up *before* the impl is judged applicable, because
+    // for a generic trait the head may not pin every impl parameter and the
+    // method's return type is what finishes the job (see below).
+    MethodDef *cand = NULL;
     for (int j = 0; j < impl->method_count; j++) {
-      if (!sv_equal(impl->methods[j].name, name)) {
+      if (sv_equal(impl->methods[j].name, name)) {
+        cand = &impl->methods[j]; // one impl declares a name at most once
+        break;
+      }
+    }
+    if (cand == NULL) {
+      continue;
+    }
+
+    // a method with type parameters of its own is not a candidate for either
+    // use of the hint: its return type mentions generics this substitution
+    // does not bind, so neither pinning nor an equality test is the right
+    // question for it.
+    bool hintable = ret_hint != NULL && cand->fun != NULL &&
+                    cand->fun->return_type != NULL &&
+                    cand->fun->type_param_count == 0;
+
+    Subst subst = subst_empty();
+    if (impl->type_param_count == 0) {
+      if (!types_equal(impl->self_type, self_type) ||
+          (trait_ref != NULL && !types_equal(impl->trait_type, trait_ref))) {
         continue;
       }
-      MethodDef *cand = &impl->methods[j];
-      bool wanted = false;
-      // a method with type parameters of its own is skipped: its return type
-      // mentions generics this substitution does not bind, and an equality
-      // test against the hint could not be the right question for it anyway.
-      if (ret_hint != NULL && cand->fun != NULL &&
-          cand->fun->return_type != NULL && cand->fun->type_param_count == 0) {
-        Type *ret = subst.count > 0
-                        ? subst_apply(&subst, cand->fun->return_type, al)
-                        : cand->fun->return_type;
-        wanted = types_equal(ret, ret_hint);
+    } else {
+      int n = impl->type_param_count;
+      StringView *names = al_alloc(al, sizeof(StringView) * n);
+      Type **args = al_alloc(al, sizeof(Type *) * n);
+      bool *bound = al_alloc_zero(al, sizeof(bool) * n);
+
+      if (!impl_match_head(impl, self_type, trait_ref, names, args, bound)) {
+        continue;
       }
-      if (first == NULL || wanted) {
-        if (out_match) {
-          out_match->impl = impl;
-          out_match->subst = subst;
+
+      // an impl parameter the head never mentions is pinned by what the call
+      // is *expected to produce*. That is the shape a conversion has and no
+      // other: `impl<T, U: From<T>> Into<U> for T` is chosen by neither its
+      // receiver nor a named trait reference, only by the type the result
+      // flows into. Consulted solely to fill a hole — with the head already
+      // total the hint stays the tie-break it was.
+      if (hintable) {
+        for (int j = 0; j < n; j++) {
+          if (!bound[j]) {
+            impl_type_match(cand->fun->return_type, ret_hint, names, n, args,
+                            bound);
+            break;
+          }
         }
-        first = cand;
       }
-      if (wanted) {
-        return first;
+
+      if (!impl_head_complete(impl, args, bound, idx, al)) {
+        continue;
       }
-      break; // one impl declares a name at most once
+      subst_init(&subst, names, args, n);
+    }
+
+    bool wanted = false;
+    if (hintable) {
+      Type *ret = subst.count > 0
+                      ? subst_apply(&subst, cand->fun->return_type, al)
+                      : cand->fun->return_type;
+      wanted = types_equal(ret, ret_hint);
+    }
+    if (first == NULL || wanted) {
+      if (out_match) {
+        out_match->impl = impl;
+        out_match->subst = subst;
+      }
+      first = cand;
+    }
+    if (wanted) {
+      return first;
     }
   }
 
@@ -6680,21 +6859,27 @@ void cctx_init(CheckCtx *cctx, TypeChecker *tc, Module *m, DiagBag *diags,
 
 typedef enum {
   PATHRES_CTX_SCOPE,
-  PATHRES_CTX_STRUCT,
+  // a concrete type qualifying the rest of the path — a struct, or a builtin
+  // like `Float::from(7)`. Only the type is needed: the lookup is over the
+  // impls, and an impl's self type is a `Type` whatever declared it.
+  PATHRES_CTX_TYPE,
   PATHRES_CTX_ENUM,
+  PATHRES_CTX_GENERIC,
 } PathResCtxKind;
 
 typedef struct {
   PathResCtxKind kind;
   union {
     struct {
-      StructDef *def;
       Type *inst;
-    } struct_;
+    } type_;
     struct {
       EnumDef *def;
       Type *inst;
     } enum_;
+    struct {
+      Type *param; // TY_GENERIC, carrying the bounds to search
+    } generic;
   } scope;
 } PathResCtx_;
 
@@ -6710,6 +6895,29 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
 
     switch (res_ctx.kind) {
     case PATHRES_CTX_SCOPE: {
+      // a builtin type may qualify a path just as a declared one does
+      // (`Float::from(7)`), which is what keeps `From` writable for the
+      // primitives it ships impls for. Asked first, exactly as `TYNODE_NAMED`
+      // asks it, so the two spellings of a name cannot disagree.
+      Type *builtin = type_named_builtin(ctx->tyres->tc, segment);
+      if (builtin != NULL) {
+        if (path->segments[i].type_arg_count > 0) {
+          diag_error(ctx->diags, path->span,
+                     "cannot apply type arguments to '" SV_FMT "'",
+                     SV_ARG(segment));
+          return false;
+        }
+        if (is_last) {
+          *out_res = (PathRes){.kind = PATHRES_TYPE, .type = builtin};
+          return true;
+        }
+        res_ctx = (PathResCtx_){
+            .kind = PATHRES_CTX_TYPE,
+            .scope.type_ = {.inst = builtin},
+        };
+        break;
+      }
+
       TypeEntry *te = tscope_lookup(ctx->tscope, segment);
       if (!te) {
         // a lone segment is a plain name (a function, a unit variant), not a
@@ -6778,12 +6986,8 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
         }
 
         res_ctx = (PathResCtx_){
-            .kind = PATHRES_CTX_STRUCT,
-            .scope.struct_ =
-                {
-                    .def = def,
-                    .inst = struct_ty,
-                },
+            .kind = PATHRES_CTX_TYPE,
+            .scope.type_ = {.inst = struct_ty},
         };
         break;
       }
@@ -6850,6 +7054,28 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
         *out_res = (PathRes){.kind = PATHRES_TYPE, .type = trait_ref};
         return true;
       }
+      case TY_GENERIC: {
+        // a type parameter qualifying a path: `T::from(v)`, or `Self::from(v)`
+        // inside a default body, where `Self` is an ordinary bounded parameter
+        // (milestone 12). It names no definition — the bounds do — so the
+        // lookup is the one `resolve_bound_method_call` does for a receiver.
+        if (is_last) {
+          *out_res = (PathRes){.kind = PATHRES_TYPE, .type = te->type};
+          return true;
+        }
+        if (path->segments[i].type_arg_count > 0) {
+          diag_error(ctx->diags, path->span,
+                     "cannot apply type arguments to type parameter '" SV_FMT
+                     "'",
+                     SV_ARG(segment));
+          return false;
+        }
+        res_ctx = (PathResCtx_){
+            .kind = PATHRES_CTX_GENERIC,
+            .scope.generic = {.param = te->type},
+        };
+        break;
+      }
       default:
         assert(false &&
                "unhandled type kind in cctx_resolve_path PATHRES_SCOPE");
@@ -6891,8 +7117,8 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
       };
       return true;
     }
-    case PATHRES_CTX_STRUCT: {
-      Type *struct_ty = res_ctx.scope.struct_.inst;
+    case PATHRES_CTX_TYPE: {
+      Type *struct_ty = res_ctx.scope.type_.inst;
 
       if (!is_last) {
         diag_error(ctx->diags, path->span,
@@ -6935,6 +7161,50 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
           .as.method.subst = subst,
       };
       return true;
+    }
+    case PATHRES_CTX_GENERIC: {
+      Type *param = res_ctx.scope.generic.param;
+
+      if (!is_last) {
+        diag_error(ctx->diags, path->span,
+                   "cannot access member '" SV_FMT "' of associated item",
+                   SV_ARG(segment));
+        return false;
+      }
+
+      // first bound declaring the name wins, like impl selection and like a
+      // method call through a bound.
+      for (int b = 0; b < param->as.generic.bound_count; b++) {
+        Type *trait_ref = param->as.generic.bounds[b];
+        if (trait_ref->kind != TY_TRAIT) {
+          continue;
+        }
+        TraitDef *trait = trait_ref->as.trait.def;
+        for (int j = 0; j < trait->method_count; j++) {
+          if (!sv_equal(trait->methods[j].name, segment)) {
+            continue;
+          }
+          *out_res = (PathRes){
+              .kind = PATHRES_TRAIT_ITEM,
+              .type = trait->methods[j].method_type,
+              .as.trait_item = {.trait_ref = trait_ref,
+                                .self_type = param,
+                                .def = &trait->methods[j]},
+          };
+          return true;
+        }
+      }
+
+      diag_error(ctx->diags, path->span,
+                 "no associated item named '" SV_FMT
+                 "' found for type parameter '" SV_FMT "'",
+                 SV_ARG(segment), SV_ARG(param->as.generic.name));
+      if (param->as.generic.bound_count == 0) {
+        diag_note(ctx->diags, (Span){0},
+                  "'" SV_FMT "' has no trait bounds, so it offers no items",
+                  SV_ARG(param->as.generic.name));
+      }
+      return false;
     }
     default:
       break;

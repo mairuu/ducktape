@@ -277,15 +277,18 @@ bool mono_seed(Mono *mono, FunDef *entry) {
 }
 
 // what the call site instantiated one type parameter with, made concrete:
-// read from the recorded arguments (`primary` first, so a method's own type
-// param shadowing one of its impl's wins, exactly as in the checker), then
-// pushed through the instantiation the *caller* is being compiled under.
-// NULL when it cannot be pinned down, which needs a diagnostic from above.
-static Type *cg_bind_param(Cg *cg, StringView name, const Subst *primary,
-                           const Subst *fallback) {
-  Type *arg = subst_find(primary, name);
-  if (arg == NULL && fallback != NULL) {
-    arg = subst_find(fallback, name);
+// read from the recorded arguments (`first`, then `second`), then pushed
+// through the instantiation the *caller* is being compiled under. NULL when it
+// cannot be pinned down, which needs a diagnostic from above.
+//
+// Which of the two goes first is the caller's decision and matters, because a
+// `Subst` is keyed by name and a name can mean two things at once — see
+// cg_inst_key.
+static Type *cg_bind_param(Cg *cg, StringView name, const Subst *first,
+                           const Subst *second) {
+  Type *arg = first != NULL ? subst_find(first, name) : NULL;
+  if (arg == NULL && second != NULL) {
+    arg = subst_find(second, name);
   }
   if (arg == NULL) {
     return NULL;
@@ -315,7 +318,14 @@ static bool cg_inst_key(Cg *cg, FunDef *fun, const Subst *primary,
       continue; // the method's own parameter of that name is bound below
     }
     names[k] = name;
-    args[k++] = cg_bind_param(cg, name, primary, fallback);
+    // an impl parameter is read from the *fallback* first, because that is the
+    // impl's own match and nothing else can speak for it. A `Subst` is keyed by
+    // name, and a call through a bound records the trait's arguments in
+    // `primary` — so `impl<T: Tag> Boxed<Int> for T` against `trait Boxed<T>`
+    // has two live meanings for "T", and reading primary first silently picks
+    // the trait's. (An impl reached by a concrete receiver has an empty
+    // fallback and its parameters in primary, so the order costs it nothing.)
+    args[k++] = cg_bind_param(cg, name, fallback, primary);
   }
   for (int i = 0; i < fun->type_param_count; i++) {
     StringView name = fun->type_params[i]->as.generic.name;
@@ -1241,6 +1251,42 @@ static void compile_coerce_dyn(Cg *cg, Expr *expr) {
 // `fun->params` actually has `is_self` set (checked generically, not
 // assumed to be 0 — see resolve_method_call_expr) — so codegen interleaves
 // `mc->object` back in at that same position when pushing arguments.
+// The body a call through a bound means, once the receiver is concrete: the
+// impl's own method, or the trait's default body when the impl omitted it.
+// `*out_impl_subst` is the impl's own type params as the receiver pinned them.
+//
+// Shared by a method call on a bounded receiver and by a path qualified by a
+// type parameter (`T::from(v)`), which are two spellings of one dispatch —
+// the second having no receiver to carry the abstract self type.
+static FunDef *cg_bound_target(Cg *cg, Type *self, Type *trait_ref,
+                               StringView name, Subst *out_impl_subst,
+                               Span span) {
+  *out_impl_subst = subst_empty();
+
+  ImplMatch match;
+  MethodDef *method = impl_index_method(
+      cg->impls, self, trait_ref, name, /*ret_hint=*/NULL, &match,
+      /*infer=*/NULL, /*bare_path=*/false, span, cg->al);
+  if (method != NULL) {
+    *out_impl_subst = match.subst;
+    return method->fun;
+  }
+
+  // an applicable impl exists (the checker enforced the bound) but does not
+  // define the name, so the body is the trait's default. It is instantiated on
+  // `Self`, which the call node's `inst` carries.
+  ImplDef *via_impl = NULL;
+  TraitDef *via_trait = NULL;
+  Subst via_subst = subst_empty();
+  TraitMethodDef *inherited =
+      impl_index_default_method(cg->impls, self, trait_ref, name, &via_impl,
+                                &via_trait, &via_subst, cg->al);
+  if (inherited == NULL) {
+    return NULL;
+  }
+  return inherited->default_impl;
+}
+
 static void compile_method_call(Cg *cg, Expr *expr) {
   ExprMethodCall *mc = &expr->as.method_call;
 
@@ -1287,28 +1333,11 @@ static void compile_method_call(Cg *cg, Expr *expr) {
     // of one generic trait for one type differ only here.
     Type *trait_ref = subst_apply(&cg->subst, mc->bound_trait, cg->al);
 
-    ImplMatch match;
-    MethodDef *method = impl_index_method(
-        cg->impls, self, trait_ref, mc->method_name, /*ret_hint=*/NULL, &match,
-        /*infer=*/NULL, /*bare_path=*/false, expr->span, cg->al);
-    if (method != NULL) {
-      fun = method->fun;
-      impl_subst = match.subst;
-    } else {
-      // an applicable impl exists (the checker enforced the bound) but does
-      // not define the method, so the body is the trait's default. It is
-      // instantiated on `Self`, which mc->inst carries.
-      ImplDef *via_impl = NULL;
-      TraitDef *via_trait = NULL;
-      Subst via_subst = subst_empty();
-      TraitMethodDef *inherited =
-          impl_index_default_method(cg->impls, self, trait_ref, mc->method_name,
-                                    &via_impl, &via_trait, &via_subst, cg->al);
-      if (inherited == NULL || inherited->default_impl == NULL) {
-        cg_error(cg, expr->span, "this method call");
-        return;
-      }
-      fun = inherited->default_impl;
+    fun = cg_bound_target(cg, self, trait_ref, mc->method_name, &impl_subst,
+                          expr->span);
+    if (fun == NULL) {
+      cg_error(cg, expr->span, "this method call");
+      return;
     }
   } else if (mc->resolved_default != NULL) {
     // the receiver's impl omitted the method: the body is the trait's default,
@@ -1844,7 +1873,31 @@ static void compile_expr_inner(Cg *cg, Expr *expr) {
       // function/method reached without dot syntax (e.g. `Point::new`,
       // or `Shape::area(s)` supplying `self` explicitly) — the checker
       // caches which FunDef that resolved to.
-      FunDef *fun = expr->as.path_expr.resolved_fun;
+      ExprPath *p = &expr->as.path_expr;
+
+      // ...unless the qualifier was a type parameter (`T::from(v)`), where
+      // there is no definition to cache: the checker knew only the trait
+      // signature, so the body is chosen here, from the substituted self type.
+      // This is compile_method_call's bound branch with the receiver moved
+      // into the path.
+      if (p->bound_trait != NULL) {
+        Type *self = subst_apply(&cg->subst, p->bound_self, cg->al);
+        Type *trait_ref = subst_apply(&cg->subst, p->bound_trait, cg->al);
+        StringView name = path->segments[path->count - 1].name;
+
+        Subst impl_subst = subst_empty();
+        FunDef *target =
+            cg_bound_target(cg, self, trait_ref, name, &impl_subst, expr->span);
+        if (target == NULL) {
+          cg_error(cg, expr->span, "this associated function call");
+          emit(cg, OP_UNIT);
+          break;
+        }
+        cg_emit_target(cg, target, &p->inst, &impl_subst, expr->span);
+        break;
+      }
+
+      FunDef *fun = p->resolved_fun;
       if (fun == NULL) {
         cg_error(cg, expr->span, "this path expression");
         emit(cg, OP_UNIT);

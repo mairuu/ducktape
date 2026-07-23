@@ -1,0 +1,82 @@
+# std::convert — `From` and `Into`.
+#
+# Two traits, and the observation that they are one relation written from two
+# ends: a `Meters` that can be made *from* an `Int` is an `Int` that goes
+# *into* a `Meters`. The blanket impl below is what makes that literally true
+# rather than merely suggestive, so a program writes `From` and gets `Into`
+# free — and never writes `Into` at all.
+#
+# That direction is not a style preference, it is what the machinery allows. An
+# impl is selected by a (self type, trait reference) pair, and a conversion is
+# exactly the case where the *receiver does not determine the answer*: `7.into()`
+# could produce anything at all. So `into` needs the expected type to pin the
+# impl, while `from` is qualified by the type it produces and needs nothing.
+# Writing the trait whose self type is the *output* is what puts the choice
+# where a name can be written down.
+#
+# **The blanket costs a program the ability to write its own `Into` impl.**
+# Coherence is blind to an impl's bounds, so `impl<T, U: From<T>> Into<U> for T`
+# overlaps every `impl Into<X> for Y` that could ever be written — importing
+# this module makes writing one an error. That is Rust's rule arrived at from
+# the same direction, and it is the price of the free direction being free.
+#
+# The reflexive `impl<T> From<T> for T` is deliberately **not** here for the
+# same reason one level worse: it would overlap every `From` impl too, and then
+# the module would ship a trait nobody could implement.
+#
+# **What it ships is two conversions**, and the restraint is the point: an
+# import's cost to its dependents is measured in impls (see `std::cmp`), and a
+# conversion trait is the easiest module in the library to overfill. Both are
+# lossless and neither is expressible as a method today.
+#
+# There is deliberately no `From<T> for String`. Rendering a value is
+# `std::fmt::Display`'s question and `to_string` already answers it; a
+# conversion trait answering it too would give the language two spellings for
+# one thing, which is the split milestone 18 drew between `print` and
+# `Display` and worth not redrawing here.
+#
+# Nor is there a `From<Float> for Int`: `as Int` truncates, and a conversion
+# that silently loses the fraction is not one a `From` should hide. Which way
+# it should round is a question a fallible conversion would have to ask, and
+# there is no `TryFrom` yet.
+
+use std::char::code;
+
+# `Self` is the type produced, which is why `from` is an associated function
+# and not a method: there is no receiver until it returns.
+pub trait From<T> {
+    fun from(value: T) -> Self;
+}
+
+pub trait Into<T> {
+    fun into(self) -> T;
+}
+
+# The whole module. `U::from` is an associated function reached through a
+# bound — the impl supplying it is not known until `U` is concrete, which is
+# the same dispatch a method call on a bounded receiver gets, with the path
+# carrying the abstract self type instead of a receiver.
+#
+# Neither the receiver nor a named trait reference pins `U` at a bare
+# `x.into()`; the type the result flows into does.
+impl<T, U: From<T>> Into<U> for T {
+    fun into(self) -> U {
+        return U::from(self);
+    }
+}
+
+# Widening, which is the one numeric conversion that keeps its value.
+impl From<Int> for Float {
+    fun from(value: Int) -> Float {
+        return value as Float;
+    }
+}
+
+# A character's scalar value. `std::char::code` is the native behind it, and
+# the import is free: `std::char` ships no impls, and neither does what it
+# imports.
+impl From<Char> for Int {
+    fun from(value: Char) -> Int {
+        return code(value);
+    }
+}

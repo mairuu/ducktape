@@ -757,6 +757,14 @@ typedef struct {
   // still name the *enclosing* definition's type params (`f::<T>()` inside a
   // generic `f`), which the monomorphiser substitutes away.
   Subst inst;
+
+  // set instead of `resolved_fun` when the path is qualified by a type
+  // parameter (`T::from(v)`, or `Self::from(v)` in a default body): the trait
+  // signature is all the checker knows, so which impl supplies the body waits
+  // until `bound_self` is substituted — exactly ExprMethodCall.bound_self one
+  // spelling over, for the case where there is no receiver to carry it.
+  Type *bound_trait; // TY_TRAIT — the trait reference the bound named
+  Type *bound_self;
 } ExprPath;
 
 typedef struct {

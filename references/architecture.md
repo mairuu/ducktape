@@ -234,6 +234,43 @@ useless, since the impl exists and the fix is one level down. The note names
 it (`an impl exists, but it requires 'Widget: Display'`) and is appended to the
 same three diagnostics.
 
+A bound is read **in the terms the head just pinned**. `impl<T, U: From<T>>`
+declares a bound mentioning another of the impl's own parameters, so asking
+whether `Meters` implements a literal `From<T>` answers no however many impls
+exist; `impl_bounds_satisfied` substitutes the head's bindings into the bound
+first (partially — a bound may also mention the *enclosing* definition's
+parameters, which this substitution has nothing to say about). That is the
+same move `infer_open_generics` makes for a function's bounds.
+
+### An impl parameter the head does not pin
+
+`impl_applies` requires every impl parameter to be pinned by the self type or
+the trait reference. A conversion is the one shape where that is impossible by
+construction: `impl<T, U: From<T>> Into<U> for T` is selected by neither its
+receiver nor a written reference, because *what a value converts into is not a
+fact about the value*. So `impl_index_method` splits the question in two —
+`impl_match_head` binds what the head mentions, and a parameter still unbound
+is pinned by matching the candidate method's return type against the call's
+expected type (`ret_hint`), after which `impl_head_complete` checks totality
+and the impl's own bounds.
+
+Three properties keep that from becoming a selection rule of its own:
+
+- it is consulted **only to fill a hole**. With the head already total the hint
+  stays the tie-break milestone 28 added, so a wrong hint still reports the
+  ordinary argument mismatch against the one impl that exists rather than
+  "no method";
+- the method must have **no type parameters of its own**, since its return
+  type would then mention generics this substitution does not bind;
+- what the hole is filled with is **verified, not trusted** — the impl's
+  `U: From<T>` bound is asked afterwards, against the type the hint supplied.
+  That is what makes `26.into()` and `'a'.into()` reach different `From` impls
+  for one `Steps`.
+
+The method is therefore looked up *before* the impl is judged applicable,
+which is the one structural change: a candidate's signature is now part of
+deciding whether its impl applies at all.
+
 ### The embedded standard library
 
 `std/*.dt` are ordinary ducktape sources, mirrored into the binary by
@@ -504,6 +541,28 @@ abstract receiver type), which is what lets codegen redo the impl lookup once
 that receiver is concrete; an inherited default sets `resolved_default`, the
 `FunDef` of the body it will run. Either way the recorded `inst` binds `Self`
 to the receiver's type — see "Trait default bodies".
+
+**The same dispatch, with no receiver.** A trait may declare an *associated
+function* — a signature with no `self` — and then there is nothing to dispatch
+on, so the path says it instead: `T::make(1)`, or `Self::make(1)` inside a
+default body. `resolve_path` grew a context for a type parameter
+(`PATHRES_CTX_GENERIC`), which searches the parameter's bounds exactly as
+`resolve_bound_method_call` searches a receiver's, and returns
+`PATHRES_TRAIT_ITEM`. `check_trait_item_path` then does what
+`check_trait_method_call` does, minus the receiver: open the method's own type
+params, apply the trait reference's arguments, `trait_project` the signature,
+record `Self` in `inst`, and set `bound_trait`/`bound_self` — on the
+`ExprPath` this time. Codegen's two branches share `cg_bound_target`.
+
+A `self` parameter is *not* special there: the signature is used whole, so
+`T::value(v)` passes the receiver as an ordinary first argument. A method is
+an associated function whose first parameter is `self`, and the path form is
+the spelling where that is visible — which is why one branch serves both.
+
+A **builtin type** may qualify a path the same way (`Float::from(7)`). The
+struct path context carried only a `Type` anyway, so it became
+`PATHRES_CTX_TYPE` and the builtin names moved into `type_named_builtin`,
+shared with `TYNODE_NAMED` so the two spellings of `Float` cannot drift.
 
 ### Trait default bodies
 
