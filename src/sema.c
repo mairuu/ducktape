@@ -1468,6 +1468,12 @@ static Decl *mod_find_use_alias(Module *m, StringView name) {
     if (decl->kind != DECL_USE) {
       continue;
     }
+    // a module import binds a namespace, not an item, so it re-exports nothing:
+    // its alias is the qualifier, and looking through it would try to hand a
+    // module to link_import_item as if it were a value.
+    if (decl->as.use_decl.is_module_import) {
+      continue;
+    }
     UseTarget *target = &decl->as.use_decl.target;
     for (int j = 0; j < target->count; j++) {
       if (sv_equal(target->aliases[j].alias, name)) {
@@ -1522,6 +1528,37 @@ static void link_import_item(TypeChecker *tc, Module *m, Module *dep,
   link_copy_entry(tc, m, dep, a->name, a->alias, a->span);
 }
 
+// bind `dep` as a module qualifier in `m` under `a->alias` (`use a::b;` →
+// `b::thing`). A qualifier shares the item namespaces' names — a module can't
+// be spelled where a type or value is expected — so a collision with an own
+// decl, an import, or another qualifier is reported here, the only place it
+// can be (the scopes don't hold the binding).
+static void link_bind_module(TypeChecker *tc, Module *m, Module *dep,
+                             const UseAlias *a) {
+  if (link_name_taken(tc, m, a)) {
+    return;
+  }
+  for (int i = 0; i < m->qual_module_count; i++) {
+    if (sv_equal(m->qual_modules[i].name, a->alias)) {
+      diag_error(tc->diags, a->span,
+                 "module qualifier '" SV_FMT "' is already bound",
+                 SV_ARG(a->alias));
+      return;
+    }
+  }
+
+  if (m->qual_module_count == m->qual_module_cap) {
+    int cap = m->qual_module_cap ? m->qual_module_cap * 2 : 4;
+    m->qual_modules =
+        al_realloc(tc->al, m->qual_modules,
+                   sizeof(QualModule) * (size_t)m->qual_module_cap,
+                   sizeof(QualModule) * (size_t)cap);
+    m->qual_module_cap = cap;
+  }
+  m->qual_modules[m->qual_module_count++] =
+      (QualModule){.name = a->alias, .target = dep, .span = a->span};
+}
+
 void tc_link_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
   for (int i = 0; i < m->import_count; i++) {
     ModImport *imp = &m->imports[i];
@@ -1531,6 +1568,11 @@ void tc_link_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
     Module *dep = reg->modules[imp->module_index];
 
     UseTarget *target = &imp->decl->as.use_decl.target;
+    if (imp->decl->as.use_decl.is_module_import) {
+      // a bare `use a::b;` naming a module: one alias, the qualifier.
+      link_bind_module(tc, m, dep, &target->aliases[0]);
+      continue;
+    }
     for (int j = 0; j < target->count; j++) {
       link_import_item(tc, m, dep, &target->aliases[j]);
     }
@@ -7344,6 +7386,7 @@ void rctx_init(ResolveCtx *rctx, TypeChecker *tc, Module *m, DiagBag *diags,
       .tc = tc,
       .tscope = NULL,
       .impls = &m->visible_impls,
+      .module = m,
       .diags = diags,
       .al = al,
   };
@@ -7367,6 +7410,7 @@ void cctx_init(CheckCtx *cctx, TypeChecker *tc, Module *m, DiagBag *diags,
       .tc = tc,
       .tscope = NULL,
       .impls = &m->visible_impls,
+      .module = m,
       .diags = diags,
       .infer = &cctx->infer,
       .al = al,
@@ -7390,6 +7434,10 @@ typedef enum {
   // The trait names which impl among several is meant; the receiver argument
   // will name the self type, so nothing here is selected yet.
   PATHRES_CTX_TRAIT,
+  // a `use`d module qualifying the rest of the path (`string::len`). The next
+  // segment is looked up among the module's `pub` exports, then handled exactly
+  // as if it had been named in the current scope.
+  PATHRES_CTX_MODULE,
 } PathResCtxKind;
 
 typedef struct {
@@ -7408,8 +7456,214 @@ typedef struct {
     struct {
       Type *trait_ref; // TY_TRAIT, fully applied
     } trait_;
+    struct {
+      Module *mod;
+    } module_;
   } scope;
 } PathResCtx_;
+
+// the module `m` bound `name` as a qualifier (`use a::b;` → `b`), or NULL.
+static Module *qual_module_lookup(Module *m, StringView name) {
+  if (m == NULL) {
+    return NULL;
+  }
+  for (int i = 0; i < m->qual_module_count; i++) {
+    if (sv_equal(m->qual_modules[i].name, name)) {
+      return m->qual_modules[i].target;
+    }
+  }
+  return NULL;
+}
+
+// the type-scope entry for a `pub` export of `mod` named `name` — the same
+// visibility rule `link_import_item` enforces for `use mod::name`, so a
+// qualified path and an item import see exactly the same set. Reports and
+// returns NULL when there is no such export, or it is private.
+static TypeEntry *module_export_lookup(PathResCtx *ctx, Module *mod,
+                                       StringView name, Span span) {
+  Decl *own = mod_find_own_decl(mod, name);
+  Decl *reexport = own ? NULL : mod_find_use_alias(mod, name);
+  if (own == NULL && reexport == NULL) {
+    diag_error(ctx->diags, span,
+               "module '" SV_FMT "' has no item named '" SV_FMT "'",
+               SV_ARG(mod->file_path), SV_ARG(name));
+    return NULL;
+  }
+  if (!(own ? own->is_pub : reexport->is_pub)) {
+    if (reexport) {
+      diag_error(ctx->diags, span,
+                 "'" SV_FMT "' is imported by module '" SV_FMT
+                 "' but not re-exported",
+                 SV_ARG(name), SV_ARG(mod->file_path));
+      diag_note(ctx->diags, (Span){0}, "add 'pub' to its 'use' declaration");
+    } else {
+      diag_error(ctx->diags, span,
+                 "'" SV_FMT "' is private in module '" SV_FMT "'", SV_ARG(name),
+                 SV_ARG(mod->file_path));
+      diag_note(ctx->diags, (Span){0}, "add 'pub' to its declaration");
+    }
+    return NULL;
+  }
+  // present since mod is resolved (topological order); NULL only if resolving
+  // mod poisoned the decl, in which case that error was already reported.
+  return tscope_lookup(&mod->tscope, name);
+}
+
+// resolving one segment against a TypeEntry either finishes the path or hands
+// off to the next resolver state.
+typedef enum {
+  PATHRES_STEP_DONE,  // *out_res is filled
+  PATHRES_STEP_NEXT,  // *next is the state for the following segment
+  PATHRES_STEP_ERROR, // a diagnostic was emitted
+} PathStep;
+
+// The item `te` names, resolved as segment `i`: either the whole path (when
+// `is_last`) or a qualifier for what follows. Shared by the scope state and the
+// module state, which differ only in where `te` was found — a name in the
+// current scope, or a `pub` export of a `use`d module.
+static PathStep pathres_step_entry(PathResCtx *ctx, Path *path, int i,
+                                   bool is_last, TypeEntry *te,
+                                   PathResCtx_ *next, PathRes *out_res) {
+  StringView segment = path->segments[i].name;
+  switch (te->type->kind) {
+  case TY_FUNCTION: {
+    if (!is_last) {
+      diag_error(ctx->diags, path->span,
+                 "cannot access member '" SV_FMT "' of function type",
+                 SV_ARG(segment));
+      return PATHRES_STEP_ERROR;
+    }
+    *out_res = (PathRes){
+        .kind = PATHRES_METHOD,
+        .type = te->type,
+        .as.method.fun = te->as.fun_def,
+    };
+    return PATHRES_STEP_DONE;
+  }
+  case TY_STRUCT: {
+    StructDef *def = te->as.struct_def;
+
+    TypeScratch type_args;
+    if (!resolve_path_segment_args(&path->segments[i], ctx->tyres, ctx->al,
+                                   &type_args)) {
+      return PATHRES_STEP_ERROR;
+    }
+
+    if (type_args.count > 0 && type_args.count != def->type_param_count) {
+      diag_error(ctx->diags, path->span,
+                 "expected %d type arguments but got %d for struct '" SV_FMT
+                 "'",
+                 def->type_param_count, type_args.count, SV_ARG(def->name));
+      return PATHRES_STEP_ERROR;
+    }
+
+    Type *struct_ty =
+        (type_args.count > 0)
+            ? ty_struct(def, type_args.ptr, type_args.count, ctx->al)
+            : def->self_type;
+
+    if (is_last) {
+      *out_res = (PathRes){.kind = PATHRES_TYPE, .type = struct_ty};
+      return PATHRES_STEP_DONE;
+    }
+
+    *next = (PathResCtx_){
+        .kind = PATHRES_CTX_TYPE,
+        .scope.type_ = {.inst = struct_ty},
+    };
+    return PATHRES_STEP_NEXT;
+  }
+  case TY_ENUM: {
+    EnumDef *def = te->as.enum_def;
+
+    TypeScratch type_args;
+    if (!resolve_path_segment_args(&path->segments[i], ctx->tyres, ctx->al,
+                                   &type_args)) {
+      return PATHRES_STEP_ERROR;
+    }
+
+    if (type_args.count > 0 && type_args.count != def->type_param_count) {
+      diag_error(ctx->diags, path->span,
+                 "expected %d type arguments but got %d for enum '" SV_FMT "'",
+                 def->type_param_count, type_args.count, SV_ARG(def->name));
+      return PATHRES_STEP_ERROR;
+    }
+
+    Type *enum_ty = (type_args.count > 0)
+                        ? ty_enum(def, type_args.ptr, type_args.count, ctx->al)
+                        : def->self_type;
+
+    if (is_last) {
+      *out_res = (PathRes){.kind = PATHRES_TYPE, .type = enum_ty};
+      return PATHRES_STEP_DONE;
+    }
+
+    *next = (PathResCtx_){
+        .kind = PATHRES_CTX_ENUM,
+        .scope.enum_ = {.def = def, .inst = enum_ty},
+    };
+    return PATHRES_STEP_NEXT;
+  }
+  case TY_TRAIT: {
+    // a trait named *with* type arguments: the head of `impl Into<Int> for S`
+    // when last, or the qualifier of a trait-qualified method call
+    // (`Into::<F>::into(c)`) when not. A trait without them never reaches here
+    // as a lone segment — that is answered by `tscope_lookup` in tyres. (A
+    // *bound* does not come through here either: `resolve_bound_refs` reads the
+    // segment's arguments itself, since a bound is a trait reference by
+    // construction and never a type.)
+    Type *trait_ref = trait_ref_resolve(
+        ctx->tyres, te->as.trait_def, path->segments[i].type_args,
+        path->segments[i].type_arg_count, path->span);
+    if (is_last) {
+      // an arity mistake is reported inside `trait_ref_resolve` and *succeeds*
+      // with a poison type rather than failing: a failure would add the
+      // caller's generic "unresolved type" on top, and poison is what
+      // propagates one mistake silently.
+      *out_res = (PathRes){.kind = PATHRES_TYPE, .type = trait_ref};
+      return PATHRES_STEP_DONE;
+    }
+    // `Into::<F>::into(c)`: the trait names which impl among several is meant;
+    // the method name is the next (final) segment, and the self type is the
+    // receiver argument — not written here. Selection waits for the call. (A
+    // poison trait_ref means the arity error was already reported; stop rather
+    // than chase a method off it.)
+    if (type_is_poison(trait_ref)) {
+      return PATHRES_STEP_ERROR;
+    }
+    *next = (PathResCtx_){
+        .kind = PATHRES_CTX_TRAIT,
+        .scope.trait_ = {.trait_ref = trait_ref},
+    };
+    return PATHRES_STEP_NEXT;
+  }
+  case TY_GENERIC: {
+    // a type parameter qualifying a path: `T::from(v)`, or `Self::from(v)`
+    // inside a default body, where `Self` is an ordinary bounded parameter
+    // (milestone 12). It names no definition — the bounds do — so the lookup is
+    // the one `resolve_bound_method_call` does for a receiver. (A module export
+    // is never a type parameter, so this arm is scope-only in practice.)
+    if (is_last) {
+      *out_res = (PathRes){.kind = PATHRES_TYPE, .type = te->type};
+      return PATHRES_STEP_DONE;
+    }
+    if (path->segments[i].type_arg_count > 0) {
+      diag_error(ctx->diags, path->span,
+                 "cannot apply type arguments to type parameter '" SV_FMT "'",
+                 SV_ARG(segment));
+      return PATHRES_STEP_ERROR;
+    }
+    *next = (PathResCtx_){
+        .kind = PATHRES_CTX_GENERIC,
+        .scope.generic = {.param = te->type},
+    };
+    return PATHRES_STEP_NEXT;
+  }
+  default:
+    assert(false && "unhandled type kind in pathres_step_entry");
+    return PATHRES_STEP_ERROR;
+  }
+}
 
 bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
   assert(out_res && "out_res is null");
@@ -7448,6 +7702,30 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
 
       TypeEntry *te = tscope_lookup(ctx->tscope, segment);
       if (!te) {
+        // not a type — but a `use`d module can qualify what follows
+        // (`string::len`). A module never stands alone as a value or a type, so
+        // it only resolves when a segment follows it.
+        Module *bound = qual_module_lookup(ctx->tyres->module, segment);
+        if (bound != NULL && !is_last) {
+          if (path->segments[i].type_arg_count > 0) {
+            diag_error(ctx->diags, path->span,
+                       "cannot apply type arguments to module '" SV_FMT "'",
+                       SV_ARG(segment));
+            return false;
+          }
+          res_ctx = (PathResCtx_){
+              .kind = PATHRES_CTX_MODULE,
+              .scope.module_ = {.mod = bound},
+          };
+          break;
+        }
+        if (bound != NULL && is_last) {
+          diag_error(ctx->diags, path->span,
+                     "'" SV_FMT "' is a module, not a value or type — name one "
+                     "of its items (`" SV_FMT "::<item>`)",
+                     SV_ARG(segment), SV_ARG(segment));
+          return false;
+        }
         // a lone segment is a plain name (a function, a unit variant), not a
         // type — and since `print` stopped being ambient this is the message
         // a missing `use` produces, so it should describe the mistake rather
@@ -7460,164 +7738,39 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
         diag_error(ctx->diags, path->span, "unknown type '" SV_FMT "' in path",
                    SV_ARG(segment));
         if (i == 0 && path->count > 1) {
-          // the shape of a module-qualified path, which isn't supported —
-          // items are named directly once imported.
+          // a first segment that resolves to neither a type nor a module: most
+          // likely the module was imported by item, not bound as a qualifier.
           diag_note(ctx->diags, (Span){0},
-                    "paths are not qualified by module; import the item with "
-                    "'use' and name it directly");
+                    "to qualify a path by module, bind it with `use "
+                    "<path>;` first");
         }
         return false;
       }
-      switch (te->type->kind) {
-      case TY_FUNCTION: {
-        if (!is_last) {
-          diag_error(ctx->diags, path->span,
-                     "cannot access member '" SV_FMT "' of function type",
-                     SV_ARG(segment));
-          return false;
-        }
-        *out_res = (PathRes){
-            .kind = PATHRES_METHOD,
-            .type = te->type,
-            .as.method.fun = te->as.fun_def,
-        };
+      switch (
+          pathres_step_entry(ctx, path, i, is_last, te, &res_ctx, out_res)) {
+      case PATHRES_STEP_DONE:
         return true;
-      }
-      case TY_STRUCT: {
-        StructDef *def = te->as.struct_def;
-
-        TypeScratch type_args;
-        if (!resolve_path_segment_args(&path->segments[i], ctx->tyres, ctx->al,
-                                       &type_args)) {
-          return false;
-        }
-
-        if (type_args.count > 0 && type_args.count != def->type_param_count) {
-          diag_error(ctx->diags, path->span,
-                     "expected %d type arguments but got %d for struct '" SV_FMT
-                     "'",
-                     def->type_param_count, type_args.count, SV_ARG(def->name));
-          return false;
-        }
-
-        Type *struct_ty =
-            (type_args.count > 0)
-                ? ty_struct(def, type_args.ptr, type_args.count, ctx->al)
-                : def->self_type;
-
-        if (is_last) {
-          *out_res = (PathRes){
-              .kind = PATHRES_TYPE,
-              .type = struct_ty,
-          };
-          return true;
-        }
-
-        res_ctx = (PathResCtx_){
-            .kind = PATHRES_CTX_TYPE,
-            .scope.type_ = {.inst = struct_ty},
-        };
-        break;
-      }
-      case TY_ENUM: {
-        EnumDef *def = te->as.enum_def;
-
-        TypeScratch type_args;
-        if (!resolve_path_segment_args(&path->segments[i], ctx->tyres, ctx->al,
-                                       &type_args)) {
-          return false;
-        }
-
-        if (type_args.count > 0 && type_args.count != def->type_param_count) {
-          diag_error(ctx->diags, path->span,
-                     "expected %d type arguments but got %d for enum '" SV_FMT
-                     "'",
-                     def->type_param_count, type_args.count, SV_ARG(def->name));
-          return false;
-        }
-
-        Type *enum_ty =
-            (type_args.count > 0)
-                ? ty_enum(def, type_args.ptr, type_args.count, ctx->al)
-                : def->self_type;
-
-        if (is_last) {
-          *out_res = (PathRes){
-              .kind = PATHRES_TYPE,
-              .type = enum_ty,
-          };
-          return true;
-        }
-
-        res_ctx = (PathResCtx_){
-            .kind = PATHRES_CTX_ENUM,
-            .scope.enum_ =
-                {
-                    .def = def,
-                    .inst = enum_ty,
-                },
-        };
-        break;
-      }
-      case TY_TRAIT: {
-        // a trait named *with* type arguments: the head of `impl Into<Int> for
-        // S` when last, or the qualifier of a trait-qualified method call
-        // (`Into::<F>::into(c)`) when not. A trait without them never reaches
-        // here as a lone segment — that is answered by `tscope_lookup` in
-        // tyres. (A *bound* does not come through here either:
-        // `resolve_bound_refs` reads the segment's arguments itself, since a
-        // bound is a trait reference by construction and never a type.)
-        Type *trait_ref = trait_ref_resolve(
-            ctx->tyres, te->as.trait_def, path->segments[i].type_args,
-            path->segments[i].type_arg_count, path->span);
-        if (is_last) {
-          // an arity mistake is reported inside `trait_ref_resolve` and
-          // *succeeds* with a poison type rather than failing: a failure would
-          // add the caller's generic "unresolved type" on top, and poison is
-          // what propagates one mistake silently.
-          *out_res = (PathRes){.kind = PATHRES_TYPE, .type = trait_ref};
-          return true;
-        }
-        // `Into::<F>::into(c)`: the trait names which impl among several is
-        // meant; the method name is the next (final) segment, and the self
-        // type is the receiver argument — not written here. Selection waits
-        // for the call. (A poison trait_ref means the arity error was already
-        // reported; stop rather than chase a method off it.)
-        if (type_is_poison(trait_ref)) {
-          return false;
-        }
-        res_ctx = (PathResCtx_){
-            .kind = PATHRES_CTX_TRAIT,
-            .scope.trait_ = {.trait_ref = trait_ref},
-        };
-        break;
-      }
-      case TY_GENERIC: {
-        // a type parameter qualifying a path: `T::from(v)`, or `Self::from(v)`
-        // inside a default body, where `Self` is an ordinary bounded parameter
-        // (milestone 12). It names no definition — the bounds do — so the
-        // lookup is the one `resolve_bound_method_call` does for a receiver.
-        if (is_last) {
-          *out_res = (PathRes){.kind = PATHRES_TYPE, .type = te->type};
-          return true;
-        }
-        if (path->segments[i].type_arg_count > 0) {
-          diag_error(ctx->diags, path->span,
-                     "cannot apply type arguments to type parameter '" SV_FMT
-                     "'",
-                     SV_ARG(segment));
-          return false;
-        }
-        res_ctx = (PathResCtx_){
-            .kind = PATHRES_CTX_GENERIC,
-            .scope.generic = {.param = te->type},
-        };
-        break;
-      }
-      default:
-        assert(false &&
-               "unhandled type kind in cctx_resolve_path PATHRES_SCOPE");
+      case PATHRES_STEP_ERROR:
         return false;
+      case PATHRES_STEP_NEXT:
+        break;
+      }
+      break;
+    }
+    case PATHRES_CTX_MODULE: {
+      Module *mod = res_ctx.scope.module_.mod;
+      TypeEntry *te = module_export_lookup(ctx, mod, segment, path->span);
+      if (!te) {
+        return false; // module_export_lookup reported it
+      }
+      switch (
+          pathres_step_entry(ctx, path, i, is_last, te, &res_ctx, out_res)) {
+      case PATHRES_STEP_DONE:
+        return true;
+      case PATHRES_STEP_ERROR:
+        return false;
+      case PATHRES_STEP_NEXT:
+        break;
       }
       break;
     }

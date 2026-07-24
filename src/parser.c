@@ -2669,6 +2669,7 @@ static Decl *parse_use_decl(Parser *p) {
 
   UseTarget target = {0};
   Path path = {0};
+  bool bare = false;
 
   if (!parse_path(p, PATH_USE, &path)) {
     error_at(p, current_tok_span(p), "expected path in use declaration");
@@ -2716,7 +2717,13 @@ static Decl *parse_use_decl(Parser *p) {
     memcpy(target.aliases, aliases, sizeof(UseAlias) * alias_count);
     target.count = alias_count;
   } else {
-    StringView alias_name = path.segments[path.count - 1].name;
+    // Bare form (`use a::b;`). The trailing name stays on `path`: it may be an
+    // item of module `a` or the module `a::b` itself, and only file existence
+    // decides — so `mod_collect_imports` disambiguates. The alias here is the
+    // name whichever it turns out to be gets bound under.
+    bare = true;
+    StringView last = path.segments[path.count - 1].name;
+    StringView alias_name = last;
     Span item_span = path.span;
     if (match_tok(p, TOKEN_AS)) {
       if (!consume_tok(p, TOKEN_IDENT, "expected identifier after 'as'")) {
@@ -2727,18 +2734,10 @@ static Decl *parse_use_decl(Parser *p) {
     }
 
     target.aliases = al_alloc(p->al, sizeof(UseAlias));
-    target.aliases[0].name = path.segments[path.count - 1].name;
+    target.aliases[0].name = last;
     target.aliases[0].alias = alias_name;
     target.aliases[0].span = item_span;
     target.count = 1;
-    path.count--;
-
-    if (path.count == 0) {
-      // targetless import: use foo;
-      error_at(p, current_tok_span(p),
-               "expected path with at least one segment in use declaration");
-      return ast_decl(DECL_POISON, token_span(&use_tok), p->al);
-    }
   }
 
   if (!consume_tok(p, TOKEN_SEMICOLON, "expected ';' after use declaration")) {
@@ -2750,6 +2749,7 @@ static Decl *parse_use_decl(Parser *p) {
   Decl *decl = ast_decl(DECL_USE, token_span(&use_tok), p->al);
   decl->as.use_decl.path = path;
   decl->as.use_decl.target = target;
+  decl->as.use_decl.bare = bare;
   return decl;
 }
 

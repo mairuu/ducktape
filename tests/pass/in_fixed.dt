@@ -6,6 +6,7 @@
 use std::io::print;
 use std::array::len;
 use std::string::slice;
+use std::string;               # the module, bound as a qualifier
 use std::fmt::Display;
 use std::convert::{From, Into};
 
@@ -281,6 +282,9 @@ fun main() {
     # natives: an @intrinsic lowered to an opcode, an @native called into C
     var n = len([1, 2, 3]);
     var s = slice("showcase", 0, 4);
+    # a module-qualified path: `string::len` names an item without importing it,
+    # and coexists with the bare `len` imported from `std::array`
+    var sl = string::len(s);
     # a Display impl reached by interpolation, beside a primitive segment
     var shown = "{Point::new(1, 2)} #{n}";
     # an associated function through a bound, and the conversion the blanket

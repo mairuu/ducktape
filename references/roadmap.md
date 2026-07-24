@@ -1859,6 +1859,56 @@
   wrapping rather than detecting overflow (a widening multiply the language
   cannot spell).
 
+- **Module-qualified paths (milestone 33)** — `use std::string;` binds the
+  module as a qualifier, so `string::len(s)` is a real path. Design:
+  `language.md` "Module-qualified paths", `architecture.md` "Module-qualified
+  paths", `grammar.ebnf`.
+
+  The observation the milestone turns on: **an item import and a module
+  qualifier are the same reachability with two spellings.** A `use` already
+  loads the file, adds the dependency edge, and imports the impls (milestone 19);
+  a module import adds exactly one thing on top — *a name for the module* — so it
+  costs no new runtime, no new impl-visibility rule, and no new resolution
+  concept. The first segment of a path may now be a module, and everything after
+  it resolves against that module's scope exactly as a top-level path resolves
+  against the current one. It splits across the same three seams every module
+  feature does:
+  - **Discovery decides the shape.** A braced `use a::b::{X}` is always an item
+    import; a bare `use a::b;` is ambiguous — item `b` of `a`, or module `a::b` —
+    and only file existence tells them apart. So the parser stops stripping the
+    trailing segment (it keeps the whole path and a `bare` flag) and
+    `mod_collect_imports` resolves it: the full path names a module ⇒ module
+    import, else the last segment is an item of the prefix. A std module is
+    exactly `std::<leaf>`, so its split is by segment count, not a probe.
+  - **Linking binds the name.** A module is neither a value nor a type, so it
+    goes in neither scope: `Module.qual_modules` is its own `{name, target,
+    span}` table, filled beside the item imports. The collision check is the
+    reused `link_name_taken` plus a scan of the qualifiers already bound —
+    `string` cannot be both a qualifier and a local.
+  - **Resolution adds one state.** A first segment that is neither a type nor a
+    builtin is looked up in `qual_modules` (reached through the new
+    `TypeResolver.module`, which resolve, check and type-annotation contexts all
+    carry). A hit enters `PATHRES_CTX_MODULE`, whose export lookup reuses the
+    exact `is_pub` gate `link_import_item` applies — so a qualified path and an
+    item import see the same set — and hands the entry to `pathres_step_entry`,
+    the factored-out body of the scope state's type switch. `a::Point::new`
+    reuses the struct→associated machinery; a qualified function resolves to the
+    same `PATHRES_METHOD` a bare call does, so **codegen never learns a module
+    was involved.**
+
+  This retires the "no module-qualified paths" gap and the API warts it drove:
+  `string::push` and `array::push` can now coexist through the qualifier, so the
+  cross-module rename-arounds (`push_str`, `count`/`byte_len`) are cleanupable —
+  though the *intra*-module ones (`buf_len` vs `len`, both in `std::string`) are
+  not, since a qualifier disambiguates modules, not names within one. The std
+  API was left unchanged this milestone: renaming it is a breaking edit to every
+  caller and belongs to its own pass.
+
+  Deliberately not done: glob imports; a module used as a value or bare type
+  (`var x = string;` is "undefined variable", which is honest — a module is not a
+  value); and re-exporting a module qualifier through `pub use` (a qualifier is
+  not an item, so `mod_find_use_alias` skips module imports).
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -2039,9 +2089,12 @@ via `Module.decl_base`) and is not part of the main line.
   lets `from_chars` be ducktape
 - `std::string` spends two names on the buffer's length and emptiness
   (`buf_len`, `buf_is_empty`) because a module cannot have two `len`s, and
-  `push_str` is named around a collision with `std::array::push`. Both are the
-  "no module-qualified paths" wart showing up in the API rather than in the
-  compiler
+  `push_str` is named around a collision with `std::array::push`. Milestone 33
+  (module-qualified paths) fixes the *cross-module* half: `string::push` and
+  `array::push` can coexist through the qualifier, so `push_str` is renameable —
+  but `buf_len` vs `len` is *intra*-module, which a qualifier does not
+  disambiguate, so it stays. The std API was not renamed when the feature
+  landed (a breaking edit to every caller); that cleanup is its own pass
 - a panic message can only name the value that caused it where the type
   parameter is bounded: `"{e}"` needs `E: Display`, and `Option`/`Result`'s
   `unwrap` are not bounded, so their messages stay fixed. `expect` is the way
@@ -2098,8 +2151,10 @@ via `Module.decl_base`) and is not part of the main line.
 - an unsupported construct inside a trait method is reported at the coercion
   site that builds the vtable, since that is where the body is first demanded
   — the same "only seen where it is instantiated" limitation generics have
-- no glob `use a::*` and no module-qualified paths; `pub use` re-export exists,
-  but only for named items, so a façade module has to list them
+- no glob `use a::*`. Module-qualified paths exist as of milestone 33 (`use
+  a::b;` binds `b`, then `b::thing`), but a *glob* still has no spelling, and a
+  `pub use` re-export names one item at a time — a façade module still lists
+  them, and a qualifier is not re-exportable (it is not an item)
 - `pub` is ignored on the `impl` keyword and rejected on a method or a struct
   field (see above); there is no sub-module visibility, so `pub` means something
   only on a top-level item, at module granularity

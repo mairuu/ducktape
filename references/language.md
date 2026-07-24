@@ -332,15 +332,20 @@ A program is one root `.dt` file plus every file reachable from it through
 `use`. There is no `mod` keyword: `use` is what pulls a file in.
 
 ```
-use geometry::Point;                 # <root_dir>/geometry.dt
+use geometry::Point;                 # <root_dir>/geometry.dt — item Point
 use geo::point::{Point, Line};       # <root_dir>/geo/point.dt, two items
 use util::Maybe as Opt;              # imported under a different name
+use std::string;                     # the *module* string, as a qualifier
 ```
 
-The leading segments name the *file*; the final segment (or the brace group)
-names the *items*. Paths are relative to the directory of the root file — the
-one search root — for every module, including modules that are not the root.
-A file reached by two different importers is loaded once.
+For a **braced** import, the leading segments name the *file* and the brace
+group names the *items*. For a **bare** import (no braces), if the whole path
+names a module file it is a *module import* — nothing is imported by name;
+instead the module is bound as a **qualifier** (see below). Otherwise the last
+segment is a single item of the prefix module. Paths are relative to the
+directory of the root file — the one search root — for every module, including
+modules that are not the root. A file reached by two different importers is
+loaded once.
 
 Items are **private by default**; `pub` makes one importable:
 
@@ -362,8 +367,34 @@ use inner::hidden;            # geo's own business; not importable through geo
 An importer never needs to know where a re-exported item was originally
 written, which is what lets a module present a façade over the files behind it.
 
-A path is never module-qualified: once imported, an item is named directly
-(`Point`, not `geometry::Point`).
+### Module-qualified paths
+
+A bare `use a::b;` whose path names a module *binds the module* rather than
+importing one of its items. The name (or an `as` alias) becomes a qualifier, and
+`b::thing` names a `pub` item of `b` — a function, a type, an associated call,
+an enum variant — without pulling it into scope by name:
+
+```
+use std::string;
+use std::array;
+
+var n = string::len(s);   # two `len`s, told apart by their module
+var m = array::len(xs);   # — no import could name both at once
+```
+
+The qualifier reaches exactly the `pub` items a `use a::b::thing;` would (private
+items and un-re-exported imports stay hidden), so the two spellings never
+disagree about what is visible. Binding a module is what makes the qualifier
+work: importing an *item* (`use a::Thing;`) does **not** let you write
+`a::Thing` — the diagnostic points you at `use a;`. A module is only ever a
+qualifier: naming it where a value or type is expected is an error.
+
+This is the same reachability model one level up. `use` already means "make
+reachable" — it loads the file, brings in its impls, and adds a dependency edge.
+A module import adds one thing on top: a name to spell what the `use` reached.
+So a qualified path needs no new runtime and no new resolution machinery — the
+first segment of a path may now be a module, and the rest resolves against that
+module's scope exactly as a top-level path resolves against the current one.
 
 ### Where an `impl` applies
 
@@ -1067,8 +1098,8 @@ overflow: a value past what an `Int` holds wraps.
 | disambiguating a qualified selection whose *argument is itself unresolved* (`Steps::from(None)`) | the argument (for `from`) or the receiver (for a trait-qualified `into`) must type on its own to choose the impl, so a value that would need the impl chosen first cannot be disambiguated |
 | a bound naming a *later* type parameter (`fun f<U: Into<T>, T>`) | "unknown type: T" — bounds resolve left to right |
 | `mod` declarations | no such keyword; `use` is what pulls a file in |
-| glob imports (`use a::*`) | not parsed; name each item |
-| module-qualified paths (`geometry::Point`) | import the item and name it directly; the diagnostic says so |
+| glob imports (`use a::*`) | not parsed; name each item, or bind the module (`use a;`) and qualify |
+| re-exporting a module qualifier (`pub use a;`) | a qualifier is not an item; `pub use` re-exports named items only |
 | `pub` on methods and struct fields | rejected: `pub fun` in an impl is "expected impl item", `pub x` on a field is "expected field name". `pub` is only ignored on the `impl` keyword itself; visibility exists only on top-level items, at module granularity |
 | overlap rules finer than "same trait, matching self types" | there is no orphan rule and no specialization: an impl may be written for any type, and two overlapping ones are simply refused wherever both are visible |
 | visibility below module granularity (`pub(crate)` &c.) | `pub` is the only modifier |

@@ -226,17 +226,30 @@ bool mod_collect_imports(Module *m, ModuleRegistry *reg, StringView base_dir,
       continue;
     }
 
-    // `std` names the embedded standard library. A std module that exists is
-    // resolved into an ordinary registry entry — same dedup, same graph edge,
-    // same `pub` rules — and differs from a user module *only* in where
-    // mod_parse gets its bytes. Keeping it ordinary is what makes moving std
-    // to a real directory later a one-branch change.
+    bool bare = decl->as.use_decl.bare;
+
+    // `std` names the embedded standard library. A std module is exactly two
+    // segments (`std::<leaf>`), so a bare `use std::x;` binds that module and a
+    // longer `use std::x::item;` imports an item from it. A std module that
+    // exists is an ordinary registry entry — same dedup, same graph edge, same
+    // `pub` rules — differing from a user module *only* in where mod_parse gets
+    // its bytes. Keeping it ordinary is what makes moving std to a real
+    // directory later a one-branch change.
     if (path->count > 0 && sv_equal_cstr(path->segments[0].name, "std")) {
+      bool is_module = bare && path->count == 2 &&
+                       std_module_source(path->segments[1].name) != NULL;
+
       StringView mod_name =
           path->count > 1 ? path->segments[1].name : (StringView){0};
 
       if (std_module_source(mod_name) == NULL) {
-        StringView mod_path = sprint_mod_path(path, al);
+        // name the module looked for (`std::<leaf>`), not the whole path — the
+        // trailing segments of `use std::nope::thing` are an item spelling.
+        Path mod_only = *path;
+        if (mod_only.count > 2) {
+          mod_only.count = 2;
+        }
+        StringView mod_path = sprint_mod_path(&mod_only, al);
         diag_error(diags, path->span,
                    "there is no standard library module '" SV_FMT "'",
                    SV_ARG(mod_path));
@@ -245,6 +258,7 @@ bool mod_collect_imports(Module *m, ModuleRegistry *reg, StringView base_dir,
         continue;
       }
 
+      decl->as.use_decl.is_module_import = is_module;
       imp->file_path = std_mod_key(mod_name, al);
       int dep = modreg_find(reg, imp->file_path);
       if (dep < 0) {
@@ -254,12 +268,35 @@ bool mod_collect_imports(Module *m, ModuleRegistry *reg, StringView base_dir,
       continue;
     }
 
-    imp->file_path = mod_file_for_use(base_dir, path, al);
+    // A bare use whose full path names a module file binds that module;
+    // anything else imports the trailing name from its prefix module.
+    // `module_path` is the file to load either way.
+    Path module_path = *path;
+    bool is_module = false;
+    if (bare) {
+      StringView full = mod_file_for_use(base_dir, path, al);
+      if (file_exists(full.chars)) {
+        is_module = true; // the whole path is a module
+      } else if (path->count >= 2) {
+        module_path.count = path->count - 1; // trailing name is an item
+      } else {
+        // a one-segment bare use has no prefix to fall back on.
+        StringView mod_path = sprint_mod_path(path, al);
+        diag_error(diags, path->span, "cannot find module '" SV_FMT "'",
+                   SV_ARG(mod_path));
+        diag_note(diags, (Span){0}, "expected file '" SV_FMT "'", SV_ARG(full));
+        ok = false;
+        continue;
+      }
+    }
+
+    decl->as.use_decl.is_module_import = is_module;
+    imp->file_path = mod_file_for_use(base_dir, &module_path, al);
 
     int dep = modreg_find(reg, imp->file_path);
     if (dep < 0) {
       if (!file_exists(imp->file_path.chars)) {
-        StringView mod_path = sprint_mod_path(path, al);
+        StringView mod_path = sprint_mod_path(&module_path, al);
         diag_error(diags, path->span, "cannot find module '" SV_FMT "'",
                    SV_ARG(mod_path));
         diag_note(diags, (Span){0}, "expected file '" SV_FMT "'",

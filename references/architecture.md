@@ -155,9 +155,46 @@ when *it* was linked, which topological order guarantees has happened.
 `tc_link_imports` also does its **own conflict checking**, because
 `vscope_define`/`tscope_define` don't detect duplicates and both lookups return
 the first match — an unchecked collision would resolve backwards, letting an
-import silently win over the module's own declaration. There is only one import
-kind to check: a std module is an ordinary registry entry, vetted by the same
-`pub` rule as any dependency.
+import silently win over the module's own declaration. There are two import
+kinds now: an item import copies entries into the scopes (above), and a *module
+import* binds a qualifier (below).
+
+### Module-qualified paths
+
+`use a::b;` naming a module binds `b` as a **qualifier**, so `b::thing`
+resolves against `b`'s exports. The observation is that an item import and a
+qualifier are the same reachability with two spellings: `use` already loads the
+file, adds the dependency edge, and imports the impls — a qualifier only adds a
+*name for the module*, so nothing about linking, the graph, or `impl` visibility
+changes. It splits across the same three seams every module feature does:
+
+- **Discovery decides the shape** (`mod_collect_imports`). A braced `use` is
+  always an item import. A bare one is ambiguous — `use a::b;` is either item
+  `b` of module `a` or module `a::b` — and only file existence disambiguates, so
+  the parser keeps the whole path (`DeclUse.bare`) and collection resolves it:
+  if the full path names a module file it is a module import
+  (`is_module_import`), otherwise the trailing segment is an item of the prefix.
+  A std module is exactly `std::<leaf>`, so its module/item split is by segment
+  count rather than a filesystem probe.
+
+- **Linking binds the name** (`link_bind_module`). A module is not a value or a
+  type, so it lives in neither scope: `Module.qual_modules` is its own small
+  table of `{name, target Module*, span}`, filled beside the item imports and in
+  the same topological order. The collision check is the reused `link_name_taken`
+  plus a scan of the qualifiers already bound — a qualifier shares the item
+  namespaces' names precisely so `string` cannot mean two things.
+
+- **Resolution adds one state** (`resolve_path`). The first segment, when it is
+  neither a type nor a builtin, is looked up in the importer's `qual_modules`
+  (reached through `TypeResolver.module`, which every resolve/check/annotation
+  context now carries). A hit enters `PATHRES_CTX_MODULE`, whose next segment is
+  found by `module_export_lookup` — the same `mod_find_own_decl` /
+  `mod_find_use_alias` + `is_pub` gate `link_import_item` uses, so a qualified
+  path and an item import see exactly the same set — and then handed to
+  `pathres_step_entry`, the factored-out body of the scope state's type-entry
+  switch. So `a::Point::new` reuses the struct→associated-fn machinery, and a
+  qualified function resolves to the same `PATHRES_METHOD` a bare call does:
+  codegen reads `ExprPath.resolved_fun` and never learns a module was involved.
 
 ### Where an `impl` applies
 
@@ -817,7 +854,8 @@ and travels with the copied `ve->as`, which is also what codegen reads back
 off `ExprPath.resolved_fun` — a name may be an alias for a function in
 another module.
 Path resolution (`resolve_path` / `cctx_resolve_path`) walks segments through
-type scope contexts (struct → associated fn, enum → variant). In
+type scope contexts (struct → associated fn, enum → variant, and a `use`d module
+→ its export — see "Module-qualified paths"). In
 `resolve_callee`, a single-segment path naming a local/value binding is
 resolved as a first-class function value; generic functions go through path
 resolution so their params are opened into the call's `Subst`.

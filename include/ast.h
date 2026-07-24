@@ -1105,8 +1105,16 @@ typedef struct {
 
 // Decl union variants
 typedef struct {
+  // `path` is the module prefix for a braced import (`use a::b::{X, Y}`), but
+  // the *whole* written path for a bare one (`use a::b;`) — because a bare use
+  // is either an item import (b is an item of module a) or a module import (b
+  // is module a::b bound as a qualifier), and only file existence tells them
+  // apart. `bare` records which shape the parser saw; `mod_collect_imports`
+  // resolves the ambiguity and sets `is_module_import`.
   Path path;
   UseTarget target;
+  bool bare;             // no `{...}` list: path includes the trailing name
+  bool is_module_import; // binds a module qualifier, not items (set at collect)
 } DeclUse;
 
 typedef struct {

@@ -17,12 +17,17 @@ attribute      = "@" ( "native" | "intrinsic" ) "(" STRING ")" ;
                  (* the string is a key into C's registry — language.md
                     "Native functions" *)
 
-useDecl        = "use" usePath ";" ;
+useDecl        = "use" usePath ( "as" IDENT )? ";" ;
 usePath        = path ( "::" "{" useItem ( "," useItem )* ","? "}" )? ;
 useItem        = IDENT ( "as" IDENT )? ;
-                 (* leading segments name the file, the last segment or the
-                    brace group names the items. `pub use` re-exports each
-                    alias as an item of the importing module — language.md
+                 (* Braced: leading segments name the file, the brace group
+                    names the items. Bare (no braces): if the whole path names a
+                    module file it is a *module import* — the last segment (or
+                    the `as` alias) becomes a qualifier, so `use a::b; b::thing`
+                    names an item of b without importing it. Otherwise the last
+                    segment is a single item of the prefix module. Only file
+                    existence tells the two apart — mod_collect_imports decides.
+                    `pub use` re-exports each item alias — language.md
                     "Modules" *)
 
 varDecl        = "var" pattern ( ":" type )? "=" expr ";" ;

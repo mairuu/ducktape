@@ -1,0 +1,27 @@
+pub struct Point {
+  x: Int,
+  y: Int,
+}
+
+impl Point {
+  fun new(x: Int, y: Int) -> Point {
+    return Point { x: x, y: y };
+  }
+  fun manhattan(self) -> Int {
+    return self.x + self.y;
+  }
+}
+
+pub enum Quadrant {
+  First,
+  Other,
+}
+
+pub fun classify(p: Point) -> Quadrant {
+  if p.x > 0 {
+    if p.y > 0 {
+      return Quadrant::First;
+    }
+  }
+  return Quadrant::Other;
+}

@@ -45,6 +45,16 @@ typedef struct {
   int module_index;     // index into ModuleRegistry; -1 if unresolved
 } ModImport;
 
+// a module name bound as a path qualifier by `use a::b;` (milestone 33). Unlike
+// an item import it names no definition — it opens a namespace: `b::thing`
+// resolves `thing` against b's `pub` exports. Stored on the importer; consumed
+// only by path resolution.
+typedef struct {
+  StringView name; // the qualifier (the module's leaf, or an `as` alias)
+  Module *target;  // the module it opens
+  Span span;       // where it was bound, for a collision diagnostic
+} QualModule;
+
 struct Module {
   // path as given on the command line, or derived from it; used verbatim for
   // fopen and as the registry key. null-terminated.
@@ -54,6 +64,11 @@ struct Module {
 
   ModImport *imports;
   int import_count;
+
+  // module qualifiers this module's `use a::b;` declarations bind. Filled by
+  // tc_link_imports, read by resolve_path when a path's first segment is one.
+  QualModule *qual_modules;
+  int qual_module_count, qual_module_cap;
 
   FunDef **funs;
   int fun_count, fun_cap;

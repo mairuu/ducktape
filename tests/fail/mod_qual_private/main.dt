@@ -1,0 +1,9 @@
+#! expect: is private in module
+# a module qualifier reaches only `pub` items — the same rule an item import
+# obeys.
+use std::io;
+use lib;
+
+fun main() {
+  io::print(lib::secret());
+}

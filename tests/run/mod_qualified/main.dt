@@ -1,0 +1,41 @@
+# Module-qualified paths (milestone 33): `use a::b;` binds the module `b` as a
+# path qualifier, so `b::thing` names an item of b without importing it by name.
+# The whole point is that two modules may now spell the same name — `string::len`
+# and `array::len` no longer collide — because the qualifier disambiguates.
+use std::io;
+use std::string;
+use std::array;
+use geo;
+use geo as g; # a module may also be bound under an alias
+
+fun quadrant_code(q: geo::Quadrant) -> Int {
+  match q {
+    geo::Quadrant::First => 1,
+    geo::Quadrant::Other => 0,
+  }
+}
+
+# two `len`s told apart by their module (the collision the milestone retires),
+# a qualified type `geo::Point` in a signature, a qualified associated call and
+# method, a qualified free function, the alias `g`, and a deeper `slice`.
+#> 11
+#> 4
+#> 8
+#> 1
+#> 0
+#> world
+fun main() {
+  var s = "hello world";
+  var xs = [1, 2, 3, 4];
+
+  io::print(string::len(s));
+  io::print(array::len(xs));
+
+  var p = geo::Point::new(3, 5);
+  io::print(p.manhattan());
+
+  io::print(quadrant_code(geo::classify(p)));
+  io::print(quadrant_code(g::classify(geo::Point::new(0, 0))));
+
+  io::print(string::slice(s, 6, 11));
+}

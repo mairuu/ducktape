@@ -344,6 +344,11 @@ struct TypeResolver {
   TypeScope *tscope;
   ImplIndex *impls; // the enclosing module's visible set
   InferCtx *infer;  // null during resolve, non-null during check
+  // the module whose code is being resolved — the one whose `use` declarations
+  // bind the module qualifiers a path may name (`string::len`). Carried here so
+  // `resolve_path` reaches it uniformly from resolve, check, and
+  // type-annotation contexts, all of which own a TypeResolver.
+  Module *module;
   DiagBag *diags;
   Allocator *al;
 };

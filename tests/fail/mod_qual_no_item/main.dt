@@ -1,0 +1,7 @@
+#! expect: has no item named 'ghost'
+use std::io;
+use lib;
+
+fun main() {
+  io::print(lib::ghost());
+}
