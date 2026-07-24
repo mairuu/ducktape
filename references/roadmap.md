@@ -2044,6 +2044,40 @@
   bound (`tests/run/container_ord.dt`). Not done: `Ord` for other tuple arities,
   and a total order for `[Float]` still inherits the NaN wart the element does.
 
+- **`==` on a generic, and the soundness hole behind it (milestone 37)** — a
+  binary operator on two values of an unbounded generic type used to be a bare
+  `// todo:` in the binary resolver that returned `t_poison` unconditionally and
+  silently. Removing it is the whole fix; the per-operator rules below it already
+  say the right thing. Design: `language.md` operators.
+
+  The observation the milestone turns on: **structural equality is a runtime
+  operation, so `==` on a generic needs no static type.** `OP_EQ` inspects none —
+  it compares two structs the same way it compares two Ints — so `a == b` on a
+  generic `T` is `types_equal(T, T)` → `Bool`, exactly as it already was for a
+  struct or a tuple. Arithmetic and ordering are the other side of the same coin:
+  there is no operator overloading, so `+` and `<` want a concrete numeric type,
+  and a generic operand now reports against its own name ("requires numeric
+  types, got 'T'") instead of poisoning. A bounded `T: Ord` still orders through
+  `.cmp`, which is why `std::cmp` and `std::option` never wrote `a == b` on a
+  generic and the hole stayed hidden.
+
+  The reason it was worth a milestone and not a one-line cleanup is the *second*
+  bug the silent poison caused. A poisoned `if` condition makes `resolve_expr`'s
+  `EXPR_IF` bail before the branch body (`type_is_poison(cond_ty)` → return), so
+  the body went **unchecked** — a blatant `var z: Int = "str";` inside
+  `if a == b { .. }` was accepted, and a *call* in that body reached codegen with
+  no `resolved_fun`, failing as the misleading "this name is not supported by the
+  VM yet". So one silent poison in the type layer surfaced as a soundness hole in
+  one direction and a codegen crash-diagnostic in the other, and neither pointed
+  at the operator. The lesson is the one the CLAUDE.md convention already states:
+  a checker error is *one `diag_error` then poison* — a poison with no diagnostic
+  is how a whole branch goes dark. Tests: `tests/run/generic_eq.dt` (the positive
+  path across Int/String/struct, and the call-in-`if`-body shape the bug hid),
+  `tests/fail/generic_add.dt` / `generic_cmp.dt` (arithmetic/ordering now
+  diagnosed), `tests/fail/generic_eq_body_checked.dt` (the body error now
+  reported). Uncovered while prototyping a `std::assert`, which `assert_eq<T>`
+  needs and which is the natural next piece.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion

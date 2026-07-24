@@ -1,0 +1,41 @@
+# `==` / `!=` on a value of an unbounded generic type. Structural equality is a
+# runtime operation (`OP_EQ` reads no static type), so it works on a generic the
+# same way it works on a struct — the checker used to poison it with a bare
+# `// todo:` instead. The `tell` calls are the shape the bug hid: a call inside
+# an `if` whose condition is a generic `==` reached codegen unresolved, because a
+# silent poison in the condition skipped type-checking the branch body.
+#> true
+#> false
+#> false
+#> true
+#> true
+#> false
+#> same
+#> different
+
+use std::io::print;
+
+fun eq<T>(a: T, b: T) -> Bool { return a == b; }
+fun ne<T>(a: T, b: T) -> Bool { return a != b; }
+
+fun tell<T>(a: T, b: T) {
+    if a == b {
+        print("same");
+    }
+    if a != b {
+        print("different");
+    }
+}
+
+struct P { x: Int, y: Int }
+
+fun main() {
+    print(eq(2, 2));
+    print(eq(2, 3));
+    print(ne("hi", "hi"));
+    print(ne("hi", "bye"));
+    print(eq(P { x: 1, y: 2 }, P { x: 1, y: 2 }));
+    print(eq(P { x: 1, y: 2 }, P { x: 1, y: 9 }));
+    tell(5, 5);
+    tell(5, 6);
+}

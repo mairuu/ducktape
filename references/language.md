@@ -84,8 +84,12 @@ ending in `return` has type `!` (never), which unifies with anything.
   without a point (`1e-7`, `3E2`, `1.5e+10`). `1e` with no digits after it is
   the `Int` `1` followed by the identifier `e`.
 - Arithmetic `+ - * / %` on numerics; `Int op Float` widens to `Float`.
-  `+` also concatenates `String`s.
-- Comparison `< <= > >=` (numeric), `== !=` (same static type).
+  `+` also concatenates `String`s. There is no operator overloading, so these
+  want a concrete numeric type: on a bare generic `T` they report ("requires
+  numeric types, got 'T'"), and a `T: Ord` orders through `.cmp`, never `<`.
+- Comparison `< <= > >=` (numeric), `== !=` (structural: any two values of the
+  same static type, including a generic `T` — the runtime compares them the way
+  it compares two structs, so `a == b` on a generic yields `Bool`).
 - Logic: keywords `and`, `or` (short-circuit), `not`. There is no `&&`/`||`.
 - Unary minus `-x` (numeric).
 - `if cond { .. } else { .. }` is an expression; without `else` it is `()`.

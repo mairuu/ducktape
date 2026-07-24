@@ -4874,11 +4874,18 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       return ctx->tc->t_poison;
     }
 
-    if (lhs->kind == TY_GENERIC && rhs->kind == TY_GENERIC) {
-      // todo:
-      return ctx->tc->t_poison;
-    }
-
+    // A binary op on two generics needs no special case: the per-operator
+    // rules below already say the right thing. `==`/`!=` compare structurally,
+    // so two values of the same generic compare like two structs do — the
+    // runtime's `OP_EQ` inspects no static type — and yield Bool. Arithmetic
+    // and ordering want a concrete numeric type, so a generic operand reports
+    // against its own name ("requires numeric types, got 'T'"); there is no
+    // operator overloading, so a bounded `T: Ord` still orders through `.cmp`,
+    // never `<`. Returning poison here instead — as a `// todo:` once did —
+    // was silent, and a silent poison in an `if` condition makes the whole
+    // branch body go unchecked (`resolve_expr`'s EXPR_IF bails on a poison
+    // condition), so a body error went unreported and a call in it reached
+    // codegen with no resolved target.
     TokenType op = binary->op;
     bool is_arith =
         (op == TOKEN_PLUS || op == TOKEN_MINUS || op == TOKEN_STAR ||
