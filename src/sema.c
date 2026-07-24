@@ -2222,15 +2222,25 @@ static Type *trait_project(Type *t, TraitDef *trait, Type *self_to,
                            ImplDef *impl, Allocator *al);
 static void check_binding_pattern(CheckCtx *ctx, Pattern *pat, Type *init_ty);
 
-// A qualified associated call whose name is ambiguous until its arguments are
-// known — `Steps::from(v)` when both `From<Int>` and `From<Char>` are impls
-// for `Steps`. `resolve_callee` fills this and returns without committing; the
-// call resolver finishes the job in `resolve_assoc_call`, selecting by the
-// argument types the path could not name.
+// A call whose callee `resolve_callee` deliberately leaves unselected, because
+// an impl cannot be picked until the arguments are in hand. Two shapes, both
+// filled here and finished by the matching call resolver:
+//
+//   - `self_type` set (`Steps::from(v)`): the self type is known, but the name
+//     is declared by more than one impl of a generic trait for it, so
+//     `resolve_assoc_call` selects by the argument types the path could not
+//     name (milestone 30).
+//   - `trait_ref` set (`Into::<F>::into(c)`): the trait reference is known, but
+//     the self type is not written, so `resolve_trait_qualified_call` reads it
+//     off the receiver argument (milestone 31, the dual).
+//
+// At most one is set; both NULL means the callee resolved normally.
 typedef struct {
-  Type *self_type; // NULL: the callee resolved normally, no re-selection needed
+  Type *self_type;
+  Type *trait_ref;
+  TraitMethodDef *method; // the trait method, for the trait_ref shape
   StringView name;
-} AssocOverload;
+} CalleeDefer;
 
 static MethodDef *impl_index_assoc_select(ImplIndex *idx, Type *self_type,
                                           StringView name, Type **arg_types,
@@ -2470,7 +2480,7 @@ static Type *check_trait_item_path(CheckCtx *ctx, Expr *callee, PathRes *r,
 }
 
 static Type *resolve_callee(CheckCtx *ctx, Expr *expr, Subst *subst,
-                            AssocOverload *ov) {
+                            CalleeDefer *ov) {
   assert(expr->kind == EXPR_CALL);
   Expr *callee = expr->as.call.callee;
 
@@ -2512,6 +2522,18 @@ static Type *resolve_callee(CheckCtx *ctx, Expr *expr, Subst *subst,
 
   if (r.kind == PATHRES_TRAIT_ITEM) {
     return check_trait_item_path(ctx, callee, &r, subst);
+  }
+
+  // a trait-qualified call (`Into::<F>::into(c)`): the trait reference is
+  // written but the self type is not — it is the receiver argument. Hand both
+  // back so the caller, which has the arguments, selects the impl by
+  // (receiver type, trait ref). Declining to commit here is the same move the
+  // overload case below makes, one field over.
+  if (r.kind == PATHRES_TRAIT_QUALIFIED) {
+    ov->trait_ref = r.as.trait_qualified.trait_ref;
+    ov->method = r.as.trait_qualified.def;
+    ov->name = callee_path->segments[callee_path->count - 1].name;
+    return ctx->tc->t_poison; // ignored: the caller dispatches on ov->trait_ref
   }
 
   // an associated call the path could not disambiguate — several impls of one
@@ -2809,12 +2831,194 @@ static Type *resolve_assoc_call(CheckCtx *ctx, Expr *expr, Type *self_type,
   return ret_ty;
 }
 
+// A trait-qualified call `Trait::<Args>::method(recv, ..)`. The dual of
+// `resolve_assoc_call`: there the self type was known and the argument chose
+// the impl; here the trait reference is known and the *receiver* chooses it.
+// The two together are exactly the (self type, trait reference) pair
+// `impl_index_method` has selected on since generic traits (milestone 28), so
+// the whole milestone is teaching the path grammar to reach that lookup — the
+// resolved node is a concrete `resolved_fun`, indistinguishable from any other
+// associated call, so codegen needs no new case.
+//
+// The receiver is passed positionally like every other argument (`T::cmp(a, b)`
+// reading is what a method call is sugar for), so the self type is the type of
+// the argument at the method's `self_index`.
+static Type *resolve_trait_qualified_call(CheckCtx *ctx, Expr *expr,
+                                          Type *trait_ref, TraitMethodDef *tm,
+                                          Type *hint) {
+  (void)hint; // the trait reference pins the trait's arguments, so unlike a
+              // bare `c.into()` this spelling needs no expected type — that is
+              // the whole point of writing it.
+  ExprCall *call = &expr->as.call;
+  Expr *callee = call->callee;
+  StringView name = tm->name;
+  TraitDef *trait = trait_ref->as.trait.def;
+
+  // an associated function has no receiver, so nothing in the call names the
+  // self type — the source type a conversion converts *from* is exactly what
+  // the qualified `Type::from(..)` spelling exists to write (milestone 30).
+  if (tm->self_index < 0) {
+    diag_error(ctx->diags, callee->span,
+               "'" SV_FMT "' is an associated function of trait '" SV_FMT
+               "', not a method — it has no receiver to select the impl by. "
+               "qualify it by the type instead, e.g. `Type::" SV_FMT "(..)`",
+               SV_ARG(name), SV_ARG(trait->name), SV_ARG(name));
+    return ctx->tc->t_poison;
+  }
+
+  if (call->arg_count <= tm->self_index) {
+    diag_error(ctx->diags, expr->span,
+               "trait-qualified call to '" SV_FMT "' needs a receiver argument",
+               SV_ARG(name));
+    return ctx->tc->t_poison;
+  }
+
+  // resolve the receiver first — it is what selects the impl, so it is resolved
+  // hint-free, and a value whose type is still unknown cannot choose (the dual
+  // of milestone 30's "the argument must type on its own").
+  Type *self_type = resolve_expr(ctx, call->args[tm->self_index], NULL);
+  self_type = infer_apply(&ctx->infer, self_type, ctx->al);
+  if (type_is_poison(self_type)) {
+    return ctx->tc->t_poison;
+  }
+  if (self_type->kind == TY_UNKNOWN) {
+    diag_error(ctx->diags, call->args[tm->self_index]->span,
+               "cannot infer the receiver's type, so it cannot select an impl "
+               "of '" SV_FMT "'",
+               SV_ARG(trait->name));
+    return ctx->tc->t_poison;
+  }
+
+  // (receiver type, trait reference) is the pair the index keys on. No hint is
+  // passed: the reference already names every trait argument, so there is no
+  // hole to fill — if selection needs one, the impl simply does not apply.
+  ImplMatch match;
+  MethodDef *method =
+      impl_index_method(ctx->impls, self_type, trait_ref, name,
+                        /*ret_hint=*/NULL, &match, &ctx->infer,
+                        /*bare_path=*/false, callee->span, ctx->al);
+  if (method == NULL) {
+    char self_buf[64], trait_buf[64];
+    type_sprintf(self_type, self_buf, sizeof(self_buf));
+    type_sprintf(trait_ref, trait_buf, sizeof(trait_buf));
+    // a default the impl inherited rather than defined is real, but reaching it
+    // needs the bound-dispatch machinery a receiver call has and this concrete
+    // path does not — so name the workaround rather than pretend it is absent.
+    ImplDef *via_impl = NULL;
+    TraitDef *via_trait = NULL;
+    Subst via_subst = subst_empty();
+    if (impl_index_default_method(ctx->impls, self_type, trait_ref, name,
+                                  &via_impl, &via_trait, &via_subst,
+                                  ctx->al) != NULL) {
+      diag_error(
+          ctx->diags, callee->span,
+          "'%s' implements '%s' but inherits '" SV_FMT
+          "' from a default body; a trait-qualified call reaches only a "
+          "method an impl defines. call it on the receiver instead, e.g. "
+          "`x." SV_FMT "(..)`",
+          self_buf, trait_buf, SV_ARG(name), SV_ARG(name));
+      return ctx->tc->t_poison;
+    }
+    diag_error(ctx->diags, callee->span,
+               "no impl of '%s' for type '%s' defines '" SV_FMT "'", trait_buf,
+               self_buf, SV_ARG(name));
+    return ctx->tc->t_poison;
+  }
+
+  // from here the node is an ordinary associated call: a concrete
+  // `resolved_fun` and the impl's own substitution as its instance, which is
+  // all codegen reads for a call through a multi-segment path.
+  FunDef *fun = method->fun;
+
+  // the method may carry type parameters of its own (`fun wrap<U>(self, ..)`).
+  // The impl was chosen by (receiver, trait reference), independent of them, so
+  // they are opened as fresh unknowns here — turbofish on the final path
+  // segment supplying them explicitly if written — exactly as a receiver method
+  // call does. Without this `subst_apply` would meet an unbound `U` and abort.
+  PathSegment *method_seg =
+      &callee->as.path_expr.path.segments[callee->as.path_expr.path.count - 1];
+  TypeScratch method_type_args;
+  if (!resolve_path_segment_args(method_seg, &ctx->tyres, ctx->al,
+                                 &method_type_args)) {
+    return ctx->tc->t_poison;
+  }
+  if (method_type_args.count > 0 &&
+      method_type_args.count != fun->type_param_count) {
+    diag_error(ctx->diags, callee->span,
+               "expected %d type arguments but got %d", fun->type_param_count,
+               method_type_args.count);
+    return ctx->tc->t_poison;
+  }
+
+  Subst method_subst = infer_open_generics(
+      &ctx->infer, fun->type_params, fun->type_param_count,
+      method_type_args.ptr, method_type_args.count, callee->span, ctx->al);
+  Subst impl_subst = subst_exclude_shadowed(match.subst, fun->type_params,
+                                            fun->type_param_count, ctx->al);
+  Subst subst = subst_concat(impl_subst, method_subst, ctx->al);
+
+  Type *fun_ty = subst_apply(&subst, fun->fun_type, ctx->al);
+  callee->as.path_expr.resolved_fun = fun;
+  cctx_record_inst(ctx, &callee->as.path_expr.inst, subst);
+
+  if (call->arg_count != fun->param_count) {
+    diag_error(ctx->diags, expr->span, "expected %d arguments but got %d",
+               fun->param_count, call->arg_count);
+    return ctx->tc->t_poison;
+  }
+
+  // check each argument against its parameter, the receiver among them (it is
+  // already resolved). Selection matched the receiver structurally, so this is
+  // where a coercion or generic unification actually happens — the same checks
+  // `resolve_assoc_call` runs.
+  bool is_generic = subst.count > 0;
+  bool had_error = false;
+  for (int i = 0; i < call->arg_count; i++) {
+    Type *param_ty = fun_ty->as.fun.param_types[i];
+    Type *arg_ty = (i == tm->self_index)
+                       ? self_type
+                       : resolve_expr(ctx, call->args[i], param_ty);
+    if (type_is_poison(param_ty) || type_is_poison(arg_ty)) {
+      had_error = true;
+      continue;
+    }
+    if (check_coerce_dyn(ctx, call->args[i], arg_ty, param_ty)) {
+      continue;
+    }
+    if (is_generic) {
+      had_error |= !infer_unify(&ctx->infer, param_ty, arg_ty, ctx->diags,
+                                call->args[i]->span);
+    } else if (!types_equal(arg_ty, param_ty)) {
+      char ab[64], pb[64];
+      type_sprintf(arg_ty, ab, sizeof(ab));
+      type_sprintf(param_ty, pb, sizeof(pb));
+      diag_error(ctx->diags, call->args[i]->span,
+                 "argument %d: expected '%s' but got '%s'", i + 1, pb, ab);
+      had_error = true;
+    }
+  }
+  if (had_error) {
+    return ctx->tc->t_poison;
+  }
+
+  Type *ret_ty = fun_ty->as.fun.return_type;
+  if (is_generic) {
+    ret_ty = subst_apply(&subst, ret_ty, ctx->al);
+    ret_ty = infer_apply(&ctx->infer, ret_ty, ctx->al);
+  }
+  return ret_ty;
+}
+
 static Type *resolve_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   ExprCall *call = &expr->as.call;
 
   Subst subst = subst_empty();
-  AssocOverload ov = {0};
+  CalleeDefer ov = {0};
   Type *callee_ty = resolve_callee(ctx, expr, &subst, &ov);
+  if (ov.trait_ref != NULL) {
+    return resolve_trait_qualified_call(ctx, expr, ov.trait_ref, ov.method,
+                                        hint);
+  }
   if (ov.self_type != NULL) {
     return resolve_assoc_call(ctx, expr, ov.self_type, ov.name, hint);
   }
@@ -5516,7 +5720,13 @@ static void tc_check_impl_conformance(TypeChecker *tc, Decl *decl,
     Subst ms = subst_exclude_shadowed(trait_subst, tm->type_params,
                                       tm->type_param_count, tc->al);
     if (ms.count > 0) {
-      expected = subst_apply(&ms, expected, tc->al);
+      // `ms` binds the trait's own type parameters (`T` in `Into<T>`), but the
+      // method may carry parameters of its *own* (`fun wrap<U>(..)`) that `ms`
+      // deliberately excludes and the impl's signature keeps under the same
+      // name — so the substitution is a partial one, and applying it totally
+      // would abort on the leftover `U`. Both sides retain it, so `types_equal`
+      // still compares them.
+      expected = subst_apply_(&ms, expected, /*total=*/false, tc->al);
     }
     expected =
         trait_project(expected, trait, impl_def->self_type, impl_def, tc->al);
@@ -7176,6 +7386,10 @@ typedef enum {
   PATHRES_CTX_TYPE,
   PATHRES_CTX_ENUM,
   PATHRES_CTX_GENERIC,
+  // a fully applied trait reference qualifying a method (`Into::<F>::into`).
+  // The trait names which impl among several is meant; the receiver argument
+  // will name the self type, so nothing here is selected yet.
+  PATHRES_CTX_TRAIT,
 } PathResCtxKind;
 
 typedef struct {
@@ -7191,6 +7405,9 @@ typedef struct {
     struct {
       Type *param; // TY_GENERIC, carrying the bounds to search
     } generic;
+    struct {
+      Type *trait_ref; // TY_TRAIT, fully applied
+    } trait_;
   } scope;
 } PathResCtx_;
 
@@ -7344,26 +7561,36 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
       }
       case TY_TRAIT: {
         // a trait named *with* type arguments: the head of `impl Into<Int> for
-        // S`. A trait without them never reaches here — a single bare segment
-        // is answered by `tscope_lookup` in tyres — so this branch is exactly
-        // the generic spelling. (A *bound* does not come through here either:
+        // S` when last, or the qualifier of a trait-qualified method call
+        // (`Into::<F>::into(c)`) when not. A trait without them never reaches
+        // here as a lone segment — that is answered by `tscope_lookup` in
+        // tyres. (A *bound* does not come through here either:
         // `resolve_bound_refs` reads the segment's arguments itself, since a
         // bound is a trait reference by construction and never a type.)
-        if (!is_last) {
-          diag_error(ctx->diags, path->span,
-                     "cannot access member '" SV_FMT "' of a trait",
-                     SV_ARG(segment));
-          return false;
-        }
         Type *trait_ref = trait_ref_resolve(
             ctx->tyres, te->as.trait_def, path->segments[i].type_args,
             path->segments[i].type_arg_count, path->span);
-        // an arity mistake is reported inside, and *succeeds* with a poison
-        // type rather than failing: a failure would add the caller's generic
-        // "unresolved type" on top, and poison is what propagates one mistake
-        // silently.
-        *out_res = (PathRes){.kind = PATHRES_TYPE, .type = trait_ref};
-        return true;
+        if (is_last) {
+          // an arity mistake is reported inside `trait_ref_resolve` and
+          // *succeeds* with a poison type rather than failing: a failure would
+          // add the caller's generic "unresolved type" on top, and poison is
+          // what propagates one mistake silently.
+          *out_res = (PathRes){.kind = PATHRES_TYPE, .type = trait_ref};
+          return true;
+        }
+        // `Into::<F>::into(c)`: the trait names which impl among several is
+        // meant; the method name is the next (final) segment, and the self
+        // type is the receiver argument — not written here. Selection waits
+        // for the call. (A poison trait_ref means the arity error was already
+        // reported; stop rather than chase a method off it.)
+        if (type_is_poison(trait_ref)) {
+          return false;
+        }
+        res_ctx = (PathResCtx_){
+            .kind = PATHRES_CTX_TRAIT,
+            .scope.trait_ = {.trait_ref = trait_ref},
+        };
+        break;
       }
       case TY_GENERIC: {
         // a type parameter qualifying a path: `T::from(v)`, or `Self::from(v)`
@@ -7530,6 +7757,38 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
                   "'" SV_FMT "' has no trait bounds, so it offers no items",
                   SV_ARG(param->as.generic.name));
       }
+      return false;
+    }
+    case PATHRES_CTX_TRAIT: {
+      Type *trait_ref = res_ctx.scope.trait_.trait_ref;
+      TraitDef *trait = trait_ref->as.trait.def;
+
+      if (!is_last) {
+        diag_error(ctx->diags, path->span,
+                   "cannot access member '" SV_FMT "' of a trait method",
+                   SV_ARG(segment));
+        return false;
+      }
+
+      // the method the trait declares. Whether it takes a receiver (and so may
+      // be trait-qualified at all) is the call resolver's question, not the
+      // path's — a value context has no receiver to offer either way.
+      for (int j = 0; j < trait->method_count; j++) {
+        if (!sv_equal(trait->methods[j].name, segment)) {
+          continue;
+        }
+        *out_res = (PathRes){
+            .kind = PATHRES_TRAIT_QUALIFIED,
+            .type = trait->methods[j].method_type,
+            .as.trait_qualified = {.trait_ref = trait_ref,
+                                   .def = &trait->methods[j]},
+        };
+        return true;
+      }
+
+      diag_error(ctx->diags, path->span,
+                 "trait '" SV_FMT "' has no method named '" SV_FMT "'",
+                 SV_ARG(trait->name), SV_ARG(segment));
       return false;
     }
     default:

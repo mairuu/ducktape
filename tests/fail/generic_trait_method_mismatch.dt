@@ -1,0 +1,17 @@
+#! expect: does not match trait 'Box'
+# The conformance check leaves a method's own type parameter (`U`) in place on
+# both sides rather than aborting on it — but the rest of the signature is still
+# compared, so a wrong return type is still caught.
+trait Box<T> {
+    fun wrap<U>(self, u: U) -> Int;
+}
+
+struct S { n: Int }
+
+impl Box<Int> for S {
+    fun wrap<U>(self, u: U) -> Bool {
+        return true;
+    }
+}
+
+fun main() {}

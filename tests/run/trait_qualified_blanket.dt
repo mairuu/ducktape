@@ -1,0 +1,37 @@
+# A trait-qualified call resolves through the `std::convert` blanket
+# `impl<T, U: From<T>> Into<U> for T`: `Into` is never written for a type, yet
+# `Into::<Fahrenheit>::into(c)` selects the `From` impl the trait reference
+# names — and monomorphises the blanket body `U::from(self)` at the concrete
+# `U`, exactly as `x.into()` does. The trait reference is the only thing that
+# disambiguates, since `Celsius` goes `Into` two ways.
+use std::io::print;
+use std::convert::{From, Into};
+
+#> 212
+#> 273
+
+struct Celsius { deg: Int }
+struct Fahrenheit { deg: Int }
+struct Kelvin { deg: Int }
+
+impl From<Celsius> for Fahrenheit {
+    fun from(c: Celsius) -> Fahrenheit {
+        return Fahrenheit { deg: c.deg * 9 / 5 + 32 };
+    }
+}
+
+impl From<Celsius> for Kelvin {
+    fun from(c: Celsius) -> Kelvin {
+        return Kelvin { deg: c.deg + 273 };
+    }
+}
+
+fun main() {
+    var boiling = Celsius { deg: 100 };
+    var f = Into::<Fahrenheit>::into(boiling);
+    print("{f.deg}");
+
+    var freezing = Celsius { deg: 0 };
+    var k = Into::<Kelvin>::into(freezing);
+    print("{k.deg}");
+}

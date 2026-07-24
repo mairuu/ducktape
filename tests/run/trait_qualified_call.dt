@@ -1,0 +1,74 @@
+# A trait-qualified call `Trait::<Args>::method(recv, ..)` names the trait
+# explicitly, so it selects among several impls of one generic trait for one
+# receiver type — the receiver-side dual of `Steps::from(v)` (milestone 30).
+# A bare `c.into()` / `b.pack(..)` here is ambiguous; this is not.
+use std::io::print;
+
+#> 212
+#> 373
+#> 98
+#> 15
+#> 10
+
+trait Into<T> {
+    fun into(self) -> T;
+}
+
+struct Celsius { deg: Int }
+struct Fahrenheit { deg: Int }
+struct Kelvin { deg: Int }
+
+impl Into<Fahrenheit> for Celsius {
+    fun into(self) -> Fahrenheit {
+        return Fahrenheit { deg: self.deg * 9 / 5 + 32 };
+    }
+}
+
+impl Into<Kelvin> for Celsius {
+    fun into(self) -> Kelvin {
+        return Kelvin { deg: self.deg + 273 };
+    }
+}
+
+# `Brick` implements `Pack` twice at the *same* receiver type — only the trait
+# argument differs, so the reference is provably what selects. The `item`
+# argument beside `self` exercises the positional argument path.
+trait Pack<T> {
+    fun pack(self, item: T) -> Int;
+}
+
+struct Brick { kg: Int }
+
+impl Pack<Int> for Brick {
+    fun pack(self, item: Int) -> Int {
+        return self.kg + item;
+    }
+}
+
+impl Pack<String> for Brick {
+    fun pack(self, item: String) -> Int {
+        return self.kg;
+    }
+}
+
+fun main() {
+    var c = Celsius { deg: 100 };
+
+    # the trait reference is what chooses, not the receiver or a hint
+    var f = Into::<Fahrenheit>::into(c);
+    print("{f.deg}");
+
+    var c2 = Celsius { deg: 100 };
+    var k = Into::<Kelvin>::into(c2);
+    print("{k.deg}");
+
+    # the return type still flows into an annotation
+    var c3 = Celsius { deg: 37 };
+    var f2: Fahrenheit = Into::<Fahrenheit>::into(c3);
+    print("{f2.deg}");
+
+    var b = Brick { kg: 10 };
+    var word = "x";
+    print("{Pack::<Int>::pack(b, 5)}");    # the Int impl: 10 + 5
+    print("{Pack::<String>::pack(b, word)}"); # the String impl: 10
+}

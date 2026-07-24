@@ -1,0 +1,18 @@
+#! expect: inherits 'greet' from a default body
+# A method the impl inherits from a default body rather than defining is not
+# reachable through the concrete trait-qualified path — it needs the same
+# bound dispatch a receiver call has. The diagnostic names the workaround.
+trait Greet<T> {
+    fun greet(self) -> Int {
+        return 7;
+    }
+}
+
+struct P { n: Int }
+
+impl Greet<Int> for P {}
+
+fun main() {
+    var p = P { n: 1 };
+    var g = Greet::<Int>::greet(p);
+}

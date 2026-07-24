@@ -1,0 +1,39 @@
+# A generic trait whose method carries type parameters of its *own*
+# (`fun with<U>`). Before milestone 31 this aborted the compiler in conformance
+# checking: the trait's signature was substituted totally, but the method's `U`
+# is deliberately left in place (both sides keep it), so the total substitution
+# met an unbound `U` and asserted. A trait-qualified call then opens that `U` as
+# a fresh unknown, exactly as a receiver method call does — inferred here from
+# the second argument, while the trait argument `T` types the first.
+use std::io::print;
+
+#> 8
+#> 5
+
+trait Combine<T> {
+    fun with<U>(self, a: T, b: U) -> Int;
+}
+
+struct Item { id: Int }
+
+impl Combine<Int> for Item {
+    fun with<U>(self, a: Int, b: U) -> Int {
+        return self.id + a;
+    }
+}
+
+impl Combine<Bool> for Item {
+    fun with<U>(self, a: Bool, b: U) -> Int {
+        return self.id;
+    }
+}
+
+fun main() {
+    var it = Item { id: 5 };
+
+    # the trait reference chooses `Combine<Int>`; `U` is inferred `Bool`
+    print("{Combine::<Int>::with(it, 3, true)}");
+
+    # `Combine<Bool>`; the first argument is a `Bool`, `U` is inferred `Int`
+    print("{Combine::<Bool>::with(it, false, 9)}");
+}

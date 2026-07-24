@@ -1,0 +1,13 @@
+#! expect: no impl of 'Into<B>' for type 'A' defines 'into'
+# The trait reference and the receiver pick an impl that does not exist.
+trait Into<T> {
+    fun into(self) -> T;
+}
+
+struct A { x: Int }
+struct B { y: Int }
+
+fun main() {
+    var a = A { x: 1 };
+    var b = Into::<B>::into(a);
+}

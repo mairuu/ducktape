@@ -322,6 +322,62 @@ The resolved node is then indistinguishable from an ordinary associated call —
 a concrete `resolved_fun` and the impl's substitution as its instance — so
 codegen needs no new case.
 
+### Trait-qualified calls
+
+`Steps::from(v)` above reads the *argument* to pick among several impls, because
+the self type is known and the trait reference is not. `Into::<Fahrenheit>::into(c)`
+is the exact dual: the trait reference is *written* (`Into<Fahrenheit>`) and the
+self type is not — it is the receiver argument. A bare `c.into()` cannot say
+which impl when `Celsius` goes `Into` two ways; naming the trait can. And
+`(self type, trait reference)` is exactly the pair `impl_index_method` has keyed
+on since generic traits (milestone 28), so the whole feature is teaching the
+path grammar to reach that lookup — the parser already produces the two segments
+(`[Into<Fahrenheit>, into]`), turbofish and all.
+
+The ordering is the milestone-30 constraint one field over — the callee cannot
+be selected before its receiver is resolved — so the ambiguous case is again
+split out rather than folded in:
+
+- **`resolve_path` only names the trait and method.** A `TY_TRAIT` segment that
+  is *not* last stops being "cannot access member of a trait" and instead
+  transitions into `PATHRES_CTX_TRAIT` carrying the resolved trait reference;
+  the final segment is looked up among the trait's methods and returned as
+  `PATHRES_TRAIT_QUALIFIED` (trait reference + `TraitMethodDef`). No impl is
+  chosen: the self type is not written here.
+- **`resolve_callee` declines to commit**, handing the trait reference and
+  method back through the `CalleeDefer` out-param — the same struct the
+  argument-selection case fills, one field over.
+- **`resolve_trait_qualified_call` is the one place the receiver precedes
+  selection.** It resolves the argument at the method's `self_index` hint-free
+  (a receiver whose type is still unknown cannot select, the dual of "the
+  argument must type on its own"), then `impl_index_method(self, trait_ref, name)`
+  picks the concrete impl and the arguments are checked against its signature —
+  the receiver among them, positionally, since a trait-qualified path is the
+  spelling where a method's `self` is an ordinary first parameter.
+
+No hint is passed to the selector: the reference already names every trait
+argument, so there is no hole for a return-type tie-break to fill. The resolved
+node is a concrete `resolved_fun` with the impl's substitution as its instance
+— identical to what `Steps::from` produces — so codegen is again untouched, and
+a generic impl (the `std::convert` blanket) monomorphises exactly as `x.into()`
+does. A method that carries type parameters of its *own* (`fun wrap<U>(..)`) is
+no obstacle: the impl was chosen by `(receiver, trait reference)`, so those
+parameters play no part in selection and are simply opened as fresh unknowns —
+turbofish on the final segment supplying them if written — the same handling a
+receiver method call gives them.
+
+Three things are deliberately refused, each with a diagnostic that names the
+alternative rather than the internals:
+
+- an **associated function** (`from`, no `self`) has no receiver to select by —
+  the qualified `Type::from(..)` spelling is where a source type is written down;
+- a method the impl **inherits from a default body** rather than defining needs
+  the bound-dispatch machinery a receiver call has and this concrete path does
+  not, so the diagnostic points at `x.method(..)`;
+- an **abstract receiver** (a bounded type parameter) has no concrete impl to
+  resolve to; `s.into()` already dispatches through its bound unambiguously, so
+  the trait-qualified spelling adds nothing there.
+
 ### The embedded standard library
 
 `std/*.dt` are ordinary ducktape sources, mirrored into the binary by

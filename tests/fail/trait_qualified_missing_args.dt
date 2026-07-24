@@ -1,0 +1,19 @@
+#! expect: trait 'Into' takes 1 type argument but 0 were given
+# A generic trait must be fully applied to qualify a call: the reference is
+# what names which impl, so `Into::into` says nothing `Into::<X>::into` does.
+trait Into<T> {
+    fun into(self) -> T;
+}
+
+struct A { x: Int }
+
+impl Into<A> for A {
+    fun into(self) -> A {
+        return self;
+    }
+}
+
+fun main() {
+    var a = A { x: 1 };
+    var b = Into::into(a);
+}

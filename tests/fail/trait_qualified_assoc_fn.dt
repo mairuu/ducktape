@@ -1,0 +1,17 @@
+#! expect: is an associated function of trait 'From'
+# A trait-qualified call selects the impl by its receiver, so a method with no
+# `self` (an associated function) has nothing to select by — `from` is the
+# `Type::from(..)` spelling's job.
+use std::convert::From;
+
+struct Steps { count: Int }
+
+impl From<Int> for Steps {
+    fun from(value: Int) -> Steps {
+        return Steps { count: value };
+    }
+}
+
+fun main() {
+    var s = From::<Int>::from(26);
+}

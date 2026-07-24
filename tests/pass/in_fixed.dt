@@ -159,6 +159,17 @@ pub fun ticks() -> Int {
     return a.at + b.at;
 }
 
+# the receiver-side dual (milestone 31): `Brick` implements `Pack` twice, and a
+# bare `brick.pack(..)` cannot say which — the receiver is `Brick` either way.
+# The trait reference qualifying the call is what tells them apart, the same
+# `(self type, trait reference)` pair `impl Pack<Int> for Brick` is filed under.
+pub fun packs() -> Int {
+    var brick = Brick { kg: 10 };
+    var by_int = Pack::<Int>::pack(brick, 5);      # the Int impl: 10 + 5
+    var by_str = Pack::<String>::pack(brick, "x"); # the String impl: 10
+    return by_int + by_str;
+}
+
 # a bounded generic: the argument type must implement Drawable, and the bound
 # is also what makes `item.draw()` (and the projection `T.Color`) resolve
 pub fun render<T: Drawable>(item: T) -> T.Color {

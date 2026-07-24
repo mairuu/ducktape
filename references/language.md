@@ -126,6 +126,17 @@ ending in `return` has type `!` (never), which unifies with anything.
   called at all. A method may be called the same way with the receiver passed
   explicitly (`T::value(v)`), since a method is an associated function whose
   first parameter is `self` (`tests/run/assoc_bound_call.dt`).
+- A call may also be qualified by a **fully applied trait reference**:
+  `Into::<Fahrenheit>::into(c)`. When a type implements one generic trait
+  several times (`Celsius` goes `Into<Fahrenheit>` *and* `Into<Kelvin>`), a bare
+  `c.into()` cannot say which; naming the trait does. The receiver is passed
+  positionally (`Trait::<Args>::method(recv, ..)`), and its type together with
+  the reference selects the impl — so this reads the *receiver* to disambiguate
+  where the qualified `Steps::from(v)` reads the *argument*. Only a method with a
+  `self` parameter qualifies this way (an associated function has no receiver to
+  choose by), the impl must *define* the method (a defaulted one is reached by
+  the receiver call), and the receiver must have a known concrete type
+  (`tests/run/trait_qualified_call.dt`).
 - Method calls: `p.draw()`, `p.x`, tuple access `t.0`. A method an impl
   omitted but whose trait gives a default body is inherited: the call checks
   against the trait's signature, projected into the impl's terms, and runs a
@@ -529,6 +540,15 @@ what it could not satisfy and lists what each candidate takes
 (`tests/run/assoc_select.dt`, `tests/fail/assoc_select_no_impl.dt`). The
 argument has to type on its own to do the choosing, so a value that would itself
 need the impl chosen first — `Steps::from(None)` — cannot be disambiguated.
+
+The receiver-side mirror is a **trait-qualified call** (milestone 31): where the
+expected type is unavailable or a type goes `Into` several ways, name the trait
+and the receiver settles the rest. `Into::<Fahrenheit>::into(c)` and
+`Into::<Kelvin>::into(c)` reach different impls of a `Celsius` that has both, and
+neither needs an annotation — the reference is written down. It reads the
+receiver to choose where `Steps::from` reads the argument, the two ends of one
+selection (`tests/run/trait_qualified_call.dt`). See "Paths" above for the rules
+that bound it.
 
 Importing the module **costs a program its own `Into` impls**: coherence is
 blind to an impl's bounds, so the blanket overlaps every `impl Into<X> for Y`
@@ -990,8 +1010,8 @@ types".
 | a `String` that is guaranteed valid UTF-8 | it is a byte string — `slice` cuts at byte offsets, so `chars` reports a runtime error on a halved sequence |
 | width, alignment, or padding in a format | only `std::fmt::float(value, precision)`; there is no format-spec grammar inside `{}` |
 | casting a `dyn Trait` back to its concrete type | no downcast; the coercion is one-way |
-| a trait's type arguments at a bare method call | the expected type breaks the tie between two impls of one generic trait, and pins an impl parameter the receiver cannot reach (`impl<T, U: From<T>> Into<U> for T`); with no expected type the first impl wins — or, where the parameter was only pinnable that way, no impl applies at all |
-| choosing between two `From` impls for one type by argument (`Meters::from(7)` vs `Meters::from('a')`) | selection does not look at arguments, so the first registered impl wins and the mismatch is reported against it. The `into` spelling has no such gap: the receiver pins the source type before the impl's bound is asked |
+| a trait's type arguments at a *bare* method call | the expected type breaks the tie between two impls of one generic trait, and pins an impl parameter the receiver cannot reach (`impl<T, U: From<T>> Into<U> for T`); with no expected type the first impl wins — or, where the parameter was only pinnable that way, no impl applies at all. The trait-qualified spelling (`Into::<Fahrenheit>::into(c)`) settles it explicitly without an expected type |
+| disambiguating a qualified selection whose *argument is itself unresolved* (`Steps::from(None)`) | the argument (for `from`) or the receiver (for a trait-qualified `into`) must type on its own to choose the impl, so a value that would need the impl chosen first cannot be disambiguated |
 | a bound naming a *later* type parameter (`fun f<U: Into<T>, T>`) | "unknown type: T" — bounds resolve left to right |
 | `mod` declarations | no such keyword; `use` is what pulls a file in |
 | glob imports (`use a::*`) | not parsed; name each item |

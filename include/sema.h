@@ -424,6 +424,13 @@ typedef enum {
   // which impl supplies the body waits for monomorphisation — the same answer
   // a method call on a bounded receiver gets.
   PATHRES_TRAIT_ITEM,
+  // a method reached through a *fully applied trait reference*
+  // (`Into::<Fahrenheit>::into(c)`): the trait names which impl among several
+  // for one receiver type, but the self type itself is not written — it comes
+  // from the receiver argument. So the path only names (trait ref, method); the
+  // impl is selected once the call resolves the receiver. The dual of the
+  // milestone-30 overload, which knows the self type and reads the argument.
+  PATHRES_TRAIT_QUALIFIED,
 } PathResKind;
 
 typedef struct {
@@ -450,6 +457,11 @@ typedef struct {
       Type *self_type; // the type parameter the path was qualified by
       TraitMethodDef *def;
     } trait_item;
+    struct {
+      Type
+          *trait_ref; // TY_TRAIT — the fully applied trait (`Into<Fahrenheit>`)
+      TraitMethodDef *def; // the method the trait declares
+    } trait_qualified;
   } as;
 } PathRes;
 

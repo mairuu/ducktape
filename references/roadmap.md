@@ -1741,6 +1741,81 @@
   say what it is. That is not a gap selection can close, since the argument is
   the only evidence there is.
 
+- **Trait-qualified calls (milestone 31)** — a call may name its trait in full,
+  `Into::<Fahrenheit>::into(c)`, closing the receiver spelling milestone 30's
+  note left unread. Design: `architecture.md` "Trait-qualified calls",
+  `language.md` "The standard library" → `std::convert`.
+
+  The observation the milestone turns on: **it is the exact dual of milestone
+  30.** That read the *argument* type to pick among impls of one produced type,
+  because the self type was known and the trait reference was not; this reads the
+  type a call's *receiver* has, because the trait reference is written and the
+  self type is not. And `(self type, trait reference)` is precisely the pair
+  `impl_index_method` has selected on since generic traits (milestone 28), so
+  the whole milestone is teaching the path grammar to reach that lookup — the
+  resolved node is a concrete `resolved_fun`, indistinguishable from any other
+  associated call, so **codegen needs no new case** (same as milestone 30) and
+  the image round-trip covers it for free. Entirely in the checker, ~150 lines.
+
+  The structure is milestone 30's split, one field over, since the ordering
+  constraint is the same — the callee cannot be selected before its receiver is
+  resolved:
+  - **`resolve_path` only names the trait and method.** A `TY_TRAIT` segment
+    that is not last stops erroring "cannot access member of a trait" and
+    transitions into a new `PATHRES_CTX_TRAIT`; the final segment is looked up
+    among the trait's methods and returned as `PATHRES_TRAIT_QUALIFIED`. No impl
+    is chosen — the self type is not written here.
+  - **`resolve_callee` declines to commit**, handing the trait reference and
+    method back through the deferral out-param `AssocOverload` had become — now
+    `CalleeDefer`, since it carries two deferral reasons.
+  - **`resolve_trait_qualified_call` is the one place the receiver precedes
+    selection.** It resolves the argument at the method's `self_index` hint-free
+    (a receiver whose type is unknown cannot select — the dual of "the argument
+    must type on its own"), selects via `impl_index_method(self, trait_ref)`,
+    and checks the arguments against the resolved signature, the receiver among
+    them positionally: a trait-qualified path is the spelling where a method's
+    `self` is an ordinary first parameter, the same uniform reading `T::value(v)`
+    already leaned on.
+
+  No hint reaches the selector: the reference already names every trait
+  argument, so there is no hole for milestone 29's return-type tie-break to fill
+  — which is the whole advantage of writing it over a bare `c.into()`. A generic
+  impl (the `std::convert` blanket) monomorphises exactly as `x.into()` does,
+  since the resolved node is the same shape.
+
+  Three things are refused, each with a diagnostic that names the alternative
+  rather than the internals — the milestone-19 lesson that a feature is only
+  usable because its failure explains itself:
+  - an **associated function** (`from`, no `self`) has no receiver to select by,
+    so the qualified `Type::from(..)` spelling is where a source type is written;
+  - a method the impl **inherits from a default body** rather than defining needs
+    the bound-dispatch machinery a receiver call has and this concrete path does
+    not, so the diagnostic points at `x.method(..)`;
+  - an **abstract receiver** (a bounded type parameter) has no concrete impl to
+    resolve to, and `s.into()` already dispatches through its bound
+    unambiguously, so the spelling adds nothing there.
+
+  Also fixed a pre-existing bug this surfaced, and a compiler-aborting one: a
+  generic trait whose method declares type parameters of its *own*
+  (`trait Box<T> { fun wrap<U>(self, ..); }`) crashed `tc_check_impl_conformance`
+  on an `assert`. The check substitutes the trait's type arguments into the
+  trait signature to compare it against the impl's, and did so *totally* — but a
+  method's own `U` is legitimately absent from that substitution (both signatures
+  keep it under the same name), so `subst_apply`'s "every generic must be bound"
+  assert fired. The same non-total application the type layer already uses for
+  opening a bound is the fix; the comparison still catches a real mismatch
+  because both sides retain `U` (`tests/run/generic_trait_method.dt`,
+  `tests/fail/generic_trait_method_mismatch.dt`). Unreachable before, since no
+  test had a generic trait method with its own type parameter — trait-qualified
+  calls made one worth writing, and opening that `U` is exactly what lets the
+  spelling reach such a method.
+
+  Also corrected a stale doc row milestone 30 left behind: the "Not yet
+  implemented" table still claimed `Meters::from(7)` could not select by
+  argument, which milestone 30 had just made false. It now records the residual
+  both spellings share — a qualified selection whose argument (or receiver) is
+  itself unresolved.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -1774,9 +1849,10 @@ by appetite rather than by necessity.
      answered for indexing and would have to answer the same way.
 
 (**Selection by argument type** was item 2 here and is now milestone 30: a
-qualified `Meters::from(x)` reads its argument to pick the impl. What remains
-unread is the *receiver* spelling — see the `c.into()` wart below — which is a
-different lack, since `into` has no argument but `self`.)
+qualified `Meters::from(x)` reads its argument to pick the impl. The *receiver*
+spelling that milestone 30's note left unread is now milestone 31: a
+trait-qualified `Into::<Fahrenheit>::into(c)` names the trait so the receiver
+settles the rest, without an expected type.)
 
 Not on the roadmap: the **REPL** is a side feature, not a milestone — it lives
 on the `feature/repl` branch (`--repl`, incremental compilation over one module
@@ -1939,17 +2015,19 @@ via `Module.decl_base`) and is not part of the main line.
 - **a bare method call on a type implementing one generic trait twice** picks
   by the *expected* type, and by first-registered-impl when there is none. So
   `print(c.into())` is not the same question as `var f: Fahrenheit =
-  c.into()`, and only the second has an answer. A trait-qualified call syntax
-  (`Into::<Fahrenheit>::into(c)`) is what would settle it, and there is none.
-  Since milestone 29 the expected type also *pins* an impl parameter the
-  receiver cannot reach, which sharpens the failure rather than removing it:
-  where that was the only way to pin it, no impl applies at all and the
-  diagnostic is "no method named 'into'"
+  c.into()`, and only the second has an answer *as a bare call*. Since milestone
+  31 the trait-qualified spelling `Into::<Fahrenheit>::into(c)` settles it
+  explicitly, so the gap is now only the *bare* form's — a value context with no
+  expected type has a way out, it is just not `c.into()`. Since milestone 29 the
+  expected type also *pins* an impl parameter the receiver cannot reach, which
+  sharpens the bare failure rather than removing it: where that was the only way
+  to pin it, no impl applies at all and the diagnostic is "no method named 'into'"
 - impl selection reads an **argument** type only through the qualified
-  spelling: `Meters::from(x)` picks by `x` (milestone 30), but only there. The
-  argument must type hint-free to do so, so `Meters::from(None)` — where the
-  argument is what would choose the impl yet needs one chosen to type — cannot
-  be disambiguated
+  spelling: `Meters::from(x)` picks by `x` (milestone 30), and the receiver side
+  `Into::<U>::into(x)` picks by `x`'s type (milestone 31), but only through those
+  written forms. The argument (or receiver) must type hint-free to do so, so
+  `Meters::from(None)` — where the argument is what would choose the impl yet
+  needs one chosen to type — cannot be disambiguated
 - a bound may name an earlier type parameter of the same list
   (`<T, U: Into<T>>`) but not a later one — bounds resolve left to right, so a
   forward reference is "unknown type: T" rather than a second pass
