@@ -2087,15 +2087,13 @@ via `Module.decl_base`) and is not part of the main line.
   defined result. A total order would have to decide where NaN goes, which is a
   decision nothing has needed to make. `String` has no equivalent: every byte
   string is ordered against every other
-- a `StringBuf` grows but never shrinks, and cannot be emptied: there is no
-  `clear`, so reusing one buffer across iterations is not expressible and each
-  round needs a fresh `strbuf::new()`. Both are one registry entry away; neither
-  has been needed yet
-- a `StringBuf` can be appended to from a `String` or (since milestone 26) a
-  `Char`, but not from anything else, so a number still has to be rendered first
-  (`strbuf::push(b, "{n}")` interns the digits). `push_int` and `push_slice` are
-  the natural next entries; `push_char` was the one that mattered, since it is
-  what lets `from_chars` be ducktape
+- a `StringBuf` grows but never shrinks its *buffer*: `strbuf::clear` drops the
+  length to zero so one buffer can be reused across iterations, but the capacity
+  it grew to is kept, and released only when the buffer is collected
+- a `StringBuf` can be appended to from a `String`, a `Char` (milestone 26) or an
+  `Int`'s digits (`strbuf::push_int`, no `"{n}"` interned to carry them), but not
+  from a *slice* of a String, so a `push_slice(b, s, from, to)` that avoids
+  interning the window first is the natural next entry; it has not been needed yet
 - a panic message can only name the value that caused it where the type
   parameter is bounded: `"{e}"` needs `E: Display`, and `Option`/`Result`'s
   `unwrap` are not bounded, so their messages stay fixed. `expect` is the way

@@ -24,6 +24,11 @@
 #> []
 #> 11
 #> 42
+#> 42/-7/0
+#> n=1
+#> n=2
+#> n=3
+#> true
 
 use std::io::print;
 use std::strbuf;
@@ -95,4 +100,26 @@ fun main() {
         strbuf::push(out, "{i}");
     }
     print(len(strbuf::build(out)));
+
+    # `push_int` puts an Int's decimal digits straight in — no throwaway "{n}"
+    # String interned to carry them, the same saving `push_char` makes for a Char
+    var nums = strbuf::new();
+    strbuf::push_int(nums, 42);
+    strbuf::push(nums, "/");
+    strbuf::push_int(nums, -7);
+    strbuf::push(nums, "/");
+    strbuf::push_int(nums, 0);
+    print(strbuf::build(nums));
+
+    # `clear` empties a buffer but keeps the capacity it grew to, so one buffer
+    # serves a whole loop instead of a fresh `new()` each round
+    var row = strbuf::new();
+    for i in 1..4 {
+        strbuf::clear(row);
+        strbuf::push(row, "n=");
+        strbuf::push_int(row, i);
+        print(strbuf::build(row));
+    }
+    strbuf::clear(row);
+    print(strbuf::is_empty(row));
 }

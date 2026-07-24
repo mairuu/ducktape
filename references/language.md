@@ -869,7 +869,9 @@ std::string  len(s: String) -> Int                  # @native, in bytes
 std::strbuf  new() -> StringBuf                     # @native
              push(b: StringBuf, s: String)          # @native
              push_char(b: StringBuf, c: Char)       # @native
+             push_int(b: StringBuf, n: Int)         # @native
              len(b: StringBuf) -> Int               # @native
+             clear(b: StringBuf)                    # @native
              build(b: StringBuf) -> String          # @native
              is_empty(b: StringBuf) -> Bool
 
@@ -961,9 +963,11 @@ Two smaller consequences, both visible from a program:
   worth making out loud. `print(b)` still shows it, as `StringBuf("…")` — the
   debug view says which of the two kinds it is looking at.
 
-Five of `std::strbuf`'s functions are written in C — existing, growing (from a
-String or from a Char), its length, and becoming a String — and `is_empty` is
-ducktape on `len`. `std::string`'s `join`, `concat`, `repeat` and `from_chars`
+Seven of `std::strbuf`'s functions are written in C — existing, growing (from a
+String, a Char or an Int's digits), emptying, its length, and becoming a String
+— and `is_empty` is ducktape on `len`. `push_int` puts a number's digits in
+without interning a `"{n}"` String to carry them, and `clear` drops the length to
+zero while keeping the capacity, so one buffer can be reused across a loop. `std::string`'s `join`, `concat`, `repeat` and `from_chars`
 are the String-shaped conveniences on top, built through the buffer, the same
 split `std::array` makes; `repeat` is the one that shows what the buffer buys —
 it copies bytes straight in, allocating no String per copy. `std::string` now

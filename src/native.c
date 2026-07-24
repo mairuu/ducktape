@@ -240,9 +240,9 @@ static Value n_string_slice(NativeCtx *ctx, Value *args, int argc) {
 }
 
 // A `StringBuf` is the object a String cannot be: uninterned, so it may be
-// appended to in place. These four are the whole of what it cannot express
-// about itself — existing, growing, its length, and becoming a String — and
-// `join`/`concat`/`repeat` are ordinary ducktape on top of them.
+// appended to in place. These natives are the whole of what it cannot express
+// about itself — existing, growing, emptying, its length, and becoming a
+// String — and `join`/`concat`/`repeat` are ordinary ducktape on top of them.
 
 static Value n_strbuf_new(NativeCtx *ctx, Value *args, int argc) {
   (void)args;
@@ -293,6 +293,36 @@ static Value n_strbuf_len(NativeCtx *ctx, Value *args, int argc) {
   return val_int(val_as_strbuf(args[0])->len);
 }
 
+// Empty the buffer without releasing what it grew to. Dropping `len` to 0 is
+// the whole of it: the bytes past it are dead, `build` copies only up to `len`,
+// and the next `push` overwrites them — so the capacity survives to be reused,
+// which is the point, a buffer reused across a loop instead of a fresh one each
+// round. Non-allocating, so it is the one strbuf native with no rooting
+// concern.
+static Value n_strbuf_clear(NativeCtx *ctx, Value *args, int argc) {
+  (void)ctx;
+  (void)argc;
+  val_as_strbuf(args[0])->len = 0;
+  return val_unit();
+}
+
+// Append an Int's decimal digits. Without it a number has to be interned first
+// (`push(b, "{n}")` builds a throwaway String), which is exactly the
+// re-interning a buffer exists to avoid; here the digits go straight in, like
+// `push_char`. `snprintf` cannot overrun `buf` — an int64_t is at most 20
+// digits and a sign — so the length it returns is the real byte count, no clamp
+// needed.
+static Value n_strbuf_push_int(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  ObjStrBuf *buf = val_as_strbuf(args[0]);
+  char digits[24];
+  int n = snprintf(digits, sizeof(digits), "%lld", (long long)args[1].as.i);
+  heap_strbuf_reserve(ctx->heap, buf, buf->len + n);
+  memcpy(buf->bytes + buf->len, digits, (size_t)n);
+  buf->len += n;
+  return val_unit();
+}
+
 // The one-way door: the bytes enter the intern table and stop being editable.
 // Non-destructive — the buffer is unchanged and may be pushed to again — so
 // this is a copy, which is also the only thing it *could* be: an ObjString is
@@ -315,14 +345,24 @@ typedef struct {
 } NativeEntry;
 
 static const NativeEntry natives[] = {
-    {"array_pop", n_array_pop},       {"array_push", n_array_push},
-    {"char_code", n_char_code},       {"char_from_code", n_char_from_code},
-    {"fmt_float", n_fmt_float},       {"io_print", n_io_print},
-    {"panic_abort", n_panic_abort},   {"strbuf_build", n_strbuf_build},
-    {"strbuf_len", n_strbuf_len},     {"strbuf_new", n_strbuf_new},
-    {"strbuf_push", n_strbuf_push},   {"strbuf_push_char", n_strbuf_push_char},
-    {"string_chars", n_string_chars}, {"string_cmp", n_string_cmp},
-    {"string_len", n_string_len},     {"string_slice", n_string_slice},
+    {"array_pop", n_array_pop},
+    {"array_push", n_array_push},
+    {"char_code", n_char_code},
+    {"char_from_code", n_char_from_code},
+    {"fmt_float", n_fmt_float},
+    {"io_print", n_io_print},
+    {"panic_abort", n_panic_abort},
+    {"strbuf_build", n_strbuf_build},
+    {"strbuf_clear", n_strbuf_clear},
+    {"strbuf_len", n_strbuf_len},
+    {"strbuf_new", n_strbuf_new},
+    {"strbuf_push", n_strbuf_push},
+    {"strbuf_push_char", n_strbuf_push_char},
+    {"strbuf_push_int", n_strbuf_push_int},
+    {"string_chars", n_string_chars},
+    {"string_cmp", n_string_cmp},
+    {"string_len", n_string_len},
+    {"string_slice", n_string_slice},
 };
 
 // An intrinsic's opcode must take **no operand bytes** and must pop exactly

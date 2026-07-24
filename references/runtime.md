@@ -264,7 +264,12 @@ of it: one to four bytes into a stack array, then the identical reserve-copy-
 advance. That it needed no new rule is the point — a Char's bytes are bytes.
 It is also the append an array of parts could never have offered, since there
 is no String to hold one character, which is what makes `from_chars` ducktape
-rather than a native.
+rather than a native. `strbuf_push_int` is the third of the same shape —
+`snprintf` a signed decimal into a 24-byte stack array (an int64_t is at most 20
+digits and a sign, so it cannot overrun), then the same reserve-copy-advance —
+and `strbuf_clear` is the one strbuf native that allocates nothing at all: it
+drops `len` to zero and leaves `cap`/`bytes` where they were, so the space is
+reused rather than freed, and there is no rooting question to get wrong.
 
 Nothing else in the runtime changed for this. A `StringBuf` is never a chunk
 constant — there is no literal syntax for one, and only a native can make one —

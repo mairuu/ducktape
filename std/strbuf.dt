@@ -34,9 +34,22 @@ pub fun push(b: StringBuf, s: String);
 @native("strbuf_push_char")
 pub fun push_char(b: StringBuf, c: Char);
 
+# Append an Int's decimal digits, without first interning a String to carry
+# them. `push(b, "{n}")` would build a throwaway String for the digits — the
+# re-interning a buffer exists to avoid — so this is `push_char`'s sibling for
+# numbers: the bytes go straight in.
+@native("strbuf_push_int")
+pub fun push_int(b: StringBuf, n: Int);
+
 # The bytes written so far.
 @native("strbuf_len")
 pub fun len(b: StringBuf) -> Int;
+
+# Empty the buffer, keeping the capacity it has grown to. A buffer can be reused
+# across a loop this way rather than allocating a fresh `new()` each round; the
+# bytes are not released, only forgotten, so the next `push` reuses the space.
+@native("strbuf_clear")
+pub fun clear(b: StringBuf);
 
 # Intern the bytes written so far into a `String`. Non-destructive: the buffer
 # is unchanged and may be appended to again, so `build` inside a loop is a
