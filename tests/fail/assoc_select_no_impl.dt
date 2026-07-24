@@ -1,0 +1,19 @@
+#! expect: no implementation of 'from' for 'Steps' takes arguments (Bool)
+# Milestone 30 — when the argument matches none of the several `From` impls
+# for a type, selection reports what it could not satisfy and lists what each
+# candidate does take, rather than picking the first impl and blaming its
+# parameter type.
+use std::convert::From;
+
+struct Steps { n: Int }
+
+impl From<Int> for Steps {
+    fun from(value: Int) -> Steps { return Steps { n: value }; }
+}
+impl From<Char> for Steps {
+    fun from(value: Char) -> Steps { return Steps { n: 0 }; }
+}
+
+fun main() {
+    var b = Steps::from(true);
+}

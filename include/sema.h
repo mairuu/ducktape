@@ -433,6 +433,13 @@ typedef struct {
     struct {
       FunDef *fun;
       Subst subst; // impl-level substitution (may map to fresh unknowns)
+      // non-NULL only for a qualified associated call (`Steps::from(..)`) whose
+      // name is declared by more than one impl of a generic trait for this type
+      // (`From<Int>` and `From<Char>` for `Steps`). The `fun`/`subst`/`type`
+      // above are the first match — enough for a value context — but a call
+      // must re-select once its arguments are known. Carries the self type the
+      // re-selection needs; NULL means the single-match resolution is final.
+      Type *overload_recv;
     } method;
     struct {
       EnumDef *enum_def;

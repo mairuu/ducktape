@@ -145,6 +145,20 @@ pub fun widened(n: Int) -> Float {
     return Float::from(n);
 }
 
+# two `From` impls for one type: the qualified call reads its *argument* to pick
+# between them (milestone 30), where the single-impl `Float::from` above has
+# nothing to choose. Neither the self type nor a written reference tells them
+# apart — only `5` vs `true` does.
+struct Tick { at: Int }
+impl From<Int> for Tick { fun from(v: Int) -> Tick { return Tick { at: v }; } }
+impl From<Bool> for Tick { fun from(v: Bool) -> Tick { return Tick { at: 0 }; } }
+
+pub fun ticks() -> Int {
+    var a = Tick::from(5);    # the Int impl
+    var b = Tick::from(true); # the Bool impl, chosen by the argument
+    return a.at + b.at;
+}
+
 # a bounded generic: the argument type must implement Drawable, and the bound
 # is also what makes `item.draw()` (and the projection `T.Color`) resolve
 pub fun render<T: Drawable>(item: T) -> T.Color {

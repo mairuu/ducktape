@@ -2222,6 +2222,22 @@ static Type *trait_project(Type *t, TraitDef *trait, Type *self_to,
                            ImplDef *impl, Allocator *al);
 static void check_binding_pattern(CheckCtx *ctx, Pattern *pat, Type *init_ty);
 
+// A qualified associated call whose name is ambiguous until its arguments are
+// known — `Steps::from(v)` when both `From<Int>` and `From<Char>` are impls
+// for `Steps`. `resolve_callee` fills this and returns without committing; the
+// call resolver finishes the job in `resolve_assoc_call`, selecting by the
+// argument types the path could not name.
+typedef struct {
+  Type *self_type; // NULL: the callee resolved normally, no re-selection needed
+  StringView name;
+} AssocOverload;
+
+static MethodDef *impl_index_assoc_select(ImplIndex *idx, Type *self_type,
+                                          StringView name, Type **arg_types,
+                                          int arg_count, Type *ret_hint,
+                                          ImplMatch *out_match, Span span,
+                                          DiagBag *diags, Allocator *al);
+
 static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
   switch (stmt->kind) {
   case STMT_EXPR: {
@@ -2453,7 +2469,8 @@ static Type *check_trait_item_path(CheckCtx *ctx, Expr *callee, PathRes *r,
   return trait_project(fun_ty, trait, self_ty, /*impl=*/NULL, ctx->al);
 }
 
-static Type *resolve_callee(CheckCtx *ctx, Expr *expr, Subst *subst) {
+static Type *resolve_callee(CheckCtx *ctx, Expr *expr, Subst *subst,
+                            AssocOverload *ov) {
   assert(expr->kind == EXPR_CALL);
   Expr *callee = expr->as.call.callee;
 
@@ -2495,6 +2512,16 @@ static Type *resolve_callee(CheckCtx *ctx, Expr *expr, Subst *subst) {
 
   if (r.kind == PATHRES_TRAIT_ITEM) {
     return check_trait_item_path(ctx, callee, &r, subst);
+  }
+
+  // an associated call the path could not disambiguate — several impls of one
+  // generic trait declare the name for this type. Hand the self type back so
+  // the caller, which has the arguments, can select by them. `r` still holds a
+  // valid first match; we simply decline to commit to it here.
+  if (r.kind == PATHRES_METHOD && r.as.method.overload_recv != NULL) {
+    ov->self_type = r.as.method.overload_recv;
+    ov->name = callee_path->segments[callee_path->count - 1].name;
+    return ctx->tc->t_poison; // ignored: the caller dispatches on ov->self_type
   }
 
   switch (r.type->kind) {
@@ -2702,13 +2729,95 @@ static bool check_coerce_dyn(CheckCtx *ctx, Expr *e, Type *actual,
   return true;
 }
 
-static Type *resolve_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
-  // todo: handle hint
+// Finish a qualified associated call whose impl the path left ambiguous
+// (`Steps::from(v)` with a `From<Int>` and a `From<Char>`). The arguments are
+// resolved first — hint-free, because the argument is exactly what is supposed
+// to decide the impl, so a value that needs the parameter as a hint cannot
+// disambiguate anyway — and `impl_index_assoc_select` picks the one impl whose
+// method accepts them. This is the mirror of milestone 29's `into`: there the
+// receiver pins the source type, here the argument does, and neither the
+// receiver nor a written trait reference can.
+static Type *resolve_assoc_call(CheckCtx *ctx, Expr *expr, Type *self_type,
+                                StringView name, Type *hint) {
+  ExprCall *call = &expr->as.call;
+  Expr *callee = call->callee;
 
+  Type **arg_types = al_alloc(ctx->al, sizeof(Type *) * (call->arg_count + 1));
+  bool had_error = false;
+  for (int i = 0; i < call->arg_count; i++) {
+    arg_types[i] = resolve_expr(ctx, call->args[i], NULL);
+    had_error |= type_is_poison(arg_types[i]);
+  }
+  if (had_error) {
+    return ctx->tc->t_poison;
+  }
+
+  ImplMatch match;
+  MethodDef *method = impl_index_assoc_select(
+      ctx->impls, self_type, name, arg_types, call->arg_count, hint, &match,
+      callee->span, ctx->diags, ctx->al);
+  if (method == NULL) {
+    return ctx->tc->t_poison; // the selector reported why
+  }
+
+  // the resolved node looks exactly like an ordinary associated call now: a
+  // concrete `resolved_fun` and the impl's own substitution as its instance,
+  // which is all codegen reads for a multi-segment path.
+  FunDef *fun = method->fun;
+  Subst subst = subst_exclude_shadowed(match.subst, fun->type_params,
+                                       fun->type_param_count, ctx->al);
+  Type *fun_ty = subst_apply(&subst, fun->fun_type, ctx->al);
+  callee->as.path_expr.resolved_fun = fun;
+  cctx_record_inst(ctx, &callee->as.path_expr.inst, subst);
+
+  // the argument types are already in hand; selection only matched them
+  // structurally, so this is where a dyn coercion or a generic unification
+  // actually happens — the same checks `resolve_call_expr` runs, minus the
+  // re-resolution the pre-resolved types make unnecessary.
+  bool is_generic = subst.count > 0;
+  for (int i = 0; i < call->arg_count; i++) {
+    Type *param_ty = fun_ty->as.fun.param_types[i];
+    Type *arg_ty = arg_types[i];
+    if (type_is_poison(param_ty)) {
+      had_error = true;
+      continue;
+    }
+    if (check_coerce_dyn(ctx, call->args[i], arg_ty, param_ty)) {
+      continue;
+    }
+    if (is_generic) {
+      had_error |= !infer_unify(&ctx->infer, param_ty, arg_ty, ctx->diags,
+                                call->args[i]->span);
+    } else if (!types_equal(arg_ty, param_ty)) {
+      char ab[64], pb[64];
+      type_sprintf(arg_ty, ab, sizeof(ab));
+      type_sprintf(param_ty, pb, sizeof(pb));
+      diag_error(ctx->diags, call->args[i]->span,
+                 "argument %d: expected '%s' but got '%s'", i + 1, pb, ab);
+      had_error = true;
+    }
+  }
+  if (had_error) {
+    return ctx->tc->t_poison;
+  }
+
+  Type *ret_ty = fun_ty->as.fun.return_type;
+  if (is_generic) {
+    ret_ty = subst_apply(&subst, ret_ty, ctx->al);
+    ret_ty = infer_apply(&ctx->infer, ret_ty, ctx->al);
+  }
+  return ret_ty;
+}
+
+static Type *resolve_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   ExprCall *call = &expr->as.call;
 
   Subst subst = subst_empty();
-  Type *callee_ty = resolve_callee(ctx, expr, &subst);
+  AssocOverload ov = {0};
+  Type *callee_ty = resolve_callee(ctx, expr, &subst, &ov);
+  if (ov.self_type != NULL) {
+    return resolve_assoc_call(ctx, expr, ov.self_type, ov.name, hint);
+  }
   if (type_is_poison(callee_ty)) {
     return ctx->tc->t_poison;
   }
@@ -6736,6 +6845,208 @@ MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, Type *trait_ref,
   return first;
 }
 
+// How many impls declare `name` for `self_type`, matched by the self type
+// alone — a qualified path names no trait reference. More than one is what
+// makes a `Steps::from(v)` call ambiguous until its arguments choose among
+// them, and the only reason `impl_index_assoc_select` has to run at all.
+static int assoc_candidate_count(ImplIndex *idx, Type *self_type,
+                                 StringView name, Allocator *al) {
+  int count = 0;
+  for (int i = 0; i < idx->count; i++) {
+    ImplDef *impl = idx->all[i];
+    if (impl->self_type == NULL || type_is_poison(impl->self_type)) {
+      continue;
+    }
+    bool declares = false;
+    for (int j = 0; j < impl->method_count; j++) {
+      if (sv_equal(impl->methods[j].name, name)) {
+        declares = true;
+        break;
+      }
+    }
+    if (!declares) {
+      continue;
+    }
+    int m = impl->type_param_count > 0 ? impl->type_param_count : 1;
+    StringView *names = al_alloc(al, sizeof(StringView) * m);
+    Type **args = al_alloc(al, sizeof(Type *) * m);
+    bool *bound = al_alloc_zero(al, sizeof(bool) * m);
+    if (impl_match_head(impl, self_type, /*trait_ref=*/NULL, names, args,
+                        bound)) {
+      count++;
+    }
+  }
+  return count;
+}
+
+// Render a comma-separated type list into `buf` — the argument types a
+// selection failure prints, and each candidate's parameter types beside them.
+// Bounded the careful way: every write is clamped, so a list past the buffer
+// truncates rather than running over it (the trap `type_sprintf` learned in the
+// 6b cleanup).
+static void render_type_list(Type **types, int count, char *buf, size_t cap) {
+  size_t pos = 0;
+  buf[0] = '\0';
+  for (int i = 0; i < count && pos + 1 < cap; i++) {
+    if (i > 0 && pos + 2 < cap) {
+      buf[pos++] = ',';
+      buf[pos++] = ' ';
+    }
+    char t[64];
+    type_sprintf(types[i], t, sizeof(t));
+    size_t len = strlen(t);
+    if (pos + len >= cap) {
+      len = cap - pos - 1;
+    }
+    memcpy(buf + pos, t, len);
+    pos += len;
+    buf[pos] = '\0';
+  }
+}
+
+// Select the one impl whose associated function `name` accepts `arg_types`,
+// for `self_type`. This is the argument-driven half of selection that milestone
+// 29 left open: a qualified path pins the type a conversion *produces* (the
+// self type) but not the trait argument it consumes, and the call arguments are
+// what pin that. Only a fixed-arity method with no type parameters of its own
+// takes part — a method generic in its own right puts names into its signature
+// this match cannot bind, the same exclusion `impl_index_method`'s hint
+// tie-break makes. Each parameter is then a pattern in the impl's terms that
+// `impl_type_match` tests against the resolved argument, and a hole no argument
+// filled is filled by the expected return type. Reports and returns NULL when
+// no candidate accepts the arguments, or when more than one does.
+static MethodDef *impl_index_assoc_select(ImplIndex *idx, Type *self_type,
+                                          StringView name, Type **arg_types,
+                                          int arg_count, Type *ret_hint,
+                                          ImplMatch *out_match, Span span,
+                                          DiagBag *diags, Allocator *al) {
+  MethodDef *chosen = NULL;
+  ImplDef *chosen_impl = NULL;
+  Subst chosen_subst = subst_empty();
+  int accepted = 0;
+
+  for (int i = 0; i < idx->count; i++) {
+    ImplDef *impl = idx->all[i];
+    if (impl->self_type == NULL || type_is_poison(impl->self_type)) {
+      continue;
+    }
+    MethodDef *cand = NULL;
+    for (int j = 0; j < impl->method_count; j++) {
+      if (sv_equal(impl->methods[j].name, name)) {
+        cand = &impl->methods[j];
+        break;
+      }
+    }
+    if (cand == NULL || cand->fun == NULL || cand->fun->type_param_count != 0) {
+      continue;
+    }
+    Type *sig = cand->fun->fun_type;
+    if (sig == NULL || sig->kind != TY_FUNCTION ||
+        sig->as.fun.param_count != arg_count) {
+      continue;
+    }
+
+    int n = impl->type_param_count;
+    int m = n > 0 ? n : 1;
+    StringView *names = al_alloc(al, sizeof(StringView) * m);
+    Type **args = al_alloc(al, sizeof(Type *) * m);
+    bool *bound = al_alloc_zero(al, sizeof(bool) * m);
+    if (!impl_match_head(impl, self_type, /*trait_ref=*/NULL, names, args,
+                         bound)) {
+      continue;
+    }
+
+    bool ok = true;
+    for (int a = 0; a < arg_count; a++) {
+      if (type_is_poison(arg_types[a]) ||
+          !impl_type_match(sig->as.fun.param_types[a], arg_types[a], names, n,
+                           args, bound)) {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok) {
+      continue;
+    }
+
+    if (ret_hint != NULL && cand->fun->return_type != NULL) {
+      for (int j = 0; j < n; j++) {
+        if (!bound[j]) {
+          impl_type_match(cand->fun->return_type, ret_hint, names, n, args,
+                          bound);
+          break;
+        }
+      }
+    }
+    if (!impl_head_complete(impl, args, bound, idx, al)) {
+      continue;
+    }
+
+    accepted++;
+    chosen = cand;
+    chosen_impl = impl;
+    if (n > 0) {
+      subst_init(&chosen_subst, names, args, n);
+    } else {
+      chosen_subst = subst_empty();
+    }
+  }
+
+  if (accepted == 1) {
+    out_match->impl = chosen_impl;
+    out_match->subst = chosen_subst;
+    return chosen;
+  }
+
+  char self_buf[64], args_buf[192];
+  type_sprintf(self_type, self_buf, sizeof(self_buf));
+  render_type_list(arg_types, arg_count, args_buf, sizeof(args_buf));
+  if (accepted == 0) {
+    diag_error(diags, span,
+               "no implementation of '" SV_FMT
+               "' for '%s' takes arguments (%s)",
+               SV_ARG(name), self_buf, args_buf);
+  } else {
+    diag_error(diags, span,
+               "ambiguous associated call '" SV_FMT
+               "' for '%s': arguments (%s) match more than one implementation",
+               SV_ARG(name), self_buf, args_buf);
+  }
+  // Name what was on offer: each candidate's trait reference and the argument
+  // types it does take — which is most of what turns "does not apply" into a
+  // fixable message.
+  for (int i = 0; i < idx->count; i++) {
+    ImplDef *impl = idx->all[i];
+    if (impl->self_type == NULL || type_is_poison(impl->self_type) ||
+        impl->trait_type == NULL) {
+      continue;
+    }
+    int m = impl->type_param_count > 0 ? impl->type_param_count : 1;
+    StringView *names = al_alloc(al, sizeof(StringView) * m);
+    Type **args = al_alloc(al, sizeof(Type *) * m);
+    bool *bound = al_alloc_zero(al, sizeof(bool) * m);
+    MethodDef *cand = NULL;
+    for (int j = 0; j < impl->method_count; j++) {
+      if (sv_equal(impl->methods[j].name, name)) {
+        cand = &impl->methods[j];
+        break;
+      }
+    }
+    if (cand == NULL || cand->fun == NULL || cand->fun->fun_type == NULL ||
+        !impl_match_head(impl, self_type, /*trait_ref=*/NULL, names, args,
+                         bound)) {
+      continue;
+    }
+    char trait_buf[64], params_buf[192];
+    type_sprintf(impl->trait_type, trait_buf, sizeof(trait_buf));
+    render_type_list(cand->fun->fun_type->as.fun.param_types,
+                     cand->fun->fun_type->as.fun.param_count, params_buf,
+                     sizeof(params_buf));
+    diag_note(diags, span, "candidate '%s' takes (%s)", trait_buf, params_buf);
+  }
+  return NULL;
+}
+
 // Does `type` implement the trait reference `trait_ref`? True if any registered
 // impl heads `impl [<..>] trait for T` matching both — exact for a non-generic
 // impl, structural (binding the impl's params) for a generic one. The trait's
@@ -7154,11 +7465,26 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
                                            fun->type_param_count, ctx->al);
       Type *fun_ty = subst_apply(&subst, fun->fun_type, ctx->al);
 
+      // A generic trait may be implemented for one type several times
+      // (`From<Int>` and `From<Char>` for `Steps`), and the path names none of
+      // the trait arguments — so `method` above is only the first match. Flag
+      // it so a *call* re-selects by its argument types; a value context keeps
+      // the first match, which is all it can do without arguments. The bare
+      // generic self of `Point::new` is excluded: it selects by method name,
+      // not by a trait argument, so its several impls are not this ambiguity.
+      Type *overload_recv = NULL;
+      if (!type_is_bare_generic_self(struct_ty) &&
+          assoc_candidate_count(ctx->tyres->impls, struct_ty, segment,
+                                ctx->al) > 1) {
+        overload_recv = struct_ty;
+      }
+
       *out_res = (PathRes){
           .kind = PATHRES_METHOD,
           .type = fun_ty,
           .as.method.fun = fun,
           .as.method.subst = subst,
+          .as.method.overload_recv = overload_recv,
       };
       return true;
     }

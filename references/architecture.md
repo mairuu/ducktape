@@ -271,6 +271,57 @@ The method is therefore looked up *before* the impl is judged applicable,
 which is the one structural change: a candidate's signature is now part of
 deciding whether its impl applies at all.
 
+### Selection by argument type
+
+The tie-break above pins an open parameter by the type a call is *expected to
+produce*. Its mirror is the type a call *consumes*, and the two together are
+what `into` and `from` need respectively. `26.into()` is pinned by its receiver
+before the impl's bound is asked; `Steps::from(26)` has no receiver, and the
+qualified path names the produced type (`Steps`) but not the source — so when a
+generic trait is implemented for one type more than once (`From<Int>` and
+`From<Char>` for `Steps`) neither the self type nor a written reference can
+choose between the impls. The argument is the only thing that can, and until
+milestone 30 selection never read one: the first registered impl won and every
+other argument was a type error against it.
+
+The obstacle is ordering. `resolve_callee` resolves the path — and thus selects
+the impl — *before* the arguments are checked, because normally the parameter
+types are the hint the arguments are resolved against. Reading the arguments to
+choose the impl inverts that, so the ambiguous case is split out rather than
+folded in:
+
+- **`cctx_resolve_path` only flags the ambiguity.** In `PATHRES_CTX_TYPE` it
+  still returns the first match — all a value context can use — but
+  `assoc_candidate_count` counts the impls declaring the name for the self type,
+  and more than one sets `PathRes.overload_recv`. The bare generic self of
+  `Point::new` is excluded, since it selects by method name, not by a trait
+  argument.
+- **`resolve_callee` declines to commit** when it sees the flag: it hands the
+  self type and name back through an `AssocOverload` out-param and returns
+  without building a callee type.
+- **`resolve_assoc_call` finishes the job**, and it is the one place arguments
+  precede selection. The arguments are resolved *hint-free* — the argument is
+  precisely what is meant to decide the impl, so a value that would need the
+  parameter as a hint cannot disambiguate anyway — and `impl_index_assoc_select`
+  picks the one impl whose method accepts them. Resolving the arguments here,
+  once, is also what keeps them from being resolved twice: the same types feed
+  both selection and the after-the-fact argument check.
+
+`impl_index_assoc_select` reuses the head machinery unchanged. Each candidate
+method's parameter is a pattern in the impl's terms, and `impl_type_match` — the
+same non-committing matcher the head uses — tests it against the resolved
+argument, binding any impl parameters the arguments mention; a hole the
+arguments leave is then filled by `ret_hint` exactly as the return-type
+tie-break does, and `impl_head_complete` checks totality and bounds. A unique
+accepting impl wins; none is a failure that names the argument types and lists
+what each candidate takes, and more than one is the ambiguity coherence makes
+practically unreachable but the selector still refuses. As with the return-type
+case, only a method with no type parameters of its own takes part, for the same
+reason: its signature would otherwise mention generics this match cannot bind.
+The resolved node is then indistinguishable from an ordinary associated call —
+a concrete `resolved_fun` and the impl's substitution as its instance — so
+codegen needs no new case.
+
 ### The embedded standard library
 
 `std/*.dt` are ordinary ducktape sources, mirrored into the binary by

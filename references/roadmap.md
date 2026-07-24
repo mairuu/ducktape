@@ -1689,6 +1689,58 @@
   reads a self type, a trait reference and now a return type — never an
   argument.
 
+- **Selection by argument type (milestone 30)** — a qualified associated call
+  `Steps::from(v)` reads its argument to choose among several `From` impls for
+  one type, closing the gap milestone 29 named on the line above. Design:
+  `architecture.md` "Selection by argument type".
+
+  The observation the milestone turns on: **the argument is to `from` what the
+  receiver is to `into`.** Milestone 29 read the type a call *produces* to pin
+  an impl parameter the head left open; this reads the type a call *consumes*. A
+  conversion qualified by its output (`Steps::from`) names the produced type but
+  not the source, so when `From` is implemented for `Steps` twice the argument
+  is the only thing that can say which — and selection had never read one, so
+  the first registered impl won and every other argument was a type error
+  against it.
+
+  The whole difficulty is ordering, and it is milestone 29's constraint one
+  level over: a callee is resolved *before* its arguments, because the parameter
+  types are the hint the arguments resolve against. Reading the arguments to
+  pick the callee inverts that, so the ambiguous case is split out rather than
+  folded in:
+  - **path resolution only flags the ambiguity.** `assoc_candidate_count` in
+    `PATHRES_CTX_TYPE` sets `overload_recv` when more than one impl declares the
+    name for the self type, still returning the first match — all a value
+    context, which has no arguments to offer, can use. `Point::new` is excluded:
+    a bare generic self selects by method name, not by a trait argument.
+  - **`resolve_callee` declines to commit**, handing the self type and name back
+    through an `AssocOverload` out-param instead of building a callee type.
+  - **`resolve_assoc_call` is the one place arguments precede selection.** It
+    resolves them hint-free — the argument is precisely what selects the impl,
+    so a value that needs the parameter as a hint cannot disambiguate anyway —
+    and reuses those types both to select and to check, so nothing is resolved
+    twice.
+
+  The selector adds no new matching. Each candidate parameter is a pattern
+  `impl_type_match` tests against the resolved argument — the same
+  non-committing matcher the head uses against the self type — and a hole the
+  arguments leave is filled by the return-type tie-break milestone 29 already
+  built, after which `impl_head_complete` checks totality and bounds. A unique
+  acceptor wins; none is a failure that names the argument types and lists what
+  each candidate takes (which is most of what makes it fixable); more than one
+  is the ambiguity coherence makes practically unreachable but the selector
+  still refuses. As with the return-type case, only a method with no type
+  parameters of its own takes part. The resolved node is then indistinguishable
+  from any other associated call — a concrete `resolved_fun` and the impl's
+  substitution as its instance — so codegen needs no new case and the image
+  round-trip covers it for free. The milestone is entirely in the checker.
+
+  The limit worth recording is that the argument must type on its own: it is
+  resolved hint-free, so `Steps::from(Option::None)` cannot be disambiguated —
+  the one value that would tell the impls apart is itself waiting on an impl to
+  say what it is. That is not a gap selection can close, since the argument is
+  the only evidence there is.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -1720,15 +1772,11 @@ by appetite rather than by necessity.
      The one open question in the set is whether they take byte offsets (like
      `slice`) or characters (like `chars`), which is the same fork milestone 26
      answered for indexing and would have to answer the same way.
-2. **Selection by argument type** — the one thing impl selection still does not
-   read. `Meters::from(7)` and `Meters::from('a')` are the same question to it,
-   so the first registered impl wins and the mismatch is reported against it.
-   Milestone 29 left this deliberately: the `into` spelling has no such gap
-   (the receiver pins the source type before the impl's bound is asked), so the
-   gap is confined to the qualified spelling of a trait that is implemented
-   several times for one type. Fixing it means resolving a callee *after* its
-   arguments, or a second pass — which is why it is its own item rather than
-   part of the milestone that found it.
+
+(**Selection by argument type** was item 2 here and is now milestone 30: a
+qualified `Meters::from(x)` reads its argument to pick the impl. What remains
+unread is the *receiver* spelling — see the `c.into()` wart below — which is a
+different lack, since `into` has no argument but `self`.)
 
 Not on the roadmap: the **REPL** is a side feature, not a milestone — it lives
 on the `feature/repl` branch (`--repl`, incremental compilation over one module
@@ -1897,10 +1945,11 @@ via `Module.decl_base`) and is not part of the main line.
   receiver cannot reach, which sharpens the failure rather than removing it:
   where that was the only way to pin it, no impl applies at all and the
   diagnostic is "no method named 'into'"
-- impl selection never reads an **argument** type: a self type, a trait
-  reference and (since 29) a return type are the whole of what decides an
-  impl, so two `From` impls for one type are indistinguishable at
-  `Meters::from(x)` however different `x` is
+- impl selection reads an **argument** type only through the qualified
+  spelling: `Meters::from(x)` picks by `x` (milestone 30), but only there. The
+  argument must type hint-free to do so, so `Meters::from(None)` — where the
+  argument is what would choose the impl yet needs one chosen to type — cannot
+  be disambiguated
 - a bound may name an earlier type parameter of the same list
   (`<T, U: Into<T>>`) but not a later one — bounds resolve left to right, so a
   forward reference is "unknown type: T" rather than a second pass

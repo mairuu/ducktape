@@ -521,6 +521,15 @@ annotation, a parameter, a return type. With none of those it is an error
 (`fun scaled<T: Into<Float>>`) needs no hint at all, since the reference is
 written down.
 
+When a type is the target of **more than one `From`**, the qualified call reads
+its argument to choose (milestone 30): with `impl From<Int> for Steps` and
+`impl From<Char> for Steps` both in scope, `Steps::from(26)` and
+`Steps::from('a')` reach different impls, and an argument that fits none names
+what it could not satisfy and lists what each candidate takes
+(`tests/run/assoc_select.dt`, `tests/fail/assoc_select_no_impl.dt`). The
+argument has to type on its own to do the choosing, so a value that would itself
+need the impl chosen first — `Steps::from(None)` — cannot be disambiguated.
+
 Importing the module **costs a program its own `Into` impls**: coherence is
 blind to an impl's bounds, so the blanket overlaps every `impl Into<X> for Y`
 that could be written (`tests/fail/into_impl_conflicts_with_blanket.dt`).

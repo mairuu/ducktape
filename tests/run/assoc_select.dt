@@ -1,0 +1,61 @@
+# Milestone 30 — selection by argument type. A qualified associated call
+# `Steps::from(v)` now reads its argument to choose among several `From` impls
+# for one produced type. Before this, the first registered impl won and every
+# other argument was a type error against it (milestone 29's one remaining gap).
+# The mechanism is not `From`-specific: any generic trait implemented more than
+# once for one type, called through the `Type::method(args)` spelling, is
+# disambiguated by what its arguments are.
+
+#> 26
+#> 97
+#> 3
+#> 1
+#> 42
+#> 7.0
+
+use std::io::print;
+use std::convert::From;
+
+struct Steps { n: Int }
+
+# two `From` impls for one type, differing only in the source they consume —
+# and the qualified path `Steps::from` names neither.
+impl From<Int> for Steps {
+    fun from(value: Int) -> Steps { return Steps { n: value }; }
+}
+impl From<Char> for Steps {
+    fun from(value: Char) -> Steps { return Steps { n: Int::from(value) }; }
+}
+
+trait Make<T> { fun make(value: T) -> Self; }
+
+struct Tally { total: Int }
+impl Make<Int> for Tally {
+    fun make(value: Int) -> Tally { return Tally { total: value }; }
+}
+impl Make<Bool> for Tally {
+    fun make(flag: Bool) -> Tally {
+        if flag { return Tally { total: 1 }; }
+        return Tally { total: 0 };
+    }
+}
+
+# a struct-typed argument, so disambiguation runs through `impl_type_match` on a
+# composite rather than a primitive.
+struct Amount { cents: Int }
+impl Make<Amount> for Tally {
+    fun make(value: Amount) -> Tally { return Tally { total: value.cents }; }
+}
+
+fun main() {
+    print(Steps::from(26).n);   # Int  -> 26
+    print(Steps::from('a').n);  # Char -> 97 (the scalar value of 'a')
+
+    print(Tally::make(3).total);                    # Int    -> 3
+    print(Tally::make(true).total);                 # Bool   -> 1
+    print(Tally::make(Amount { cents: 42 }).total); # Amount -> 42
+
+    # a type with a single `From` impl still resolves the old way, untouched.
+    var f: Float = Float::from(7);
+    print(f); # 7.0
+}
