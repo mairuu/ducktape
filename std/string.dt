@@ -10,11 +10,17 @@
 # the call site — the closest thing the language has to a panic until there is
 # a real one (roadmap: `std::result`).
 #
-# Nothing below imports another module, so `std::string` is a leaf: importing
-# any of it hands a program no impls it did not ask for, which `std::array`
-# stopped being able to promise once `pop` started answering with an `Option`.
-# `join` is what that costs — it iterates with `for`, whose desugaring emits
-# the length opcode itself, rather than importing `std::array::len`.
+# `std::string` reaches only `std::strbuf` — the buffer `join` and friends build
+# through — and `std::strbuf` imports nothing and ships no impls, so importing
+# any of `std::string` still hands a program no impls it did not ask for. That is
+# the property `std::cmp` leans on by building `impl Ord for String` on `compare`
+# here, and it is what `std::array` stopped being able to promise once `pop`
+# started answering with an `Option`. `join` iterating with `for` (whose
+# desugaring emits the length opcode itself) rather than importing
+# `std::array::len` is the same discipline: reaching `std::array` would reach
+# `Option` and close the cycle `string → option → cmp → string`.
+
+use std::strbuf::{new, push, push_char, build};
 
 @native("string_len")
 pub fun len(s: String) -> Int;
@@ -50,64 +56,19 @@ pub fun chars(s: String) -> [Char];
 
 # ── building a string ────────────────────────────────────────────────────────
 #
-# `a + b` allocates a whole new String and interns it, so growing one a piece
-# at a time re-interns the entire accumulation at every step. A `StringBuf` is
-# the way out, and it is a distinct *type* rather than a mutable `String`
-# because interning is precisely what makes a String immutable: two equal
-# strings are one pointer, so an object filed under the hash of its bytes
-# cannot have its bytes change underneath it.
-#
-# So a buffer is the object deliberately kept out of that table, `build` is the
-# one-way door back in, and the four functions below are the whole of what the
-# buffer cannot express about itself in ducktape. Everything after them is
-# ordinary code on top.
-
-@native("strbuf_new")
-pub fun builder() -> StringBuf;
-
-# Append the bytes of `s`, growing the buffer when it is full. Like a `[T]`, a
-# `StringBuf` is a reference to one growable object, so every name bound to it
-# sees the append — which is why this takes an ordinary `StringBuf` and needs
-# no way to spell "by reference".
-#
-# It is `push_str` rather than `push` so that a program can import it beside
-# `std::array::push`: there are no module-qualified paths, so two imported
-# names that collide have to be aliased apart at the `use`.
-@native("strbuf_push")
-pub fun push_str(b: StringBuf, s: String);
-
-# Append one character's UTF-8 bytes. This is the append that an array of
-# parts could never have offered, and so the one that shows why a buffer was
-# worth a new object kind: the bytes go straight in, with no String interned
-# along the way to carry them.
-@native("strbuf_push_char")
-pub fun push_char(b: StringBuf, c: Char);
-
-# The bytes written so far. Not `len`, which this module already spends on
-# `String`.
-@native("strbuf_len")
-pub fun buf_len(b: StringBuf) -> Int;
-
-# Intern the bytes written so far into a `String`. Non-destructive: the buffer
-# is unchanged and may be appended to again, so `build` inside a loop is a
-# snapshot rather than a handover.
-@native("strbuf_build")
-pub fun build(b: StringBuf) -> String;
-
-pub fun buf_is_empty(b: StringBuf) -> Bool {
-    return buf_len(b) == 0;
-}
+# The buffer these build through lives in `std::strbuf`; here it is only the
+# String-shaped conveniences on top of it.
 
 # `sep` between each pair of parts. The buffer is what makes this one pass:
 # the same loop written with `+` would intern every prefix along the way.
 pub fun join(parts: [String], sep: String) -> String {
-    var b = builder();
+    var b = new();
     var first = true;
     for p in parts {
         if not first {
-            push_str(b, sep);
+            push(b, sep);
         }
-        push_str(b, p);
+        push(b, p);
         first = false;
     }
     return build(b);
@@ -122,7 +83,7 @@ pub fun concat(parts: [String]) -> String {
 # within reach: a String is built out of Chars exactly the way it is built out
 # of anything else.
 pub fun from_chars(cs: [Char]) -> String {
-    var b = builder();
+    var b = new();
     for c in cs {
         push_char(b, c);
     }
@@ -133,10 +94,10 @@ pub fun from_chars(cs: [Char]) -> String {
 # straight into the buffer — which is the difference a buffer makes that an
 # array of parts could not.
 pub fun repeat(s: String, n: Int) -> String {
-    var b = builder();
+    var b = new();
     var i = 0;
     while i < n {
-        push_str(b, s);
+        push(b, s);
         i = i + 1;
     }
     return build(b);

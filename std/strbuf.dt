@@ -1,0 +1,49 @@
+# std::strbuf — a growable text buffer, the object a `String` is built from.
+#
+# `a + b` allocates a whole new String and interns it, so growing one a piece at
+# a time re-interns the entire accumulation at every step. A `StringBuf` is the
+# way out, and it is a distinct *type* rather than a mutable `String` because
+# interning is precisely what makes a String immutable: two equal strings are
+# one pointer, so an object filed under the hash of its bytes cannot have its
+# bytes change underneath it. So a buffer is the object deliberately kept out of
+# that table, `build` is the one-way door back in, and the natives below are the
+# whole of what the buffer cannot express about itself in ducktape.
+#
+# It lives in its own module so its operations can take the plain names — `len`,
+# `push`, `is_empty` — that `std::string` already spends on the `String`, and
+# `std::array` already spends on the `[T]`. Before module-qualified paths those
+# names had to be dodged (`buf_len`, `push_str`); now a caller writes
+# `use std::strbuf;` and `strbuf::len(b)` sits beside `string::len(s)` and
+# `array::len(xs)` with nothing aliased apart. This module imports nothing, so
+# it ships no impls and is free to reach for.
+
+@native("strbuf_new")
+pub fun new() -> StringBuf;
+
+# Append the bytes of `s`, growing the buffer when it is full. Like a `[T]`, a
+# `StringBuf` is a reference to one growable object, so every name bound to it
+# sees the append — which is why this takes an ordinary `StringBuf` and needs no
+# way to spell "by reference".
+@native("strbuf_push")
+pub fun push(b: StringBuf, s: String);
+
+# Append one character's UTF-8 bytes. This is the append that an array of parts
+# could never have offered, and so the one that shows why a buffer was worth a
+# new object kind: the bytes go straight in, with no String interned along the
+# way to carry them.
+@native("strbuf_push_char")
+pub fun push_char(b: StringBuf, c: Char);
+
+# The bytes written so far.
+@native("strbuf_len")
+pub fun len(b: StringBuf) -> Int;
+
+# Intern the bytes written so far into a `String`. Non-destructive: the buffer
+# is unchanged and may be appended to again, so `build` inside a loop is a
+# snapshot rather than a handover.
+@native("strbuf_build")
+pub fun build(b: StringBuf) -> String;
+
+pub fun is_empty(b: StringBuf) -> Bool {
+    return len(b) == 0;
+}

@@ -3,10 +3,10 @@
 # is interned, so it is filed under the hash of its bytes and two equal strings
 # are one pointer. A buffer whose bytes change cannot be that. `build` is the
 # only way across.
-use std::string::{builder, push_str};
+use std::strbuf::{new, push};
 
 fun main() {
-    var b = builder();
-    push_str(b, "hello");
+    var b = new();
+    push(b, "hello");
     var s: String = b;
 }

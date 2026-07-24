@@ -40,7 +40,8 @@
 #> s
 
 use std::io::print;
-use std::string::{chars, from_chars, len, builder, push_char, build};
+use std::string::{chars, from_chars, len};
+use std::strbuf::{new, push_char, build};
 use std::char::{code, from_code, is_ascii, is_digit, is_alpha, is_alnum};
 use std::char::{is_lower, is_upper, is_whitespace, to_upper, to_lower, to_digit};
 use std::cmp::{max, min};
@@ -54,7 +55,7 @@ fun id<T>(v: T) -> T {
 }
 
 fun shout(s: String) -> String {
-    var b = builder();
+    var b = new();
     for c in chars(s) {
         push_char(b, to_upper(c));
     }
@@ -62,7 +63,7 @@ fun shout(s: String) -> String {
 }
 
 fun quiet(s: String) -> String {
-    var b = builder();
+    var b = new();
     for c in chars(s) {
         push_char(b, to_lower(c));
     }
@@ -131,7 +132,7 @@ fun main() {
     print("{min('a', 'Z')}:{max('a', 'Z')}");
 
     # a buffer takes Chars and Strings alike, which is what `from_chars` is
-    var b = builder();
+    var b = new();
     push_char(b, 'a');
     push_char(b, 'b');
     push_char(b, 'c');

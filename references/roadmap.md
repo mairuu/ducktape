@@ -1896,13 +1896,22 @@
     same `PATHRES_METHOD` a bare call does, so **codegen never learns a module
     was involved.**
 
-  This retires the "no module-qualified paths" gap and the API warts it drove:
-  `string::push` and `array::push` can now coexist through the qualifier, so the
-  cross-module rename-arounds (`push_str`, `count`/`byte_len`) are cleanupable —
-  though the *intra*-module ones (`buf_len` vs `len`, both in `std::string`) are
-  not, since a qualifier disambiguates modules, not names within one. The std
-  API was left unchanged this milestone: renaming it is a breaking edit to every
-  caller and belongs to its own pass.
+  This retires the "no module-qualified paths" gap and the API warts it drove.
+  A follow-up pass (same session) did the std cleanup the feature unlocks:
+  - `std::text` dropped its `len as byte_len` / `len as count` aliases — it
+    imports `std::string` and `std::array` as qualifiers and writes `string::len`
+    / `array::len` directly, the flagship case, since no `use` could bind two
+    `len`s under one name.
+  - **`StringBuf` moved to its own module `std::strbuf`**, which is what actually
+    cleans the *intra*-module collisions a qualifier could not: `buf_len` /
+    `buf_is_empty` / `push_str` (dodging `std::string`'s own `len` and
+    `std::array::push`) became plain `strbuf::len` / `is_empty` / `push`. So
+    `strbuf::len(b)` now sits beside `string::len(s)` and `array::len(xs)`, three
+    modules spending the one good name. `std::string` keeps the String-shaped
+    conveniences (`join`, `concat`, `repeat`, `from_chars`) and imports
+    `std::strbuf` to build them — it reaches one module further now, but
+    `std::strbuf` ships no impls, so nothing that depended on `std::string`
+    shipping none is affected.
 
   Deliberately not done: glob imports; a module used as a value or bare type
   (`var x = string;` is "undefined variable", which is honest — a module is not a
@@ -2080,21 +2089,13 @@ via `Module.decl_base`) and is not part of the main line.
   string is ordered against every other
 - a `StringBuf` grows but never shrinks, and cannot be emptied: there is no
   `clear`, so reusing one buffer across iterations is not expressible and each
-  round needs a fresh `builder()`. Both are one registry entry away; neither
+  round needs a fresh `strbuf::new()`. Both are one registry entry away; neither
   has been needed yet
 - a `StringBuf` can be appended to from a `String` or (since milestone 26) a
   `Char`, but not from anything else, so a number still has to be rendered first
-  (`push_str(b, "{n}")` interns the digits). `push_int` and `push_slice` are the
-  natural next entries; `push_char` was the one that mattered, since it is what
-  lets `from_chars` be ducktape
-- `std::string` spends two names on the buffer's length and emptiness
-  (`buf_len`, `buf_is_empty`) because a module cannot have two `len`s, and
-  `push_str` is named around a collision with `std::array::push`. Milestone 33
-  (module-qualified paths) fixes the *cross-module* half: `string::push` and
-  `array::push` can coexist through the qualifier, so `push_str` is renameable —
-  but `buf_len` vs `len` is *intra*-module, which a qualifier does not
-  disambiguate, so it stays. The std API was not renamed when the feature
-  landed (a breaking edit to every caller); that cleanup is its own pass
+  (`strbuf::push(b, "{n}")` interns the digits). `push_int` and `push_slice` are
+  the natural next entries; `push_char` was the one that mattered, since it is
+  what lets `from_chars` be ducktape
 - a panic message can only name the value that caused it where the type
   parameter is bounded: `"{e}"` needs `E: Display`, and `Option`/`Result`'s
   `unwrap` are not bounded, so their messages stay fixed. `expect` is the way

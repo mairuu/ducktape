@@ -4,10 +4,10 @@
 # making out loud. `"{build(b)}"` is the spelling.
 use std::io::print;
 use std::fmt::Display;
-use std::string::{builder, push_str};
+use std::strbuf::{new, push};
 
 fun main() {
-    var b = builder();
-    push_str(b, "hello");
+    var b = new();
+    push(b, "hello");
     print("{b}");
 }

@@ -1,7 +1,8 @@
 # A `StringBuf` is the object a `String` cannot be: uninterned, so it can be
 # appended to in place. Interning is what makes a String immutable — two equal
 # strings are one pointer — so the two are different kinds, and `build` is the
-# one-way door between them.
+# one-way door between them. `std::strbuf` and `std::string` both spell `len`;
+# the qualifier is what lets `strbuf::len(b)` sit beside `string::len` here.
 #> true
 #> 0
 #> []
@@ -25,26 +26,26 @@
 #> 42
 
 use std::io::print;
-use std::string::{builder, push_str, buf_len, build, buf_is_empty};
+use std::strbuf;
 use std::string::{join, concat, repeat, len, slice};
 
 fun main() {
-    var b = builder();
-    print(buf_is_empty(b));
-    print(buf_len(b));
-    print("[{build(b)}]"); # an empty buffer has no allocation at all
+    var b = strbuf::new();
+    print(strbuf::is_empty(b));
+    print(strbuf::len(b));
+    print("[{strbuf::build(b)}]"); # an empty buffer has no allocation at all
 
-    push_str(b, "hello");
-    push_str(b, ", ");
-    push_str(b, "world");
-    print(buf_len(b));
-    print(build(b));
+    strbuf::push(b, "hello");
+    strbuf::push(b, ", ");
+    strbuf::push(b, "world");
+    print(strbuf::len(b));
+    print(strbuf::build(b));
 
     # `build` is a snapshot rather than a handover: the buffer is unchanged and
     # can still be appended to
-    push_str(b, "!");
-    print(build(b));
-    print(buf_len(b));
+    strbuf::push(b, "!");
+    print(strbuf::build(b));
+    print(strbuf::len(b));
 
     # `print` is the debug view, so it says which of the two kinds it has —
     # the one place the difference is visible without calling `build`
@@ -52,8 +53,8 @@ fun main() {
 
     # a buffer is a reference to one growable object, exactly like a `[T]`
     var alias = b;
-    push_str(alias, "?");
-    print(buf_len(b));
+    strbuf::push(alias, "?");
+    print(strbuf::len(b));
 
     # 100 pushes from a floor of 16 doubles the buffer four times, so every
     # byte survives being copied. Nothing here allocates a String per copy,
@@ -64,13 +65,13 @@ fun main() {
 
     # equality is the other place the kinds differ: a String compares by
     # pointer because it is interned, a buffer has to compare its bytes
-    var x = builder();
-    push_str(x, "ab");
-    var y = builder();
-    push_str(y, "ab");
+    var x = strbuf::new();
+    strbuf::push(x, "ab");
+    var y = strbuf::new();
+    strbuf::push(y, "ab");
     print(x == y);
-    print(build(x) == build(y));
-    push_str(y, "c");
+    print(strbuf::build(x) == strbuf::build(y));
+    strbuf::push(y, "c");
     print(x == y);
 
     var sep = ", ";
@@ -83,15 +84,15 @@ fun main() {
     print("[{zero}]");
 
     # an ordinary value: it goes in containers like anything else
-    var bs = [builder(), builder()];
-    push_str(bs[0], "in an array");
-    print(buf_len(bs[0]));
+    var bs = [strbuf::new(), strbuf::new()];
+    strbuf::push(bs[0], "in an array");
+    print(strbuf::len(bs[0]));
 
     # the loop the buffer exists for: with `+` this interns every prefix on
     # the way, so it is quadratic in the bytes it touches
-    var out = builder();
+    var out = strbuf::new();
     for i in 0..26 {
-        push_str(out, "{i}");
+        strbuf::push(out, "{i}");
     }
-    print(len(build(out)));
+    print(len(strbuf::build(out)));
 }

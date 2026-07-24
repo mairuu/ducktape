@@ -7,8 +7,8 @@
 # `std::cmp`, and every function below either answers with an `Option` or builds
 # a `[String]`. So `std::string` importing `Option` or array `push` would close
 # the loop `string → option → cmp → string`, which the dependency graph rejects
-# outright. `std::string` is a leaf by necessity; the operations that reach past
-# a leaf live one module up.
+# outright. `std::string` reaches nothing above the buffer it builds through, so
+# the operations that reach past it live one module up.
 #
 # Two views of text meet here, and the split between them is the milestone-26
 # rule that `std::string` and `std::char` were built around:
@@ -20,9 +20,14 @@
 #     about a character, not a byte.
 # `starts_with` needs neither a position nor a classification, so it is the pure
 # `slice`+`==` one.
+#
+# `string::len` (bytes) and `array::len` (elements) both appear below, told apart
+# by their module rather than aliased apart at the `use` — the reason a module is
+# bound as a qualifier here rather than its items imported by name.
 
-use std::string::{len as byte_len, slice, chars, builder, push_char, build};
-use std::array::{push, len as count};
+use std::string;
+use std::strbuf;
+use std::array;
 use std::option::Option;
 use std::char::{is_whitespace, is_digit, to_digit};
 
@@ -32,20 +37,20 @@ use std::char::{is_whitespace, is_digit, to_digit};
 # empty prefix always does — `slice(s, 0, 0)` is `""`, which interns to the same
 # pointer `""` does, so `==` answers yes without a special case.
 pub fun starts_with(s: String, prefix: String) -> Bool {
-    var pl = byte_len(prefix);
-    if pl > byte_len(s) {
+    var pl = string::len(prefix);
+    if pl > string::len(s) {
         return false;
     }
-    return slice(s, 0, pl) == prefix;
+    return string::slice(s, 0, pl) == prefix;
 }
 
 pub fun ends_with(s: String, suffix: String) -> Bool {
-    var sl = byte_len(suffix);
-    var n = byte_len(s);
+    var sl = string::len(suffix);
+    var n = string::len(s);
     if sl > n {
         return false;
     }
-    return slice(s, n - sl, n) == suffix;
+    return string::slice(s, n - sl, n) == suffix;
 }
 
 # The byte offset of the first occurrence of `needle` in `s`, or `None`. The
@@ -57,14 +62,14 @@ pub fun ends_with(s: String, suffix: String) -> Bool {
 # it out first. A byte-level scan would need a `byte_at` the language declines
 # to offer (see `std::char`).
 pub fun find(s: String, needle: String) -> Option<Int> {
-    var nl = byte_len(needle);
+    var nl = string::len(needle);
     if nl == 0 {
         return Option::Some(0);
     }
-    var n = byte_len(s);
+    var n = string::len(s);
     var i = 0;
     while i + nl <= n {
-        if slice(s, i, i + nl) == needle {
+        if string::slice(s, i, i + nl) == needle {
             return Option::Some(i);
         }
         i = i + 1;
@@ -86,24 +91,24 @@ pub fun contains(s: String, needle: String) -> Bool {
 # at which `""` is *not*, so the loop that finds them would never end.
 pub fun split(s: String, sep: String) -> [String] {
     var parts: [String] = [];
-    var sl = byte_len(sep);
+    var sl = string::len(sep);
     if sl == 0 {
-        push(parts, s);
+        array::push(parts, s);
         return parts;
     }
-    var n = byte_len(s);
+    var n = string::len(s);
     var start = 0;
     var i = 0;
     while i + sl <= n {
-        if slice(s, i, i + sl) == sep {
-            push(parts, slice(s, start, i));
+        if string::slice(s, i, i + sl) == sep {
+            array::push(parts, string::slice(s, start, i));
             i = i + sl;
             start = i;
         } else {
             i = i + 1;
         }
     }
-    push(parts, slice(s, start, n));
+    array::push(parts, string::slice(s, start, n));
     return parts;
 }
 
@@ -115,8 +120,8 @@ pub fun split(s: String, sep: String) -> [String] {
 # characters, not bytes, and rebuilds the middle through a buffer rather than
 # assuming a trimmed edge lands on a byte boundary.
 pub fun trim(s: String) -> String {
-    var cs = chars(s);
-    var n = count(cs);
+    var cs = string::chars(s);
+    var n = array::len(cs);
     var lo = 0;
     while lo < n {
         if not is_whitespace(cs[lo]) {
@@ -131,13 +136,13 @@ pub fun trim(s: String) -> String {
         }
         hi = hi - 1;
     }
-    var b = builder();
+    var b = strbuf::new();
     var i = lo;
     while i < hi {
-        push_char(b, cs[i]);
+        strbuf::push_char(b, cs[i]);
         i = i + 1;
     }
-    return build(b);
+    return strbuf::build(b);
 }
 
 # The integer `s` spells, or `None` if it spells none. An optional leading `+`
@@ -148,8 +153,8 @@ pub fun trim(s: String) -> String {
 # failing, which is the one thing this cannot promise without a widening
 # multiply the language has no way to spell.
 pub fun parse_int(s: String) -> Option<Int> {
-    var cs = chars(s);
-    var n = count(cs);
+    var cs = string::chars(s);
+    var n = array::len(cs);
     if n == 0 {
         return Option::None;
     }

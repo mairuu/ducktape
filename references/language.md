@@ -51,7 +51,7 @@ case for it) — declare variables inside functions only.
 |---|---|
 | `Int` `Float` `Bool` `String` | primitives |
 | `Char` | one Unicode scalar value — see "`std::char`" |
-| `StringBuf` | a growable text buffer — see "`std::string`" |
+| `StringBuf` | a growable text buffer — see "`std::strbuf`" |
 | `()` | unit |
 | `Never` | code that does not come back — see "`std::panic`" |
 | `(A, B)` | tuple |
@@ -450,9 +450,9 @@ directory. `std::` never touches the filesystem, so a local `std.dt` is
 unreachable. Where ducktape cannot express the operation, a module declares a
 bodyless function bound to C (see "Native functions" below); `std::cmp`,
 `std::convert`, `std::option`, `std::result` and `std::text` need none, `std::io`
-and `std::panic` are nothing but, and `std::array`, `std::string` and `std::char`
-are the mixed case — a handful of natives, and every other function written on
-top of them in ducktape. `std::fmt::Display` is the only std name the
+and `std::panic` are nothing but, and `std::array`, `std::string`, `std::strbuf`
+and `std::char` are the mixed case — a handful of natives, and every other
+function written on top of them in ducktape. `std::fmt::Display` is the only std name the
 *compiler* knows.
 
 **There is no prelude.** Every std name, `print` included, has to be imported.
@@ -844,7 +844,7 @@ registry is closed, so the only names available are the ones the binary already
 provides, and the *decision* about what C exposes stays in C. Restricting the
 attribute by module would add a rule without adding a guarantee.
 
-### `std::io`, `std::array`, `std::string`
+### `std::io`, `std::array`, `std::string`, `std::strbuf`
 
 ```
 std::io      print<T>(value: T)                     # @native
@@ -861,16 +861,17 @@ std::string  len(s: String) -> Int                  # @native, in bytes
              slice(s: String, from: Int, to: Int) -> String   # @native
              compare(a: String, b: String) -> Int   # @native
              chars(s: String) -> [Char]             # @native
-             builder() -> StringBuf                 # @native
-             push_str(b: StringBuf, s: String)      # @native
-             push_char(b: StringBuf, c: Char)       # @native
-             buf_len(b: StringBuf) -> Int           # @native
-             build(b: StringBuf) -> String          # @native
-             buf_is_empty(b: StringBuf) -> Bool
              join(parts: [String], sep: String) -> String
              concat(parts: [String]) -> String
              repeat(s: String, n: Int) -> String
              from_chars(cs: [Char]) -> String
+
+std::strbuf  new() -> StringBuf                     # @native
+             push(b: StringBuf, s: String)          # @native
+             push_char(b: StringBuf, c: Char)       # @native
+             len(b: StringBuf) -> Int               # @native
+             build(b: StringBuf) -> String          # @native
+             is_empty(b: StringBuf) -> Bool
 
 std::char    code(c: Char) -> Int                   # @native
              from_code(n: Int) -> Char              # @native
@@ -921,18 +922,27 @@ contract is "n values in, one out" and it has no handle on the `VariantDef` an
 enum instance needs, so a native *cannot* build an `Option` at all. Popping
 does not release capacity; the buffer is returned when the array is collected.
 
-**A `String` is built with a `StringBuf`.** `a + b` allocates a new String and
-interns it, so growing one a piece at a time re-interns the whole accumulation
-at every step. A buffer appends in place instead, and `build` interns once:
+**A `String` is built with a `StringBuf`, which lives in `std::strbuf`.** `a +
+b` allocates a new String and interns it, so growing one a piece at a time
+re-interns the whole accumulation at every step. A buffer appends in place
+instead, and `build` interns once:
 
 ```
-var b = builder();
+use std::strbuf;
+
+var b = strbuf::new();
 for word in words {
-    push_str(b, word);
-    push_str(b, " ");
+    strbuf::push(b, word);
+    strbuf::push(b, " ");
 }
-print(build(b));
+print(strbuf::build(b));
 ```
+
+The buffer is its own module so its operations can take the plain names `len`,
+`push` and `is_empty` — the ones `std::string` spends on `String` and
+`std::array` on `[T]`. Before module-qualified paths they had to be dodged
+(`buf_len`, `push_str`); now `strbuf::len(b)` sits beside `string::len(s)` with
+nothing aliased apart.
 
 `StringBuf` is a *separate type* from `String`, not a mutable flavour of one,
 and the reason is interning: a String is filed in the runtime's table under the
@@ -945,22 +955,24 @@ than once and appended to in between.
 Two smaller consequences, both visible from a program:
 
 - **A buffer is a reference**, like a `[T]`: a second name is the same object,
-  so a `push_str` through either is seen through both.
+  so a `push` through either is seen through both.
 - **A buffer has no `Display` impl**, so `"{b}"` is an error naming the type.
   Rendering one is `build`, which allocates and interns, and that is a decision
   worth making out loud. `print(b)` still shows it, as `StringBuf("…")` — the
   debug view says which of the two kinds it is looking at.
 
-Only five of the functions are written in C — existing, growing (from a String
-or from a Char), its length, and becoming a String — and `join`, `concat`,
-`repeat` and `from_chars` are ducktape on top, the same split `std::array`
-makes. `repeat` is the one that shows what the
-buffer buys: it copies bytes straight in, allocating no String per copy.
-Unlike `std::array`, `std::string` imports nothing, so it is still a leaf: it
-hands a program no impls it did not ask for. That is also what makes it safe
-for `std::cmp` to depend on it for `impl Ord for String`. `push_char` and
-`chars` — added when `Char` arrived — keep both properties: neither imports
-anything, and `from_chars` is written on top of them rather than in C.
+Five of `std::strbuf`'s functions are written in C — existing, growing (from a
+String or from a Char), its length, and becoming a String — and `is_empty` is
+ducktape on `len`. `std::string`'s `join`, `concat`, `repeat` and `from_chars`
+are the String-shaped conveniences on top, built through the buffer, the same
+split `std::array` makes; `repeat` is the one that shows what the buffer buys —
+it copies bytes straight in, allocating no String per copy. `std::string` now
+reaches only `std::strbuf`, which imports nothing and ships no impls, so
+importing `std::string` still hands a program no impls it did not ask for — the
+property that makes it safe for `std::cmp` to depend on it for `impl Ord for
+String`. What `std::string` must *not* reach is `Option` or `std::array`, which
+would close the cycle `string → option → cmp → string`; the buffer is a pure
+leaf below it, so the edge to it is free.
 
 A `Float` prints — and interpolates — as the shortest decimal that reads back
 as the same double, always carrying a `.` or an exponent so it is never
@@ -1049,10 +1061,13 @@ dependency cycle rather than taste.** `std::cmp` imports `std::string` for
 imports `std::cmp`; and every function in `std::text` either answers with an
 `Option` or builds a `[String]`. So putting them in `std::string` would make it
 import `Option` or array `push`, closing the loop `string → option → cmp →
-string` — which the dependency graph rejects outright ("module cycle"). A leaf
-that everything else builds on cannot reach back up to them; the operations that
-do live one module higher. This is `std::array` losing its leaf status once
-`pop` returned an `Option`, taken to the point where the split is *forced*.
+string` — which the dependency graph rejects outright ("module cycle"). The
+module everything else builds on cannot reach back up to them (it reaches only
+`std::strbuf`, a pure leaf below it); the operations that do live one module
+higher. This is `std::array` losing its leaf status once `pop` returned an
+`Option`, taken to the point where the split is *forced*. `std::text` is also
+where a module qualifier earns its keep: it wants both `string::len` (bytes) and
+`array::len` (elements), which no `use` could import under one name.
 
 Within the module the two views of text stay apart, the milestone-26 way:
 
