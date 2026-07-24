@@ -1565,6 +1565,100 @@ static Expr *parse_match(Parser *p) {
   return expr;
 }
 
+// ── Interpolation format specs (milestone 35) ────────────────────────────────
+//
+// A `:`-introduced spec after the value in `{v:>8}` / `{f:.3}` / `{f:>8.3}`:
+// one alignment (`<` `>` `^`) with a width, an optional leading fill char, and
+// an optional `.N` precision — nothing more, because it is only shorthand for
+// the `pad_*` / `float` calls the checker desugars it to. One scanner quirk
+// shapes the parse: `8.3` scans as one FLOAT token (a digit precedes the dot),
+// while a bare `.3` scans as DOT then INT, so a width and a precision arrive
+// fused in the first case and separate in the second.
+
+static int64_t parse_int_lexeme(StringView lexeme) {
+  char buf[32];
+  int len = lexeme.len < 31 ? (int)lexeme.len : 31;
+  memcpy(buf, lexeme.chars, len);
+  buf[len] = '\0';
+  return atoll(buf);
+}
+
+// `.N`, the current token being the `.`.
+static bool parse_format_precision(Parser *p, FormatSpec *spec) {
+  match_tok(p, TOKEN_DOT);
+  if (!check_tok(p, TOKEN_INT)) {
+    error_at(p, current_tok_span(p),
+             "expected a number of decimal places after '.' in this format "
+             "spec");
+    return false;
+  }
+  spec->has_precision = true;
+  spec->precision = parse_int_lexeme(peek_tok(p)->lexeme);
+  match_tok(p, TOKEN_INT);
+  return true;
+}
+
+// The whole spec, the current token being the `:`.
+static bool parse_format_spec(Parser *p, FormatSpec *spec) {
+  *spec = (FormatSpec){.present = true, .fill = ' '};
+  match_tok(p, TOKEN_COLON);
+
+  // `.N` alone: a precision with no field width (`{f:.3}`).
+  if (check_tok(p, TOKEN_DOT)) {
+    return parse_format_precision(p, spec);
+  }
+
+  // an optional fill character, written as a char literal (`{v:'-'^8}`). A
+  // char literal tokenises unambiguously where a bare `*` would collide with
+  // multiplication, and it is the Char the value is padded with either way.
+  if (check_tok(p, TOKEN_CHAR)) {
+    uint32_t cp = 0;
+    char_literal_value(peek_tok(p)->lexeme, &cp);
+    spec->fill = cp;
+    match_tok(p, TOKEN_CHAR);
+  }
+
+  // a required alignment...
+  if (match_tok(p, TOKEN_GT)) {
+    spec->align = FMT_ALIGN_START;
+  } else if (match_tok(p, TOKEN_LT)) {
+    spec->align = FMT_ALIGN_END;
+  } else if (match_tok(p, TOKEN_CARET)) {
+    spec->align = FMT_ALIGN_CENTER;
+  } else {
+    error_at(p, current_tok_span(p),
+             "expected an alignment '<', '>' or '^' in this format spec");
+    return false;
+  }
+
+  // ...and a required width, which arrives as an INT, or as a FLOAT whose
+  // fractional part is a fused precision (`>8.3`).
+  if (check_tok(p, TOKEN_INT)) {
+    spec->width = parse_int_lexeme(peek_tok(p)->lexeme);
+    match_tok(p, TOKEN_INT);
+    if (check_tok(p, TOKEN_DOT)) { // a width and precision written apart
+      return parse_format_precision(p, spec);
+    }
+  } else if (check_tok(p, TOKEN_FLOAT)) {
+    StringView lex = peek_tok(p)->lexeme;
+    int dot = 0;
+    while (dot < (int)lex.len && lex.chars[dot] != '.')
+      dot++;
+    spec->width =
+        parse_int_lexeme((StringView){.chars = lex.chars, .len = dot});
+    spec->has_precision = true;
+    spec->precision = parse_int_lexeme(
+        (StringView){.chars = lex.chars + dot + 1, .len = lex.len - dot - 1});
+    match_tok(p, TOKEN_FLOAT);
+  } else {
+    error_at(p, current_tok_span(p),
+             "expected a field width after the alignment in this format spec");
+    return false;
+  }
+
+  return true;
+}
+
 static Expr *parse_primary(Parser *p) {
   Token *t = peek_tok(p);
 
@@ -1609,7 +1703,7 @@ static Expr *parse_primary(Parser *p) {
   }
 
   if (match_tok(p, TOKEN_INTERPOLATION)) {
-    InterpolSeg segs[16];
+    InterpolSeg segs[16] = {0};
     int seg_count = 2;
 
     segs[0].kind = ISEG_TEXT;
@@ -1620,6 +1714,10 @@ static Expr *parse_primary(Parser *p) {
     segs[1].expr = parse_expr(p);
 
     if (segs[1].expr->kind == EXPR_POISON) {
+      return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
+    }
+
+    if (check_tok(p, TOKEN_COLON) && !parse_format_spec(p, &segs[1].spec)) {
       return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
     }
 
@@ -1673,6 +1771,10 @@ static Expr *parse_primary(Parser *p) {
       }
       segs[seg_count].kind = ISEG_EXPR;
       segs[seg_count].expr = expr;
+      if (check_tok(p, TOKEN_COLON) &&
+          !parse_format_spec(p, &segs[seg_count].spec)) {
+        return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
+      }
       seg_count++;
     }
 

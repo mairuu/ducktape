@@ -186,10 +186,15 @@ EXPONENT       = ( "e" | "E" ) ( "+" | "-" )? DIGIT+ ;
 
 (* ── strings and characters ───────────────────────────────────────────── *)
 
-interpString   = '"' ( TEXT | "{" expr "}" )* '"' ;
+interpString   = '"' ( TEXT | "{" expr formatSpec? "}" )* '"' ;
                  (* segments must be Int/Float/Bool/Char/String, or a type
                     implementing std::fmt::Display; escapes:
                     \n \t \r \" \\ \{ *)
+formatSpec     = ":" ( CHAR? ( "<" | ">" | "^" ) INT ( "." INT )?
+                     | "." INT ) ;
+                 (* sugar the checker desugars to std::string::pad_* and
+                    std::fmt::float; the fill CHAR defaults to ' '. A width
+                    and precision written together ("8.3") lex as one FLOAT. *)
 
 CHAR           = "'" ( UTF8CHAR | CHARESCAPE ) "'" ;
 CHARESCAPE     = "\" ( "n" | "t" | "r" | "\\" | "'" | '"' )

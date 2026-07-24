@@ -213,6 +213,15 @@ struct TypeChecker {
   // diagnostic say so.
   TraitDef *display_trait;
 
+  // The format functions a `{v:>8}` / `{f:.3}` spec desugars to, captured the
+  // same way `display_trait` is and for the same reason: the user never types
+  // these names, so the language must resolve them rather than leaving the
+  // meaning of a spec to whatever happens to be imported. `pad_*` live in
+  // `std::string`, `fmt_float` in `std::fmt`; each is NULL when no module in
+  // the program imported the module that defines it, which is what lets the
+  // diagnostic say a spec needs that import. See `check_interpol_seg`.
+  FunDef *fmt_pad_start, *fmt_pad_end, *fmt_pad_center, *fmt_float;
+
   DiagBag *diags;
   Allocator *al;
 };

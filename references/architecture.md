@@ -496,6 +496,40 @@ declared bounds and is re-checked where it is instantiated. The two abstract
 kinds the impl index has no entry for, `TY_DYN` and the `TY_TRAIT` of a default
 body, answer from the trait they name.
 
+**A format spec desugars in the same place.** A `{v:>8}` / `{f:.3}` / `{f:>8.3}`
+spec (milestone 35) is parsed into a `FormatSpec` on the `InterpolSeg` — one
+alignment (`<` `>` `^`) with a width, an optional fill char, and an optional
+`.N` precision, or a `.N` alone — and `check_interpol_seg` rewrites the segment
+into ordinary calls: the value is rendered to a `String` (through
+`std::fmt::float` for a precision, through a nested `{v}` interpolation
+otherwise, so a primitive and a `Display` type render the same way they always
+do), and if a width was given the render is wrapped in the matching
+`std::string::pad_start`/`pad_end`/`pad_center`. Nothing downstream of the
+checker sees a `FormatSpec`: the segment simply evaluates to a `String`, so
+codegen, `OP_INTERP`, the VM and the image format are untouched — the same shape
+the `to_string` rewrite has.
+
+The desugaring's callees are captured as lang items exactly like `Display`, and
+for the same reason: the user never writes `pad_start` or `float`, so leaving
+those names to whatever is imported would make the meaning of `{v:>8}` depend on
+imports. `tc_register_fun` captures `TypeChecker.fmt_pad_start`/`fmt_pad_end`/
+`fmt_pad_center` from `<std>/string.dt` and `fmt_float` from `<std>/fmt.dt`,
+keyed on the module the same way, and a spec whose module is absent from the
+program is reported ("a width spec needs 'std::string'…"). This is the second
+crack in "the compiler knows nothing about std" that `Display` opened: it is now
+five captured names, not one, and the honest framing is that formatting as a
+whole — deciding how a value renders *and* how it is laid out — is the corner of
+the standard library the language is entangled with. The calls themselves are
+built by `mk_fun_call`, which sets `resolved_fun` directly on a synthetic
+two-segment path (so codegen skips the local-name lookup) rather than routing
+through `resolve_callee`, which resolves by name and would fail.
+
+The `pad_*` are non-generic ducktape functions and `float` a non-generic native,
+so the calls need no inference — the render is a `String`, the width and
+precision `Int` literals, the fill a `Char` literal, all correct by
+construction, which is why the rewrite validates only the value's own type (a
+precision requires a `Float`).
+
 ### Types and inference
 
 `Type` (`include/ast.h`) is a tagged union; structural types are interned so
@@ -524,7 +558,8 @@ type with no coercion and no further rule (`language.md` "`std::panic`").
 `Char` is written in `TYNODE_NAMED` the same way, and is the cheaper half of
 the milestone that introduced it: adding a *primitive* to the checker is four
 lines beside `Never`, a case in `resolve_expr`, an entry in the three inert
-type switches, and its name in `check_interpol_seg`'s primitive list — which is
+type switches, and its name in the interpolation primitive list
+(`interp_render_bare`, the bare-segment half of `check_interpol_seg`) — which is
 the one place it differs from `StringBuf` below, since a Char renders itself.
 Everything else about the milestone is in the scanner, the value
 representation, and the image format; nothing in the checker had to learn what
@@ -533,7 +568,7 @@ a character *is*.
 `StringBuf` is written in `TYNODE_NAMED` the same way, and the checker knows
 nothing else about it: it is inert in every switch it appears in (a singleton
 to `subst_apply`, `infer_unify` and `infer_apply`) and is deliberately *absent*
-from `check_interpol_seg`'s primitive list, so `"{b}"` goes down the `Display`
+from `interp_render_bare`'s primitive list, so `"{b}"` goes down the `Display`
 path and reports that a buffer has no impl. That is the same arrangement
 `String` already has — a builtin *type* whose operations live in std — so it is
 not another lang item in the sense `Display` is (see "Interpolation and

@@ -83,6 +83,7 @@ typedef enum {
   TOKEN_QUESTION, // ?
   TOKEN_PIPE,     // |  (closure parameter delimiter)
   TOKEN_AT,       // @  (attribute introducer)
+  TOKEN_CARET,    // ^  (centre alignment in an interpolation format spec)
 
   // control
   TOKEN_EOF,

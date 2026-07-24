@@ -1,0 +1,5 @@
+#! expect: expected a field width after the alignment
+use std::io::print;
+fun main() {
+    print("{42:>}");
+}

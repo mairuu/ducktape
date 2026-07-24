@@ -1962,6 +1962,58 @@
   functions read better at the call site, and the enum only pays off if the sugar
   is ever built, at which point the wrappers are trivial.
 
+- **The format spec `{v:>8}` (milestone 35)** — the sugar milestone 34 left as
+  the one genuinely-absent piece. `{v:>8}` / `{v:<8}` / `{v:^8}` pad a rendered
+  value to a width, `{v:'-'^8}` sets the fill, `{f:.3}` fixes the decimals, and
+  `{f:>10.3}` fuses the two. Design: `language.md` "`std::fmt`", `architecture.md`
+  "Interpolation and `Display`", `grammar.ebnf`.
+
+  The observation the milestone turns on: **the spec is not a runtime, it is a
+  spelling.** Milestone 34 established that padding needs the value rendered to a
+  `String` first, so a spec could only ever desugar to the `pad_*` / `float`
+  calls that already exist. So that is literally what `check_interpol_seg` does
+  — render the value (through `std::fmt::float` for a precision, through a nested
+  `{v}` interpolation otherwise, so a primitive and a `Display` type keep the
+  render they always had), then wrap it in the matching `std::string::pad_*`.
+  **Codegen, `OP_INTERP`, the VM and the image format did not change**, exactly
+  as milestone 18 predicted a spec would behave: the segment simply evaluates to
+  a `String`. The whole feature is a scanner token (`^`), a `FormatSpec` on the
+  `InterpolSeg`, a parser for the spec, and the checker rewrite.
+
+  Two things follow, and the second is the real cost:
+  - **The scanner already tokenised the spec** — `:` `>` `8` are ordinary
+    tokens, so the only new one is `^` for centre. The one quirk is that `8.3`
+    lexes as a single FLOAT (a digit precedes the dot) while a bare `.3` lexes as
+    DOT then INT, so a fused width-and-precision arrives as a FLOAT the parser
+    splits, and a lone precision as its own tokens. The fill is a *char literal*
+    (`'-'`), which tokenises unambiguously where a bare `*` would collide with
+    multiplication and is the `Char` the value is padded with either way.
+  - **`pad_*` and `float` had to become lang items, and that is forced by the
+    same argument that made `Display` one.** The user never writes those names,
+    so the compiler generates the calls — and if it resolved them through
+    whatever happens to be imported, the meaning of `{v:>8}` would depend on
+    imports, exactly the reason `Display` is captured rather than looked up.
+    `tc_register_fun` captures `fmt_pad_start`/`fmt_pad_end`/`fmt_pad_center`
+    from `std::string` and `fmt_float` from `std::fmt`, keyed on the module, and
+    a spec whose module is absent is reported. This is the **second crack** in
+    "the compiler knows nothing about std": one captured name became five, and
+    the honest framing is that formatting as a whole — how a value renders *and*
+    how it is laid out — is the corner of std the language is entangled with.
+
+  The calls are built by `mk_fun_call`, which sets `resolved_fun` on a synthetic
+  two-segment path directly rather than routing through `resolve_callee` (which
+  resolves by name and would fail on a name the user never imported) — the same
+  "the checker already knows the FunDef" shape `resolve_assoc_call` uses. The
+  `pad_*` are non-generic ducktape and `float` a non-generic native, so the
+  calls need no inference; the rewrite validates only the value's own type, since
+  a precision applies to a `Float` and nothing else.
+
+  Deliberately not done: a *dynamic* width or precision (`{v:>{n}}`) — the two
+  are literals, and a runtime value there has no spelling; truncation (pad only
+  widens, inherited from milestone 34); and a bare width with no alignment
+  (`{v:8}`), which would need a type-dependent default the checker has no reason
+  to pick, so an alignment is always required before a width.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -1984,10 +2036,15 @@ by appetite rather than by necessity.
 
 (**Padding a rendered value to a width** was the last open piece here and is now
 milestone 34: `std::string` ships `pad_start`/`pad_end`/`pad_center`. The
-format-spec question it was gating is answered *no grammar* — a rendering choice
-stays a function beside the value, and a spec, were one ever added, would desugar
-to these calls. Width is a character count, the display side of milestone 32's
-byte-vs-character fork.)
+format-spec question it was gating is answered *the functions are the primitive*
+— a rendering choice is those functions, and the spec is sugar over them.)
+
+(**The `{v:>8}` format spec** — the sugar milestone 34 recorded as the one thing
+genuinely absent — is now milestone 35: a `:` spec desugars in the checker to
+the `pad_*` / `float` calls, so codegen and the runtime are untouched. Its one
+cost is that those four functions became lang items like `Display`, forced by
+the same argument: the user never types the names, so their meaning cannot be
+left to imports.)
 
 (**Text operations** was the second open piece here and is now milestone 32:
 `std::text` ships `find`, `split`, `trim`, `starts_with`/`ends_with`, `contains`
@@ -2008,15 +2065,12 @@ via `Module.decl_base`) and is not part of the main line.
 
 ## Known warts to clean up opportunistically
 
-- there is no format-spec grammar inside `{}`: a segment is a bare expression,
-  and every rendering choice is a function beside it — `std::fmt::float(f, 3)`
-  for precision, `std::string::pad_start`/`pad_end`/`pad_center` for width and
-  alignment (milestone 34). That is the answer to the question this wart used to
-  defer, not a gap: a spec grammar would only be sugar that desugars to those
-  calls, since padding needs the value rendered to a `String` first either way.
-  What is genuinely absent is the *sugar* — `{v:>8}` has no spelling, so a wide
-  or aligned field is `"{pad_start(v.to_string(), 8, ' ')}"`, which nests a call
-  in the braces where a reader wants a terse spec
+- a format spec inside `{}` exists as of milestone 35 (`{v:>8}`, `{f:.3}`,
+  `{f:>10.3}`), desugaring to `std::string::pad_*` / `std::fmt::float`. What has
+  no spelling is a *dynamic* width or precision (`{v:>{n}}`): both are literals,
+  so a runtime value in that position must still be written as the call itself.
+  A bare width with no alignment (`{v:8}`) is also rejected — an alignment is
+  required before a width, since defaulting it would need the value's type
 - a `Display` impl whose body is `return "{self}";` recurses until the frame
   limit. That is exactly how `std::fmt`'s four impls are written, and it is
   correct there only because a primitive receiver takes the built-in path —
@@ -2148,10 +2202,14 @@ via `Module.decl_base`) and is not part of the main line.
   parameter is bounded: `"{e}"` needs `E: Display`, and `Option`/`Result`'s
   `unwrap` are not bounded, so their messages stay fixed. `expect` is the way
   round it
-- `Display` is a lang item — the one std name `TypeChecker` knows, captured by
-  module and name in `tc_register_trait`. Every other std item is anonymous to
-  the compiler, so this is the first exception to "the std/not-std difference
-  is one branch in `mod_parse`"
+- formatting is the corner of std the compiler knows by name, and since
+  milestone 35 that is five names, not one: `Display` (captured in
+  `tc_register_trait`) plus `pad_start`/`pad_end`/`pad_center`/`float` (captured
+  in `tc_register_fun`), all keyed by module. Every other std item is anonymous
+  to the compiler, so these are the exceptions to "the std/not-std difference is
+  one branch in `mod_parse`" — each forced by the same rule, that a construct the
+  compiler desugars (interpolation, a spec) cannot have its meaning depend on
+  what the user happened to import
 - `Never` is not *checked* to diverge: unification lets it stand in for any
   type in both directions, so `fun f() -> Never { return 1; }` is accepted and
   a `var x: Never` annotation is legal. It is a promise the compiler takes on

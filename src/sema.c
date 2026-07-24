@@ -1170,6 +1170,21 @@ static void tc_register_fun(TypeChecker *tc, Module *m, Decl *decl) {
   // set backpointers
   decl->as.fun_decl.def = def;
   def->module = m;
+
+  // the format functions an interpolation spec desugars to, learned from the
+  // standard library the same way `Display` is (tc_register_trait), and keyed
+  // on the module for the same reason: a user's own `pad_start` is an ordinary
+  // function. See TypeChecker.fmt_pad_start and check_interpol_seg.
+  if (mod_is_std(m, "string")) {
+    if (sv_equal_cstr(def->name, "pad_start"))
+      tc->fmt_pad_start = def;
+    else if (sv_equal_cstr(def->name, "pad_end"))
+      tc->fmt_pad_end = def;
+    else if (sv_equal_cstr(def->name, "pad_center"))
+      tc->fmt_pad_center = def;
+  } else if (mod_is_std(m, "fmt") && sv_equal_cstr(def->name, "float")) {
+    tc->fmt_float = def;
+  }
 }
 
 static void tc_register_struct(TypeChecker *tc, Module *m, Decl *decl) {
@@ -4593,7 +4608,11 @@ static bool display_satisfied(CheckCtx *ctx, Type *type) {
   return impl_index_implements(ctx->impls, type, display->self_type, ctx->al);
 }
 
-static void check_interpol_seg(CheckCtx *ctx, InterpolSeg *seg) {
+// Render one segment to a String in place, with no format spec: the primitive
+// path (left for the VM to stringify) or the `Display` rewrite to
+// `v.to_string()`. A `{v:...}` spec renders through this too, for its no-
+// precision case, so one rule decides how a value prints either way.
+static void interp_render_bare(CheckCtx *ctx, InterpolSeg *seg) {
   Expr *recv = seg->expr;
   Type *seg_ty = resolve_expr(ctx, recv, NULL);
   seg_ty = infer_apply(&ctx->infer, seg_ty, ctx->al);
@@ -4670,6 +4689,136 @@ static void check_interpol_seg(CheckCtx *ctx, InterpolSeg *seg) {
   // resolve_method_call_expr. A failure here is a malformed `Display` impl,
   // which conformance checking has already reported against the impl itself.
   resolve_method_call_typed(ctx, call, seg_ty, /*hint=*/NULL);
+}
+
+static Expr *mk_int_lit(CheckCtx *ctx, int64_t v, Span span) {
+  Expr *e = al_alloc_zero_for(ctx->al, Expr);
+  *e = (Expr){.kind = EXPR_INT, .span = span, .as.int_val = v};
+  return e;
+}
+
+static Expr *mk_char_lit(CheckCtx *ctx, uint32_t cp, Span span) {
+  Expr *e = al_alloc_zero_for(ctx->al, Expr);
+  *e = (Expr){.kind = EXPR_CHAR, .span = span, .as.char_val = cp};
+  return e;
+}
+
+// `"{recv}"` — recv rendered to a String through the ordinary segment path. The
+// format desugaring uses it as the render step before padding, so a padded
+// primitive stringifies via the VM and a padded `Display` type via
+// `.to_string()`, exactly as a bare `{recv}` would.
+static Expr *mk_render_interp(CheckCtx *ctx, Expr *recv, Span span) {
+  InterpolSeg *segs = al_alloc_zero(ctx->al, sizeof(InterpolSeg));
+  segs[0] = (InterpolSeg){.kind = ISEG_EXPR, .expr = recv};
+  Expr *e = al_alloc_zero_for(ctx->al, Expr);
+  *e = (Expr){.kind = EXPR_INTERPOLATED,
+              .span = span,
+              .as.interpolated = {.segs = segs, .seg_count = 1}};
+  return e;
+}
+
+// A checked call to a known non-generic FunDef, bypassing name resolution — the
+// format desugaring's callees (`pad_start`, `float`) are lang items the user
+// never wrote, so there is no path to resolve. The args are already resolved.
+// The callee is a synthetic two-segment path so codegen skips the local-name
+// lookup a single-segment path does and reads `resolved_fun` directly.
+static Expr *mk_fun_call(CheckCtx *ctx, FunDef *fun, Expr **args, int argc,
+                         Span span) {
+  PathSegment *segs = al_alloc(ctx->al, sizeof(PathSegment) * 2);
+  segs[0] = (PathSegment){.name = sv_from_cstr("std")};
+  segs[1] = (PathSegment){.name = fun->name};
+
+  Expr *callee = al_alloc_zero_for(ctx->al, Expr);
+  *callee = (Expr){
+      .kind = EXPR_PATH,
+      .span = span,
+      .as.path_expr = {.path = {.segments = segs, .count = 2, .span = span},
+                       .resolved_fun = fun,
+                       .inst = subst_empty()},
+  };
+
+  Expr *call = al_alloc_zero_for(ctx->al, Expr);
+  *call = (Expr){
+      .kind = EXPR_CALL,
+      .span = span,
+      .as.call = {.callee = callee, .args = args, .arg_count = argc},
+  };
+  return call;
+}
+
+// Milestone 35: a `{v:>8}` / `{f:.3}` / `{f:>8.3}` spec is pure sugar. The value
+// is rendered to a String — through `std::fmt::float` when a precision is
+// asked for, through the ordinary segment path otherwise — and then, if a width
+// was given, padded by the matching `std::string::pad_*`. Both are lang items
+// (see TypeChecker.fmt_pad_start), captured for the same reason `Display` is:
+// the user never typed these names, so their meaning cannot depend on imports.
+// The result is a String-typed expression the outer `OP_INTERP` passes straight
+// through, so codegen, the VM and the image format need no change.
+static void check_interpol_seg(CheckCtx *ctx, InterpolSeg *seg) {
+  if (!seg->spec.present) {
+    interp_render_bare(ctx, seg);
+    return;
+  }
+
+  FormatSpec *spec = &seg->spec;
+  Expr *recv = seg->expr;
+  Span span = recv->span;
+  Expr *rendered; // evaluates to a String
+
+  if (spec->has_precision) {
+    // a precision renders a Float through `std::fmt::float`: the bare path has
+    // no way to ask for a fixed number of decimal places.
+    Type *ty = resolve_expr(ctx, recv, NULL);
+    ty = infer_apply(&ctx->infer, ty, ctx->al);
+    if (type_is_poison(ty)) {
+      return;
+    }
+    if (ty->kind != TY_FLOAT) {
+      char buf[64];
+      type_sprintf(ty, buf, sizeof(buf));
+      diag_error(ctx->diags, span,
+                 "a '.%d' precision in an interpolation applies to a Float, "
+                 "not '%s'",
+                 (int)spec->precision, buf);
+      return;
+    }
+    if (ctx->tc->fmt_float == NULL) {
+      diag_error(ctx->diags, span,
+                 "a precision spec needs 'std::fmt' in the program, for its "
+                 "'float'");
+      return;
+    }
+    Expr **args = al_alloc(ctx->al, sizeof(Expr *) * 2);
+    args[0] = recv;
+    args[1] = mk_int_lit(ctx, spec->precision, span);
+    rendered = mk_fun_call(ctx, ctx->tc->fmt_float, args, 2, span);
+  } else {
+    // render through the ordinary segment path, then pad the String it yields.
+    rendered = mk_render_interp(ctx, recv, span);
+    if (type_is_poison(resolve_expr(ctx, rendered, NULL))) {
+      return;
+    }
+  }
+
+  if (spec->align == FMT_ALIGN_NONE) {
+    seg->expr = rendered; // precision only (`{f:.3}`)
+    return;
+  }
+
+  FunDef *pad = spec->align == FMT_ALIGN_START ? ctx->tc->fmt_pad_start
+                : spec->align == FMT_ALIGN_END ? ctx->tc->fmt_pad_end
+                                               : ctx->tc->fmt_pad_center;
+  if (pad == NULL) {
+    diag_error(ctx->diags, span,
+               "a width spec needs 'std::string' in the program, for its "
+               "'pad_start' / 'pad_end' / 'pad_center'");
+    return;
+  }
+  Expr **args = al_alloc(ctx->al, sizeof(Expr *) * 3);
+  args[0] = rendered;
+  args[1] = mk_int_lit(ctx, spec->width, span);
+  args[2] = mk_char_lit(ctx, spec->fill, span);
+  seg->expr = mk_fun_call(ctx, pad, args, 3, span);
 }
 
 static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {

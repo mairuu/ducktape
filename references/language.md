@@ -94,7 +94,9 @@ ending in `return` has type `!` (never), which unifies with anything.
 - Ranges: `a..b`, `a..=b` — Int-only, first-class values (`var r = 0..10;`).
 - Casts: `x as T` — only `Int`↔`Float` and identity casts.
 - String interpolation: `"x = {x}"` — a primitive segment (Int/Float/Bool/
-  String) renders itself; anything else must implement `std::fmt::Display`.
+  String) renders itself; anything else must implement `std::fmt::Display`. A
+  `:` format spec (`"{v:>8}"`, `"{f:.3}"`) is sugar for the `std::string::pad_*`
+  and `std::fmt::float` calls — see `std::fmt`.
 - Calls: `f(a, b)`; functions are first-class (`var g = f; g(1)`).
 - Closures use pipes: `|x, y| => x + y`, `|n: Int| -> Int { return n * 2; }`.
   Unannotated params infer from a function-typed hint
@@ -688,17 +690,37 @@ structurally, through the runtime's own walk: `print(p)` gives
 "render this for a reader" is the type's own decision, and only the second
 needs a trait.
 
-`float` is the one rendering interpolation cannot ask for: `"{f}"` gives the
-shortest decimal that round-trips, which is the only rendering the VM has.
-There is still no format-spec grammar inside `{}`: a rendering choice is a
-function beside the value, not a spec within the braces. `float` renders a
-`Float` to a fixed precision, and `std::string`'s `pad_start`/`pad_end`/
-`pad_center` lay a rendered string out to a width — `"{pad_start(name, 8, ' ')}"`
-right-aligns into a column. Width there is a *character* count, not bytes, since
-alignment is a display question; the value has to be rendered to a `String`
-first, which is exactly why these are String→String operations and not a spec on
-the value. A spec grammar, were one ever added, would desugar to these calls, so
-the functions are the primitive either way.
+`float` is the one rendering interpolation cannot ask for on its own: `"{f}"`
+gives the shortest decimal that round-trips, which is the only rendering the VM
+has. `float` renders a `Float` to a fixed precision, and `std::string`'s
+`pad_start`/`pad_end`/`pad_center` lay a rendered string out to a width. Width
+there is a *character* count, not bytes, since alignment is a display question;
+the value has to be rendered to a `String` first, which is exactly why these are
+String→String operations.
+
+A format spec is the terse spelling of those calls (milestone 35):
+
+```
+"{v:>8}"       # pad_start(v, 8, ' ')   — right-aligned to width 8
+"{v:<8}"       # pad_end(v, 8, ' ')     — left-aligned
+"{v:^8}"       # pad_center(v, 8, ' ')  — centred
+"{v:'-'^8}"    # a fill char, written as a char literal
+"{f:.3}"       # float(f, 3)            — three decimal places
+"{f:>10.3}"    # pad_start(float(f, 3), 10, ' ')  — both, fused
+```
+
+The spec is `:` then an alignment (`<` `>` `^`) with a width, an optional
+leading fill char, and an optional `.N` precision — or a `.N` alone. It is
+sugar and nothing more: the checker rewrites the segment into the same `pad_*`
+and `float` calls you could write by hand, so codegen, the VM and the image
+format never see a spec. The value is rendered to a `String` first (a primitive
+via the VM, a `Display` type via `to_string`), which is why a width applies to
+anything renderable while a precision applies only to a `Float`. Because the
+compiler generates the `pad_*`/`float` calls, it must resolve those names
+itself — so they are lang items like `Display`, and a spec needs its module
+(`std::string` for a width, `std::fmt` for a precision) present in the program,
+reported if it is not. What has no spelling is a *dynamic* width (`{v:>{n}}`):
+the width and precision are literals.
 
 ### `std::option`
 
@@ -1122,7 +1144,7 @@ overflow: a value past what an `Int` holds wraps.
 | Unicode case mapping, folding, or normalisation | `std::char`'s classifications and `to_upper`/`to_lower` are ASCII-only; `String` comparison is raw bytes |
 | indexing a `String` by character (`s[i]`) | there is none: `chars(s)` converts, because a byte offset is not a character position |
 | a `String` that is guaranteed valid UTF-8 | it is a byte string — `slice` cuts at byte offsets, so `chars` reports a runtime error on a halved sequence |
-| a format-spec grammar inside `{}` (`{v:>8}`) | there is none; a rendering choice is a function beside the value — `std::fmt::float(f, 3)` for precision, `std::string::pad_start`/`pad_end`/`pad_center` for width and alignment |
+| a *dynamic* width or precision in a format spec (`{v:>{n}}`) | the width and precision in a `{v:>8}` / `{f:.3}` spec are literals; a runtime value there has no spelling. The spec itself is sugar for `std::string::pad_*` / `std::fmt::float` (milestone 35) |
 | casting a `dyn Trait` back to its concrete type | no downcast; the coercion is one-way |
 | a trait's type arguments at a *bare* method call | the expected type breaks the tie between two impls of one generic trait, and pins an impl parameter the receiver cannot reach (`impl<T, U: From<T>> Into<U> for T`); with no expected type the first impl wins — or, where the parameter was only pinnable that way, no impl applies at all. The trait-qualified spelling (`Into::<Fahrenheit>::into(c)`) settles it explicitly without an expected type |
 | disambiguating a qualified selection whose *argument is itself unresolved* (`Steps::from(None)`) | the argument (for `from`) or the receiver (for a trait-qualified `into`) must type on its own to choose the impl, so a value that would need the impl chosen first cannot be disambiguated |

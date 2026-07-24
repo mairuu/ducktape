@@ -1,0 +1,6 @@
+#! expect: precision in an interpolation applies to a Float
+use std::io::print;
+use std::fmt::{float};
+fun main() {
+    print("{42:.2}");
+}

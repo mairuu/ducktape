@@ -717,11 +717,34 @@ typedef struct {
   Span span;
 } TypeParamNode;
 
+// A format spec written after a `:` in an interpolation segment — the `>8` in
+// `{v:>8}`, the `.3` in `{f:.3}`, or both fused in `{f:>8.3}`. This is the
+// whole grammar of a spec, and it is pure front-end sugar (milestone 35): the
+// checker desugars it into calls to `std::string`'s `pad_*` and
+// `std::fmt::float`, so nothing downstream of `check_interpol_seg` ever sees a
+// `FormatSpec` — codegen, the VM and the image format are untouched.
+typedef enum {
+  FMT_ALIGN_NONE,   // no width/alignment
+  FMT_ALIGN_START,  // `>` — value at the right, fill on the left (pad_start)
+  FMT_ALIGN_END,    // `<` — value at the left, fill on the right (pad_end)
+  FMT_ALIGN_CENTER, // `^` — value centred (pad_center)
+} FormatAlign;
+
+typedef struct {
+  bool present;       // was there a `:` spec on this segment at all
+  FormatAlign align;  // FMT_ALIGN_NONE unless a width was given
+  int64_t width;      // field width, meaningful when align != FMT_ALIGN_NONE
+  uint32_t fill;      // fill codepoint; ' ' unless a `'c'` literal overrode it
+  bool has_precision; // was a `.N` precision given
+  int64_t precision;  // decimal places, meaningful when has_precision
+} FormatSpec;
+
 typedef enum { ISEG_TEXT, ISEG_EXPR } InterpolSegKind;
 typedef struct {
   InterpolSegKind kind;
   StringView text; // (slice into source for ISEG_TEXT)
   Expr *expr;      // ISEG_EXPR
+  FormatSpec spec; // ISEG_EXPR; `.present` is false for a bare `{v}`
 } InterpolSeg;
 
 // Expr union variants

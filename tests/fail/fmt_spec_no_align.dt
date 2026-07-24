@@ -1,0 +1,5 @@
+#! expect: expected an alignment '<', '>' or '^'
+use std::io::print;
+fun main() {
+    print("{42:6}");
+}

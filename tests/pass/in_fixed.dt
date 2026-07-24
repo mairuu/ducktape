@@ -292,4 +292,7 @@ fun main() {
     # since a conversion is the one call its receiver cannot decide
     var blank = blank_weight::<Brick>();
     var wide: Float = 7.into();
+    # a format spec (milestone 35): a width aligns a Display value, a precision
+    # fixes a Float's decimals — both desugar to std::string::pad_* / fmt::float
+    var padded = "{Point::new(1, 2):>12} {wide:.2}";
 }

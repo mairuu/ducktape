@@ -1,0 +1,5 @@
+#! expect: a width spec needs 'std::string'
+use std::io::print;
+fun main() {
+    print("{42:>6}");
+}

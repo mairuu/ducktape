@@ -85,6 +85,7 @@ static const char *token_type_string[] = {
     [TOKEN_QUESTION] = "QUESTION", // ?
     [TOKEN_PIPE] = "PIPE",         // |
     [TOKEN_AT] = "AT",             // @
+    [TOKEN_CARET] = "CARET",       // ^
 
     // control
     [TOKEN_EOF] = "EOF",
@@ -522,6 +523,8 @@ Token scanner_next_token(Scanner *s) {
     return make_token(s, TOKEN_PIPE);
   case '@':
     return make_token(s, TOKEN_AT);
+  case '^':
+    return make_token(s, TOKEN_CARET);
   case '%':
     return make_token(s, TOKEN_PERCENT);
 
