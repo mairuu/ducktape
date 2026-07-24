@@ -690,7 +690,15 @@ needs a trait.
 
 `float` is the one rendering interpolation cannot ask for: `"{f}"` gives the
 shortest decimal that round-trips, which is the only rendering the VM has.
-There is no format-spec grammar inside `{}`.
+There is still no format-spec grammar inside `{}`: a rendering choice is a
+function beside the value, not a spec within the braces. `float` renders a
+`Float` to a fixed precision, and `std::string`'s `pad_start`/`pad_end`/
+`pad_center` lay a rendered string out to a width — `"{pad_start(name, 8, ' ')}"`
+right-aligns into a column. Width there is a *character* count, not bytes, since
+alignment is a display question; the value has to be rendered to a `String`
+first, which is exactly why these are String→String operations and not a spec on
+the value. A spec grammar, were one ever added, would desugar to these calls, so
+the functions are the primitive either way.
 
 ### `std::option`
 
@@ -865,6 +873,9 @@ std::string  len(s: String) -> Int                  # @native, in bytes
              concat(parts: [String]) -> String
              repeat(s: String, n: Int) -> String
              from_chars(cs: [Char]) -> String
+             pad_start(s: String, width: Int, fill: Char) -> String
+             pad_end(s: String, width: Int, fill: Char) -> String
+             pad_center(s: String, width: Int, fill: Char) -> String
 
 std::strbuf  new() -> StringBuf                     # @native
              push(b: StringBuf, s: String)          # @native
@@ -1111,7 +1122,7 @@ overflow: a value past what an `Int` holds wraps.
 | Unicode case mapping, folding, or normalisation | `std::char`'s classifications and `to_upper`/`to_lower` are ASCII-only; `String` comparison is raw bytes |
 | indexing a `String` by character (`s[i]`) | there is none: `chars(s)` converts, because a byte offset is not a character position |
 | a `String` that is guaranteed valid UTF-8 | it is a byte string — `slice` cuts at byte offsets, so `chars` reports a runtime error on a halved sequence |
-| width, alignment, or padding in a format | only `std::fmt::float(value, precision)`; there is no format-spec grammar inside `{}` |
+| a format-spec grammar inside `{}` (`{v:>8}`) | there is none; a rendering choice is a function beside the value — `std::fmt::float(f, 3)` for precision, `std::string::pad_start`/`pad_end`/`pad_center` for width and alignment |
 | casting a `dyn Trait` back to its concrete type | no downcast; the coercion is one-way |
 | a trait's type arguments at a *bare* method call | the expected type breaks the tie between two impls of one generic trait, and pins an impl parameter the receiver cannot reach (`impl<T, U: From<T>> Into<U> for T`); with no expected type the first impl wins — or, where the parameter was only pinnable that way, no impl applies at all. The trait-qualified spelling (`Into::<Fahrenheit>::into(c)`) settles it explicitly without an expected type |
 | disambiguating a qualified selection whose *argument is itself unresolved* (`Steps::from(None)`) | the argument (for `from`) or the receiver (for a trait-qualified `into`) must type on its own to choose the impl, so a value that would need the impl chosen first cannot be disambiguated |

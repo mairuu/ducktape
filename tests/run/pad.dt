@@ -1,0 +1,48 @@
+# Padding a rendered value to a width, `std::string`'s answer to the format-spec
+# question the language deferred: not a grammar inside `{}` but three functions
+# beside it, `fmt::float`'s neighbours one module over. Width is a *character*
+# count — `pad_start("café", 6)` adds two spaces, not one — because alignment is
+# a display question, the same fork `std::text` answered by crossing to `chars`.
+#> [hi...]
+#> [00042]
+#> [--x--]
+#> [-ab--]
+#> [exact]
+#> [wider than the field]
+#> [   right]
+#> [left    ]
+#> [café  ]
+#> n=1   |
+#> n=2   |
+#> n=42  |
+
+use std::io::print;
+use std::string::{pad_start, pad_end, pad_center};
+
+fun main() {
+    # the three alignments, shown in brackets so the padding is visible
+    print("[{pad_end("hi", 5, '.')}]");
+    print("[{pad_start("42", 5, '0')}]");
+    print("[{pad_center("x", 5, '-')}]");
+
+    # an odd remainder puts the extra fill on the right: text left of centre
+    print("[{pad_center("ab", 5, '-')}]");
+
+    # a string already at the width is returned unchanged — pad never truncates
+    print("[{pad_end("exact", 5, ' ')}]");
+    print("[{pad_start("wider than the field", 5, ' ')}]");
+
+    # the default fill is written out; a space right-aligns into a column
+    print("[{pad_start("right", 8, ' ')}]");
+    print("[{pad_end("left", 8, ' ')}]");
+
+    # width is characters, not bytes: "café" is five bytes but four characters,
+    # so padding to six adds two spaces rather than one
+    print("[{pad_end("café", 6, ' ')}]");
+
+    # the loop the feature is for: a reused buffer laying out a labelled column
+    var labels = ["1", "2", "42"];
+    for n in labels {
+        print("{pad_end("n=", 2, ' ')}{pad_end(n, 4, ' ')}|");
+    }
+}

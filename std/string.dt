@@ -102,3 +102,81 @@ pub fun repeat(s: String, n: Int) -> String {
     }
     return build(b);
 }
+
+# ── padding to a width ─────────────────────────────────────────────────────────
+#
+# A rendered value laid out in a field of a given *character* width, `fill`
+# making up the difference. Width is a character count rather than a byte count
+# because alignment is a display question, and a display question is about
+# characters — the same fork `std::text` answered this way (a classification
+# crosses to `chars`, only a position stays a byte offset). The cost is that
+# `chars` walks the UTF-8, so a padded string must be valid UTF-8; the win is
+# that `pad_start("café", 6, ' ')` adds two spaces, not one. It is still a
+# *character* count and not a true display width — a double-width or combining
+# character counts as one — the same ASCII-exact limit `std::char` documents.
+#
+# The count is a `for` over `chars` rather than `array::len(chars(s))` for the
+# same reason `join` counts nothing at all: reaching `std::array` would reach
+# `Option` and close the `string → option → cmp → string` cycle. Padding never
+# truncates — a string already at least `width` wide is returned unchanged —
+# because narrowing is `slice`'s job and it cuts in bytes, a different question.
+
+# how many characters `s` is, walking its scalar values. Private: the three
+# pad functions each need it, and factoring it keeps the byte/character choice
+# in one place rather than three.
+fun char_width(s: String) -> Int {
+    var n = 0;
+    for _ in chars(s) {
+        n = n + 1;
+    }
+    return n;
+}
+
+# `s` at the left of a `width`-wide field, `fill` on the right (left-aligned).
+pub fun pad_end(s: String, width: Int, fill: Char) -> String {
+    var cur = char_width(s);
+    if cur >= width {
+        return s;
+    }
+    var b = new();
+    push(b, s);
+    for _ in cur..width {
+        push_char(b, fill);
+    }
+    return build(b);
+}
+
+# `fill` on the left, `s` at the right of a `width`-wide field (right-aligned).
+pub fun pad_start(s: String, width: Int, fill: Char) -> String {
+    var cur = char_width(s);
+    if cur >= width {
+        return s;
+    }
+    var b = new();
+    for _ in cur..width {
+        push_char(b, fill);
+    }
+    push(b, s);
+    return build(b);
+}
+
+# `s` centred in a `width`-wide field. An odd remainder puts the extra `fill` on
+# the right, so `pad_center("x", 4, '-')` is `-x--`: the text sits left of centre
+# when it cannot sit on it, which is the convention a reader expects for a label.
+pub fun pad_center(s: String, width: Int, fill: Char) -> String {
+    var cur = char_width(s);
+    if cur >= width {
+        return s;
+    }
+    var total = width - cur;
+    var left = total / 2;
+    var b = new();
+    for _ in 0..left {
+        push_char(b, fill);
+    }
+    push(b, s);
+    for _ in 0..(total - left) {
+        push_char(b, fill);
+    }
+    return build(b);
+}

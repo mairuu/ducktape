@@ -1918,6 +1918,50 @@
   value); and re-exporting a module qualifier through `pub use` (a qualifier is
   not an item, so `mod_find_use_alias` skips module imports).
 
+- **Padding to a width (milestone 34)** — `std::string` ships `pad_start`,
+  `pad_end` and `pad_center`, so a rendered value can be laid out in a field.
+  Design: `language.md` "`std::fmt`" / "`std::string`".
+
+  This closes the last piece of "growing std on the natives" that had a design
+  question behind it, and the milestone *is* the answer to that question: **the
+  format spec is not a grammar.** `{}` stays a bare expression, and a rendering
+  choice is a function beside the value — `std::fmt::float(f, 3)` for precision,
+  these three for width — never a spec inside the braces. The reason is forced
+  rather than chosen: **padding needs the value rendered to a `String` first**
+  (you cannot align what you have not yet turned to text), so `pad` is
+  `String → String`, and a `{v:>8}` grammar could only ever be sugar that
+  desugars to `pad_start(v.to_string(), 8, ' ')`. The functions are the
+  primitive; the grammar, if it is ever wanted, is a front-end convenience that
+  changes no runtime — the same shape milestone 18 gave `"{v}"` itself.
+
+  Three things follow, and they are the whole milestone:
+  - **It shipped no compiler change at all** — no scanner, parser, AST, codegen
+    or VM, and not even a native. All three functions are ordinary ducktape in
+    `std/string.dt`, built on `strbuf` + `push_char` the same way `repeat` is.
+    The whole feature is one `.dt` addition, which is milestone 14's claim
+    ("std is written in ducktape") paying off at its cleanest.
+  - **Width is a *character* count, not a byte count** — the display side of
+    milestone 32's byte-vs-character fork. Alignment is a display question and a
+    display question is about characters, so `pad_start("café", 6, ' ')` adds two
+    spaces, not one. It is still not a *true* display width — a double-width or
+    combining character counts as one — the same ASCII-exact limit `std::char`
+    documents, and it inherits `chars`'s runtime error on invalid UTF-8.
+  - **It lives in `std::string`, not `std::fmt`** — `pad` reshapes a `String`,
+    where `float` renders a `Float`, so it is `repeat`'s neighbour rather than
+    `float`'s. That also keeps the no-impl property: `std::string` ships no
+    impls and refuses to reach `std::array` (the count is a `for` over `chars`,
+    not `array::len(chars(s))`, for the same reason `join` counts nothing —
+    reaching `std::array` would close the `string → option → cmp → string`
+    cycle), so a program can pad without inheriting anything. In `std::fmt`,
+    importing `pad` would have dragged in every `Display` impl that module ships.
+
+  Deliberately not done: the `{v:>8}` sugar (recorded as the one thing genuinely
+  absent, since the functions nest a call in the braces where a spec would read
+  terse); truncation (pad only widens — narrowing is `slice`'s job and cuts in
+  bytes); and an `Align` enum with a single `pad(s, w, f, align)` — three
+  functions read better at the call site, and the enum only pays off if the sugar
+  is ever built, at which point the wrappers are trivial.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -1934,14 +1978,16 @@ by appetite rather than by necessity.
    has `push`/`pop`), a growable text buffer (milestone 24, so a `String` can be
    *built* rather than concatenated), and string ordering (milestone 25, so
    `impl Ord for String` exists and text sorts). What is left is breadth, and
-   each piece is one registry entry plus a decision about the type it needs. One
-   is still open:
-   - **Padding a rendered value to a width**, which still decides something —
-     whether `{}` ever grows a format-spec grammar or stays a bare segment with
-     `std::fmt` functions beside it — and now has a buffer to be written on top
-     of, an `Ord` for the strings it pads, and (since milestone 26) a `Char` to
-     say what it pads *with*, which is what makes `pad` cheap enough to be worth
-     having either way.
+   each piece is one registry entry plus a decision about the type it needs.
+   Every piece with a design question behind it is now done — the last open one,
+   padding, is milestone 34 (below).
+
+(**Padding a rendered value to a width** was the last open piece here and is now
+milestone 34: `std::string` ships `pad_start`/`pad_end`/`pad_center`. The
+format-spec question it was gating is answered *no grammar* — a rendering choice
+stays a function beside the value, and a spec, were one ever added, would desugar
+to these calls. Width is a character count, the display side of milestone 32's
+byte-vs-character fork.)
 
 (**Text operations** was the second open piece here and is now milestone 32:
 `std::text` ships `find`, `split`, `trim`, `starts_with`/`ends_with`, `contains`
@@ -1963,10 +2009,14 @@ via `Module.decl_base`) and is not part of the main line.
 ## Known warts to clean up opportunistically
 
 - there is no format-spec grammar inside `{}`: a segment is a bare expression,
-  and every rendering choice is a function beside it (`std::fmt::float(f, 3)`).
-  Width, alignment and padding have nowhere to be written, and adding them
-  would mean either parsing a spec or a `pad` native — a decision deferred
-  until something needs it
+  and every rendering choice is a function beside it — `std::fmt::float(f, 3)`
+  for precision, `std::string::pad_start`/`pad_end`/`pad_center` for width and
+  alignment (milestone 34). That is the answer to the question this wart used to
+  defer, not a gap: a spec grammar would only be sugar that desugars to those
+  calls, since padding needs the value rendered to a `String` first either way.
+  What is genuinely absent is the *sugar* — `{v:>8}` has no spelling, so a wide
+  or aligned field is `"{pad_start(v.to_string(), 8, ' ')}"`, which nests a call
+  in the braces where a reader wants a terse spec
 - a `Display` impl whose body is `return "{self}";` recurses until the frame
   limit. That is exactly how `std::fmt`'s four impls are written, and it is
   correct there only because a primitive receiver takes the built-in path —
