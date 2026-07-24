@@ -1931,9 +1931,11 @@ via `Module.decl_base`) and is not part of the main line.
 - a refutable `var` binding whose column type inference never pinned down is
   accepted (the tri-state answer reports nothing) and traps at runtime via
   `OP_MATCH_FAIL` instead of at compile time
-- `pub` is rejected outright on an impl item (`pub fun` inside an `impl`
-  block is "expected impl item"), though it is parsed and ignored on a struct
-  field. Method visibility is not a thing, so std impls simply omit it
+- `pub` is parsed and ignored on the `impl` keyword itself, but *rejected* on
+  the items where visibility would have to be a thing: `pub fun` inside an
+  `impl` block is "expected impl item", and `pub x` on a struct field is
+  "expected field name". Method and field visibility do not exist, so std impls
+  and structs simply omit it
 - a definition nothing reaches is never compiled, so a construct the VM
   refuses inside one goes unreported — the diagnostic arrives only if
   something calls it (`tests/run/unreachable_body.dt`). The checker is
@@ -2098,8 +2100,9 @@ via `Module.decl_base`) and is not part of the main line.
   — the same "only seen where it is instantiated" limitation generics have
 - no glob `use a::*` and no module-qualified paths; `pub use` re-export exists,
   but only for named items, so a façade module has to list them
-- `pub` on impls/methods/fields is parsed and ignored — visibility is
-  per-item at module granularity only
+- `pub` is ignored on the `impl` keyword and rejected on a method or a struct
+  field (see above); there is no sub-module visibility, so `pub` means something
+  only on a top-level item, at module granularity
 - module dedup is lexical, so one file reached by two different spellings
   (a symlink, say) would load twice and collide
 - a bytecode image is structurally validated (bounds, indices, counts) but the

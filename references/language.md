@@ -1069,7 +1069,7 @@ overflow: a value past what an `Int` holds wraps.
 | `mod` declarations | no such keyword; `use` is what pulls a file in |
 | glob imports (`use a::*`) | not parsed; name each item |
 | module-qualified paths (`geometry::Point`) | import the item and name it directly; the diagnostic says so |
-| `pub` on impls, methods, and fields | parsed and ignored — a public type's fields and methods are all visible |
+| `pub` on methods and struct fields | rejected: `pub fun` in an impl is "expected impl item", `pub x` on a field is "expected field name". `pub` is only ignored on the `impl` keyword itself; visibility exists only on top-level items, at module granularity |
 | overlap rules finer than "same trait, matching self types" | there is no orphan rule and no specialization: an impl may be written for any type, and two overlapping ones are simply refused wherever both are visible |
 | visibility below module granularity (`pub(crate)` &c.) | `pub` is the only modifier |
 | two spellings of one file (symlinks, unusual paths) | dedup is lexical, so the file would load twice and collide |
