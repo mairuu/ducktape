@@ -2014,6 +2014,36 @@
   (`{v:8}`), which would need a type-dependent default the checker has no reason
   to pick, so an alignment is always required before a width.
 
+- **`Ord` for the containers (milestone 36)** — `[T]` and `(A, B)` order
+  themselves, so an array of strings sorts and a tuple compares field by field
+  without a line of it written per program. Design: `language.md` "`std::cmp`".
+
+  Like milestone 20's `Display` for the same two containers, **the std code
+  needed no compiler change — both impls ran against the unmodified binary**,
+  and the milestone is the placement question, not the code. Two things settle
+  it, and the second is the one worth recording:
+  - **Both impls live in `std::cmp`, beside the trait**, exactly where `std::fmt`
+    keeps `Display for [T]` / `Display for (A, B)`: an array and a tuple have no
+    module of their own, so the trait's module is the closest thing they have to
+    one. Milestone 20 supplied the permission (module-granular impls, so shipping
+    one no longer claims `[T]`'s ordering for every program) and milestone 20's
+    bound-at-selection check makes `T: Ord` an error where the element has none.
+  - **The array impl needs `len`, and `use std::array` would close a cycle** —
+    `std::array` reaches `std::option`, which reaches `std::cmp`, so importing it
+    back is a back edge the dependency graph rejects. The resolution is the
+    milestone's one idea: **an impl is owned by the module that writes it, but an
+    `@intrinsic` is not a definition at all — it is a spelling for an opcode.**
+    `OP_LEN` is program-wide; `std::cmp` declares its own private `len` and names
+    the opcode a second time, which costs nothing and depends on nothing, so the
+    cycle that blocks the impl's *type* does not block the *length* it needs. The
+    tuple impl needs none of this — `.0`/`.1` are field reads — and ships free.
+
+  Arity stays per-impl (`(A, B)` only, nothing is generic over a tuple's length,
+  the same limit `Display` records), and the element is ordered through its own
+  `Ord`, so `[(A, B)]` and `[[T]]` sort by reaching both new impls through the
+  bound (`tests/run/container_ord.dt`). Not done: `Ord` for other tuple arities,
+  and a total order for `[Float]` still inherits the NaN wart the element does.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -2177,12 +2207,12 @@ via `Module.decl_base`) and is not part of the main line.
   `[Char]`: `chars` is the only reader, so testing the first character of a long
   string allocates an array as long as it. A lazy or indexed form would need the
   byte/character question answered differently than milestone 26 answered it
-- `Ord` ships for `Int`, `Float`, `Char`, `String` and `Option<T>`, but not for `[T]` or
-  tuples, so an array of strings has no lexicographic order of its own and a
-  sort has to be written per program (`tests/run/string_ord.dt` writes one).
-  `impl<T: Ord> Ord for [T]` is writable today; nothing has needed it yet, and
-  shipping it would take the pair away from programs the same way `Display` for
-  the containers already does
+- `Ord` ships for `Int`, `Float`, `Char`, `String`, `Option<T>`, `[T]` and
+  `(A, B)` (the last two as of milestone 36), so an array of strings sorts and a
+  tuple compares field by field without a per-program impl. As with `Display`,
+  shipping them takes the pair away from a program that would write its own, and
+  only the two-element tuple is covered — nothing is generic over a tuple's
+  arity, so a `(A, B, C)` still has no order
 - `Ord` for `Float` inherits IEEE comparison, so `NaN.cmp(x)` answers 0 for
   every `x`: the impl's `<` and `>` are both false and it falls through to the
   equal case, which makes NaN compare *equal to everything* rather than

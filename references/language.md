@@ -488,6 +488,29 @@ library extends the built-in types with exactly the machinery user code uses.
 Your own types join the same trait and `max`/`min` work on them unchanged
 (`tests/run/std_cmp.dt`).
 
+It is also implemented for the two containers with no module of their own,
+`[T]` and `(A, B)`, beside the trait the way `std::fmt` ships their `Display`
+(`tests/run/container_ord.dt`):
+
+```
+use std::cmp::{Ord, max};
+print([1, 2, 3].cmp([1, 2, 4]));  # -1  lexicographic, first difference decides
+print([1, 2].cmp([1, 2, 3]));     # -1  a prefix sorts before what extends it
+print((2, 1).cmp((1, 9)));        #  1  a tuple field by field, .0 before .1
+print(max([1, 3], [1, 2]));       # [1, 3]
+```
+
+Both need `T: Ord` (each `A`/`B` for the tuple), and the element is ordered
+through *its* own `Ord` — so `[[T]]`, an array of tuples of strings, all sort
+with no order written per program. A tuple's arity is part of its type and
+nothing is generic over it, so `(A, B)` is the only tuple width shipped, the
+same limit `Display` has. The array impl needs an array's length while
+`use std::array` would close a dependency cycle (`std::array` reaches
+`std::option`, which reaches `std::cmp`); `len` is an `@intrinsic`, though —
+a *spelling* for `OP_LEN` rather than a definition a module owns — so `std::cmp`
+names the opcode a second time and the cycle that blocks the impl's type does
+not block the length it needs.
+
 **`String` is ordered by a trait, not by an operator.** `<` and `>` stay
 numeric — comparing two Strings is `a.lt(b)`, or `max`/`min`/`clamp`
 (`tests/run/string_ord.dt`):
