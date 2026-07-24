@@ -48,7 +48,17 @@
           "end": "\\}",
           "beginCaptures": { "0": { "name": "punctuation.section.interpolation.begin.ducktape" } },
           "endCaptures": { "0": { "name": "punctuation.section.interpolation.end.ducktape" } },
-          "patterns": [{ "include": "$self" }]
+          "patterns": [
+            {
+              "comment": "format spec: `:>8`, `:.3`, `:'-'^8`, `:>10.3` — sugar for pad_*/float",
+              "match": "(:)((?:'(?:\\\\u\\{[0-9A-Fa-f]{1,6}\\}|\\\\[ntr'\"\\\\]|[^'\\\\])')?[<>^]\\d+(?:\\.\\d+)?|\\.\\d+)(?=\\})",
+              "captures": {
+                "1": { "name": "punctuation.separator.format-spec.ducktape" },
+                "2": { "name": "constant.other.format-spec.ducktape" }
+              }
+            },
+            { "include": "$self" }
+          ]
         }
       ]
     },
