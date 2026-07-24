@@ -1816,6 +1816,49 @@
   both spellings share — a qualified selection whose argument (or receiver) is
   itself unresolved.
 
+- **Text operations (milestone 32)** — `std::text` is searching, splitting,
+  trimming and parsing: `starts_with`, `ends_with`, `find`, `contains`, `split`,
+  `trim`, `parse_int`. Design: `language.md` "The standard library" →
+  `std::text`.
+
+  The observation the milestone turns on: **these operations cannot live in
+  `std::string`, and the reason is a dependency cycle, not taste.** Every one of
+  them either answers with an `Option` or builds a `[String]`, so `std::string`
+  would have to import `Option` or array `push`. But `std::cmp` imports
+  `std::string` (for `compare`, since milestone 25) and `std::option` imports
+  `std::cmp`, so that import closes the loop `string → option → cmp → string`,
+  which the dependency graph rejects outright. `std::string` is a leaf *by
+  necessity*: it is what `std::cmp` is built on, so it cannot reach back up to
+  the `Option` these return. The operations that do live one module higher.
+  This is `std::array` losing its leaf status once `pop` returned an `Option`,
+  taken to the point where the split is forced rather than merely tidy — and it
+  is why the milestone shipped no compiler change at all: `std::text` ran against
+  the unmodified binary the moment it was written in the module the graph allows.
+
+  Within the module the milestone-26 rule that `std::string` and `std::char`
+  were built around decides the byte-vs-character fork the roadmap left open, and
+  it answers it *both* ways because the two operations that expose a position and
+  the two that inspect a character are different questions:
+  - **a position is a byte offset**, because a position is one you will `slice`
+    at — `find` and `split` are `slice`+`==` and never read a byte alone, so a
+    `find` result feeds straight back into `slice`. The cost is that `find`
+    slices and interns a candidate at every position (O(*n·m*) allocations): a
+    String's only reader is `slice`, so a window has to be cut out to be
+    compared, there being no `byte_at` (milestone 26 refused the spelling);
+  - **a character is classified by its value**, so `trim` and `parse_int` cross
+    to the `chars` view — whether something is a space or a digit is a fact about
+    a character, not a byte, and an ASCII space is single-byte only by luck of
+    the encoding.
+
+  `starts_with`/`ends_with` need neither, so they are the pure `slice`+`==` ones.
+  The empty pattern reads consistently — `starts_with(s, "")` and `find(s, "")`
+  both succeed at 0, `split(s, "")` returns `s` whole (no position lacks `""`, so
+  the finder would never terminate) — and `split` yields one more piece than
+  separators, so an edge or doubled separator gives an empty piece. Known limits,
+  each recorded as a wart: `find`'s per-position interning, and `parse_int`
+  wrapping rather than detecting overflow (a widening multiply the language
+  cannot spell).
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -1832,21 +1875,21 @@ by appetite rather than by necessity.
    has `push`/`pop`), a growable text buffer (milestone 24, so a `String` can be
    *built* rather than concatenated), and string ordering (milestone 25, so
    `impl Ord for String` exists and text sorts). What is left is breadth, and
-   each piece is one registry entry plus a decision about the type it needs. Two
-   are still open:
+   each piece is one registry entry plus a decision about the type it needs. One
+   is still open:
    - **Padding a rendered value to a width**, which still decides something —
      whether `{}` ever grows a format-spec grammar or stays a bare segment with
      `std::fmt` functions beside it — and now has a buffer to be written on top
      of, an `Ord` for the strings it pads, and (since milestone 26) a `Char` to
      say what it pads *with*, which is what makes `pad` cheap enough to be worth
      having either way.
-   - **Text operations now that a program can get inside a String**: `split`,
-     `trim`, `find`, `starts_with`, `parse_int`. Milestone 26 was the enabler
-     and deliberately shipped none of them — every one is ordinary ducktape over
-     `chars`/`from_chars` plus a `StringBuf`, so what is left really is breadth.
-     The one open question in the set is whether they take byte offsets (like
-     `slice`) or characters (like `chars`), which is the same fork milestone 26
-     answered for indexing and would have to answer the same way.
+
+(**Text operations** was the second open piece here and is now milestone 32:
+`std::text` ships `find`, `split`, `trim`, `starts_with`/`ends_with`, `contains`
+and `parse_int`. The byte-vs-character fork it left open was answered both ways
+— a position is a byte offset, a classification crosses to `chars` — and the
+functions had to become their own module rather than more of `std::string`,
+which the dependency graph forced.)
 
 (**Selection by argument type** was item 2 here and is now milestone 30: a
 qualified `Meters::from(x)` reads its argument to pick the impl. The *receiver*
@@ -1942,6 +1985,15 @@ via `Module.decl_base`) and is not part of the main line.
   now reaches `std::string` and `std::char`, and `std::char` reaches
   `std::panic` — but not its cost, since none of the three ships an impl to
   inherit
+- `std::text::find` slices and interns a candidate substring at every position,
+  so `find`/`contains`/`split` are O(*n·m*) allocations. There is no `byte_at`,
+  so a window has to be cut out to be compared; a real substring search would
+  need one, which is the byte-level reader `std::char` declined to offer
+- `std::text::parse_int` wraps on overflow rather than failing: `acc * 10 + d`
+  is an ordinary `Int` multiply, and detecting the wrap needs a widening multiply
+  or a divide-back check the module has not been given a reason to write. So the
+  `Option` it returns distinguishes "not a number" from a number, but not a
+  number too large from one that fits
 - `String` ordering is raw bytes: no locale, no case-insensitive compare, no
   Unicode normalisation, so `"Zebra"` sorts before `"apple"` and two strings
   that are canonically equivalent are simply different. Since milestone 26 a

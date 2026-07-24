@@ -1,0 +1,97 @@
+# std::text — searching, splitting, trimming and parsing.
+
+use std::io::print;
+use std::option::Option;
+use std::text::{starts_with, ends_with, find, contains, split, trim, parse_int};
+
+fun show_int_opt(label: String, o: Option<Int>) {
+    print("{label}: {o}");
+}
+
+fun main() {
+    # starts_with / ends_with, including the empty and too-long edges.
+    var a = starts_with("hello", "he");
+    print("{a}");
+#> true
+    var b = starts_with("hello", "lo");
+    print("{b}");
+#> false
+    var c = starts_with("hi", "hello");
+    print("{c}");
+#> false
+    var d = starts_with("hello", "");
+    print("{d}");
+#> true
+    var e = ends_with("hello", "lo");
+    print("{e}");
+#> true
+    var f = ends_with("hello", "he");
+    print("{f}");
+#> false
+
+    # find: first hit as a byte offset, miss, and the empty needle.
+    show_int_opt("f-l", find("hello", "l"));
+#> f-l: Some(2)
+    show_int_opt("f-ell", find("hello", "ell"));
+#> f-ell: Some(1)
+    show_int_opt("f-z", find("hello", "z"));
+#> f-z: None
+    show_int_opt("f-empty", find("hello", ""));
+#> f-empty: Some(0)
+
+    var has = contains("hello world", "o w");
+    print("{has}");
+#> true
+    var nope = contains("hello", "xyz");
+    print("{nope}");
+#> false
+
+    # split: one more piece than separators; empty pieces at the edges and
+    # between adjacent separators; the empty separator returns the whole.
+    for p in split("a,b,,c", ",") {
+        print("[{p}]");
+    }
+#> [a]
+#> [b]
+#> []
+#> [c]
+    for p in split(",x,", ",") {
+        print("<{p}>");
+    }
+#> <>
+#> <x>
+#> <>
+    for p in split("whole", "") {
+        print("{p}");
+    }
+#> whole
+
+    # trim: both ends, interior preserved, and all-whitespace to empty.
+    var t1 = trim("  hi there  ");
+    print("[{t1}]");
+#> [hi there]
+    var t2 = trim("nospace");
+    print("[{t2}]");
+#> [nospace]
+    var t3 = trim("   ");
+    print("[{t3}]");
+#> []
+
+    # parse_int: signs, and the three ways to spell "not a number".
+    show_int_opt("p", parse_int("42"));
+#> p: Some(42)
+    show_int_opt("pp", parse_int("+7"));
+#> pp: Some(7)
+    show_int_opt("pn", parse_int("-42"));
+#> pn: Some(-42)
+    show_int_opt("pe", parse_int(""));
+#> pe: None
+    show_int_opt("ps", parse_int("-"));
+#> ps: None
+    show_int_opt("px", parse_int("12x"));
+#> px: None
+
+    # parse_int composes with trim: parse after trimming leading space.
+    show_int_opt("pt", parse_int(trim("  99 ")));
+#> pt: Some(99)
+}

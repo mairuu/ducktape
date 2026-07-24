@@ -418,8 +418,8 @@ involved.
 directory. `std::` never touches the filesystem, so a local `std.dt` is
 unreachable. Where ducktape cannot express the operation, a module declares a
 bodyless function bound to C (see "Native functions" below); `std::cmp`,
-`std::convert`, `std::option` and `std::result` need none, `std::io` and
-`std::panic` are nothing but, and `std::array`, `std::string` and `std::char`
+`std::convert`, `std::option`, `std::result` and `std::text` need none, `std::io`
+and `std::panic` are nothing but, and `std::array`, `std::string` and `std::char`
 are the mixed case — a handful of natives, and every other function written on
 top of them in ducktape. `std::fmt::Display` is the only std name the
 *compiler* knows.
@@ -994,6 +994,59 @@ English and quietly wrong elsewhere.
 UTF-8 byte order and code-point order agree. As with `String`, ordering is the
 trait and not the operator: `'a' < 'b'` is still "comparison requires numeric
 types".
+
+### `std::text`
+
+`std::text` is searching, splitting, trimming and parsing, written entirely in
+ducktape on the primitives `std::string` and `std::char` already offer:
+
+```
+use std::text::{starts_with, ends_with, find, contains, split, trim, parse_int};
+
+starts_with("hello", "he");    # true
+ends_with("hello", "lo");      # true
+find("hello", "l");            # Some(2) — a byte offset
+contains("hello", "ell");      # true
+split("a,b,,c", ",");          # ["a", "b", "", "c"]
+trim("  hi there  ");          # "hi there"
+parse_int("-42");              # Some(-42);  parse_int("12x") is None
+```
+
+**It is a module of its own, not more of `std::string`, and the reason is a
+dependency cycle rather than taste.** `std::cmp` imports `std::string` for
+`compare` (the byte comparison `impl Ord for String` is written on); `std::option`
+imports `std::cmp`; and every function in `std::text` either answers with an
+`Option` or builds a `[String]`. So putting them in `std::string` would make it
+import `Option` or array `push`, closing the loop `string → option → cmp →
+string` — which the dependency graph rejects outright ("module cycle"). A leaf
+that everything else builds on cannot reach back up to them; the operations that
+do live one module higher. This is `std::array` losing its leaf status once
+`pop` returned an `Option`, taken to the point where the split is *forced*.
+
+Within the module the two views of text stay apart, the milestone-26 way:
+
+- **A *position* is a byte offset**, because a position is one you will `slice`
+  at. `find` and `split` are `slice`+`==` and never inspect a byte on its own —
+  so `find("héllo", "llo")` is `Some(3)`, and that 3 feeds straight back into
+  `slice`. The cost is that `find` slices and interns a candidate substring at
+  every position (O(*n·m*) allocations), the honest price of a String whose only
+  reader is `slice`: there is no `byte_at`, so a window has to be cut out to be
+  compared.
+- **A *character* is classified by its value**, so `trim` and `parse_int` cross
+  to the `chars` view — whether something is a space or a digit is a fact about a
+  character, not a byte, and an ASCII space is a single byte only by luck of the
+  encoding.
+
+`starts_with`/`ends_with` need neither a position nor a classification, so they
+are the pure `slice`+`==` ones. The empty pattern is read consistently
+everywhere: `starts_with(s, "")` and `find(s, "")` both succeed at 0, and
+`split(s, "")` returns `s` whole in a one-element array (there is no position at
+which `""` is *not*, so the loop that finds one would never end). `split` yields
+one more piece than there were separators, so a leading, trailing, or doubled
+separator each produces an empty piece. `parse_int` accepts an optional leading
+`+`/`-` then one or more digits and nothing else — an empty string, a bare sign,
+or a stray character is `None`, not a partial parse — and does **not** detect
+overflow: a value past what an `Int` holds wraps.
 
 ## Not yet implemented
 
