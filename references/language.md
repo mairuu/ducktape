@@ -575,6 +575,15 @@ Putting the impl in `std::string` would have handed a program that only wanted
 its own `impl Ord for Int`. **An import's cost is measured in impls, not in
 code.** `impl Display for String` living in `std::fmt` sets the same precedent.
 
+`Float` is ordered by IEEE comparison, which is *not* a total order: every
+`<`/`>`/`==` involving a NaN is false. `Ord` promises a total order, so the impl
+decides where NaN goes — **NaN sorts after every real number, and all NaNs are
+equal to each other** (`self != self` is the NaN test, since only NaN is unequal
+to itself). So `max(nan, x)` is NaN whichever argument the NaN is, and a
+`[Float]` with a NaN in it has a defined sort (`tests/run/float_nan.dt`). The
+sign bit and payload are ignored, so a `-NaN` and a `+NaN` are one order —
+deliberately coarser than Rust's `total_cmp`.
+
 `Ord` is deliberately *not* object-safe — `other: Self` means a caller must
 know the concrete type — so it is a bound, never a `dyn Ord`. That is the rule
 working as designed: object safety is only demanded where `dyn` is written.

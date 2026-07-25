@@ -1,0 +1,36 @@
+# `Ord for Float` is a *total* order: NaN sorts after every real number and all
+# NaNs are equal to each other, so `cmp` is transitive and `max`/`min` give the
+# same answer whichever argument the NaN is. Before this the naive three-branch
+# `cmp` returned 0 for `NaN.cmp(x)` at every `x`, so `max(nan, 1.0)` and
+# `max(1.0, nan)` disagreed.
+#> 1
+#> -1
+#> 0
+#> NaN
+#> NaN
+#> 1.5
+#> 1.5
+#> -2.5
+#> 3.5
+
+use std::io::print;
+use std::cmp::{Ord, max, min};
+
+fun main() {
+    var nan = 0.0 / 0.0;
+
+    # NaN sorts after a real number, a real number before NaN, NaN equals NaN.
+    print(nan.cmp(1.0));
+    print(1.0.cmp(nan));
+    print(nan.cmp(nan));
+
+    # max/min no longer depend on which side the NaN is on.
+    print(max(nan, 1.5));
+    print(max(1.5, nan));
+    print(min(nan, 1.5));
+    print(min(1.5, nan));
+
+    # a real Float pair still orders as before — the NaN branches are inert.
+    print(min(0 - 2.5, 3.5));
+    print(max(0 - 2.5, 3.5));
+}

@@ -2252,6 +2252,27 @@
   `contains` → `find` became `self.find(needle)`, an ordinary method call on the
   receiver.
 
+- **`Ord for Float` is a total order (milestone 42)** — the last of the ordering
+  warts: IEEE comparison is not a total order, so the naive three-branch `cmp`
+  returned 0 for `NaN.cmp(x)` at every `x` and NaN compared *equal to
+  everything*, making `max(nan, 1.0)` and `max(1.0, nan)` disagree and a
+  `[Float]` with a NaN in it have no defined sort. Design: `language.md` →
+  `std::cmp`, and the wart entry updated to record the decision.
+
+  The observation the milestone turns on: **the fix needs nothing the language
+  cannot already say.** `self != self` is the NaN test — only NaN is unequal to
+  itself, and `!=` is IEEE on `Float` because `value_equal` compares the bits
+  with `==` — so the whole change is two branches at the top of `impl Ord for
+  Float`, a pure `.dt` edit with no compiler, opcode or runtime change. The only
+  real content is the *decision* the wart said "nothing has needed to make":
+  **NaN sorts after every real number and all NaNs are equal to each other.**
+  That is the placement that keeps `cmp` transitive (every real `x` is `< NaN`,
+  and NaN is neither `<` nor `>` another NaN) while ignoring the sign bit and
+  payload, so a `-NaN` and a `+NaN` are one order — deliberately coarser than
+  Rust's `total_cmp`, since nothing distinguishes them. `max`/`min` now give the
+  same answer whichever side the NaN is on (`tests/run/float_nan.dt`), which is
+  the concrete thing the total order buys.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -2459,14 +2480,15 @@ via `Module.decl_base`) and is not part of the main line.
   shipping them takes the pair away from a program that would write its own, and
   only the two-element tuple is covered — nothing is generic over a tuple's
   arity, so a `(A, B, C)` still has no order
-- `Ord` for `Float` inherits IEEE comparison, so `NaN.cmp(x)` answers 0 for
-  every `x`: the impl's `<` and `>` are both false and it falls through to the
-  equal case, which makes NaN compare *equal to everything* rather than
-  unordered. `max(nan, 1.0)` is `NaN` and `max(1.0, nan)` is `1.0` — the answer
-  depends on argument order — and sorting a `[Float]` containing one has no
-  defined result. A total order would have to decide where NaN goes, which is a
-  decision nothing has needed to make. `String` has no equivalent: every byte
-  string is ordered against every other
+- `Ord` for `Float` was IEEE comparison, so `NaN.cmp(x)` answered 0 for every
+  `x` and NaN compared equal to everything. Fixed in milestone 42: the impl now
+  decides a total order — NaN sorts after every real number and all NaNs are
+  equal — with `self != self` as the NaN test, so `max(nan, x)` is NaN whichever
+  side the NaN is and a `[Float]` with a NaN has a defined sort. What the
+  placement ignores is the sign bit and payload: `-NaN` and `+NaN` are one
+  order, unlike Rust's `total_cmp`, since nothing has needed to tell them apart.
+  `String` never had this problem: every byte string is ordered against every
+  other
 - a `StringBuf` grows but never shrinks its *buffer*: `b.clear()` drops the
   length to zero so one buffer can be reused across iterations, but the capacity
   it grew to is kept, and released only when the buffer is collected

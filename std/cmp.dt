@@ -67,8 +67,28 @@ impl Ord for Int {
     }
 }
 
+# IEEE comparison alone is not a total order: every `<`/`>`/`==` involving a NaN
+# is false, so the naive three-branch `cmp` returns 0 for `NaN.cmp(x)` at every
+# `x` — NaN compares *equal to everything*, and `max`/`min`/sort give an answer
+# that depends on argument order. `Ord` promises a total order, so this impl
+# decides where NaN goes: **NaN sorts after every real number, and all NaNs are
+# equal to each other.** That is the one placement that keeps `cmp` transitive
+# (a real x is < NaN for all x, and NaN is neither < nor > another NaN) while
+# needing nothing the language cannot already express — the sign bit and the
+# payload are ignored, so a `-NaN` and a `+NaN` are the same order, unlike Rust's
+# `total_cmp`. `self != self` is the NaN test: only NaN is unequal to itself, and
+# `!=` is IEEE on Float (`value_equal` compares the bits with `==`).
 impl Ord for Float {
     fun cmp(self, other: Float) -> Int {
+        if self != self {
+            if other != other {
+                return 0;
+            }
+            return 1;
+        }
+        if other != other {
+            return 0 - 1;
+        }
         if self < other {
             return 0 - 1;
         }
