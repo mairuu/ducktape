@@ -2123,6 +2123,48 @@ spelling that milestone 30's note left unread is now milestone 31: a
 trait-qualified `Into::<Fahrenheit>::into(c)` names the trait so the receiver
 settles the rest, without an expected type.)
 
+2. **Ordering operators over `Ord`** — `a < b` on a non-numeric type desugars to
+   `Ord`, the way `"{v}"` desugars to `Display`. `< <= > >=` on operands that are
+   not numeric rewrite in the checker to the trait — `a < b` → `a.cmp(b) < 0`, or
+   equivalently the `lt`/`le`/`gt`/`ge` defaults `Ord` already ships — and are
+   then resolved by the ordinary method-call machinery, monomorphised or
+   dispatched through a bound like any other. The payoff is concrete: `a < b` on
+   a `Point`, and `tests/run/string_ord.dt`'s hand-written selection sort gets to
+   use `<` instead of `.lt`.
+
+   **Numeric comparison and *all* of `==`/`!=` stay built-in primitives** — this
+   is the same split `Display` drew, and drawing it here is the whole design.
+   `1 < 2` keeps `OP_LT` (no import, no frame), exactly as `"{1}"` keeps the VM's
+   own rendering; only a *non-primitive* operand reaches for the trait. `Ord`
+   becomes a lang item as a result (captured in `tc_register_trait`, keyed on
+   `std::cmp` like `display_trait`), so `<` on a user type is import-dependent —
+   but that regresses nothing, since `<` on a struct is an *error* today. It only
+   gains a capability.
+
+   **`==`/`!=` are deliberately *not* included, and that is the considered
+   position, not an omission.** Structural equality is a free, import-less,
+   universal primitive: `OP_EQ` reads no static type, so `a == b` works on any
+   value — Int, struct, generic `T` — with nothing imported. Routing it through
+   an `Eq`/`PartialEq` trait would (a) make the commonest operation
+   import-dependent in a language with no prelude, (b) hand coherence the power to
+   take `[1,2] == [1,2]` away from a program that did not import the right module
+   — the `Display`/`Ord`-for-`[T]` wart applied to `==` — and (c) cost a
+   monomorphised call where an opcode stands now, all to buy *custom* equality
+   that would need specialisation (which the language does not have) to coexist
+   with the structural default. Nothing needs custom equality yet, so `Eq` waits
+   for a concrete consumer — a hash map keyed by user types, or a first type whose
+   equality is genuinely not structural. The `PartialEq`/`PartialOrd` split waits
+   with it; its one live motivation, the `Ord for Float` NaN wart, is an ordering
+   bug fixable on its own terms and does not need the trait hierarchy to address.
+
+   The open design question the milestone has to answer is how many `Ord` methods
+   the operator names: rewriting all four comparisons to `cmp` compared to `0` is
+   one `cmp` call per operator and keeps the lang-item surface to a single method,
+   while rewriting to `lt`/`le`/`gt`/`ge` honours a type that overrode a default
+   but pins four names instead of one. The `cmp`-only spelling is the smaller
+   entanglement and the likely answer, matching how `Display` names exactly
+   `to_string`.
+
 Not on the roadmap: the **REPL** is a side feature, not a milestone — it lives
 on the `feature/repl` branch (`--repl`, incremental compilation over one module
 via `Module.decl_base`) and is not part of the main line.
