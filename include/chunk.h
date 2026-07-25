@@ -84,6 +84,9 @@ typedef enum {
                  // declaration, which the parser caps well below 256.
   OP_FIELD_GET,  // u8 index — pops a tuple/struct/enum instance, pushes its
                  // index-th field (no bounds check: indices are static)
+  OP_FIELD_SET,  // u8 index — pops value then a tuple/struct/enum instance,
+                 // writes the index-th field, pushes the value (assignment is
+                 // an expression); the mirror of OP_FIELD_GET
   OP_MAKE_DYN,   // u16 vtable slot — pops a value, pushes it wrapped as a
                  // trait object carrying that vtable
   OP_DYN_METHOD, // u8 vtable method index — pops a trait object, pushes its

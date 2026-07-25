@@ -3112,10 +3112,10 @@ static Decl *parse_impl_decl(Parser *p, bool is_pub) {
         item_count++;
       } else if (check_tok(p, TOKEN_AT) || check_tok(p, TOKEN_FUN)) {
         // a method may carry `@native`/`@intrinsic` just like a top-level fun:
-        // the attribute *is* its body, so a primitive's operation can be spelled
-        // `s.len()` rather than as a free `string::len(s)`. `self` is an ordinary
-        // parameter to the native, so nothing downstream of the signature has to
-        // change.
+        // the attribute *is* its body, so a primitive's operation can be
+        // spelled `s.len()` rather than as a free `string::len(s)`. `self` is
+        // an ordinary parameter to the native, so nothing downstream of the
+        // signature has to change.
         AttrNode attr = {.kind = ATTR_NONE};
         if (match_tok(p, TOKEN_AT)) {
           attr = parse_attr(p);

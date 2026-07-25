@@ -610,6 +610,30 @@ bool vm_run(Executable *exe, Heap *heap, FunDef *entry) {
       break;
     }
 
+    case OP_FIELD_SET: {
+      uint8_t idx = READ_BYTE();
+      Value value = pop(&vm);
+      Value v = pop(&vm);
+      Value *fields;
+      switch (v.as.obj->kind) {
+      case OBJ_TUPLE:
+        fields = val_as_tuple(v)->items;
+        break;
+      case OBJ_STRUCT:
+        fields = val_as_struct(v)->fields;
+        break;
+      case OBJ_ENUM:
+        fields = val_as_enum(v)->fields;
+        break;
+      default:
+        assert(false && "OP_FIELD_SET on a non-aggregate value");
+        fields = NULL;
+      }
+      fields[idx] = value;
+      push(&vm, value); // assignment is an expression
+      break;
+    }
+
     case OP_TAG:
       push(&vm, val_int(val_as_enum(pop(&vm))->variant->tag));
       break;

@@ -2273,6 +2273,44 @@
   same answer whichever side the NaN is on (`tests/run/float_nan.dt`), which is
   the concrete thing the total order buys.
 
+- **Mutable aggregate fields (milestone 43)** — `p.x = v`, `self.n += 1`,
+  `t.0 *= 2` and `xs[i].field = v` all run. Design: `runtime.md` "Codegen
+  shapes" + the `OP_FIELD_SET` row, `language.md` assignment.
+
+  The observation the milestone turns on: **field assignment already
+  type-checks.** `EXPR_ASSIGN` resolves its target as an ordinary expression and
+  unifies it with the RHS, so `p.x = v` passed sema the whole time — it died
+  only at codegen with "assignment to this target is not supported by the VM
+  yet." So the milestone is a pure backend feature, the mirror of a getter that
+  already existed: `OP_FIELD_SET index` pops `[obj, value]`, writes
+  `fields[index]`, and pushes the value back (assignment is an expression),
+  exactly as `OP_FIELD_GET` reads it. It works over every aggregate the getter
+  reads — struct, tuple element, enum-variant field — because it dispatches on
+  the same three `Obj` kinds.
+
+  Three things fall out, and they are the whole milestone:
+  - **`compile_assign` grows one branch.** A field target routes to
+    `compile_field_assign`, which for a plain `=` compiles receiver then value
+    then `OP_FIELD_SET`, and for a compound `+=` uses the existing `OP_DUP 0` to
+    read the current field off a duplicated instance before combining — so the
+    receiver expression is evaluated once, the same discipline
+    `compile_index_assign` already keeps for `arr[i]`.
+  - **Nested and array-element targets are free.** `w.c.n = v` and
+    `xs[i].n = v` need no case of their own: the receiver is whatever expression
+    the target's `.object` is, compiled recursively.
+  - **Nothing else moved.** No `mut` keyword (locals have none — all vars are
+    mutable), no aliasing analysis (a struct is a shared heap reference, so a
+    write through `self` or an alias is visible everywhere, the rule arrays
+    already keep), and the serializer is untouched because it copies raw chunk
+    bytes and never decodes an opcode.
+
+  This is the foundational gap behind a stateful object: until now a struct
+  field could be read but never written, so a counter could not count and an
+  iterator could not advance a cursor — the immediate blocker met while scouting
+  an `Iterator` trait as the next feature. `tests/run/field_assign.dt` covers
+  plain/compound assignment, mutation through a method, a nested field, a tuple
+  element, aliasing, and a field of an array element.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion

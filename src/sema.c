@@ -1981,9 +1981,9 @@ static void resolve_impl_decl(ResolveCtx *rctx, Decl *decl) {
       fun_def->slot = SLOT_NONE;
 
       // a method may be `@native`/`@intrinsic` too — the same name lookup a
-      // top-level fun gets (tc_register_fun), so the receiver's operation can be
-      // in C and still be called `s.len()`. A method with no attribute leaves
-      // this ATTR_NONE, exactly as before.
+      // top-level fun gets (tc_register_fun), so the receiver's operation can
+      // be in C and still be called `s.len()`. A method with no attribute
+      // leaves this ATTR_NONE, exactly as before.
       tc_bind_native(rctx->tc, fun_def, &fun_decl->attr);
 
       // resolve method type parameters

@@ -1,0 +1,63 @@
+# Mutable aggregate fields: `p.x = v` and the compound forms compile to
+# OP_FIELD_SET (the mirror of OP_FIELD_GET), so a struct, a tuple element, an
+# array element's field, and a field reached through a method all mutate in
+# place. A struct is a shared heap reference, so a mutation through one binding
+# (or through `self`) is visible through every alias of it.
+#> 5
+#> 15
+#> 12
+#> 10
+#> 100 7
+#> 42
+#> 99
+
+use std::io::print;
+
+struct Counter { n: Int }
+
+impl Counter {
+    fun bump(self) { self.n += 1; }
+    fun get(self) -> Int { return self.n; }
+}
+
+struct Wrap { c: Counter }
+
+fun main() {
+    # plain and compound assignment to a field
+    var c = Counter { n: 0 };
+    c.n = 5;
+    print(c.n);              # 5
+    c.n += 3;                # 8
+    c.n *= 2;                # 16
+    c.n -= 1;
+    print(c.n);             # 15
+
+    # mutation through a method (self is the same heap object)
+    c.n = 10;
+    c.bump();
+    c.bump();
+    print(c.get());         # 12
+
+    # a nested field
+    var w = Wrap { c: Counter { n: 0 } };
+    w.c.n = 7;
+    w.c.n += 3;
+    print(w.c.n);           # 10
+
+    # a tuple element
+    var t = (1, 2);
+    t.0 = 100;
+    t.1 += 5;
+    print("{t.0} {t.1}");   # 100 7
+
+    # aliasing: two bindings, one heap struct
+    var a = Counter { n: 0 };
+    var b = a;
+    a.n = 42;
+    print(b.n);             # 42
+
+    # a field of an array element
+    var xs = [Counter { n: 1 }, Counter { n: 2 }];
+    xs[1].n = 99;
+    print(xs[1].n);         # 99
+}

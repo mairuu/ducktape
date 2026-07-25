@@ -69,6 +69,8 @@ var y: [Int] = [1, 2, 3];     # annotated
 var (a, b) = (1, 2.5);        # destructuring — the binding is a pattern
 var Point { x: px, y } = p;   # ... any irrefutable one, nested freely
 x = 2;  x += 1;               # assignment / compound assignment (+= -= *= /=)
+p.x = 3;  p.x += 1;           # ... to a field, tuple element, or array slot too
+xs[i] = v;  t.0 *= 2;         # a struct is a shared reference, so this mutates
 return expr;  return;         # bare return means ()
 break;  continue;             # inside loops only
 ```

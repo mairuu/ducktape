@@ -815,11 +815,55 @@ static void compile_index_assign(Cg *cg, Expr *expr) {
   emit(cg, OP_INDEX_SET);
 }
 
+// assignment to `obj.field` (`=` or a compound `+=`/etc). stack discipline:
+// [obj, value] going into OP_FIELD_SET, which pops both and pushes `value` back
+// as the expression's result. The receiver is compiled once — a compound op
+// re-reads the field off a duplicated instance rather than re-evaluating it.
+static void compile_field_assign(Cg *cg, Expr *expr) {
+  ExprAssign *assign = &expr->as.assign;
+  ExprField *field = &assign->target->as.field;
+  uint8_t idx = (uint8_t)field->resolved_index;
+
+  compile_expr(cg, field->object); // [obj]
+
+  if (assign->op == TOKEN_EQ) {
+    compile_expr(cg, assign->value); // [obj, value]
+  } else {
+    emit2(cg, OP_DUP, 0);            // [obj, obj]
+    emit2(cg, OP_FIELD_GET, idx);    // [obj, current]
+    compile_expr(cg, assign->value); // [obj, current, value]
+    switch (assign->op) {
+    case TOKEN_PLUSEQ:
+      emit(cg, OP_ADD);
+      break;
+    case TOKEN_MINUSEQ:
+      emit(cg, OP_SUB);
+      break;
+    case TOKEN_STAREQ:
+      emit(cg, OP_MUL);
+      break;
+    case TOKEN_SLASHEQ:
+      emit(cg, OP_DIV);
+      break;
+    default:
+      cg_error(cg, expr->span, "this compound assignment");
+      break;
+    }
+  }
+
+  emit2(cg, OP_FIELD_SET, idx);
+}
+
 static void compile_assign(Cg *cg, Expr *expr) {
   ExprAssign *assign = &expr->as.assign;
 
   if (assign->target->kind == EXPR_INDEX) {
     compile_index_assign(cg, expr);
+    return;
+  }
+
+  if (assign->target->kind == EXPR_FIELD) {
+    compile_field_assign(cg, expr);
     return;
   }
 

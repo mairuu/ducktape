@@ -103,6 +103,7 @@ Operands are u8 unless noted.
 | `OP_STRUCT struct_slot(u16)` | pops `module->structs[slot]->field_count` elems (declaration order), pushes a struct instance |
 | `OP_ENUM enum_slot(u16) tag` | pops that variant's `field_count` elems (declaration order), pushes an enum instance |
 | `OP_FIELD_GET index` | pops a tuple/struct/enum instance, pushes its `index`-th field — no bounds check, since the index is always a compile-time-valid constant |
+| `OP_FIELD_SET index` | pops value then a tuple/struct/enum instance, writes the `index`-th field, pushes the value back (assignment is an expression) — the mirror of `OP_FIELD_GET` |
 | `OP_TAG` | pops an enum instance, pushes its variant tag as `Int` |
 | `OP_MAKE_DYN vtable_slot(u16)` | pops a value, pushes it wrapped as a trait object carrying `exe->vtables[slot]` |
 | `OP_DYN_METHOD index` | pops a trait object, pushes its `index`-th method *then* the unwrapped receiver — so the `OP_CALL` that follows sees an ordinary callee-beneath-args stack |
@@ -320,6 +321,16 @@ its bytes.
   resolves and caches the field's declaration-order index on the expr node
   (`resolved_index`); codegen just compiles the object then emits one
   `OP_FIELD_GET`.
+- Assigning to `obj.field` (`compile_field_assign`): the plain `=` compiles the
+  receiver then the value, then one `OP_FIELD_SET index`; a compound `+=` etc.
+  compiles the receiver once, `OP_DUP 0`s it to read the current field
+  (`OP_FIELD_GET`), combines, then `OP_FIELD_SET`. The receiver expression is
+  evaluated once — the same discipline `compile_index_assign` keeps for
+  `arr[i]`. Every aggregate the getter reads is writable (struct, tuple element,
+  enum-variant field); the assignment yields the written value, so it is an
+  expression like every other. There is no `mut` marker and no aliasing check:
+  a struct is a shared heap reference, so a write through one binding or through
+  `self` is visible through every alias — the same rule arrays already keep.
 - Match (`compile_match`, see "Match compilation" below).
 - Methods (`compile_method_call`) and associated functions/bare
   self-supplying calls (`Point::new(...)`, `Shape::area(s)`): see "Methods"
