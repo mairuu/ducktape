@@ -1,8 +1,8 @@
-# std::text — searching, splitting, trimming and parsing.
+# std::text — searching, splitting, trimming and parsing, as methods on String.
 
 use std::io::print;
 use std::option::Option;
-use std::text::{starts_with, ends_with, find, contains, split, trim, parse_int};
+use std::text;
 
 fun show_int_opt(label: String, o: Option<Int>) {
     print("{label}: {o}");
@@ -10,88 +10,88 @@ fun show_int_opt(label: String, o: Option<Int>) {
 
 fun main() {
     # starts_with / ends_with, including the empty and too-long edges.
-    var a = starts_with("hello", "he");
+    var a = "hello".starts_with("he");
     print("{a}");
 #> true
-    var b = starts_with("hello", "lo");
+    var b = "hello".starts_with("lo");
     print("{b}");
 #> false
-    var c = starts_with("hi", "hello");
+    var c = "hi".starts_with("hello");
     print("{c}");
 #> false
-    var d = starts_with("hello", "");
+    var d = "hello".starts_with("");
     print("{d}");
 #> true
-    var e = ends_with("hello", "lo");
+    var e = "hello".ends_with("lo");
     print("{e}");
 #> true
-    var f = ends_with("hello", "he");
+    var f = "hello".ends_with("he");
     print("{f}");
 #> false
 
     # find: first hit as a byte offset, miss, and the empty needle.
-    show_int_opt("f-l", find("hello", "l"));
+    show_int_opt("f-l", "hello".find("l"));
 #> f-l: Some(2)
-    show_int_opt("f-ell", find("hello", "ell"));
+    show_int_opt("f-ell", "hello".find("ell"));
 #> f-ell: Some(1)
-    show_int_opt("f-z", find("hello", "z"));
+    show_int_opt("f-z", "hello".find("z"));
 #> f-z: None
-    show_int_opt("f-empty", find("hello", ""));
+    show_int_opt("f-empty", "hello".find(""));
 #> f-empty: Some(0)
 
-    var has = contains("hello world", "o w");
+    var has = "hello world".contains("o w");
     print("{has}");
 #> true
-    var nope = contains("hello", "xyz");
+    var nope = "hello".contains("xyz");
     print("{nope}");
 #> false
 
     # split: one more piece than separators; empty pieces at the edges and
     # between adjacent separators; the empty separator returns the whole.
-    for p in split("a,b,,c", ",") {
+    for p in "a,b,,c".split(",") {
         print("[{p}]");
     }
 #> [a]
 #> [b]
 #> []
 #> [c]
-    for p in split(",x,", ",") {
+    for p in ",x,".split(",") {
         print("<{p}>");
     }
 #> <>
 #> <x>
 #> <>
-    for p in split("whole", "") {
+    for p in "whole".split("") {
         print("{p}");
     }
 #> whole
 
     # trim: both ends, interior preserved, and all-whitespace to empty.
-    var t1 = trim("  hi there  ");
+    var t1 = "  hi there  ".trim();
     print("[{t1}]");
 #> [hi there]
-    var t2 = trim("nospace");
+    var t2 = "nospace".trim();
     print("[{t2}]");
 #> [nospace]
-    var t3 = trim("   ");
+    var t3 = "   ".trim();
     print("[{t3}]");
 #> []
 
     # parse_int: signs, and the three ways to spell "not a number".
-    show_int_opt("p", parse_int("42"));
+    show_int_opt("p", "42".parse_int());
 #> p: Some(42)
-    show_int_opt("pp", parse_int("+7"));
+    show_int_opt("pp", "+7".parse_int());
 #> pp: Some(7)
-    show_int_opt("pn", parse_int("-42"));
+    show_int_opt("pn", "-42".parse_int());
 #> pn: Some(-42)
-    show_int_opt("pe", parse_int(""));
+    show_int_opt("pe", "".parse_int());
 #> pe: None
-    show_int_opt("ps", parse_int("-"));
+    show_int_opt("ps", "-".parse_int());
 #> ps: None
-    show_int_opt("px", parse_int("12x"));
+    show_int_opt("px", "12x".parse_int());
 #> px: None
 
     # parse_int composes with trim: parse after trimming leading space.
-    show_int_opt("pt", parse_int(trim("  99 ")));
+    show_int_opt("pt", "  99 ".trim().parse_int());
 #> pt: Some(99)
 }

@@ -2221,6 +2221,37 @@
   trades it for the receiver syntax. New test: `tests/run/std_methods.dt`
   exercises all four modules' method surface in one file.
 
+- **`std::text` adopts methods (milestone 41)** — the searching/splitting/
+  parsing layer now spells its operations as methods on `String`:
+  `s.starts_with(p)`, `s.ends_with(p)`, `s.find(n)`, `s.contains(n)`,
+  `s.split(sep)`, `s.trim()`, `s.parse_int()`. Design: `language.md` "The
+  standard library" → `std::text`. Like milestone 40 it is **a pure `.dt`
+  change** — the whole diff is `std/text.dt`, its one test, and this note; no C,
+  and `make sanitize` had nothing new to make unsafe.
+
+  The milestone is milestone 40's rule read from the far side: **a method needs
+  its defining impl reachable, and `std::text` is exactly the module the cycle
+  put out of reach of `std::string`.** Milestone 40 migrated the primitives'
+  *own* operations but left `std::text` as free functions, because it is not
+  `std::string` — the `string → option → cmp → string` cycle forces the
+  `Option`- and `[String]`-returning operations one module up. That did not
+  block the migration: an `impl String` is legal in any module that can see
+  `String`, so `std::text` ships a **second `impl String`** beside the leaf's.
+  Two inherent impls for one type coexist with no coherence question because
+  their method names are disjoint and neither is a trait impl — `impl_index_*`
+  finds each name in whichever *visible* impl declares it, so a call site sees
+  `s.len()` (the leaf's) and `s.trim()` (this one) as one flat method surface
+  and never learns they live in different files. The module boundary the cycle
+  draws stays invisible exactly where it should: at the call site.
+
+  It extends the milestone-40 wart by the same mechanism — an inherent method on
+  a primitive shipped widely means a program importing `std::text` cannot add its
+  own `String` method of these names — and buys nothing new in the backend, which
+  is the point: the whole feature is turning seven free functions into a `self`
+  parameter and updating the one test that named them. The internal cross-call
+  `contains` → `find` became `self.find(needle)`, an ordinary method call on the
+  receiver.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -2373,10 +2404,13 @@ via `Module.decl_base`) and is not part of the main line.
   `array → option → cmp` cycle (a method needs its impl visible; a free
   `@intrinsic` does not)
 - shipping an inherent method on a primitive widely (`impl String`, `impl<T> [T]`,
-  `impl Char` since milestone 40) means a program importing that module cannot add
-  its own inherent method of the same name — overlapping inherent methods are
-  silently first-wins, with no coherence check, so it shadows rather than errors.
-  The `Display`/`Ord`-for-containers cost, one level over, minus the diagnostic
+  `impl Char` since milestone 40, and a *second* `impl String` in `std::text`
+  since milestone 41) means a program importing that module cannot add its own
+  inherent method of the same name — overlapping inherent methods are silently
+  first-wins, with no coherence check, so it shadows rather than errors. The
+  `Display`/`Ord`-for-containers cost, one level over, minus the diagnostic.
+  Note this is only a problem *across* impls: two std impls for `String` coexist
+  fine because their names are disjoint, which is what milestone 41 relies on
 - a native's C signature is not checked against its ducktape one — the registry
   knows only "n values in, one out", so a mismatch is a std bug that the
   checker cannot catch

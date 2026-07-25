@@ -1165,19 +1165,27 @@ types".
 ### `std::text`
 
 `std::text` is searching, splitting, trimming and parsing, written entirely in
-ducktape on the primitives `std::string` and `std::char` already offer:
+ducktape on the primitives `std::string` and `std::char` already offer. Its
+operations are **methods on `String`** (milestone 41), a second `impl String`
+one module up from the leaf's — so importing the module is all it takes and no
+item is ever named:
 
 ```
-use std::text::{starts_with, ends_with, find, contains, split, trim, parse_int};
+use std::text;
 
-starts_with("hello", "he");    # true
-ends_with("hello", "lo");      # true
-find("hello", "l");            # Some(2) — a byte offset
-contains("hello", "ell");      # true
-split("a,b,,c", ",");          # ["a", "b", "", "c"]
-trim("  hi there  ");          # "hi there"
-parse_int("-42");              # Some(-42);  parse_int("12x") is None
+"hello".starts_with("he");    # true
+"hello".ends_with("lo");      # true
+"hello".find("l");            # Some(2) — a byte offset
+"hello".contains("ell");      # true
+"a,b,,c".split(",");          # ["a", "b", "", "c"]
+"  hi there  ".trim();        # "hi there"
+"-42".parse_int();            # Some(-42);  "12x".parse_int() is None
 ```
+
+Two inherent impls for one type coexist: `std::string`'s `impl String` and this
+one declare disjoint method names, and neither is a trait impl, so coherence has
+no say — method resolution finds each name in whichever visible impl declares
+it. The module boundary the cycle below forces is invisible at the call site.
 
 **It is a module of its own, not more of `std::string`, and the reason is a
 dependency cycle rather than taste.** `std::cmp` imports `std::string` for
@@ -1198,7 +1206,7 @@ Within the module the two views of text stay apart, the milestone-26 way:
 
 - **A *position* is a byte offset**, because a position is one you will `slice`
   at. `find` and `split` are `slice`+`==` and never inspect a byte on its own —
-  so `find("héllo", "llo")` is `Some(3)`, and that 3 feeds straight back into
+  so `"héllo".find("llo")` is `Some(3)`, and that 3 feeds straight back into
   `slice`. The cost is that `find` slices and interns a candidate substring at
   every position (O(*n·m*) allocations), the honest price of a String whose only
   reader is `slice`: there is no `byte_at`, so a window has to be cut out to be
@@ -1210,8 +1218,8 @@ Within the module the two views of text stay apart, the milestone-26 way:
 
 `starts_with`/`ends_with` need neither a position nor a classification, so they
 are the pure `slice`+`==` ones. The empty pattern is read consistently
-everywhere: `starts_with(s, "")` and `find(s, "")` both succeed at 0, and
-`split(s, "")` returns `s` whole in a one-element array (there is no position at
+everywhere: `s.starts_with("")` and `s.find("")` both succeed at 0, and
+`s.split("")` returns `s` whole in a one-element array (there is no position at
 which `""` is *not*, so the loop that finds one would never end). `split` yields
 one more piece than there were separators, so a leading, trailing, or doubled
 separator each produces an empty piece. `parse_int` accepts an optional leading

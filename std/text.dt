@@ -10,6 +10,15 @@
 # outright. `std::string` reaches nothing above the buffer it builds through, so
 # the operations that reach past it live one module up.
 #
+# They are still *methods on `String`* (milestone 41): a second `impl String`,
+# one module up from the leaf's. Two inherent impls for one type coexist because
+# their method names are disjoint and neither is a trait impl, so coherence has
+# no say — the impl index simply finds each method by name in whichever visible
+# impl declares it. So `s.trim()` and `s.parse_int()` read like `s.len()` even
+# though the cycle forces them to live in a different file, and the module
+# boundary the cycle draws is invisible at the call site: a program writes
+# `use std::text;` and calls the methods, never naming one.
+#
 # Two views of text meet here, and the split between them is the milestone-26
 # rule that `std::string` and `std::char` were built around:
 #   - a *position* is a byte offset, because a position is one you will `slice`
@@ -22,10 +31,9 @@
 # `slice`+`==` one.
 #
 # `s.len()` (bytes) and `cs.len()` (elements) both appear below, told apart by
-# their receiver's type rather than by a module qualifier: the operations are
-# methods now (milestone 40), so the `use` lines are only here to make the
-# primitives' impls — `String`, `[T]`, `StringBuf`, `Char` — visible for method
-# resolution, not to name any item.
+# their receiver's type rather than by a module qualifier. The `use` lines make
+# the primitives' impls — `String`, `[T]`, `StringBuf`, `Char` — visible for
+# method resolution; none names an item.
 
 use std::string;
 use std::strbuf;
@@ -33,155 +41,160 @@ use std::array;
 use std::option::Option;
 use std::char;
 
-# ── searching, by byte position ──────────────────────────────────────────────
+impl String {
+    # ── searching, by byte position ──────────────────────────────────────────
 
-# Does `s` begin with `prefix`? A prefix longer than `s` cannot match, and the
-# empty prefix always does — `s.slice(0, 0)` is `""`, which interns to the same
-# pointer `""` does, so `==` answers yes without a special case.
-pub fun starts_with(s: String, prefix: String) -> Bool {
-    var pl = prefix.len();
-    if pl > s.len() {
-        return false;
-    }
-    return s.slice(0, pl) == prefix;
-}
-
-pub fun ends_with(s: String, suffix: String) -> Bool {
-    var sl = suffix.len();
-    var n = s.len();
-    if sl > n {
-        return false;
-    }
-    return s.slice(n - sl, n) == suffix;
-}
-
-# The byte offset of the first occurrence of `needle` in `s`, or `None`. The
-# empty needle is found at 0, matching `starts_with`'s reading of it.
-#
-# This slices and interns a candidate substring at every position, so it is
-# O(len(s) * len(needle)) allocations — the honest cost of a String whose only
-# reader is `slice`, since there is no way to compare a window without cutting
-# it out first. A byte-level scan would need a `byte_at` the language declines
-# to offer (see `std::char`).
-pub fun find(s: String, needle: String) -> Option<Int> {
-    var nl = needle.len();
-    if nl == 0 {
-        return Option::Some(0);
-    }
-    var n = s.len();
-    var i = 0;
-    while i + nl <= n {
-        if s.slice(i, i + nl) == needle {
-            return Option::Some(i);
+    # Does `self` begin with `prefix`? A prefix longer than `self` cannot match,
+    # and the empty prefix always does — `self.slice(0, 0)` is `""`, which
+    # interns to the same pointer `""` does, so `==` answers yes without a
+    # special case.
+    fun starts_with(self, prefix: String) -> Bool {
+        var pl = prefix.len();
+        if pl > self.len() {
+            return false;
         }
-        i = i + 1;
+        return self.slice(0, pl) == prefix;
     }
-    return Option::None;
-}
 
-pub fun contains(s: String, needle: String) -> Bool {
-    return find(s, needle).is_some();
-}
-
-# `s` cut at every occurrence of `sep`, in order. Adjacent separators, and a
-# leading or trailing one, each yield an empty piece, so the result always has
-# one more element than there were separators — `split("a,b", ",")` is
-# `["a", "b"]` and `split(",", ",")` is `["", ""]`.
-#
-# An empty separator has no occurrences to cut at, so `s` comes back whole in a
-# one-element array rather than one character per element: there is no position
-# at which `""` is *not*, so the loop that finds them would never end.
-pub fun split(s: String, sep: String) -> [String] {
-    var parts: [String] = [];
-    var sl = sep.len();
-    if sl == 0 {
-        parts.push(s);
-        return parts;
+    fun ends_with(self, suffix: String) -> Bool {
+        var sl = suffix.len();
+        var n = self.len();
+        if sl > n {
+            return false;
+        }
+        return self.slice(n - sl, n) == suffix;
     }
-    var n = s.len();
-    var start = 0;
-    var i = 0;
-    while i + sl <= n {
-        if s.slice(i, i + sl) == sep {
-            parts.push(s.slice(start, i));
-            i = i + sl;
-            start = i;
-        } else {
+
+    # The byte offset of the first occurrence of `needle` in `self`, or `None`.
+    # The empty needle is found at 0, matching `starts_with`'s reading of it.
+    #
+    # This slices and interns a candidate substring at every position, so it is
+    # O(len(self) * len(needle)) allocations — the honest cost of a String whose
+    # only reader is `slice`, since there is no way to compare a window without
+    # cutting it out first. A byte-level scan would need a `byte_at` the language
+    # declines to offer (see `std::char`).
+    fun find(self, needle: String) -> Option<Int> {
+        var nl = needle.len();
+        if nl == 0 {
+            return Option::Some(0);
+        }
+        var n = self.len();
+        var i = 0;
+        while i + nl <= n {
+            if self.slice(i, i + nl) == needle {
+                return Option::Some(i);
+            }
             i = i + 1;
         }
-    }
-    parts.push(s.slice(start, n));
-    return parts;
-}
-
-# ── trimming and parsing, by character ───────────────────────────────────────
-
-# `s` with leading and trailing whitespace removed. This is the crossing to the
-# character view: whitespace is a `Char` classification, and an ASCII space is a
-# single byte only by luck of the encoding — so the honest spelling walks
-# characters, not bytes, and rebuilds the middle through a buffer rather than
-# assuming a trimmed edge lands on a byte boundary.
-pub fun trim(s: String) -> String {
-    var cs = s.chars();
-    var n = cs.len();
-    var lo = 0;
-    while lo < n {
-        if not cs[lo].is_whitespace() {
-            break;
-        }
-        lo = lo + 1;
-    }
-    var hi = n;
-    while hi > lo {
-        if not cs[hi - 1].is_whitespace() {
-            break;
-        }
-        hi = hi - 1;
-    }
-    var b = StringBuf::new();
-    var i = lo;
-    while i < hi {
-        b.push_char(cs[i]);
-        i = i + 1;
-    }
-    return b.build();
-}
-
-# The integer `s` spells, or `None` if it spells none. An optional leading `+`
-# or `-`, then one or more digits, and nothing else — an empty string, a bare
-# sign, or a stray character each answer `None` rather than a partial parse.
-#
-# Overflow is not detected: a value past what an `Int` holds wraps rather than
-# failing, which is the one thing this cannot promise without a widening
-# multiply the language has no way to spell.
-pub fun parse_int(s: String) -> Option<Int> {
-    var cs = s.chars();
-    var n = cs.len();
-    if n == 0 {
         return Option::None;
     }
-    var i = 0;
-    var neg = false;
-    if cs[0] == '-' {
-        neg = true;
-        i = 1;
-    } else if cs[0] == '+' {
-        i = 1;
+
+    fun contains(self, needle: String) -> Bool {
+        return self.find(needle).is_some();
     }
-    if i == n {
-        return Option::None;
+
+    # `self` cut at every occurrence of `sep`, in order. Adjacent separators, and
+    # a leading or trailing one, each yield an empty piece, so the result always
+    # has one more element than there were separators — `"a,b".split(",")` is
+    # `["a", "b"]` and `",".split(",")` is `["", ""]`.
+    #
+    # An empty separator has no occurrences to cut at, so `self` comes back whole
+    # in a one-element array rather than one character per element: there is no
+    # position at which `""` is *not*, so the loop that finds them would never
+    # end.
+    fun split(self, sep: String) -> [String] {
+        var parts: [String] = [];
+        var sl = sep.len();
+        if sl == 0 {
+            parts.push(self);
+            return parts;
+        }
+        var n = self.len();
+        var start = 0;
+        var i = 0;
+        while i + sl <= n {
+            if self.slice(i, i + sl) == sep {
+                parts.push(self.slice(start, i));
+                i = i + sl;
+                start = i;
+            } else {
+                i = i + 1;
+            }
+        }
+        parts.push(self.slice(start, n));
+        return parts;
     }
-    var acc = 0;
-    while i < n {
-        var c = cs[i];
-        if not c.is_digit() {
+
+    # ── trimming and parsing, by character ───────────────────────────────────
+
+    # `self` with leading and trailing whitespace removed. This is the crossing
+    # to the character view: whitespace is a `Char` classification, and an ASCII
+    # space is a single byte only by luck of the encoding — so the honest
+    # spelling walks characters, not bytes, and rebuilds the middle through a
+    # buffer rather than assuming a trimmed edge lands on a byte boundary.
+    fun trim(self) -> String {
+        var cs = self.chars();
+        var n = cs.len();
+        var lo = 0;
+        while lo < n {
+            if not cs[lo].is_whitespace() {
+                break;
+            }
+            lo = lo + 1;
+        }
+        var hi = n;
+        while hi > lo {
+            if not cs[hi - 1].is_whitespace() {
+                break;
+            }
+            hi = hi - 1;
+        }
+        var b = StringBuf::new();
+        var i = lo;
+        while i < hi {
+            b.push_char(cs[i]);
+            i = i + 1;
+        }
+        return b.build();
+    }
+
+    # The integer `self` spells, or `None` if it spells none. An optional leading
+    # `+` or `-`, then one or more digits, and nothing else — an empty string, a
+    # bare sign, or a stray character each answer `None` rather than a partial
+    # parse.
+    #
+    # Overflow is not detected: a value past what an `Int` holds wraps rather
+    # than failing, which is the one thing this cannot promise without a widening
+    # multiply the language has no way to spell.
+    fun parse_int(self) -> Option<Int> {
+        var cs = self.chars();
+        var n = cs.len();
+        if n == 0 {
             return Option::None;
         }
-        acc = acc * 10 + c.to_digit();
-        i = i + 1;
+        var i = 0;
+        var neg = false;
+        if cs[0] == '-' {
+            neg = true;
+            i = 1;
+        } else if cs[0] == '+' {
+            i = 1;
+        }
+        if i == n {
+            return Option::None;
+        }
+        var acc = 0;
+        while i < n {
+            var c = cs[i];
+            if not c.is_digit() {
+                return Option::None;
+            }
+            acc = acc * 10 + c.to_digit();
+            i = i + 1;
+        }
+        if neg {
+            return Option::Some(-acc);
+        }
+        return Option::Some(acc);
     }
-    if neg {
-        return Option::Some(-acc);
-    }
-    return Option::Some(acc);
 }
