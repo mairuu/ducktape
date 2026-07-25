@@ -22,7 +22,7 @@
 use std::io::print;
 use std::result::Result;
 use std::option::Option;
-use std::string::len;
+use std::string;
 
 fun divide(a: Int, b: Int) -> Result<Int, String> {
     if b == 0 {
@@ -56,7 +56,7 @@ fun main() {
     print(ok.unwrap_or(0));
     print(bad.unwrap_or(0));
     # unlike Option's, the fallback is handed the error
-    print(bad.unwrap_or_else(|e| => len(e)));
+    print(bad.unwrap_or_else(|e| => e.len()));
 
     print(ok.map(|x| => x / 2));
     print(bad.map(|x| => x / 2));

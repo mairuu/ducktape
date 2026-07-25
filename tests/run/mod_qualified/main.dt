@@ -1,7 +1,12 @@
 # Module-qualified paths (milestone 33): `use a::b;` binds the module `b` as a
 # path qualifier, so `b::thing` names an item of b without importing it by name.
-# The whole point is that two modules may now spell the same name — `string::len`
-# and `array::len` no longer collide — because the qualifier disambiguates.
+# Its original motivation was two modules spelling the same name — `string::len`
+# and `array::len` — but milestone 40 retired *that* collision a level deeper:
+# both are methods now, told apart by their receiver's type, so no qualifier is
+# needed for them at all. What a qualifier still buys is here — a qualified free
+# function (`io::print`), a user module's types, associated calls and free
+# functions (`geo::`), and an alias (`g`) — while the primitives' operations use
+# the method spelling the milestone gave them.
 use std::io;
 use std::string;
 use std::array;
@@ -15,9 +20,9 @@ fun quadrant_code(q: geo::Quadrant) -> Int {
   }
 }
 
-# two `len`s told apart by their module (the collision the milestone retires),
-# a qualified type `geo::Point` in a signature, a qualified associated call and
-# method, a qualified free function, the alias `g`, and a deeper `slice`.
+# a qualified free function (`io::print`), a qualified type `geo::Quadrant` in a
+# signature, a qualified associated call and free function, the alias `g`, and
+# the primitives' `len`/`slice` as methods.
 #> 11
 #> 4
 #> 8
@@ -28,8 +33,8 @@ fun main() {
   var s = "hello world";
   var xs = [1, 2, 3, 4];
 
-  io::print(string::len(s));
-  io::print(array::len(xs));
+  io::print(s.len());
+  io::print(xs.len());
 
   var p = geo::Point::new(3, 5);
   io::print(p.manhattan());
@@ -37,5 +42,5 @@ fun main() {
   io::print(quadrant_code(geo::classify(p)));
   io::print(quadrant_code(g::classify(geo::Point::new(0, 0))));
 
-  io::print(string::slice(s, 6, 11));
+  io::print(s.slice(6, 11));
 }

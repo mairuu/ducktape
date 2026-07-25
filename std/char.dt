@@ -17,86 +17,91 @@
 # file needed a native, and nothing in it needed the compiler to know anything
 # about `Char` beyond the name of the type.
 #
-# `std::char` ships **no impls**, and the one module it imports (`std::panic`,
-# for `to_digit`) ships none either. That is what makes it the cheap thing for
-# `std::cmp` to depend on for `impl Ord for Char` — an import's cost is
-# measured in impls rather than in code (see the note there), so a dependency
-# on an impl-free module is free no matter how much of it is used.
+# `std::char` ships one impl, on its own `Char` (milestone 40): the
+# classifications and case conversions are **methods** now — `c.is_alpha()`,
+# `c.to_upper()`, `c.code()` — and `from_code` is the associated constructor
+# `Char::from_code(n)`. The module it imports (`std::panic`, for `to_digit`)
+# ships none, so importing `std::char` hands a program methods on `Char` and
+# nothing more. That `Char` impl is the whole of what `std::cmp` inherits by
+# depending on this module for `impl Ord for Char` — a cost paid in one type's
+# methods rather than in a trait impl coherence could take away.
 #
-# **The classifications are ASCII-only.** `is_alpha('é')` is false and
-# `to_upper('é')` is `'é'` unchanged. Full Unicode case mapping is a table
+# **The classifications are ASCII-only.** `'é'.is_alpha()` is false and
+# `'é'.to_upper()` is `'é'` unchanged. Full Unicode case mapping is a table
 # large enough to be its own project, and it is not one a range test can
 # approximate: the honest thing is to say the limit out loud rather than to
 # ship something that is right for English and quietly wrong elsewhere.
 
 use std::panic::panic;
 
-# The scalar value, as a number: 'A' is 65, '😀' is 128512.
-@native("char_code")
-pub fun code(c: Char) -> Int;
+impl Char {
+    # The scalar value, as a number: 'A' is 65, '😀' is 128512.
+    @native("char_code")
+    fun code(self) -> Int;
 
-# The inverse. A runtime error if `n` is not a Unicode scalar value — negative,
-# past U+10FFFF, or one half of a surrogate pair, none of which is a character.
-# That check is what lets every other part of the runtime take for granted that
-# a Char it holds can be encoded.
-@native("char_from_code")
-pub fun from_code(n: Int) -> Char;
+    # The inverse. A runtime error if `n` is not a Unicode scalar value —
+    # negative, past U+10FFFF, or one half of a surrogate pair, none of which is
+    # a character. That check is what lets every other part of the runtime take
+    # for granted that a Char it holds can be encoded.
+    @native("char_from_code")
+    fun from_code(n: Int) -> Char;
 
-pub fun is_ascii(c: Char) -> Bool {
-    return code(c) < 128;
-}
-
-pub fun is_digit(c: Char) -> Bool {
-    var n = code(c);
-    return n >= code('0') and n <= code('9');
-}
-
-pub fun is_lower(c: Char) -> Bool {
-    var n = code(c);
-    return n >= code('a') and n <= code('z');
-}
-
-pub fun is_upper(c: Char) -> Bool {
-    var n = code(c);
-    return n >= code('A') and n <= code('Z');
-}
-
-pub fun is_alpha(c: Char) -> Bool {
-    return is_lower(c) or is_upper(c);
-}
-
-pub fun is_alnum(c: Char) -> Bool {
-    return is_alpha(c) or is_digit(c);
-}
-
-pub fun is_whitespace(c: Char) -> Bool {
-    return c == ' ' or c == '\t' or c == '\n' or c == '\r';
-}
-
-# ASCII case conversion; anything else is returned unchanged. The distance
-# between the two alphabets is a constant, which is the whole implementation —
-# and also the whole reason this cannot be generalised, since no other script
-# is laid out that obligingly.
-pub fun to_upper(c: Char) -> Char {
-    if is_lower(c) {
-        return from_code(code(c) - code('a') + code('A'));
+    fun is_ascii(self) -> Bool {
+        return self.code() < 128;
     }
-    return c;
-}
 
-pub fun to_lower(c: Char) -> Char {
-    if is_upper(c) {
-        return from_code(code(c) - code('A') + code('a'));
+    fun is_digit(self) -> Bool {
+        var n = self.code();
+        return n >= '0'.code() and n <= '9'.code();
     }
-    return c;
-}
 
-# The digit a character spells, or a runtime error if it spells none. `'7'` is
-# 55 as a code point and 7 as a digit; nothing but subtraction tells them
-# apart, which is why this is a function rather than a cast.
-pub fun to_digit(c: Char) -> Int {
-    if not is_digit(c) {
-        return panic("not a digit");
+    fun is_lower(self) -> Bool {
+        var n = self.code();
+        return n >= 'a'.code() and n <= 'z'.code();
     }
-    return code(c) - code('0');
+
+    fun is_upper(self) -> Bool {
+        var n = self.code();
+        return n >= 'A'.code() and n <= 'Z'.code();
+    }
+
+    fun is_alpha(self) -> Bool {
+        return self.is_lower() or self.is_upper();
+    }
+
+    fun is_alnum(self) -> Bool {
+        return self.is_alpha() or self.is_digit();
+    }
+
+    fun is_whitespace(self) -> Bool {
+        return self == ' ' or self == '\t' or self == '\n' or self == '\r';
+    }
+
+    # ASCII case conversion; anything else is returned unchanged. The distance
+    # between the two alphabets is a constant, which is the whole implementation
+    # — and also the whole reason this cannot be generalised, since no other
+    # script is laid out that obligingly.
+    fun to_upper(self) -> Char {
+        if self.is_lower() {
+            return Char::from_code(self.code() - 'a'.code() + 'A'.code());
+        }
+        return self;
+    }
+
+    fun to_lower(self) -> Char {
+        if self.is_upper() {
+            return Char::from_code(self.code() - 'A'.code() + 'a'.code());
+        }
+        return self;
+    }
+
+    # The digit a character spells, or a runtime error if it spells none. `'7'`
+    # is 55 as a code point and 7 as a digit; nothing but subtraction tells them
+    # apart, which is why this is a method rather than a cast.
+    fun to_digit(self) -> Int {
+        if not self.is_digit() {
+            return panic("not a digit");
+        }
+        return self.code() - '0'.code();
+    }
 }

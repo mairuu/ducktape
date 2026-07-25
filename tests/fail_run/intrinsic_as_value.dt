@@ -1,7 +1,10 @@
 #! expect: is an intrinsic and can only be called directly
 # an intrinsic *is* an opcode: there is no body for a global slot to address,
-# so unlike a @native it cannot be named as a value.
-use std::array::len;
+# so unlike a @native it cannot be named as a value. `std::array` spells `len`
+# as a method now, which is never a path-value at all, so this declares its own
+# free intrinsic to name the way that used to be reachable through std.
+@intrinsic("array_len")
+fun len<T>(xs: [T]) -> Int;
 
 fun main() {
   var f = len::<Int>;

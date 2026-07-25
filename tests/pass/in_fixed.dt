@@ -4,8 +4,7 @@
 #   for w < 10      ->  while w < 10
 #   inline trait bounds (T: Drawable) are enforced at instantiation
 use std::io::print;
-use std::array::len;
-use std::string::slice;
+use std::array;
 use std::string;               # the module, bound as a qualifier
 use std::fmt::Display;
 use std::convert::{From, Into};
@@ -279,12 +278,14 @@ fun main() {
     var w = total_weight([Brick { kg: 20 }, Feather { grams: 1 }, Brick { kg: 3 }]);
     # the same coercion into a trait object that names its associated type
     var c = render_dyn(Point::new(3, 4));
-    # natives: an @intrinsic lowered to an opcode, an @native called into C
-    var n = len([1, 2, 3]);
-    var s = slice("showcase", 0, 4);
-    # a module-qualified path: `string::len` names an item without importing it,
-    # and coexists with the bare `len` imported from `std::array`
-    var sl = string::len(s);
+    # native methods (milestone 40): an @intrinsic method lowered to an opcode,
+    # an @native method called into C — the receiver at the self position
+    var n = [1, 2, 3].len();
+    var s = "showcase".slice(0, 4);
+    # a module-qualified path names a still-free item without importing it:
+    # `join` and `concat` stay free functions because their receiver is a
+    # `[String]`, not a String, so they keep the qualified spelling
+    var sl = string::concat([s, "!"]);
     # a Display impl reached by interpolation, beside a primitive segment
     var shown = "{Point::new(1, 2)} #{n}";
     # an associated function through a bound, and the conversion the blanket

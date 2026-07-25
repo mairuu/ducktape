@@ -27,21 +27,21 @@
 
 use std::io::print;
 use std::cmp::{Ord, max, min, clamp};
-use std::array::len;
-use std::string::compare;
+use std::array;
+use std::string;
 
 fun main() {
-    # the raw native. Equal strings are the same pointer, which is the one
-    # shortcut the intern table hands it
-    print(compare("apple", "apple"));
-    print(compare("apple", "banana"));
-    print(compare("banana", "apple"));
+    # the raw native, a String method. Equal strings are the same pointer,
+    # which is the one shortcut the intern table hands it
+    print("apple".compare("apple"));
+    print("apple".compare("banana"));
+    print("banana".compare("apple"));
 
     # a prefix sorts before what extends it, and the empty string before
     # everything
-    print(compare("ab", "abc"));
-    print(compare("abc", "ab"));
-    print(compare("", "a"));
+    print("ab".compare("abc"));
+    print("abc".compare("ab"));
+    print("".compare("a"));
 
     # the trait's methods, callable directly. Since milestone 38 the operators
     # below (`<` in `sort`) desugar to these, but the methods remain first-class.
@@ -57,7 +57,7 @@ fun main() {
     print(clamp("z", "a", "m"));
 
     # digits compare as text, not as numbers
-    print(compare("9", "10"));
+    print("9".compare("10"));
 
     # the thing the milestone is for: a sort. Index assignment is all it needs
     # — the ordering is the part that did not exist.
@@ -67,18 +67,18 @@ fun main() {
 
     # byte order is code-point order for well-formed UTF-8: a multi-byte
     # sequence's lead byte is above every ASCII byte
-    print(compare("é", "z"));
-    print(compare("a", "é"));
+    print("é".compare("z"));
+    print("a".compare("é"));
 }
 
 # selection sort, so the comparison is the only interesting part — and since
 # milestone 38 it is spelled `<`, which desugars to `xs[j].cmp(xs[least]) < 0`.
 fun sort(xs: [String]) {
     var i = 0;
-    while i < len(xs) {
+    while i < xs.len() {
         var least = i;
         var j = i + 1;
-        while j < len(xs) {
+        while j < xs.len() {
             if xs[j] < xs[least] {
                 least = j;
             }

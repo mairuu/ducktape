@@ -3,8 +3,8 @@
 # invariant: `slice` is indexed in bytes, so it can cut a multi-byte sequence
 # in half. A String is a byte string; only a Char promises to be a character.
 use std::io::print;
-use std::string::{chars, slice};
+use std::string;
 
 fun main() {
-    print(chars(slice("é", 0, 1)));
+    print("é".slice(0, 1).chars());
 }

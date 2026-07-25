@@ -23,19 +23,25 @@
 # rule working as intended: object safety is only demanded where `dyn` is
 # written (see language.md "Trait objects").
 
-use std::string::compare;
-use std::char::code;
+# Imported as modules, not by item: `compare` and `code` are methods now
+# (milestone 40), and a method travels with its impl by reachability rather than
+# through a named import — so the `use` is only here to make `impl String` and
+# `impl Char` visible, and the receiver spellings `self.compare(..)` /
+# `self.code()` do the rest.
+use std::string;
+use std::char;
 
-# `len` again, spelled here rather than imported. `impl Ord for [T]` below needs
-# an array's length, but `use std::array` cannot be written: `std::array`
-# reaches `std::option`, which reaches this module, so the import would close a
-# cycle the dependency graph rejects. An `@intrinsic` is the way out, and it is
-# the milestone's whole point — an *impl* is owned by the module that writes it,
-# so it can only travel where that module is reachable, but an intrinsic is not
-# a definition at all, it is a *spelling for an opcode*. `OP_LEN` is program-
-# wide; naming it a second time costs nothing and depends on nothing, so the
-# cycle that blocks the impl's *type* does not block the length it needs.
-# Private, because `std::array::len` is the name a program imports.
+# `len` again, spelled here rather than reached through `std::array`. `impl Ord
+# for [T]` below needs an array's length, but `use std::array` cannot be written:
+# `std::array` reaches `std::option`, which reaches this module, so the import
+# would close a cycle the dependency graph rejects — and now that `len` is a
+# *method* on `[T]` (milestone 40), reaching it means having `std::array`'s impl
+# visible, which is exactly the import the cycle forbids. An `@intrinsic` free
+# function is the way out and stays one: an intrinsic is not a definition owned
+# by a module, it is a *spelling for an opcode*. `OP_LEN` is program-wide, so
+# naming it a second time costs nothing and depends on nothing, and the cycle
+# that blocks the *method* does not block the length it needs. Private and a
+# free function, since `xs.len()` is the method a program calls.
 @intrinsic("array_len")
 fun len<T>(xs: [T]) -> Int;
 
@@ -78,22 +84,23 @@ impl Ord for Float {
 # operator — so this is the whole of how a program compares two Strings.
 impl Ord for String {
     fun cmp(self, other: String) -> Int {
-        return compare(self, other);
+        return self.compare(other);
     }
 }
 
 # Code-point order, which is what a Char *is*: unlike `String` this needs no
-# native at all, because `std::char::code` already hands the comparison two
-# Ints and `<` is a numeric opcode. The import costs nothing beyond the
-# function — `std::char` ships no impls, and neither does what it imports.
+# native at all, because `c.code()` already hands the comparison two Ints and
+# `<` is a numeric opcode. The dependency costs only `std::char`'s own `Char`
+# methods — it ships that one impl and nothing else, and neither does what it
+# imports.
 #
 # It agrees with `impl Ord for String` on one-character strings, since UTF-8
 # byte order and code-point order are the same order. It disagrees with a
 # reader's expectations in the same places: 'Z' sorts before 'a'.
 impl Ord for Char {
     fun cmp(self, other: Char) -> Int {
-        var a = code(self);
-        var b = code(other);
+        var a = self.code();
+        var b = other.code();
         if a < b {
             return 0 - 1;
         }

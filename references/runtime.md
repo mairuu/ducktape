@@ -137,8 +137,8 @@ its `fields` array but never touches the def pointer itself.
 
 A `StringBuf` is the one object defined by what it is *not*: an `ObjString` is
 in the intern table, so its bytes cannot change (see below); a buffer is out of
-it, so they can. Nothing else about the two differs, and `std::string::build`
-is the door — one `heap_intern` of the bytes written so far.
+it, so they can. Nothing else about the two differs, and `StringBuf`'s `build`
+method is the door — one `heap_intern` of the bytes written so far.
 
 String identity is pointer identity — `heap_intern` looks up an
 open-addressing table (FNV-1a hash, linear probing, tombstone deletes)
@@ -205,7 +205,7 @@ the stack in place, decrementing `sp` only after the result exists).
 An `ObjArray` holds `count` live values in a buffer of `cap`.
 `heap_array` — the only thing `OP_ARRAY` calls, and it already knows how many
 elements it just evaluated — builds an exact fit (`cap == count`), so an array
-literal costs nothing extra and only `std::array::push` ever grows one.
+literal costs nothing extra and only `[T]`'s `push` method ever grows one.
 `heap_array_reserve` doubles the buffer (from a floor of 8), copies the live
 prefix, fills the tail with unit and frees the old buffer through
 `heap_dealloc` so `bytes_allocated` stays honest. `free_obj` releases `cap`
@@ -951,7 +951,8 @@ until now reachable only from the `for` desugaring.
 **A method may be native too.** `resolve_impl_decl` runs the same
 `tc_bind_native` on an impl method's `FunDef` that `tc_register_fun` runs on a
 top-level one, so `impl String { @native("string_len") fun len(self) -> Int; }`
-binds exactly as the free `string::len` does. `self` is an ordinary parameter
+binds exactly as a free native declaration does — which, since milestone 40, is
+how `std::string` spells `len`. `self` is an ordinary parameter
 (`is_self` set), and the receiver's value is what the free-function form would
 have passed as argument 0 — so a native method needs *no* codegen change at all:
 `compile_method_call` already pushes the arguments in `is_self` order and closes

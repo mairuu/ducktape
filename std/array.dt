@@ -3,77 +3,84 @@
 # An array is a *growable* buffer behind a reference: `push` may reallocate it,
 # and every name bound to the same array sees the result. That follows from
 # what an array already was — indexing has always assigned through a shared
-# object — rather than from anything new here, and it is why `push` takes an
-# ordinary `[T]` and needs no way to spell "by reference".
+# object — rather than from anything new here, and it is why `push` takes the
+# receiver by value and needs no way to spell "by reference".
 #
-# Only two of the functions below are written in C, and they are exactly the
-# two an array cannot express about itself: a slot that did not exist before,
-# and one fewer than there was. Everything else is ducktape on top — which is
-# what makes `pop` able to return an `Option`, a thing the native tier cannot
-# do at all, since a native's contract is "n values in, one out" and it has no
-# handle on the `VariantDef` an enum instance needs.
+# The operations are **methods** (milestone 40): `xs.len()`, `xs.push(v)`,
+# `xs.pop()`. Only two of them are written in C, and they are exactly the two an
+# array cannot express about itself: a slot that did not exist before, and one
+# fewer than there was. Everything else is ducktape on top — which is what makes
+# `pop` able to return an `Option`, a thing the native tier cannot do at all,
+# since a native's contract is "n values in, one out" and it has no handle on
+# the `VariantDef` an enum instance needs.
+#
+# The impl this ships is on `[T]`, so a program that imports any of `std::array`
+# can no longer add its own inherent method of the same name to an array — the
+# cost of shipping a method for a type the program did not define, paid here for
+# the same names `std::cmp` and `std::fmt` already spend on `[T]`.
 use std::option::Option;
 
-# `len` is an `@intrinsic` rather than an `@native`: it lowers to OP_LEN
-# inline, so a call costs one opcode and no frame. The opcode already existed
-# — the `for x in xs` desugaring emits it — but nothing could *name* it until
-# there was a declaration surface to hang it on.
-#
-# The price of that tier is that an intrinsic has no body for a global slot to
-# address, so it can only be called directly, never passed as a value. An
-# `@native` can be either.
-@intrinsic("array_len")
-pub fun len<T>(xs: [T]) -> Int;
-
-# Append `value`, growing the array's buffer when it is full. `push` is an
-# `@native` rather than an intrinsic even though it needs no operand: growth
-# allocates, so the call is doing real work and the frame it costs is noise
-# next to that — and being an ordinary global means it can be passed as a
-# value like anything else.
-@native("array_push")
-pub fun push<T>(xs: [T], value: T);
-
-# The raw remove-last: a runtime error on an empty array. Private, because the
-# public spelling below answers with an `Option` instead — this is only the
-# part that has to be in C.
+# The raw remove-last: a runtime error on an empty array. A free *function*, and
+# deliberately not a method, because it is the one piece that has to stay
+# private: an impl method has no visibility control (`pub` is rejected on one),
+# so a `pop_last` method would be callable everywhere the impl is. `pop` below is
+# the public spelling, answering with an `Option` instead of failing.
 @native("array_pop")
 fun pop_last<T>(xs: [T]) -> T;
 
-# Remove and return the last element, or `None` when there is none.
-#
-# Capacity is not released: popping every element leaves the buffer at the size
-# it grew to, and the memory returns when the array itself is collected.
-pub fun pop<T>(xs: [T]) -> Option<T> {
-    if len(xs) == 0 {
-        return Option::None;
+impl<T> [T] {
+    # `len` is an `@intrinsic` rather than an `@native`: it lowers to OP_LEN
+    # inline, so a call costs one opcode and no frame. The opcode already existed
+    # — the `for x in xs` desugaring emits it — but nothing could *name* it until
+    # there was a declaration surface to hang it on. The price of that tier is
+    # that an intrinsic has no body for a global slot to address, so it can only
+    # be called directly, never passed as a value; an `@native` can be either.
+    @intrinsic("array_len")
+    fun len(self) -> Int;
+
+    # Append `value`, growing the array's buffer when it is full. `push` is an
+    # `@native` rather than an intrinsic even though it needs no operand: growth
+    # allocates, so the call is doing real work and the frame it costs is noise
+    # next to that.
+    @native("array_push")
+    fun push(self, value: T);
+
+    # Remove and return the last element, or `None` when there is none.
+    #
+    # Capacity is not released: popping every element leaves the buffer at the
+    # size it grew to, and the memory returns when the array itself is collected.
+    fun pop(self) -> Option<T> {
+        if self.len() == 0 {
+            return Option::None;
+        }
+        return Option::Some(pop_last(self));
     }
-    return Option::Some(pop_last(xs));
-}
 
-pub fun is_empty<T>(xs: [T]) -> Bool {
-    return len(xs) == 0;
-}
-
-# The first element, or `None`. `xs[0]` is the same read, minus the bounds
-# check being a runtime error rather than a value the caller can answer.
-pub fun first<T>(xs: [T]) -> Option<T> {
-    if len(xs) == 0 {
-        return Option::None;
+    fun is_empty(self) -> Bool {
+        return self.len() == 0;
     }
-    return Option::Some(xs[0]);
-}
 
-pub fun last<T>(xs: [T]) -> Option<T> {
-    if len(xs) == 0 {
-        return Option::None;
+    # The first element, or `None`. `self[0]` is the same read, minus the bounds
+    # check being a runtime error rather than a value the caller can answer.
+    fun first(self) -> Option<T> {
+        if self.len() == 0 {
+            return Option::None;
+        }
+        return Option::Some(self[0]);
     }
-    return Option::Some(xs[len(xs) - 1]);
-}
 
-# Drop every element, in place. The array is the same object afterwards, so
-# anything else holding it sees the emptying too.
-pub fun clear<T>(xs: [T]) {
-    while len(xs) > 0 {
-        pop_last(xs);
+    fun last(self) -> Option<T> {
+        if self.len() == 0 {
+            return Option::None;
+        }
+        return Option::Some(self[self.len() - 1]);
+    }
+
+    # Drop every element, in place. The array is the same object afterwards, so
+    # anything else holding it sees the emptying too.
+    fun clear(self) {
+        while self.len() > 0 {
+            pop_last(self);
+        }
     }
 }

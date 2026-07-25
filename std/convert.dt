@@ -40,7 +40,9 @@
 # it should round is a question a fallible conversion would have to ask, and
 # there is no `TryFrom` yet.
 
-use std::char::code;
+# Imported as a module, not by item: `code` is a method now (milestone 40), so
+# the `use` is only here to make `impl Char` visible for `value.code()` below.
+use std::char;
 
 # `Self` is the type produced, which is why `from` is an associated function
 # and not a method: there is no receiver until it returns.
@@ -72,11 +74,11 @@ impl From<Int> for Float {
     }
 }
 
-# A character's scalar value. `std::char::code` is the native behind it, and
-# the import is free: `std::char` ships no impls, and neither does what it
-# imports.
+# A character's scalar value. `c.code()` is the native behind it, and the
+# dependency costs only `std::char`'s own `Char` methods — the one impl it ships,
+# and none from what it imports.
 impl From<Char> for Int {
     fun from(value: Char) -> Int {
-        return code(value);
+        return value.code();
     }
 }

@@ -9,54 +9,58 @@
 # that table, `build` is the one-way door back in, and the natives below are the
 # whole of what the buffer cannot express about itself in ducktape.
 #
-# It lives in its own module so its operations can take the plain names — `len`,
-# `push`, `is_empty` — that `std::string` already spends on the `String`, and
-# `std::array` already spends on the `[T]`. Before module-qualified paths those
-# names had to be dodged (`buf_len`, `push_str`); now a caller writes
-# `use std::strbuf;` and `strbuf::len(b)` sits beside `string::len(s)` and
-# `array::len(xs)` with nothing aliased apart. This module imports nothing, so
-# it ships no impls and is free to reach for.
+# The operations are **methods** (milestone 40): `b.len()`, `b.push(s)`,
+# `b.build()`. A method resolves on its receiver's type, so `b.len()`,
+# `s.len()` and `xs.len()` coexist with nothing aliased apart — the collision
+# the free-function spelling once had to dodge (`buf_len`, `push_str`) and then
+# disambiguate with a qualifier is gone, since a method names the operation and
+# the receiver names which one. The impl this ships is on the module's own
+# `StringBuf`, so it costs no other program a name: nothing else adds methods to
+# a type only this module defines.
 
-@native("strbuf_new")
-pub fun new() -> StringBuf;
+impl StringBuf {
+    @native("strbuf_new")
+    fun new() -> StringBuf;
 
-# Append the bytes of `s`, growing the buffer when it is full. Like a `[T]`, a
-# `StringBuf` is a reference to one growable object, so every name bound to it
-# sees the append — which is why this takes an ordinary `StringBuf` and needs no
-# way to spell "by reference".
-@native("strbuf_push")
-pub fun push(b: StringBuf, s: String);
+    # Append the bytes of `s`, growing the buffer when it is full. Like a `[T]`,
+    # a `StringBuf` is a reference to one growable object, so every name bound to
+    # it sees the append — which is why this takes the receiver by value and
+    # needs no way to spell "by reference".
+    @native("strbuf_push")
+    fun push(self, s: String);
 
-# Append one character's UTF-8 bytes. This is the append that an array of parts
-# could never have offered, and so the one that shows why a buffer was worth a
-# new object kind: the bytes go straight in, with no String interned along the
-# way to carry them.
-@native("strbuf_push_char")
-pub fun push_char(b: StringBuf, c: Char);
+    # Append one character's UTF-8 bytes. This is the append that an array of
+    # parts could never have offered, and so the one that shows why a buffer was
+    # worth a new object kind: the bytes go straight in, with no String interned
+    # along the way to carry them.
+    @native("strbuf_push_char")
+    fun push_char(self, c: Char);
 
-# Append an Int's decimal digits, without first interning a String to carry
-# them. `push(b, "{n}")` would build a throwaway String for the digits — the
-# re-interning a buffer exists to avoid — so this is `push_char`'s sibling for
-# numbers: the bytes go straight in.
-@native("strbuf_push_int")
-pub fun push_int(b: StringBuf, n: Int);
+    # Append an Int's decimal digits, without first interning a String to carry
+    # them. `b.push("{n}")` would build a throwaway String for the digits — the
+    # re-interning a buffer exists to avoid — so this is `push_char`'s sibling
+    # for numbers: the bytes go straight in.
+    @native("strbuf_push_int")
+    fun push_int(self, n: Int);
 
-# The bytes written so far.
-@native("strbuf_len")
-pub fun len(b: StringBuf) -> Int;
+    # The bytes written so far.
+    @native("strbuf_len")
+    fun len(self) -> Int;
 
-# Empty the buffer, keeping the capacity it has grown to. A buffer can be reused
-# across a loop this way rather than allocating a fresh `new()` each round; the
-# bytes are not released, only forgotten, so the next `push` reuses the space.
-@native("strbuf_clear")
-pub fun clear(b: StringBuf);
+    # Empty the buffer, keeping the capacity it has grown to. A buffer can be
+    # reused across a loop this way rather than allocating a fresh `new()` each
+    # round; the bytes are not released, only forgotten, so the next `push`
+    # reuses the space.
+    @native("strbuf_clear")
+    fun clear(self);
 
-# Intern the bytes written so far into a `String`. Non-destructive: the buffer
-# is unchanged and may be appended to again, so `build` inside a loop is a
-# snapshot rather than a handover.
-@native("strbuf_build")
-pub fun build(b: StringBuf) -> String;
+    # Intern the bytes written so far into a `String`. Non-destructive: the
+    # buffer is unchanged and may be appended to again, so `build` inside a loop
+    # is a snapshot rather than a handover.
+    @native("strbuf_build")
+    fun build(self) -> String;
 
-pub fun is_empty(b: StringBuf) -> Bool {
-    return len(b) == 0;
+    fun is_empty(self) -> Bool {
+        return self.len() == 0;
+    }
 }

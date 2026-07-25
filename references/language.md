@@ -392,12 +392,16 @@ importing one of its items. The name (or an `as` alias) becomes a qualifier, and
 an enum variant — without pulling it into scope by name:
 
 ```
+use std::io;
 use std::string;
-use std::array;
 
-var n = string::len(s);   # two `len`s, told apart by their module
-var m = array::len(xs);   # — no import could name both at once
+io::print(string::concat(parts));   # `print` and `concat`, each named
+                                    # through its module without an import
 ```
+
+(The primitives' operations — `s.len()`, `xs.push(v)` — are *methods* now, told
+apart by their receiver's type, so a qualifier is for the free functions and
+user modules that remain, not for those.)
 
 The qualifier reaches exactly the `pub` items a `use a::b::thing;` would (private
 items and un-re-exported imports stay hidden), so the two spellings never
@@ -430,16 +434,21 @@ error: no method named 'show' found for type 'S'
 
 Reachability is transitive because `pub use` can re-export a type whose impls
 live one module further away. It applies to std exactly as to anything else,
-which is worth knowing before writing your own impl for a primitive: `use
-std::array::push;` reaches `std::option` (that is what `pop` returns), and so
+which is worth knowing before writing your own method on a primitive: `use
+std::array;` reaches `std::option` (that is what `pop` returns), and so
 `std::fmt` and `std::cmp` beyond it, and `std::string` beyond *that* — so every
-impl those modules ship is visible too.
+impl those modules ship is visible too, and since milestone 40 that includes
+inherent methods on the primitives (`impl<T> [T]`, `impl String`, `impl Char`,
+`impl StringBuf`). Importing `std::array` therefore also means you cannot add
+your own inherent `[T]` method of a name it already spends (`len`, `push`, …).
 
 That chain is why the direction of a std module's own imports is a design
 decision rather than bookkeeping: what an import costs its dependents is the
-*impls* the imported module ships, not its size. `std::cmp` can afford to
-import `std::string` and `std::char` because both are modules of free functions
-with no impls at all.
+*impls* the imported module ships, not its size. `std::cmp` imports
+`std::string` and `std::char` for `impl Ord for String` / `impl Ord for Char`,
+and the cost it passes on is those modules' own `impl String` / `impl Char` —
+one type's methods each, on a type the importer did not itself define, rather
+than a trait impl coherence could take away.
 
 Two implementations of **the same trait for overlapping types** may not be
 visible at once. Writing `impl Ord for Int` in a module that also imports
@@ -544,21 +553,23 @@ before what extends it, and there is no locale, case-folding or normalisation.
 The interesting part is what interning does *not* buy here. `==` on a String is
 a pointer compare because two equal strings are one object in the intern table
 — but pointer *order* is allocation order, so ordering gets nothing from the
-table beyond the equal case, and has to walk the bytes. That walk is
-`std::string::compare`, and it has to be a native for the same reason `push` is:
-the finest handle ducktape has on a String's contents is `slice`, and comparing
-two one-byte slices would need the ordering being defined.
+table beyond the equal case, and has to walk the bytes. That walk is the String
+method `compare` (`a.compare(b)`), and it has to be a native for the same reason
+`push` is: the finest handle ducktape has on a String's contents is `slice`, and
+comparing two one-byte slices would need the ordering being defined.
 
 `Char` is ordered the same way, and by the same rule about where the impl
 goes: `std::cmp` imports `std::char` for it. That one needs no native at all —
-`std::char::code` hands the comparison two Ints, and `<` on an Int is an
-opcode — which is the difference between ordering a character and ordering a
-string of them.
+`c.code()` hands the comparison two Ints, and `<` on an Int is an opcode —
+which is the difference between ordering a character and ordering a string of
+them.
 
 The impl lives in `std::cmp`, beside the trait, so `std::cmp` imports
-`std::string` (and `std::char`) rather than the other way round. That direction is deliberate:
-impl visibility is transitive through `use`, and `std::string` ships no impls,
-so importing it adds nothing to what a `use std::cmp::…` already delivers.
+`std::string` (and `std::char`) rather than the other way round. That direction
+is deliberate: impl visibility is transitive through `use`, so importing them
+brings their `impl String` / `impl Char` (the methods `compare` and `code` live
+on) into every `use std::cmp::…` — one type's methods each, and nothing a
+program did not already reach through `std::cmp`.
 Putting the impl in `std::string` would have handed a program that only wanted
 `len` every `Ord` impl — and with them coherence's refusal to let it write
 its own `impl Ord for Int`. **An import's cost is measured in impls, not in
@@ -924,9 +935,15 @@ an ordinary global slot, and slots into a `dyn Trait` vtable like any other
 method; an intrinsic method lowers to its opcode at the call site. A *trait*
 method (in a `trait` declaration) still cannot be native — its default body is
 generic over `Self` — so the attribute is accepted on a top-level `fun` and on
-an impl method only. The standard library does not yet use this: each std module
-spells its operations as free functions by deliberate choice (see the notes in
-`std/strbuf.dt`, `std/char.dt`), and migrating them is a separate step.
+an impl method only. **Since milestone 40 the standard library uses this**: the
+primitive modules spell their operations as methods (`s.len()`, `xs.push(v)`,
+`c.code()`), with constructors as associated functions (`StringBuf::new()`,
+`Char::from_code(n)`). What stays a free function is the exceptions the design
+forces — a *builder* whose receiver is a collection not the primitive
+(`std::string`'s `join`/`concat`/`from_chars`), a lang item the compiler
+desugars into (`pad_*`, `float`), a private raw native (`array` `pop_last`), and
+the one length `std::cmp` needs but cannot reach as a method without closing a
+dependency cycle.
 
 Nothing restricts natives to `std/` — a user module may declare one too. The
 registry is closed, so the only names available are the ones the binary already
@@ -935,54 +952,62 @@ attribute by module would add a rule without adding a guarantee.
 
 ### `std::io`, `std::array`, `std::string`, `std::strbuf`
 
+The primitive operations are **methods** (milestone 40); a free-function line is
+a deliberate exception, marked below.
+
 ```
-std::io      print<T>(value: T)                     # @native
+std::io      print<T>(value: T)                     # @native, free (see below)
 
-std::array   len<T>(xs: [T]) -> Int                 # @intrinsic (OP_LEN)
-             push<T>(xs: [T], value: T)             # @native
-             pop<T>(xs: [T]) -> Option<T>
-             first<T>(xs: [T]) -> Option<T>
-             last<T>(xs: [T]) -> Option<T>
-             is_empty<T>(xs: [T]) -> Bool
-             clear<T>(xs: [T])
+impl<T> [T]  self.len() -> Int                      # @intrinsic (OP_LEN)
+             self.push(value: T)                    # @native
+             self.pop() -> Option<T>
+             self.first() -> Option<T>
+             self.last() -> Option<T>
+             self.is_empty() -> Bool
+             self.clear()
+             (std::array also: private free `pop_last<T>(xs)`, the raw @native)
 
-std::string  len(s: String) -> Int                  # @native, in bytes
-             slice(s: String, from: Int, to: Int) -> String   # @native
-             compare(a: String, b: String) -> Int   # @native
-             chars(s: String) -> [Char]             # @native
-             join(parts: [String], sep: String) -> String
-             concat(parts: [String]) -> String
-             repeat(s: String, n: Int) -> String
-             from_chars(cs: [Char]) -> String
-             pad_start(s: String, width: Int, fill: Char) -> String
-             pad_end(s: String, width: Int, fill: Char) -> String
-             pad_center(s: String, width: Int, fill: Char) -> String
+impl String  self.len() -> Int                      # @native, in bytes
+             self.slice(from: Int, to: Int) -> String         # @native
+             self.compare(other: String) -> Int     # @native
+             self.chars() -> [Char]                 # @native
+             self.repeat(n: Int) -> String
+             std::string free: join(parts: [String], sep: String) -> String
+                              concat(parts: [String]) -> String
+                              from_chars(cs: [Char]) -> String
+                              pad_start/pad_end/pad_center(s, width, fill)  # lang items
 
-std::strbuf  new() -> StringBuf                     # @native
-             push(b: StringBuf, s: String)          # @native
-             push_char(b: StringBuf, c: Char)       # @native
-             push_int(b: StringBuf, n: Int)         # @native
-             len(b: StringBuf) -> Int               # @native
-             clear(b: StringBuf)                    # @native
-             build(b: StringBuf) -> String          # @native
-             is_empty(b: StringBuf) -> Bool
+impl StringBuf  StringBuf::new() -> StringBuf        # @native (associated)
+             self.push(s: String)                   # @native
+             self.push_char(c: Char)                # @native
+             self.push_int(n: Int)                  # @native
+             self.len() -> Int                      # @native
+             self.clear()                           # @native
+             self.build() -> String                 # @native
+             self.is_empty() -> Bool
 
-std::char    code(c: Char) -> Int                   # @native
-             from_code(n: Int) -> Char              # @native
-             is_ascii/is_digit/is_lower/is_upper(c: Char) -> Bool
-             is_alpha/is_alnum/is_whitespace(c: Char) -> Bool
-             to_upper(c: Char) -> Char              # ASCII only
-             to_lower(c: Char) -> Char              # ASCII only
-             to_digit(c: Char) -> Int
+impl Char    self.code() -> Int                     # @native
+             Char::from_code(n: Int) -> Char        # @native (associated)
+             self.is_ascii/is_digit/is_lower/is_upper() -> Bool
+             self.is_alpha/is_alnum/is_whitespace() -> Bool
+             self.to_upper() -> Char                # ASCII only
+             self.to_lower() -> Char                # ASCII only
+             self.to_digit() -> Int
 
-std::fmt     float(value: Float, precision: Int) -> String   # @native
+std::fmt     float(value: Float, precision: Int) -> String   # @native, free (lang item)
 ```
+
+`print` stays a free function because it is a general operation over any `T`,
+not a method on one type; the `pad_*` and `float` functions stay free because
+they are lang items the `{v:>8}` / `{f:.3}` format spec desugars into, so their
+meaning cannot depend on what a program imported; `join`/`concat`/`from_chars`
+stay free because their receiver is a `[String]` / `[Char]`, not a `String`.
 
 **`print` is not a builtin and is not in scope by default** — `use
 std::io::print;` is a real import of a real module, and forgetting it is an
 ordinary "cannot find 'print' in this scope" error. There is no prelude.
 
-`std::string::slice` and `std::fmt::float` are the std functions that can fail
+`String`'s `slice` and `std::fmt::float` are the std operations that can fail
 without a `Result`: a native reports a runtime error by setting `ctx->error`,
 and the VM raises it at the call site, exactly as `std::panic::panic` does.
 
@@ -992,9 +1017,9 @@ both ordinary starting points:
 
 ```
 var xs: [Int] = [];
-push(xs, 1);
-push(xs, 2);
-print(pop(xs).unwrap());   # 2
+xs.push(1);
+xs.push(2);
+print(xs.pop().unwrap());   # 2
 ```
 
 Two consequences follow from what an array already was, rather than from
@@ -1024,19 +1049,19 @@ instead, and `build` interns once:
 ```
 use std::strbuf;
 
-var b = strbuf::new();
+var b = StringBuf::new();
 for word in words {
-    strbuf::push(b, word);
-    strbuf::push(b, " ");
+    b.push(word);
+    b.push(" ");
 }
-print(strbuf::build(b));
+print(b.build());
 ```
 
-The buffer is its own module so its operations can take the plain names `len`,
-`push` and `is_empty` — the ones `std::string` spends on `String` and
-`std::array` on `[T]`. Before module-qualified paths they had to be dodged
-(`buf_len`, `push_str`); now `strbuf::len(b)` sits beside `string::len(s)` with
-nothing aliased apart.
+The operations are methods on `StringBuf`, with `new` the associated
+constructor. A method resolves on its receiver, so `b.len()`, `s.len()` and
+`xs.len()` coexist unqualified — the collision the free-function spelling once
+had to dodge (`buf_len`, `push_str`) and later disambiguate with a qualifier is
+gone, since a method names the operation and the receiver names which one.
 
 `StringBuf` is a *separate type* from `String`, not a mutable flavour of one,
 and the reason is interning: a String is filed in the runtime's table under the
@@ -1055,20 +1080,22 @@ Two smaller consequences, both visible from a program:
   worth making out loud. `print(b)` still shows it, as `StringBuf("…")` — the
   debug view says which of the two kinds it is looking at.
 
-Seven of `std::strbuf`'s functions are written in C — existing, growing (from a
-String, a Char or an Int's digits), emptying, its length, and becoming a String
-— and `is_empty` is ducktape on `len`. `push_int` puts a number's digits in
-without interning a `"{n}"` String to carry them, and `clear` drops the length to
-zero while keeping the capacity, so one buffer can be reused across a loop. `std::string`'s `join`, `concat`, `repeat` and `from_chars`
-are the String-shaped conveniences on top, built through the buffer, the same
-split `std::array` makes; `repeat` is the one that shows what the buffer buys —
-it copies bytes straight in, allocating no String per copy. `std::string` now
-reaches only `std::strbuf`, which imports nothing and ships no impls, so
-importing `std::string` still hands a program no impls it did not ask for — the
-property that makes it safe for `std::cmp` to depend on it for `impl Ord for
-String`. What `std::string` must *not* reach is `Option` or `std::array`, which
-would close the cycle `string → option → cmp → string`; the buffer is a pure
-leaf below it, so the edge to it is free.
+Seven of `StringBuf`'s methods are written in C — existing (the associated
+`new`), growing (from a String, a Char or an Int's digits), emptying, its
+length, and becoming a String — and `is_empty` is ducktape on `len`. `push_int`
+puts a number's digits in without interning a `"{n}"` String to carry them, and
+`clear` drops the length to zero while keeping the capacity, so one buffer can be
+reused across a loop. `std::string`'s `repeat` method and its free `join`,
+`concat` and `from_chars` are the String-shaped conveniences on top, built
+through the buffer, the same split `std::array` makes; `repeat` is the one that
+shows what the buffer buys — it copies bytes straight in, allocating no String
+per copy. `std::string` reaches only `std::strbuf`, which imports nothing and
+ships only methods on its own `StringBuf`, so importing `std::string` hands a
+program no impls for a type it did not itself name beyond that one — the property
+that makes it safe for `std::cmp` to depend on it for `impl Ord for String`. What
+`std::string` must *not* reach is `Option` or `std::array`, which would close the
+cycle `string → option → cmp → string`; the buffer is a pure leaf below it, so
+the edge to it is free.
 
 A `Float` prints — and interpolates — as the shortest decimal that reads back
 as the same double, always carrying a `.` or an exponent so it is never
@@ -1100,14 +1127,14 @@ the way an `Int` match does — a wildcard is required, since the domain is far
 too large to enumerate.
 
 **A `String` is bytes and a `Char` is a character, and the language keeps the
-two apart.** `std::string::len` counts *bytes*, `slice` cuts at *byte* offsets,
-and `compare` walks bytes; `std::string::chars` is the only crossing:
+two apart.** `s.len()` counts *bytes*, `s.slice(..)` cuts at *byte* offsets, and
+`s.compare(..)` walks bytes; `s.chars()` is the only crossing:
 
 ```
 var s = "héllo";
-len(s);              # 6 — bytes
-alen(chars(s));      # 5 — characters
-from_chars(chars(s)) == s;   # true
+s.len();              # 6 — bytes
+s.chars().len();      # 5 — characters
+from_chars(s.chars()) == s;   # true
 ```
 
 There is deliberately **no `char_at(s, i)`**. The index would be a byte offset,
@@ -1120,13 +1147,14 @@ conversion in both directions, and `from_chars` goes back through a
 program can provoke: `slice` cuts at byte offsets, so it can halve a multi-byte
 sequence. A String is a byte string; only a `Char` promises to be a character.
 
-Everything else in `std::char` is ordinary ducktape over `code`/`from_code` —
-the one thing a Char cannot say about itself is its number, and once it can,
-every classification is a range test and every case conversion is an addition.
-**The classifications are ASCII-only**: `is_alpha('é')` is false and
-`to_upper('é')` is `'é'` unchanged. Full Unicode case mapping is a table, not a
-range test, and shipping a range test under that name would be right for
-English and quietly wrong elsewhere.
+Everything else in `std::char` is ordinary ducktape over `code`/`from_code`
+(methods on `Char`, `from_code` the associated constructor) — the one thing a
+Char cannot say about itself is its number, and once it can, every
+classification is a range test and every case conversion is an addition. **The
+classifications are ASCII-only**: `'é'.is_alpha()` is false and `'é'.to_upper()`
+is `'é'` unchanged. Full Unicode case mapping is a table, not a range test, and
+shipping a range test under that name would be right for English and quietly
+wrong elsewhere.
 
 `impl Ord for Char` (in `std::cmp`, beside the trait) is code-point order, so
 `'Z'` sorts before `'a'` — the same order `impl Ord for String` gives, since
@@ -1161,9 +1189,10 @@ string` — which the dependency graph rejects outright ("module cycle"). The
 module everything else builds on cannot reach back up to them (it reaches only
 `std::strbuf`, a pure leaf below it); the operations that do live one module
 higher. This is `std::array` losing its leaf status once `pop` returned an
-`Option`, taken to the point where the split is *forced*. `std::text` is also
-where a module qualifier earns its keep: it wants both `string::len` (bytes) and
-`array::len` (elements), which no `use` could import under one name.
+`Option`, taken to the point where the split is *forced*. `std::text` uses
+`s.len()` (bytes) and `cs.len()` (elements) side by side, told apart by their
+receiver's type — the collision that once made this the showcase for module
+qualifiers is what methods retired.
 
 Within the module the two views of text stay apart, the milestone-26 way:
 
@@ -1201,7 +1230,7 @@ overflow: a value past what an `Int` holds wraps.
 | `Display` for a tuple of arity other than 2 | arity is part of a tuple's type and nothing is generic over it, so each needs its own impl; only `(A, B)` ships |
 | writing your own `Display` for a container | rejected as a conflict with the std impl, which naming the trait makes visible |
 | Unicode case mapping, folding, or normalisation | `std::char`'s classifications and `to_upper`/`to_lower` are ASCII-only; `String` comparison is raw bytes |
-| indexing a `String` by character (`s[i]`) | there is none: `chars(s)` converts, because a byte offset is not a character position |
+| indexing a `String` by character (`s[i]`) | there is none: `s.chars()` converts, because a byte offset is not a character position |
 | a `String` that is guaranteed valid UTF-8 | it is a byte string — `slice` cuts at byte offsets, so `chars` reports a runtime error on a halved sequence |
 | a *dynamic* width or precision in a format spec (`{v:>{n}}`) | the width and precision in a `{v:>8}` / `{f:.3}` spec are literals; a runtime value there has no spelling. The spec itself is sugar for `std::string::pad_*` / `std::fmt::float` (milestone 35) |
 | casting a `dyn Trait` back to its concrete type | no downcast; the coercion is one-way |

@@ -1,0 +1,65 @@
+# Milestone 40: std spells a primitive's operations as methods. The capability
+# landed in milestone 39 (a native/intrinsic method body); this is std actually
+# using it, so `string::len(s)` is `s.len()`, `array::push(xs, v)` is
+# `xs.push(v)`, and the constructors are associated functions — `StringBuf::new()`,
+# `Char::from_code(n)`. A method resolves on its receiver, so the four `len`s
+# (String, [T], StringBuf, and the counted array of chars) coexist unqualified.
+#> 5
+#> ell
+#> hellohello
+#> -1
+#> 5
+#> 4
+#> 4
+#> 1
+#> false
+#> ab3
+#> 3
+#> 65
+#> a
+#> true
+#> X
+#> pear
+#> Z
+use std::io::print;
+use std::string;
+use std::array;
+use std::strbuf;
+use std::char;
+use std::cmp::{max, min};
+
+fun main() {
+    # String: @native methods, and a ducktape one (repeat) on top of them
+    var s = "hello";
+    print(s.len());
+    print(s.slice(1, 4));
+    print(s.repeat(2));
+    print("abc".compare("abd"));
+    print(s.chars().len());
+
+    # [T]: @intrinsic len, @native push, ducktape pop/first/is_empty
+    var xs = [1, 2, 3];
+    xs.push(4);
+    print(xs.len());
+    print(xs.pop().unwrap());
+    print(xs.first().unwrap());
+    print(xs.is_empty());
+
+    # StringBuf: the associated constructor, then methods, then build
+    var b = StringBuf::new();
+    b.push("a");
+    b.push_char('b');
+    b.push_int(3);
+    print(b.build());
+    print(b.len());
+
+    # Char: @native code / associated from_code, ducktape classifications
+    print('A'.code());
+    print(Char::from_code(97));
+    print('x'.is_alpha());
+    print('x'.to_upper());
+
+    # the std::cmp generics call the methods above through their `Ord` bound
+    print(max("apple", "pear"));
+    print(min('a', 'Z'));
+}

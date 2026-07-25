@@ -1,7 +1,20 @@
-# Native functions: a bodyless std declaration whose body is in C.
+# Native functions: a bodyless declaration whose body is in C. A native is an
+# ordinary global, so it is first-class — passable, storable, capturable — and
+# that is the property this file exercises. `std::string` and `std::array` spell
+# these operations as methods now (milestone 40), and a method is *not* a
+# path-value, so the first-class demonstration declares its own free natives
+# binding the very same C bodies. `@intrinsic` is the exception either way: it is
+# an opcode, so it can only be called directly, never named as a value.
 use std::io::print;
-use std::array::len;
-use std::string::{len as str_len, slice};
+
+@native("string_len")
+fun str_len(s: String) -> Int;
+
+@native("string_slice")
+fun str_slice(s: String, from: Int, to: Int) -> String;
+
+@intrinsic("array_len")
+fun alen<T>(xs: [T]) -> Int;
 
 # a native is an ordinary global, so it is first-class: passable, storable,
 # capturable. Only its *body* is unusual.
@@ -12,17 +25,17 @@ fun main() {
 #> printed by a native
 
     # @intrinsic: lowered to OP_LEN inline, no call frame at all
-    print(len([10, 20, 30]));
+    print(alen([10, 20, 30]));
 #> 3
-    print(len(["only one"]));
+    print(alen(["only one"]));
 #> 1
 
     # @native: an ordinary OP_CALL into C
     print(str_len("abcd"));
 #> 4
-    print(slice("hello world", 6, 11));
+    print(str_slice("hello world", 6, 11));
 #> world
-    print(slice("hello", 0, 0));
+    print(str_slice("hello", 0, 0));
 #>
 
     # first-class, three ways
@@ -43,7 +56,7 @@ fun main() {
     # from under it.
     var total = 0;
     for i in 0..10 {
-        total = total + str_len(slice("abcdefghij", 0, i));
+        total = total + str_len(str_slice("abcdefghij", 0, i));
     }
     print(total);
 #> 45

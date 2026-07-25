@@ -7,8 +7,13 @@
 # This was already true of every generic definition (an uncalled one has no
 # body to compile). It is now true uniformly, which is the whole trade: the
 # checker still sees every function, only codegen is demand-driven.
+#
+# The intrinsic is a local free function, because `std::array` spells `len` as a
+# method now and a method is never a path-value.
 use std::io::print;
-use std::array::len;
+
+@intrinsic("array_len")
+fun len<T>(xs: [T]) -> Int;
 
 fun sleeping() {
   var f = len::<Int>;

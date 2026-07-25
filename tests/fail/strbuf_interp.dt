@@ -1,13 +1,13 @@
 #! expect: cannot interpolate a value of type 'StringBuf'
 # A buffer deliberately has no `Display` impl: rendering it would be `build`,
 # which allocates and interns, and that is a decision the caller should be
-# making out loud. `"{build(b)}"` is the spelling.
+# making out loud. `"{b.build()}"` is the spelling.
 use std::io::print;
 use std::fmt::Display;
-use std::strbuf::{new, push};
+use std::strbuf;
 
 fun main() {
-    var b = new();
-    push(b, "hello");
+    var b = StringBuf::new();
+    b.push("hello");
     print("{b}");
 }

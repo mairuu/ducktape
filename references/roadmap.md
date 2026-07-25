@@ -2164,6 +2164,63 @@
   through a `dyn Measure` vtable), `tests/fail/native_method_unknown.dt` (an
   unknown native name on a method reports at its span).
 
+- **The standard library adopts methods (milestone 40)** — the primitive modules
+  now spell their operations as methods: `s.len()`, `xs.push(v)`, `c.code()`,
+  `b.build()`, with constructors as associated functions (`StringBuf::new()`,
+  `Char::from_code(n)`). Design: `language.md` "The standard library",
+  `runtime.md` "Native functions". This is the milestone-39 follow-up, and it is
+  **a pure `.dt` change**: no C moved, the checker and runtime were already done
+  in 39, and the whole diff is the four primitive modules (`std::string`,
+  `std::array`, `std::strbuf`, `std::char`), their dependents' call sites, and
+  the tests. `make sanitize` stayed clean because there was nothing new to make
+  unsafe.
+
+  The observation the milestone turns on: **a method needs its defining impl
+  visible, so where a free function only needed a name, a method needs a
+  reachable module.** That is what draws the line between what migrated and what
+  could not:
+  - **The forced exception is `std::cmp`'s array length.** `impl Ord for [T]`
+    needs an array's length, but `std::cmp` cannot `use std::array` — that closes
+    the `array → option → cmp` cycle — so it cannot reach `xs.len()` *as a
+    method* either, because the method would need array's impl in view. It keeps
+    the private free `@intrinsic fun len<T>(xs)` it already had: an intrinsic is a
+    spelling for an opcode, not a definition owned by a module, so it dodges the
+    cycle a method cannot. The same free spelling that milestone 39's note called
+    load-bearing turns out to be load-bearing for exactly this reason.
+  - **`compare` and `code` migrated freely**, because `std::cmp` already imports
+    `std::string` and `std::char` (no new cycle), so `self.compare(other)` and
+    `c.code()` resolve against impls already in view. The imports changed from
+    naming an item (`use std::string::compare`) to naming the module (`use
+    std::string`) — a method travels with its impl by reachability, not through a
+    named import, so the `use` is only there for the dependency edge now.
+  - **The lang items and the builders stay free.** `pad_start`/`pad_end`/
+    `pad_center` and `float` are what the `{v:>8}` / `{f:.3}` format spec desugars
+    into, so their meaning cannot depend on what a program imported — a method
+    would move the target the desugar builds and break the capture in
+    `tc_register_fun`. `join`/`concat`/`from_chars` stay free because their
+    receiver is a `[String]` / `[Char]`, not a `String`. `print` stays free
+    because it is general over any `T`, a function rather than one type's method.
+
+  **The cost the milestone actually buys is a wart, and it is worth naming.**
+  Shipping `impl String` / `impl<T> [T]` / `impl Char` widely means a program that
+  imports the module can no longer add its own inherent method of the same name to
+  that primitive — overlapping inherent methods are silently first-wins (there is
+  no coherence check on inherent impls), so it shadows with no diagnostic. This is
+  the `Display`/`Ord`-for-containers tradeoff, one level over, minus even the
+  error: a trait impl coherence would reject, an inherent one it accepts.
+  `std::strbuf` is the free case — `StringBuf` is a type only it defines, so no
+  program competes for those names.
+
+  One consequence surfaced in the tests and is the honest edge of the change: **a
+  method is not a first-class value.** A free `@native` could be stored, passed,
+  and captured (`var f = str_len;`); a method cannot be named as a path-value at
+  all. So `tests/run/native.dt` (which exercises exactly that first-classness) and
+  the `intrinsic_as_value` / `unreachable_body` tests now declare their own *free*
+  natives to name — which is legitimate, since `@native`/`@intrinsic` were never
+  restricted to `std`. The property belongs to free functions; the method spelling
+  trades it for the receiver syntax. New test: `tests/run/std_methods.dt`
+  exercises all four modules' method surface in one file.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -2306,11 +2363,20 @@ via `Module.decl_base`) and is not part of the main line.
   `@native` beside it which is fully first-class
 - `@native`/`@intrinsic` on a *trait*-declaration method is still rejected — its
   default body is generic over `Self`, with no concrete C body to bind. An impl
-  method may be native as of milestone 39 (`s.len()`), but the standard library
-  does not yet use it: each std module spells its operations as free functions by
-  deliberate choice (`std/strbuf.dt`, `std/char.dt` both note "ships no impls"),
-  and several call sites are load-bearing for other tests (`mod_qualified` leans
-  on the free `array::len`), so migrating std is a separate step
+  method may be native as of milestone 39, and since milestone 40 the standard
+  library uses it: the primitive modules spell their operations as methods
+  (`s.len()`, `xs.push(v)`, `c.code()`). What stays a free function is the
+  design-forced exceptions — the `pad_*`/`float` lang items, the
+  `join`/`concat`/`from_chars` builders (receiver is a collection), `print`
+  (general over any `T`), `array`'s private `pop_last`, and the length
+  `std::cmp` needs but cannot reach as a method without closing the
+  `array → option → cmp` cycle (a method needs its impl visible; a free
+  `@intrinsic` does not)
+- shipping an inherent method on a primitive widely (`impl String`, `impl<T> [T]`,
+  `impl Char` since milestone 40) means a program importing that module cannot add
+  its own inherent method of the same name — overlapping inherent methods are
+  silently first-wins, with no coherence check, so it shadows rather than errors.
+  The `Display`/`Ord`-for-containers cost, one level over, minus the diagnostic
 - a native's C signature is not checked against its ducktape one — the registry
   knows only "n values in, one out", so a mismatch is a std bug that the
   checker cannot catch
@@ -2367,12 +2433,12 @@ via `Module.decl_base`) and is not part of the main line.
   defined result. A total order would have to decide where NaN goes, which is a
   decision nothing has needed to make. `String` has no equivalent: every byte
   string is ordered against every other
-- a `StringBuf` grows but never shrinks its *buffer*: `strbuf::clear` drops the
+- a `StringBuf` grows but never shrinks its *buffer*: `b.clear()` drops the
   length to zero so one buffer can be reused across iterations, but the capacity
   it grew to is kept, and released only when the buffer is collected
 - a `StringBuf` can be appended to from a `String`, a `Char` (milestone 26) or an
-  `Int`'s digits (`strbuf::push_int`, no `"{n}"` interned to carry them), but not
-  from a *slice* of a String, so a `push_slice(b, s, from, to)` that avoids
+  `Int`'s digits (`b.push_int(n)`, no `"{n}"` interned to carry them), but not
+  from a *slice* of a String, so a `b.push_slice(s, from, to)` that avoids
   interning the window first is the natural next entry; it has not been needed yet
 - a panic message can only name the value that caused it where the type
   parameter is bounded: `"{e}"` needs `E: Display`, and `Option`/`Result`'s

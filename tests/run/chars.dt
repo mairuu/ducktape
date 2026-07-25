@@ -40,12 +40,11 @@
 #> s
 
 use std::io::print;
-use std::string::{chars, from_chars, len};
-use std::strbuf::{new, push_char, build};
-use std::char::{code, from_code, is_ascii, is_digit, is_alpha, is_alnum};
-use std::char::{is_lower, is_upper, is_whitespace, to_upper, to_lower, to_digit};
+use std::string::from_chars;
+use std::strbuf;
+use std::char;
 use std::cmp::{max, min};
-use std::array::len as alen;
+use std::array;
 use std::fmt::Display;
 
 struct Tag { c: Char, n: Int }
@@ -55,19 +54,19 @@ fun id<T>(v: T) -> T {
 }
 
 fun shout(s: String) -> String {
-    var b = new();
-    for c in chars(s) {
-        push_char(b, to_upper(c));
+    var b = StringBuf::new();
+    for c in s.chars() {
+        b.push_char(c.to_upper());
     }
-    return build(b);
+    return b.build();
 }
 
 fun quiet(s: String) -> String {
-    var b = new();
-    for c in chars(s) {
-        push_char(b, to_lower(c));
+    var b = StringBuf::new();
+    for c in s.chars() {
+        b.push_char(c.to_lower());
     }
-    return build(b);
+    return b.build();
 }
 
 fun main() {
@@ -102,26 +101,26 @@ fun main() {
         _ => print("other"),
     }
 
-    print(code('A'));
-    print(code('😀'));
-    print(from_code(9731));
-    print(from_code(code('é')) == 'é');
+    print('A'.code());
+    print('😀'.code());
+    print(Char::from_code(9731));
+    print(Char::from_code('é'.code()) == 'é');
 
     # the whole point: `len` counts bytes and `chars` counts characters, and
     # for anything but ASCII those are different numbers
     var s = "héllo, wörld 42";
-    print(len(s));
-    print(alen(chars(s)));
-    print(chars(s));
-    print(from_chars(chars(s)) == s);
+    print(s.len());
+    print(s.chars().len());
+    print(s.chars());
+    print(from_chars(s.chars()) == s);
 
     print(shout(s));
     print(quiet(shout(s)));
 
-    print("{is_digit('7')} {is_alpha('x')} {is_alnum('7')} {is_whitespace('\n')}");
+    print("{'7'.is_digit()} {'x'.is_alpha()} {'7'.is_alnum()} {'\n'.is_whitespace()}");
     # the classifications are ASCII-only, and say so
-    print("{is_alpha('é')} {is_ascii('é')} {is_upper('É')}");
-    print(to_digit('7'));
+    print("{'é'.is_alpha()} {'é'.is_ascii()} {'É'.is_upper()}");
+    print('7'.to_digit());
 
     # `impl Ord for Char` is code-point order: 'Z' (90) sorts before 'a' (97)
     print('a'.cmp('b'));
@@ -132,11 +131,11 @@ fun main() {
     print("{min('a', 'Z')}:{max('a', 'Z')}");
 
     # a buffer takes Chars and Strings alike, which is what `from_chars` is
-    var b = new();
-    push_char(b, 'a');
-    push_char(b, 'b');
-    push_char(b, 'c');
-    print(build(b));
+    var b = StringBuf::new();
+    b.push_char('a');
+    b.push_char('b');
+    b.push_char('c');
+    print(b.build());
 
     # a Char is a primitive everywhere a primitive goes: a struct field, a
     # type argument keying an instantiation, and a `dyn Display` element
