@@ -530,6 +530,45 @@ precision `Int` literals, the fill a `Char` literal, all correct by
 construction, which is why the rewrite validates only the value's own type (a
 precision requires a `Float`).
 
+### Ordering operators and `Ord`
+
+`<`/`<=`/`>`/`>=` are the same move as interpolation, one operator over
+(milestone 38). The `EXPR_BINARY` case in `resolve_expr` keeps the built-in path
+for two numeric operands — `type_is_numeric(lhs) && type_is_numeric(rhs)` emits
+`OP_LT`/etc. with no import and no frame, exactly as a primitive interpolation
+segment keeps the VM's own rendering. A non-numeric operand routes through
+`rewrite_ord_comparison`, which reshapes `a OP b` into `a.cmp(b) OP 0` in place:
+it builds an `EXPR_METHOD_CALL` for `a.cmp(b)`, resolves it with
+`resolve_method_call_typed` (the receiver type is already known, so it must not
+re-resolve), then sets `binary->left` to that call and `binary->right` to a `0`
+literal, leaving the operator untouched. The outer node is now an `Int OP Int`
+comparison — so codegen, `OP_LT` and the VM need no change, the mirror of the
+`to_string` rewrite evaluating to a `String`.
+
+Two things carry over from the `Display` design intact:
+
+- **Only `cmp` is named.** Rewriting to `cmp` compared to `0` — rather than to
+  `Ord`'s `lt`/`le`/`gt`/`ge` defaults — keeps the lang-item surface a single
+  method, the way interpolation names exactly `to_string`. The four default
+  methods stay ordinary trait items, callable directly (`a.lt(b)`), just not
+  what the operator reaches for.
+- **`ord_satisfied` gates the rewrite**, for the same two reasons
+  `display_satisfied` does: it keeps the diagnostic about *comparison* (naming
+  the `T: Ord` bound to add for a type parameter, or the missing impl for a
+  concrete type, with the unimported-impl / blocking-bound notes) rather than
+  about a missing `cmp` method, and it stops an unrelated inherent `cmp` from
+  silently qualifying. `TypeChecker.ord_trait` is captured in
+  `tc_register_trait` when `<std>/cmp.dt` declares `Ord`, keyed on the module
+  like `display_trait`; NULL when no module imports `std::cmp`, which the
+  diagnostic reports as such.
+
+**`==`/`!=` are deliberately left out** and stay a structural primitive: `OP_EQ`
+reads no static type, so equality is free, import-less and universal on any two
+values of one type — routing it through an `Eq` trait would make the commonest
+operation import-dependent in a language with no prelude, and hand coherence the
+power to take `[1,2] == [1,2]` away from a program that imported the wrong
+module. `Eq` waits for a concrete consumer that needs *custom* equality.
+
 ### Types and inference
 
 `Type` (`include/ast.h`) is a tagged union; structural types are interned so

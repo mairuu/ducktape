@@ -86,10 +86,21 @@ ending in `return` has type `!` (never), which unifies with anything.
 - Arithmetic `+ - * / %` on numerics; `Int op Float` widens to `Float`.
   `+` also concatenates `String`s. There is no operator overloading, so these
   want a concrete numeric type: on a bare generic `T` they report ("requires
-  numeric types, got 'T'"), and a `T: Ord` orders through `.cmp`, never `<`.
-- Comparison `< <= > >=` (numeric), `== !=` (structural: any two values of the
-  same static type, including a generic `T` — the runtime compares them the way
-  it compares two structs, so `a == b` on a generic yields `Bool`).
+  numeric types, got 'T'"). Comparison is the one exception — it desugars to
+  `Ord` for a non-numeric operand (below) — but arithmetic never does.
+- Comparison `< <= > >=`: numeric operands stay a built-in opcode (no import,
+  no frame); a non-numeric operand desugars to `std::cmp::Ord`, so `a < b`
+  becomes `a.cmp(b) < 0`, dispatched by the ordinary method machinery. A `Point`
+  with `impl Ord for Point`, a bounded `T: Ord`, a `Char`, a `String` — all
+  compare with the operator. Without `std::cmp` in the program the operator has
+  no trait to name (the diagnostic says so), and on an unbounded generic it asks
+  for the `T: Ord` bound. Only `cmp` is named by the rewrite, so `lt`/`le`/`gt`/
+  `ge` are not lang items; `Ord` is one (keyed on `std::cmp`, like `Display`).
+- `== !=` (structural: any two values of the same static type, including a
+  generic `T` — the runtime compares them the way it compares two structs, so
+  `a == b` on a generic yields `Bool`). Unlike ordering, equality is *never* a
+  trait: it is a free, import-less, universal primitive, and routing it through
+  an `Eq` would make the commonest operation depend on an import.
 - Logic: keywords `and`, `or` (short-circuit), `not`. There is no `&&`/`||`.
 - Unary minus `-x` (numeric).
 - `if cond { .. } else { .. }` is an expression; without `else` it is `()`.
@@ -515,14 +526,15 @@ a *spelling* for `OP_LEN` rather than a definition a module owns — so `std::cm
 names the opcode a second time and the cycle that blocks the impl's type does
 not block the length it needs.
 
-**`String` is ordered by a trait, not by an operator.** `<` and `>` stay
-numeric — comparing two Strings is `a.lt(b)`, or `max`/`min`/`clamp`
-(`tests/run/string_ord.dt`):
+**`String` is ordered by a trait, not by a built-in opcode** — but since
+milestone 38 the operator reaches that trait: `a < b` on a String desugars to
+`a.cmp(b) < 0`, so comparing two Strings is `a < b`, `a.lt(b)`, or `max`/`min`/
+`clamp`, all reaching `impl Ord for String` (`tests/run/string_ord.dt`):
 
 ```
 use std::cmp::{Ord, max};
 print(max("apple", "pear"));      # pear
-print("Zebra".gt("apple"));       # false — byte order, not locale
+print("Zebra" < "apple");         # false — byte order, not locale
 ```
 
 The comparison is by *bytes*, which for well-formed UTF-8 is code-point order:

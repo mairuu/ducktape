@@ -1,0 +1,63 @@
+# Milestone 38: `<`/`<=`/`>`/`>=` on a non-numeric type desugar to `Ord`, the
+# way `"{v}"` desugars to `Display`. `a < b` becomes `a.cmp(b) < 0`, so a user
+# type that implements `Ord` compares with the operator instead of `.lt`. `==`
+# and `!=` are untouched — they stay a structural primitive that needs no trait.
+#> true
+#> false
+#> true
+#> true
+#> false
+#> true
+#> false
+#> true
+#> true
+#> true
+#> true
+#> false
+#> true
+
+use std::io::print;
+use std::cmp::{Ord, max};
+
+struct Point { x: Int, y: Int }
+
+# order by x, then y — the impl is ordinary, and `<` on a Point reaches it
+impl Ord for Point {
+    fun cmp(self, other: Point) -> Int {
+        if self.x != other.x {
+            return self.x - other.x;
+        }
+        return self.y - other.y;
+    }
+}
+
+# `<` on a bounded generic dispatches through the bound, monomorphised per T
+fun before<T: Ord>(a: T, b: T) -> Bool {
+    return a < b;
+}
+
+fun main() {
+    var a = Point { x: 1, y: 2 };
+    var b = Point { x: 1, y: 5 };
+
+    print(a < b);   # cmp = 2 - 5 = -3, so -3 < 0
+    print(b < a);
+    print(a <= b);
+    print(a <= a);  # equal → cmp is 0, so 0 <= 0
+    print(a >= b);
+    print(b > a);
+    print(a > b);
+
+    # the same operators reaching Ord through a bound
+    print(before(a, b));
+    print(before(1, 2));  # a numeric T routes through cmp here, not OP_LT
+
+    # `max` over `T: Ord` never wrote `<`, but a caller now can
+    var bigger = max(a, b);
+    print(bigger.y == 5); # bigger is b
+
+    # Char orders through impl Ord for Char (code-point order)
+    print('a' < 'b');
+    print('b' < 'a');
+    print('Z' < 'a');     # uppercase sorts first: byte order
+}

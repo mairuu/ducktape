@@ -2078,6 +2078,52 @@
   reported). Uncovered while prototyping a `std::assert`, which `assert_eq<T>`
   needs and which is the natural next piece.
 
+- **Ordering operators over `Ord` (milestone 38)** — `a < b` on a non-numeric
+  type desugars to `std::cmp::Ord`, the way `"{v}"` desugars to `Display`.
+  Design: `architecture.md` "Ordering operators and `Ord`", `language.md`
+  operators / `std::cmp`.
+
+  The observation the milestone turns on is the same as interpolation's, one
+  operator over: **once a trait decides ordering, `a < b` is not an operator on
+  `a` and `b` — it is the numeric comparison `a.cmp(b) < 0`.** So
+  `rewrite_ord_comparison` reshapes the `EXPR_BINARY` node in place: build an
+  `EXPR_METHOD_CALL` for `a.cmp(b)`, resolve it against the already-known
+  receiver type, then set the node's left to that call and its right to a `0`
+  literal, operator untouched. The outer node is now `Int OP Int`, so **codegen,
+  `OP_LT` and the VM did not change at all** — the exact shape the `to_string`
+  rewrite has, where the segment ends up a `String` the VM already stringifies.
+
+  Three things follow, and they are the whole milestone:
+  - **Numeric comparison stays a built-in opcode**, and so does *all* of
+    `==`/`!=`. This is the split `Display` drew: `1 < 2` keeps `OP_LT` with no
+    import and no frame, exactly as `"{1}"` keeps the VM's own rendering; only a
+    *non-primitive* operand reaches for the trait. `Ord` becomes a lang item as a
+    result (`TypeChecker.ord_trait`, captured in `tc_register_trait`, keyed on
+    `std::cmp` like `display_trait`), so `<` on a user type is import-dependent —
+    but that regresses nothing, since `<` on a struct was an *error* before.
+  - **Only `cmp` is named.** Rewriting to `cmp` compared to `0`, rather than to
+    the `lt`/`le`/`gt`/`ge` defaults, keeps the lang-item surface a single
+    method — the smaller entanglement, matching how `Display` names exactly
+    `to_string`. The four defaults stay ordinary trait items, callable directly
+    (`a.lt(b)`), just not what the operator reaches for.
+  - **`ord_satisfied` gates the rewrite** before it happens, for the two reasons
+    `display_satisfied` does: the diagnostic stays about *comparison* — naming
+    the `T: Ord` bound to add for a type parameter, or the missing impl (with the
+    unimported-impl / blocking-bound notes) for a concrete type, or the absent
+    `std::cmp` import — rather than degrading to "no method named 'cmp'", and an
+    unrelated inherent `cmp` cannot silently qualify.
+
+  `==`/`!=` are deliberately *not* included: structural equality is a free,
+  import-less, universal primitive (`OP_EQ` reads no static type), and routing it
+  through an `Eq` would make the commonest operation import-dependent and hand
+  coherence the power to take `[1,2] == [1,2]` away from a program. `Eq` waits
+  for a concrete consumer that needs *custom* equality. Tests:
+  `tests/run/ord_operators.dt` (struct, bounded generic, Char, `max`),
+  `tests/run/string_ord.dt`'s selection sort now spells its comparison `<`,
+  `tests/fail/generic_cmp.dt` (unbounded `T` asks for the bound),
+  `tests/fail/ord_not_implemented.dt` (a type with no impl),
+  `tests/fail/char_no_comparison_operator.dt` (the absent-import case).
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -2123,47 +2169,27 @@ spelling that milestone 30's note left unread is now milestone 31: a
 trait-qualified `Into::<Fahrenheit>::into(c)` names the trait so the receiver
 settles the rest, without an expected type.)
 
-2. **Ordering operators over `Ord`** — `a < b` on a non-numeric type desugars to
-   `Ord`, the way `"{v}"` desugars to `Display`. `< <= > >=` on operands that are
-   not numeric rewrite in the checker to the trait — `a < b` → `a.cmp(b) < 0`, or
-   equivalently the `lt`/`le`/`gt`/`ge` defaults `Ord` already ships — and are
-   then resolved by the ordinary method-call machinery, monomorphised or
-   dispatched through a bound like any other. The payoff is concrete: `a < b` on
-   a `Point`, and `tests/run/string_ord.dt`'s hand-written selection sort gets to
-   use `<` instead of `.lt`.
+(**Ordering operators over `Ord`** was item 2 here and is now milestone 38:
+`a < b` on a non-numeric type desugars to `a.cmp(b) < 0`. The open question it
+recorded — how many `Ord` methods the operator names — was answered `cmp` only,
+the smaller entanglement, matching how `Display` names exactly `to_string`.)
 
-   **Numeric comparison and *all* of `==`/`!=` stay built-in primitives** — this
-   is the same split `Display` drew, and drawing it here is the whole design.
-   `1 < 2` keeps `OP_LT` (no import, no frame), exactly as `"{1}"` keeps the VM's
-   own rendering; only a *non-primitive* operand reaches for the trait. `Ord`
-   becomes a lang item as a result (captured in `tc_register_trait`, keyed on
-   `std::cmp` like `display_trait`), so `<` on a user type is import-dependent —
-   but that regresses nothing, since `<` on a struct is an *error* today. It only
-   gains a capability.
-
-   **`==`/`!=` are deliberately *not* included, and that is the considered
-   position, not an omission.** Structural equality is a free, import-less,
-   universal primitive: `OP_EQ` reads no static type, so `a == b` works on any
-   value — Int, struct, generic `T` — with nothing imported. Routing it through
-   an `Eq`/`PartialEq` trait would (a) make the commonest operation
-   import-dependent in a language with no prelude, (b) hand coherence the power to
-   take `[1,2] == [1,2]` away from a program that did not import the right module
-   — the `Display`/`Ord`-for-`[T]` wart applied to `==` — and (c) cost a
-   monomorphised call where an opcode stands now, all to buy *custom* equality
-   that would need specialisation (which the language does not have) to coexist
-   with the structural default. Nothing needs custom equality yet, so `Eq` waits
-   for a concrete consumer — a hash map keyed by user types, or a first type whose
-   equality is genuinely not structural. The `PartialEq`/`PartialOrd` split waits
-   with it; its one live motivation, the `Ord for Float` NaN wart, is an ordering
-   bug fixable on its own terms and does not need the trait hierarchy to address.
-
-   The open design question the milestone has to answer is how many `Ord` methods
-   the operator names: rewriting all four comparisons to `cmp` compared to `0` is
-   one `cmp` call per operator and keeps the lang-item surface to a single method,
-   while rewriting to `lt`/`le`/`gt`/`ge` honours a type that overrode a default
-   but pins four names instead of one. The `cmp`-only spelling is the smaller
-   entanglement and the likely answer, matching how `Display` names exactly
-   `to_string`.
+2. **A custom equality trait (`Eq`), if a consumer ever needs it.** Not on the
+   main line, and deliberately deferred rather than planned — recorded here so
+   the reasoning survives. `==`/`!=` stay a structural primitive: `OP_EQ` reads
+   no static type, so `a == b` works on any value — Int, struct, generic `T` —
+   with nothing imported. Routing it through an `Eq`/`PartialEq` trait would
+   (a) make the commonest operation import-dependent in a language with no
+   prelude, (b) hand coherence the power to take `[1,2] == [1,2]` away from a
+   program that did not import the right module — the `Display`/`Ord`-for-`[T]`
+   wart applied to `==` — and (c) cost a monomorphised call where an opcode
+   stands now, all to buy *custom* equality that would need specialisation (which
+   the language does not have) to coexist with the structural default. Nothing
+   needs custom equality yet, so `Eq` waits for a concrete consumer — a hash map
+   keyed by user types, or a first type whose equality is genuinely not
+   structural. The `PartialEq`/`PartialOrd` split waits with it; its one live
+   motivation, the `Ord for Float` NaN wart, is an ordering bug fixable on its
+   own terms and does not need the trait hierarchy to address.
 
 Not on the roadmap: the **REPL** is a side feature, not a milestone — it lives
 on the `feature/repl` branch (`--repl`, incremental compilation over one module

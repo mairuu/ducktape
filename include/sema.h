@@ -213,6 +213,14 @@ struct TypeChecker {
   // diagnostic say so.
   TraitDef *display_trait;
 
+  // `std::cmp`'s `Ord`, captured the same way and for the same reason as
+  // `display_trait`: a non-numeric `<`/`<=`/`>`/`>=` desugars to `a.cmp(b) <
+  // 0`, and *which* trait declares `cmp` is the language's decision, not
+  // whatever is in scope. Numeric comparison stays a built-in opcode, so only a
+  // non-primitive operand reaches for this. NULL when no module imported
+  // `std::cmp`, which lets the diagnostic say so. See `rewrite_ord_comparison`.
+  TraitDef *ord_trait;
+
   // The format functions a `{v:>8}` / `{f:.3}` spec desugars to, captured the
   // same way `display_trait` is and for the same reason: the user never types
   // these names, so the language must resolve them rather than leaving the

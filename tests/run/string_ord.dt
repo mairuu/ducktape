@@ -43,8 +43,8 @@ fun main() {
     print(compare("abc", "ab"));
     print(compare("", "a"));
 
-    # the trait: `<` and `>` stay numeric opcodes, so this is how a program
-    # compares two Strings
+    # the trait's methods, callable directly. Since milestone 38 the operators
+    # below (`<` in `sort`) desugar to these, but the methods remain first-class.
     print("apple".lt("banana"));
     print("apple".gt("banana"));
     print("apple".le("apple"));
@@ -71,14 +71,15 @@ fun main() {
     print(compare("a", "é"));
 }
 
-# selection sort, so the comparison is the only interesting part
+# selection sort, so the comparison is the only interesting part — and since
+# milestone 38 it is spelled `<`, which desugars to `xs[j].cmp(xs[least]) < 0`.
 fun sort(xs: [String]) {
     var i = 0;
     while i < len(xs) {
         var least = i;
         var j = i + 1;
         while j < len(xs) {
-            if xs[j].lt(xs[least]) {
+            if xs[j] < xs[least] {
                 least = j;
             }
             j = j + 1;

@@ -1293,6 +1293,12 @@ static void tc_register_trait(TypeChecker *tc, Module *m, Decl *decl) {
   if (mod_is_std(m, "fmt") && sv_equal_cstr(def->name, "Display")) {
     tc->display_trait = def;
   }
+  // Ordering operators (`<` etc.) on a non-numeric type route through this, the
+  // way interpolation routes through `display_trait`. Keyed on `std::cmp` too,
+  // so a user trait named `Ord` stays an ordinary trait.
+  if (mod_is_std(m, "cmp") && sv_equal_cstr(def->name, "Ord")) {
+    tc->ord_trait = def;
+  }
 }
 
 // the name a top-level decl introduces into the module's scopes, if any.
@@ -4746,8 +4752,8 @@ static Expr *mk_fun_call(CheckCtx *ctx, FunDef *fun, Expr **args, int argc,
   return call;
 }
 
-// Milestone 35: a `{v:>8}` / `{f:.3}` / `{f:>8.3}` spec is pure sugar. The value
-// is rendered to a String — through `std::fmt::float` when a precision is
+// Milestone 35: a `{v:>8}` / `{f:.3}` / `{f:>8.3}` spec is pure sugar. The
+// value is rendered to a String — through `std::fmt::float` when a precision is
 // asked for, through the ordinary segment path otherwise — and then, if a width
 // was given, padded by the matching `std::string::pad_*`. Both are lang items
 // (see TypeChecker.fmt_pad_start), captured for the same reason `Display` is:
@@ -4819,6 +4825,103 @@ static void check_interpol_seg(CheckCtx *ctx, InterpolSeg *seg) {
   args[1] = mk_int_lit(ctx, spec->width, span);
   args[2] = mk_char_lit(ctx, spec->fill, span);
   seg->expr = mk_fun_call(ctx, pad, args, 3, span);
+}
+
+// Milestone 38: `<`/`<=`/`>`/`>=` on a non-numeric operand desugar to `Ord`,
+// the mirror of `"{v}"` desugaring to `Display`. The observation is the same:
+// once a trait decides ordering, `a < b` is not an operator on `a` and `b`, it
+// is the numeric comparison `a.cmp(b) < 0`. So the rewrite names exactly one
+// method, `cmp`, and leaves the outer `< 0` a built-in numeric opcode — which
+// is why `lt`/`le`/`gt`/`ge` need not be lang items and codegen, the VM and the
+// image format are untouched. A numeric operand keeps `OP_LT` (no import, no
+// frame), exactly as a primitive interpolation segment keeps the VM's own
+// rendering; only a non-primitive reaches for the trait.
+
+// does `type` implement `Ord`? Mirrors `display_satisfied`. `Ord` is not
+// object-safe, so a `TY_DYN` never reaches here, but a bounded generic and a
+// default body's abstract `Self` both answer from the trait they name.
+static bool ord_satisfied(CheckCtx *ctx, Type *type) {
+  TraitDef *ord = ctx->tc->ord_trait;
+  if (ord == NULL) {
+    return false; // `std::cmp` is not in the program at all
+  }
+  if (type->kind == TY_TRAIT) {
+    return type->as.trait.def == ord;
+  }
+  // `Ord` takes no type parameters, so its reference is the trait's own self
+  // type; `impl_index_implements` answers for a concrete type and, from the
+  // declared bounds, for a generic one.
+  return impl_index_implements(ctx->impls, type, ord->self_type, ctx->al);
+}
+
+// Reshape `a OP b` into `a.cmp(b) OP 0` in place, gating on `Ord` first so the
+// diagnostic is about comparison (naming the bound to add) rather than about a
+// missing `cmp`, and so an unrelated inherent `cmp` cannot silently qualify —
+// the same two reasons the `Display` rewrite checks `display_satisfied` first.
+// Returns Bool on success, poison (after one diagnostic) otherwise.
+static Type *rewrite_ord_comparison(CheckCtx *ctx, Expr *expr, Type *lhs) {
+  ExprBinary *binary = &expr->as.binary;
+  Span span = expr->span;
+  char lhs_buf[64];
+  type_sprintf(lhs, lhs_buf, sizeof(lhs_buf));
+
+  if (ctx->tc->ord_trait == NULL) {
+    diag_error(ctx->diags, span,
+               "cannot compare a value of type '%s': only a numeric type "
+               "compares with '<' built in, and this program does not import "
+               "'std::cmp' to get the 'Ord' trait",
+               lhs_buf);
+    return ctx->tc->t_poison;
+  }
+  if (!ord_satisfied(ctx, lhs)) {
+    if (lhs->kind == TY_GENERIC) {
+      // a type parameter satisfies exactly what it was declared to, so the fix
+      // is at the declaration rather than at an impl
+      diag_error(ctx->diags, span,
+                 "cannot compare a value of type '%s': add the bound "
+                 "'%s: Ord'",
+                 lhs_buf, lhs_buf);
+      return ctx->tc->t_poison;
+    }
+    diag_error(ctx->diags, span,
+               "cannot compare a value of type '%s': it does not implement "
+               "'Ord'",
+               lhs_buf);
+    Type *ord_ref = ctx->tc->ord_trait->self_type;
+    ImplQuery q = {
+        .self_type = lhs, .trait = ord_ref, .impls = ctx->impls, .al = ctx->al};
+    note_unimported_impl(
+        ctx->diags,
+        find_unimported_impl(ctx->tc, ctx->impls, impl_query_matches, &q));
+    note_blocking_bound(ctx->diags, ctx->impls, lhs, ord_ref, (StringView){0},
+                        ctx->al);
+    return ctx->tc->t_poison;
+  }
+
+  // `a.cmp(b)`, resolved against the already-known receiver type — so this must
+  // not re-enter resolve_method_call_expr and re-resolve the operands. If the
+  // right operand is not the receiver's `Self`, that resolution reports it.
+  Expr **args = al_alloc(ctx->al, sizeof(Expr *));
+  args[0] = binary->right;
+  Expr *cmp = al_alloc_zero_for(ctx->al, Expr);
+  *cmp = (Expr){
+      .kind = EXPR_METHOD_CALL,
+      .span = span,
+      .as.method_call = {.object = binary->left,
+                         .method_name = sv_from_cstr("cmp"),
+                         .args = args,
+                         .arg_count = 1},
+  };
+  Type *cmp_ty = resolve_method_call_typed(ctx, cmp, lhs, /*hint=*/NULL);
+  if (type_is_poison(cmp_ty)) {
+    return ctx->tc->t_poison;
+  }
+
+  // the outer comparison is now `<cmp> OP 0` — Int against Int, so codegen sees
+  // an ordinary numeric comparison and emits OP_LT/etc. as before.
+  binary->left = cmp;
+  binary->right = mk_int_lit(ctx, 0, span);
+  return ctx->tc->t_bool;
 }
 
 static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
@@ -4913,16 +5016,12 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
                                                                   : ty_int();
       }
     } else if (is_cmp) {
-      if (!type_is_numeric(lhs) || !type_is_numeric(rhs)) {
-        char lhs_buf[64], rhs_buf[64];
-        type_sprintf(lhs, lhs_buf, sizeof(lhs_buf));
-        type_sprintf(rhs, rhs_buf, sizeof(rhs_buf));
-        diag_error(ctx->diags, expr->span,
-                   "comparison requires numeric types, got '%s' and '%s'",
-                   lhs_buf, rhs_buf);
-        result = ty_poison();
-      } else {
+      if (type_is_numeric(lhs) && type_is_numeric(rhs)) {
         result = ty_bool();
+      } else {
+        // a non-numeric operand orders through `Ord`: `a < b` → `a.cmp(b) < 0`,
+        // rewritten in place so codegen sees a numeric comparison.
+        result = rewrite_ord_comparison(ctx, expr, lhs);
       }
     } else if (is_eq) {
       if (!types_equal(lhs, rhs)) {

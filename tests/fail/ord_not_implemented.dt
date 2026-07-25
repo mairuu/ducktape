@@ -1,0 +1,14 @@
+#! expect: cannot compare a value of type 'Widget': it does not implement 'Ord'
+# `<` on a non-numeric type desugars to `Ord` (milestone 38). `std::cmp` is
+# imported, so the trait can be named — but `Widget` has no `impl Ord for
+# Widget`, so the comparison is rejected against the type, not against a missing
+# `cmp` method. `==` would still work: structural equality needs no trait.
+use std::cmp::Ord;
+
+struct Widget { id: Int }
+
+fun main() {
+    var a = Widget { id: 1 };
+    var b = Widget { id: 2 };
+    var less = a < b;
+}

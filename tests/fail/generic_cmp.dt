@@ -1,6 +1,11 @@
-#! expect: comparison requires numeric types, got 'T' and 'T'
-# `<` stays a numeric opcode, so ordering a generic goes through `T: Ord` and
-# `.cmp`, never the operator. Reported against the parameter, not swallowed.
+#! expect: cannot compare a value of type 'T': add the bound 'T: Ord'
+# `<` on a non-numeric type desugars to `Ord` (milestone 38), so ordering a
+# generic goes through `T: Ord` and `.cmp`. An *unbounded* `T` offers no such
+# method, and the fix is at the declaration — so the diagnostic names the bound
+# to add rather than swallowing the operator. `std::cmp` is imported here, so
+# the compiler can name the trait; the parameter simply is not bound by it.
+use std::cmp::Ord;
+
 fun less<T>(a: T, b: T) -> Bool {
     return a < b;
 }
