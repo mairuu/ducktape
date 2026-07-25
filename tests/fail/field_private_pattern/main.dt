@@ -1,0 +1,10 @@
+#! expect: field 'h' of struct 'Rect' is private in module
+use shape::Rect;
+use shape::square;
+
+fun main() {
+  var r = square(3);
+  match r {
+    Rect { w: a, h: b } => { print(a + b); },
+  }
+}

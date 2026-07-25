@@ -1,0 +1,24 @@
+# A stateful object with a hidden invariant: `n` is a private cursor that only
+# this module can touch, so it advances solely through `tick`. `limit` is part
+# of the public surface. This is the shape field visibility exists for — the
+# honest version of a hand-written iterator.
+pub struct Counter {
+  n: Int,        # private: the cursor, mutated only through tick
+  pub limit: Int,
+}
+
+impl Counter {
+  fun new(limit: Int) -> Counter {
+    return Counter { n: 0, limit: limit };
+  }
+
+  # writes the private field within its own module (milestone 43's `+=`).
+  fun tick(self) -> Int {
+    self.n += 1;
+    return self.n;
+  }
+
+  fun done(self) -> Bool {
+    return self.n >= self.limit;
+  }
+}

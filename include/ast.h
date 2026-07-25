@@ -255,7 +255,8 @@ typedef union {
 
 typedef struct {
   FieldIdent ident;
-  Type *type; // resolved field type
+  Type *type;  // resolved field type
+  bool is_pub; // visible outside the defining module (private by default)
 } FieldDef;
 
 typedef struct {
@@ -1080,6 +1081,7 @@ typedef struct {
     int index; // for tuple structs
   } ident;
   TypeNode *type_annotation;
+  bool is_pub; // `pub` prefix: visible outside the defining module
   Span span;
 } FieldDeclNode;
 

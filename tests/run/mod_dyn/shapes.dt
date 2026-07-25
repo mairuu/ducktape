@@ -5,7 +5,7 @@ pub trait Shape {
     }
 }
 
-pub struct Sq { s: Int }
+pub struct Sq { pub s: Int }
 
 impl Shape for Sq {
     fun area(self) -> Int { self.s * self.s }

@@ -139,7 +139,7 @@ a prerequisite rather than a nicety.
 Linking finds the item by **scanning the dependency's own top-level decls**
 (`mod_find_own_decl`), not by looking in its scopes, then copies the resolved
 entry out of the scopes. Scanning the AST is what makes `Decl.is_pub`
-readable — visibility is checked here and nowhere else, off the `Decl` rather
+readable — *item* visibility is checked here, off the `Decl` rather
 than the `*Def` copies — and it is also what keeps re-export *deliberate*: a
 dependency's scopes also hold *its* imports, so a bare `tscope_lookup` would
 give every `use b::X` the meaning of `pub use`. The alternative, tagging every
@@ -153,6 +153,18 @@ rule applies unchanged and the two failures get different wordings ("is private
 in module" vs "is imported by module ... but not re-exported"). Nothing else
 moves: the entry being copied is already in the dependency's scopes, put there
 when *it* was linked, which topological order guarantees has happened.
+
+**Field visibility is the one check that is *not* at the import boundary.**
+A struct field's `pub` (`FieldDef.is_pub`) gates access from another module, but
+a field is never imported by name — it is reached through a value — so the check
+has to live at each *use*, not at the `use`. All three uses funnel through
+`find_struct_field`, so a single guard, `check_field_visible`, sits at each of
+its callers: construction (`EXPR_STRUCT_INIT`), `.field` access-or-assignment
+(`EXPR_FIELD`, which a write reaches through its assignment target), and a struct
+pattern. The rule is `field->is_pub || accessing_module == def->module`, the
+accessing module read off `CheckCtx.tyres.module`; a same-module access ignores
+`pub` entirely. Codegen and the bytecode image are untouched — field *indices*
+do not change — so this is a pure front-end check.
 
 `tc_link_imports` also does its **own conflict checking**, because
 `vscope_define`/`tscope_define` don't detect duplicates and both lookups return

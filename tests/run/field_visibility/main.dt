@@ -1,0 +1,21 @@
+# Cross-module: the `pub` field reads, the private one is reachable only through
+# the type's own methods.
+use std::io::print;
+use counter::Counter;
+
+fun main() {
+  var c = Counter::new(3);
+
+  print(c.limit); # pub field, read across the module boundary
+#> 3
+  print(c.tick());
+#> 1
+  print(c.tick());
+#> 2
+  print(c.done());
+#> false
+  print(c.tick());
+#> 3
+  print(c.done());
+#> true
+}

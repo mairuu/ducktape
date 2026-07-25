@@ -2311,6 +2311,44 @@
   plain/compound assignment, mutation through a method, a nested field, a tuple
   element, aliasing, and a field of an array element.
 
+- **Field-level visibility (milestone 44)** — a struct field carries its own
+  `pub`, private by default. A `pub struct` stays importable, but each field is
+  readable, assignable, constructible, and matchable from another module only
+  when written `pub`; within the defining module every field is reachable
+  regardless. Design: `language.md` visibility section, `architecture.md`
+  "Field visibility is the one check that is not at the import boundary".
+
+  The observation the milestone turns on: **every field use already funnels
+  through one function.** `find_struct_field` answers construction
+  (`EXPR_STRUCT_INIT`), `.field` access-and-assignment (`EXPR_FIELD` — a write
+  reaches it through its assignment target, so milestone 43's `OP_FIELD_SET` is
+  covered for free), and a struct pattern. So visibility is one guard,
+  `check_field_visible`, called at those three sites: `field->is_pub ||
+  accessing_module == def->module`, the accessing module read off
+  `CheckCtx.tyres.module`. Item visibility is checked at the import boundary
+  (`link_import_item`) because an item is imported by name; a field never is —
+  it is reached through a value — so its check has to live at each use instead.
+
+  Three things fall out, and they are the whole milestone:
+  - **Parser gains one optional token.** `parse_field_decl` accepts a `pub`
+    before a named or tuple field. An enum variant's payload reuses the same
+    function but passes `allow_pub = false` — a variant is as visible as its
+    enum, so a `pub` there is rejected rather than silently ignored.
+  - **Codegen and the image are untouched.** Field *indices* do not change, so
+    the check is pure front-end — the same "serializer never moved" property
+    milestone 43 had.
+  - **The default flip cost one line each in five tests.** No `std` struct
+    exposes a field cross-module, and only five pre-existing multi-file tests
+    read an imported struct's fields; each gained `pub` on the fields it always
+    meant to expose. `tests/run/field_visibility` is the honest private-cursor
+    `Counter`; `tests/fail/field_private{,_pattern}` and
+    `tests/fail/field_pub_on_variant` cover the three rejections.
+
+  This is the encapsulation milestone the `Iterator` scouting wanted next: an
+  iterator's whole point is a private advancing cursor, which until now a
+  `pub` type could not hide. Enum variants keep no field-level visibility (a
+  `pub enum`'s payloads are as visible as the enum), matching Rust.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion

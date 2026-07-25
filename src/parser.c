@@ -2478,8 +2478,11 @@ static Decl *parse_fun_decl(Parser *p, bool is_pub, AttrNode attr) {
   return decl;
 }
 
+// `allow_pub` gates a per-field `pub`: a struct field carries its own
+// visibility, but an enum variant's payload does not (a variant is as visible
+// as its enum), so a `pub` there is rejected rather than silently ignored.
 static bool parse_field_decl(Parser *p, FieldDeclNode **out, int *out_count,
-                             bool *out_is_tuple) {
+                             bool *out_is_tuple, bool allow_pub) {
   FieldDeclNode fields[16];
   int field_count = 0;
   bool is_tuple_fields = false;
@@ -2494,6 +2497,14 @@ static bool parse_field_decl(Parser *p, FieldDeclNode **out, int *out_count,
 
         if (field_count >= 16) {
           error_at(p, current_tok_span(p), "too many fields in struct");
+          had_error = true;
+          break;
+        }
+
+        bool field_pub = match_tok(p, TOKEN_PUB);
+        if (field_pub && !allow_pub) {
+          error_at(p, previous_tok_span(p),
+                   "'pub' is not allowed on an enum variant's field");
           had_error = true;
           break;
         }
@@ -2517,6 +2528,7 @@ static bool parse_field_decl(Parser *p, FieldDeclNode **out, int *out_count,
 
         fields[field_count].ident.name = name_tok.lexeme;
         fields[field_count].type_annotation = ty;
+        fields[field_count].is_pub = field_pub;
         fields[field_count].span = span_merge(token_span(&name_tok), ty->span);
         field_count++;
       } while (match_tok(p, TOKEN_COMMA));
@@ -2543,6 +2555,14 @@ static bool parse_field_decl(Parser *p, FieldDeclNode **out, int *out_count,
           break;
         }
 
+        bool field_pub = match_tok(p, TOKEN_PUB);
+        if (field_pub && !allow_pub) {
+          error_at(p, previous_tok_span(p),
+                   "'pub' is not allowed on an enum variant's field");
+          had_error = true;
+          break;
+        }
+
         TypeNode *ty = parse_type(p);
         if (ty->kind == TYNODE_POISON) {
           had_error = true;
@@ -2551,6 +2571,7 @@ static bool parse_field_decl(Parser *p, FieldDeclNode **out, int *out_count,
 
         fields[field_count].ident.index = field_count;
         fields[field_count].type_annotation = ty;
+        fields[field_count].is_pub = field_pub;
         fields[field_count].span = ty->span;
         field_count++;
       } while (match_tok(p, TOKEN_COMMA));
@@ -2628,8 +2649,9 @@ static Decl *parse_struct_decl(Parser *p, bool is_pub) {
   int field_count = 0;
   FieldDeclNode *fields = NULL;
   bool is_tuple_struct = false;
-  had_error = !parse_field_decl(p, &fields, &field_count, &is_tuple_struct) ||
-              had_error;
+  had_error =
+      !parse_field_decl(p, &fields, &field_count, &is_tuple_struct, true) ||
+      had_error;
 
   if (field_count == 0) {
     consume_tok(p, TOKEN_SEMICOLON,
@@ -2719,7 +2741,8 @@ static Decl *parse_enum_decl(Parser *p, bool is_pub) {
         int field_count = 0;
         FieldDeclNode *fields = NULL;
         had_error =
-            !parse_field_decl(p, &fields, &field_count, &is_tuple) || had_error;
+            !parse_field_decl(p, &fields, &field_count, &is_tuple, false) ||
+            had_error;
 
         if (had_error) {
           break;

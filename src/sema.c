@@ -62,6 +62,33 @@ FieldDef *find_struct_field(const StructDef *def, FieldIdent ident,
   }
 }
 
+// a struct field is reachable from the module that defines the struct
+// regardless of `pub` — privacy is a module boundary, never an intra-file one —
+// and from elsewhere only when marked `pub`. The three sites that name a field
+// (construction, `.field` access/assignment, a struct pattern) all funnel
+// through find_struct_field, so they all guard with this. Returns true when the
+// access is allowed; otherwise emits the diagnostic and returns false.
+static bool check_field_visible(CheckCtx *ctx, const StructDef *def,
+                                const FieldDef *field, Span span) {
+  if (field->is_pub || ctx->tyres.module == def->module) {
+    return true;
+  }
+  if (def->is_tuple) {
+    diag_error(
+        ctx->diags, span,
+        "field %d of struct '" SV_FMT "' is private in module '" SV_FMT "'",
+        field->ident.index, SV_ARG(def->name), SV_ARG(def->module->file_path));
+  } else {
+    diag_error(ctx->diags, span,
+               "field '" SV_FMT "' of struct '" SV_FMT
+               "' is private in module '" SV_FMT "'",
+               SV_ARG(field->ident.name), SV_ARG(def->name),
+               SV_ARG(def->module->file_path));
+  }
+  diag_note(ctx->diags, (Span){0}, "add 'pub' to the field's declaration");
+  return false;
+}
+
 VariantDef *find_enum_variant(const EnumDef *def, StringView name,
                               DiagBag *diags, Span span) {
   for (int i = 0; i < def->variant_count; i++) {
@@ -1823,6 +1850,7 @@ static void resolve_struct_decl(ResolveCtx *rctx, Decl *decl) {
     field_types.ptr[i] =
         rctx_resolve(rctx, struct_decl->fields[i].type_annotation);
     struct_def->fields[i].type = field_types.ptr[i];
+    struct_def->fields[i].is_pub = struct_decl->fields[i].is_pub;
     if (struct_def->is_tuple) {
       struct_def->fields[i].ident.index = struct_decl->fields[i].ident.index;
     } else {
@@ -3238,7 +3266,7 @@ static bool check_struct_pattern(CheckCtx *ctx, Pattern *pattern,
         find_struct_field(struct_def, fp->ident, ctx->diags, fp->span);
 
     Type *field_ty = NULL;
-    if (fd == NULL) {
+    if (fd == NULL || !check_field_visible(ctx, struct_def, fd, fp->span)) {
       sub_pattern_error = true;
       field_ty = ctx->tc->t_poison;
     } else {
@@ -5264,7 +5292,8 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
 
       FieldDef *field_def =
           find_struct_field(def, field_init->ident, ctx->diags, expr->span);
-      if (!field_def) {
+      if (!field_def ||
+          !check_field_visible(ctx, def, field_def, field_init->value->span)) {
         had_error = true;
         continue;
       }
@@ -5413,7 +5442,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
 
       FieldDef *field_def =
           find_struct_field(def, field->ident, ctx->diags, expr->span);
-      if (!field_def) {
+      if (!field_def || !check_field_visible(ctx, def, field_def, expr->span)) {
         result = ctx->tc->t_poison;
       } else {
         result = field_def->type;

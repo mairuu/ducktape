@@ -18,7 +18,7 @@ fun add(a: Int, b: Int) -> Int {     # return type via ->, omitted = ()
     a + b                            # last expression is the return value
 }
 
-pub struct Point<T> { x: T, y: T, }  # named struct; pub = visible to importers
+pub struct Point<T> { pub x: T, pub y: T, }  # pub struct; pub fields exposed too
 struct Pair(Int, Int)                # tuple struct
 struct Unit;                         # unit struct
 
@@ -369,9 +369,29 @@ loaded once.
 Items are **private by default**; `pub` makes one importable:
 
 ```
-pub struct Point { x: Int, y: Int }  # importable
-fun helper() -> Int { 1 }            # private: `use m::helper;` is an error
+pub struct Point { pub x: Int, pub y: Int }  # importable, both fields exposed
+fun helper() -> Int { 1 }                    # private: `use m::helper;` is an error
 ```
+
+A struct's **fields carry their own visibility**, and it too is private by
+default: a `pub struct` is importable, but each field is readable, assignable,
+constructible, and matchable from another module only if it is written `pub`.
+Within the module that defines the struct every field is reachable regardless —
+visibility is a module boundary, never an intra-file one — so a type can keep an
+invariant behind a private field and expose it only through its methods:
+
+```
+pub struct Counter {
+  n: Int,          # private: only this module touches the cursor
+  pub limit: Int,  # public
+}
+# elsewhere: `c.limit` reads, but `c.n` and `Counter { n: 0, .. }` are errors,
+# as is a pattern `Counter { n, .. }` — the field is named either way.
+```
+
+Enum variants have no field-level visibility: a `pub enum`'s variants and their
+payloads are as visible as the enum itself. `pub` on a tuple-struct field
+(`struct P(pub Int, Int)`) works the same way as on a named one.
 
 A plain `use` does not re-export. If `b.dt` does `use a::X;`, then `use b::X;`
 from a third module is an error — "imported by module 'b.dt' but not

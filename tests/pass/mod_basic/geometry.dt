@@ -1,8 +1,8 @@
 # imported by main.dt
 
 pub struct Point {
-  x: Int,
-  y: Int,
+  pub x: Int,
+  pub y: Int,
 }
 
 pub fun origin() -> Point {

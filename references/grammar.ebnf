@@ -43,15 +43,17 @@ paramList      = param ( "," param )* ;
 param          = "self" | IDENT ":" type ;   (* self only in impl methods *)
 
 structDecl     = "struct" IDENT typeParams?
-                 ( "{" fieldDecl ( "," fieldDecl )* ","? "}"   (* named  *)
-                 | "(" type ( "," type )* ")"                  (* tuple  *)
-                 | ";" ) ;                                     (* unit   *)
-fieldDecl      = IDENT ":" type ;
+                 ( "{" fieldDecl ( "," fieldDecl )* ","? "}"       (* named  *)
+                 | "(" ( "pub"? type ) ( "," "pub"? type )* ")"    (* tuple  *)
+                 | ";" ) ;                                         (* unit   *)
+fieldDecl      = "pub"? IDENT ":" type ;   (* per-field visibility, private by default *)
 
 enumDecl       = "enum" IDENT typeParams?
                  "{" variantDecl ( "," variantDecl )* ","? "}" ;
+(* a variant's payload takes no per-field "pub": it is as visible as its enum *)
 variantDecl    = IDENT ( "(" type ( "," type )* ")"
-                       | "{" fieldDecl ( "," fieldDecl )* ","? "}" )? ;
+                       | "{" variantFieldDecl ( "," variantFieldDecl )* ","? "}" )? ;
+variantFieldDecl = IDENT ":" type ;
 
 traitDecl      = "trait" IDENT typeParams? "{" traitItem* "}" ;
 traitItem      = "type" IDENT ";"

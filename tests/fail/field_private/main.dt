@@ -1,0 +1,9 @@
+#! expect: field 'h' of struct 'Rect' is private in module
+use shape::Rect;
+use shape::square;
+
+fun main() {
+  var r = square(3);
+  # w is pub, this would be fine; h is private, so reading it here is the error.
+  var hidden: Int = r.h;
+}

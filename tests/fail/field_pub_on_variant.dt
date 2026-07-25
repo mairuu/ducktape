@@ -1,0 +1,8 @@
+#! expect: 'pub' is not allowed on an enum variant's field
+# an enum variant is as visible as its enum, so a per-field `pub` on its payload
+# is meaningless — the parser rejects it rather than silently ignore it.
+pub enum Shape {
+  Circle { pub r: Int },
+}
+
+fun main() {}

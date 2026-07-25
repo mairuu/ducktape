@@ -5,7 +5,7 @@ pub trait Area {
 }
 
 pub struct Circle {
-  r: Float,
+  pub r: Float,
 }
 
 impl Area for Circle {
