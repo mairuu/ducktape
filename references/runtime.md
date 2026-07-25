@@ -948,6 +948,22 @@ frame. Anything that would need a value — naming it, passing it — reaches
 `cg_call_target` and is a diagnostic. This is what finally exposes `OP_LEN`,
 until now reachable only from the `for` desugaring.
 
+**A method may be native too.** `resolve_impl_decl` runs the same
+`tc_bind_native` on an impl method's `FunDef` that `tc_register_fun` runs on a
+top-level one, so `impl String { @native("string_len") fun len(self) -> Int; }`
+binds exactly as the free `string::len` does. `self` is an ordinary parameter
+(`is_self` set), and the receiver's value is what the free-function form would
+have passed as argument 0 — so a native method needs *no* codegen change at all:
+`compile_method_call` already pushes the arguments in `is_self` order and closes
+with `OP_CALL`, which dispatches `fun->native`. That is why a native method is
+first-class in the same breath — it takes a global slot and drops into a
+`dyn Trait` vtable like the free form. An **intrinsic** method is the one place
+`compile_method_call` grew a branch, mirroring `compile_call`: it pushes the
+receiver at its `self` position and emits the opcode inline, so the
+`cg_call_target` "an intrinsic has no slot" diagnostic is never reached for a
+method. (A *trait*-declaration method still cannot be native: its default body is
+generic over `Self`, with no concrete C body to bind.)
+
 **Serialization.** A C function pointer cannot go in an image, so a fun record
 carries a *body kind*: `BC_BODY_CHUNK` writes the chunk as before,
 `BC_BODY_NATIVE` writes the registry name, and `bc_load` re-binds it against

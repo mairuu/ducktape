@@ -1980,6 +1980,12 @@ static void resolve_impl_decl(ResolveCtx *rctx, Decl *decl) {
       fun_def->span = item->span;
       fun_def->slot = SLOT_NONE;
 
+      // a method may be `@native`/`@intrinsic` too — the same name lookup a
+      // top-level fun gets (tc_register_fun), so the receiver's operation can be
+      // in C and still be called `s.len()`. A method with no attribute leaves
+      // this ATTR_NONE, exactly as before.
+      tc_bind_native(rctx->tc, fun_def, &fun_decl->attr);
+
       // resolve method type parameters
       fun_def->type_param_count = fun_decl->type_param_count;
       fun_def->type_params = al_alloc_zero(
@@ -6101,7 +6107,12 @@ static void tc_check_impl(TypeChecker *tc, Decl *decl) {
                       cctx.diags, (Span){0}, NULL);
       }
 
-      resolve_expr_coerced(&cctx, fun_decl->body, fun_def->return_type);
+      // a native/intrinsic method has its body in C, so the signature is the
+      // whole declaration — nothing here to check, same as a top-level native
+      // (tc_check_fun).
+      if (fun_decl->body != NULL) {
+        resolve_expr_coerced(&cctx, fun_decl->body, fun_def->return_type);
+      }
 
       // end method var scope
       cctx.vscope = vscope_pop(cctx.vscope);

@@ -1,0 +1,10 @@
+#! expect: no native named 'no_such_native'
+# A method's `@native` is bound by the same registry lookup a top-level fun gets
+# (tc_bind_native), so an unknown name is reported here with a real span rather
+# than surfacing later as a mysterious missing method.
+
+impl String {
+    @native("no_such_native") fun len(self) -> Int;
+}
+
+fun main() {}

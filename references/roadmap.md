@@ -2124,6 +2124,46 @@
   `tests/fail/ord_not_implemented.dt` (a type with no impl),
   `tests/fail/char_no_comparison_operator.dt` (the absent-import case).
 
+- **Native methods (milestone 39)** — a method's body may be `@native`/
+  `@intrinsic`, so a primitive's operation can be spelled `s.len()` rather than a
+  free `string::len(s)`. Design: `language.md` "Native functions", `runtime.md`
+  "Native functions", `grammar.ebnf` `implItem`.
+
+  The observation the milestone turns on: **`self` is an ordinary parameter to
+  the C function** — the same value the free-function form passes as argument 0.
+  So a native method is not a new mechanism, it is the existing one with the
+  receiver named `self`, and almost nothing below the signature had to move:
+  - **The runtime did not change at all.** `compile_method_call` already pushed
+    the arguments in `is_self` order and closed with `OP_CALL`, and `OP_CALL`
+    already dispatched `fun->native` — so an `@native` method runs, takes a
+    global slot, and drops into a `dyn Trait` vtable with no new code. The one
+    codegen addition is the `@intrinsic` method, which mirrors `compile_call`:
+    push the receiver at its `self` position and emit the opcode inline, so the
+    "an intrinsic has no slot" diagnostic is never reached for a method.
+  - **The checker change is two lines of reuse.** `resolve_impl_decl` runs the
+    same `tc_bind_native` on a method's `FunDef` that `tc_register_fun` runs on a
+    top-level one — so an unknown name reports against its span, exactly as
+    before — and `tc_check_impl` skips a bodyless method's body-check the way
+    `tc_check_fun` already skips a native's. The parser accepts an optional
+    attribute before `fun` in an impl body and threads it through the same
+    `parse_fun_decl`.
+  - **A *trait*-declaration method stays non-native.** Its default body is
+    generic over `Self`, so there is no concrete C body to bind; the attribute is
+    accepted on a top-level `fun` and on an impl method only.
+
+  **The standard library deliberately does not adopt it here.** Every std module
+  documents its free-function spelling as a choice — `std/strbuf.dt` and
+  `std/char.dt` both note "ships no impls, and is free to reach for", the
+  property that keeps them cheap dependencies — and several call sites are
+  load-bearing for unrelated tests (`tests/run/mod_qualified` leans on the free
+  `array::len` to demonstrate module-qualified paths). Migrating std to methods
+  would have to rethink each of those notes, so it is left as a separate step;
+  this milestone lands the *capability* the way milestone 16 landed natives, with
+  the registry deliberately small. Tests: `tests/run/native_method.dt` (a native
+  `String` method, an intrinsic `[T]` method, and a native method dispatched
+  through a `dyn Measure` vtable), `tests/fail/native_method_unknown.dt` (an
+  unknown native name on a method reports at its span).
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -2264,9 +2304,13 @@ via `Module.decl_base`) and is not part of the main line.
 - an `@intrinsic` cannot be used as a value (it is an opcode, so there is no
   body for a global slot to address) — reported at codegen, unlike the
   `@native` beside it which is fully first-class
-- `@native`/`@intrinsic` are only accepted on a top-level `fun`: an impl method
-  or a trait method cannot be native, so a primitive's operations have to be
-  free functions (`string::len(s)`, not `s.len()`)
+- `@native`/`@intrinsic` on a *trait*-declaration method is still rejected — its
+  default body is generic over `Self`, with no concrete C body to bind. An impl
+  method may be native as of milestone 39 (`s.len()`), but the standard library
+  does not yet use it: each std module spells its operations as free functions by
+  deliberate choice (`std/strbuf.dt`, `std/char.dt` both note "ships no impls"),
+  and several call sites are load-bearing for other tests (`mod_qualified` leans
+  on the free `array::len`), so migrating std is a separate step
 - a native's C signature is not checked against its ducktape one — the registry
   knows only "n values in, one out", so a mismatch is a std bug that the
   checker cannot catch

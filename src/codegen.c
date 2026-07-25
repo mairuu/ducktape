@@ -1348,6 +1348,25 @@ static void compile_method_call(Cg *cg, Expr *expr) {
     return;
   }
 
+  // an @intrinsic method *is* its opcode: push the receiver at its `self`
+  // position, the arguments interleaved as usual, then emit the opcode inline —
+  // no slot, no frame, no OP_CALL. This is compile_call's direct-intrinsic path
+  // with the receiver folded in, and it is why the ATTR_INTRINSIC guard in
+  // cg_call_target (an intrinsic has no slot to address) is never reached for a
+  // method call.
+  if (fun->native_kind == ATTR_INTRINSIC) {
+    int ki = 0;
+    for (int i = 0; i < fun->param_count; i++) {
+      if (fun->params[i].is_self) {
+        compile_expr(cg, mc->object);
+      } else {
+        compile_expr(cg, mc->args[ki++]);
+      }
+    }
+    emit(cg, (OpCode)fun->intrinsic_op);
+    return;
+  }
+
   if (!cg_emit_target(cg, fun, &mc->inst, &impl_subst, expr->span)) {
     return;
   }

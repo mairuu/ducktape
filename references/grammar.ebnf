@@ -63,7 +63,10 @@ implDecl       = "impl" typeParams? type ( "for" type )? whereClause?
                  "{" implItem* "}" ;
                  (* with "for": first type is the trait, second is self *)
 implItem       = "type" IDENT "=" type ";"
-               | funDecl ;    (* method; no "pub" inside impls *)
+               | attribute? funDecl ;
+                 (* method; no "pub" inside impls. An `@native`/`@intrinsic`
+                    method has its body in C, exactly like a top-level fun —
+                    language.md "Native functions" *)
 
 typeParams     = "<" typeParam ( "," typeParam )* ">" ;
 typeParam      = IDENT ( ":" traitBound )? ;

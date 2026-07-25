@@ -60,9 +60,11 @@ Three passes over each module, mirroring compiler phases:
    scope define never detects a collision and a scope lookup returns the
    *first* match, so a redeclaration would silently lose to the original),
    then allocate def stubs for fun/struct/enum/impl/trait,
-   count-then-populate. A `fun` carrying `@native`/`@intrinsic` is bound to
-   C's registry here by `tc_bind_native` — the attribute still has a span, so
-   an unknown name reports against it (`runtime.md` "Native functions"). There
+   count-then-populate. A top-level `fun` carrying `@native`/`@intrinsic` is
+   bound to C's registry here by `tc_bind_native` — the attribute still has a
+   span, so an unknown name reports against it (`runtime.md` "Native
+   functions"); an impl method's attribute is bound by the same call in the
+   *resolve* pass, where the method's `FunDef` is built (milestone 39). There
    are no builtins: `print` is an ordinary import of `std::io`. `use` is a
    no-op here — imports are linked in pass 2, see "Modules". Top-level `var`
    is diagnosed here: every slot space the linker builds is a definition

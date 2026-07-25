@@ -3110,11 +3110,21 @@ static Decl *parse_impl_decl(Parser *p, bool is_pub) {
         items[item_count].assoc_type = ty;
         items[item_count].span = span_merge(start_span, ty->span);
         item_count++;
-      } else if (check_tok(p, TOKEN_FUN)) {
-        // no attribute: an impl method cannot be native yet, so there is
-        // nowhere for one to be written.
-        Decl *fun_decl =
-            parse_fun_decl(p, false, (AttrNode){.kind = ATTR_NONE});
+      } else if (check_tok(p, TOKEN_AT) || check_tok(p, TOKEN_FUN)) {
+        // a method may carry `@native`/`@intrinsic` just like a top-level fun:
+        // the attribute *is* its body, so a primitive's operation can be spelled
+        // `s.len()` rather than as a free `string::len(s)`. `self` is an ordinary
+        // parameter to the native, so nothing downstream of the signature has to
+        // change.
+        AttrNode attr = {.kind = ATTR_NONE};
+        if (match_tok(p, TOKEN_AT)) {
+          attr = parse_attr(p);
+          if (attr.kind == ATTR_NONE) {
+            had_error = true;
+            break;
+          }
+        }
+        Decl *fun_decl = parse_fun_decl(p, false, attr);
         if (fun_decl->kind == DECL_POISON) {
           had_error = true;
         } else {

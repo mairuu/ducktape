@@ -905,10 +905,30 @@ alias like anything else, and a *generic* native is never monomorphised — the
 runtime is uniform in type arguments, so one C body serves every `T`, which is
 why `print<T>` works at all.
 
-Attributes are only accepted on a top-level `fun`. An impl method or a trait
-method cannot be native.
+An **impl method** may carry an attribute too, so a primitive's operation can be
+spelled `s.len()` rather than as a free `string::len(s)`:
 
-Nothing restricts them to `std/` — a user module may declare a native too. The
+```
+impl String {
+    @native("string_len") fun len(self) -> Int;
+}
+impl<T> [T] {
+    @intrinsic("array_len") fun len(self) -> Int;   # lowers to OP_LEN inline
+}
+```
+
+`self` is an ordinary parameter to the C function — the same value it would have
+received as the first argument of the free-function form — so nothing below the
+signature changes: a native method dispatches through the same `OP_CALL`, takes
+an ordinary global slot, and slots into a `dyn Trait` vtable like any other
+method; an intrinsic method lowers to its opcode at the call site. A *trait*
+method (in a `trait` declaration) still cannot be native — its default body is
+generic over `Self` — so the attribute is accepted on a top-level `fun` and on
+an impl method only. The standard library does not yet use this: each std module
+spells its operations as free functions by deliberate choice (see the notes in
+`std/strbuf.dt`, `std/char.dt`), and migrating them is a separate step.
+
+Nothing restricts natives to `std/` — a user module may declare one too. The
 registry is closed, so the only names available are the ones the binary already
 provides, and the *decision* about what C exposes stays in C. Restricting the
 attribute by module would add a rule without adding a guarantee.
