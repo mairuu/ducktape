@@ -987,7 +987,9 @@ in the emitted code.
 Porting `print` to this deleted `OP_PRINT`, `cg_names_builtin_print`,
 `tc_register_builtins`, the "using a builtin as a value" diagnostic, and the
 `std::io` no-op in `mod_collect_imports`/`tc_link_imports`. `print` is now
-imported like anything else; there is no prelude.
+imported like anything else, and is deliberately kept out of the prelude
+(milestone 45) — that prelude covers the lang-item and vocabulary modules, not
+plain functions like `print`.
 
 
 ## Future (design intent, not implemented)

@@ -1486,6 +1486,15 @@ static void link_copy_entry(TypeChecker *tc, Module *dst, Module *src,
   }
 }
 
+// does `alias` already name something in m — an own decl or an earlier
+// import? The silent counterpart of link_name_taken: a prelude import asks
+// this and yields quietly, where an explicit one reports the clash.
+static bool link_name_bound(Module *m, StringView alias) {
+  return mod_find_own_decl(m, alias) != NULL ||
+         tscope_lookup(&m->tscope, alias) != NULL ||
+         vscope_lookup(&m->vscope, alias, NULL) != NULL;
+}
+
 // return true if `alias` is already taken in m, reporting why.
 static bool link_name_taken(TypeChecker *tc, Module *m, const UseAlias *a) {
   if (mod_find_own_decl(m, a->alias) != NULL) {
@@ -1536,7 +1545,15 @@ static Decl *mod_find_use_alias(Module *m, StringView name) {
 // a std module is an ordinary registry entry, vetted by the same `pub` rule
 // as any other dependency.
 static void link_import_item(TypeChecker *tc, Module *m, Module *dep,
-                             const UseAlias *a) {
+                             const UseAlias *a, bool from_prelude) {
+  // a prelude name is lowest priority: if the module already has it — its own
+  // decl, or an explicit import linked earlier — the prelude simply steps
+  // aside, no diagnostic. That is what lets a program define its own `Option`
+  // or `use` a different `Ord` with the prelude's still injected.
+  if (from_prelude && link_name_bound(m, a->alias)) {
+    return;
+  }
+
   Decl *d = mod_find_own_decl(dep, a->name);
   bool via_reexport = false;
   if (d == NULL) {
@@ -1621,8 +1638,9 @@ void tc_link_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
       link_bind_module(tc, m, dep, &target->aliases[0]);
       continue;
     }
+    bool from_prelude = imp->decl->as.use_decl.from_prelude;
     for (int j = 0; j < target->count; j++) {
-      link_import_item(tc, m, dep, &target->aliases[j]);
+      link_import_item(tc, m, dep, &target->aliases[j], from_prelude);
     }
   }
 }

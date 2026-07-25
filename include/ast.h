@@ -1140,6 +1140,9 @@ typedef struct {
   UseTarget target;
   bool bare;             // no `{...}` list: path includes the trailing name
   bool is_module_import; // binds a module qualifier, not items (set at collect)
+  bool from_prelude;     // synthesised by mod_inject_prelude, not written in
+                         // source: yields silently on a name collision so a
+                         // local decl or explicit import always wins.
 } DeclUse;
 
 typedef struct {

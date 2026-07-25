@@ -2349,6 +2349,57 @@
   `pub` type could not hide. Enum variants keep no field-level visibility (a
   `pub enum`'s payloads are as visible as the enum), matching Rust.
 
+- **A prelude (milestone 45)** — the `Iterator` scouting turned up a friction
+  worth fixing at the root first. ducktape has no auto-import, and a lang item
+  is a name the *compiler* resolves for a construct that never spells it — so
+  interpolating a struct silently needed `use std::fmt`, `a < b` on a struct
+  needed `use std::cmp`, a `{v:>8}` spec needed `use std::string`. Each is a
+  syntactic construct whose meaning lived behind an import the user had to
+  remember. The prelude removes the whole class: every non-std module implicitly
+  imports `std::option` (`Option`), `std::result` (`Result`), `std::cmp`
+  (`Ord`), `std::fmt` (`Display`), and `std::string` (capture-only, for the
+  `pad_*` a width spec needs). Design: `architecture.md` "Modules" → "The
+  prelude is discovery, not a new phase".
+
+  The observation the milestone turns on: **the prelude is discovery, not a new
+  phase.** Every later phase — dep graph, register, resolve, link — already
+  iterates one array, `Module.imports[]`. So the prelude is *synthesised import
+  entries* appended to that array (`mod_inject_prelude`, in `src/module.c`,
+  right after `mod_collect_imports`): ordinary `DECL_USE` nodes carrying a new
+  `from_prelude` flag. Nothing downstream changed. Three properties are the
+  whole design:
+  - **std is exempt** (`is_std_key`): a prelude module can't import itself, the
+    one cycle to avoid.
+  - **Lowest priority, silent yield.** Appended *after* the real imports (so
+    those link first), and on a name already bound — an own decl or an explicit
+    import — `link_import_item` sees `from_prelude` and returns quietly
+    (`link_name_bound`) instead of the clash diagnostic. This is Rust's "a local
+    item shadows the prelude": `tests/pass/prelude_shadow.dt` keeps its own
+    three-variant `Option`, and `tests/*/propagate` keep their hand-written
+    `Result` + `?`.
+  - **Lang-item capture is free.** `display_trait`/`ord_trait`/`fmt_*` (see
+    `sema.h`) are captured when their module *registers*, which the prelude now
+    guarantees always happens — so they went from "NULL unless imported" to
+    always-populated.
+
+  Two things fall out:
+  - **Four "you forgot to import std::X" diagnostics became unreachable** — the
+    invisible import can no longer be missing. `tests/fail/{interp_no_fmt,
+    char_no_comparison_operator,fmt_spec_no_fmt,fmt_spec_no_string}` were retired
+    (the first was already a duplicate of `interp_no_display`); their coverage
+    moved to `tests/run/prelude.dt`, which reaches every lang item with only
+    `use std::io::print`. The NULL guards stay as defence against a std module
+    failing to load.
+  - **`print` is deliberately *not* preluded.** It is a plain function tied to
+    no syntax, so it stays `use std::io::print` — preluding it would have churned
+    nearly every test to fix no friction. The prelude is exactly the lang-item
+    and vocabulary modules, nothing more.
+
+  With the friction gone at the root, the deferred `Iterator` trait is now the
+  clean choice for next: it can name `Option` and `Display` in its signatures
+  and be *used* through a bare `for x in it` without the loop ever forcing an
+  import.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -2404,10 +2455,12 @@ the smaller entanglement, matching how `Display` names exactly `to_string`.)
    the reasoning survives. `==`/`!=` stay a structural primitive: `OP_EQ` reads
    no static type, so `a == b` works on any value — Int, struct, generic `T` —
    with nothing imported. Routing it through an `Eq`/`PartialEq` trait would
-   (a) make the commonest operation import-dependent in a language with no
-   prelude, (b) hand coherence the power to take `[1,2] == [1,2]` away from a
-   program that did not import the right module — the `Display`/`Ord`-for-`[T]`
-   wart applied to `==` — and (c) cost a monomorphised call where an opcode
+   (a) make the commonest operation depend on a trait impl — and unlike `Ord`,
+   `==` is deliberately *not* one of the prelude's lang items, so this would be
+   real friction, not the kind the prelude removes, (b) hand coherence the power
+   to take `[1,2] == [1,2]` away from a program whose modules disagree — the
+   `Display`/`Ord`-for-`[T]` wart applied to `==` — and (c) cost a monomorphised
+   call where an opcode
    stands now, all to buy *custom* equality that would need specialisation (which
    the language does not have) to coexist with the structural default. Nothing
    needs custom equality yet, so `Eq` waits for a concrete consumer — a hash map

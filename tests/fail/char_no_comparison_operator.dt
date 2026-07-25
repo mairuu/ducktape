@@ -1,8 +1,0 @@
-#! expect: does not import 'std::cmp'
-# Ordering a Char is `Ord`, not a built-in opcode: `<` and `>` stay numeric, so
-# `'a' < 'b'` desugars to `'a'.cmp('b') < 0` (milestone 38) and needs the trait
-# in scope. Without `use std::cmp`, the compiler cannot name `Ord` at all, and
-# says so rather than reporting a missing method.
-fun main() {
-    var b = 'a' < 'b';
-}

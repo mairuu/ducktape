@@ -173,6 +173,38 @@ import silently win over the module's own declaration. There are two import
 kinds now: an item import copies entries into the scopes (above), and a *module
 import* binds a qualifier (below).
 
+**The prelude is discovery, not a new phase** (`mod_inject_prelude`,
+`src/module.c`; milestone 45). ducktape has no auto-import, so a construct whose
+meaning is a lang item used to need an import the user never wrote — `"{v}"` on
+a struct needed `std::fmt`, `a < b` on a struct needed `std::cmp`. The prelude
+removes that class of friction by making every *non-std* module implicitly
+depend on a fixed set: `std::option` (`Option`), `std::result` (`Result`),
+`std::cmp` (`Ord`), `std::fmt` (`Display`), and `std::string` (capture-only, for
+the `pad_*` a width spec needs). The mechanism reuses everything above: after
+`mod_collect_imports`, the discovery loop appends **synthesised `ModImport`s** —
+ordinary `DECL_USE` nodes with `from_prelude` set — to `m->imports`, registering
+any prelude module not yet seen. The dep graph, register, resolve, and link
+phases are untouched; they already iterate `imports[]`. Three properties make it
+safe:
+
+- **std modules are exempt** (`is_std_key`): a prelude module cannot import
+  itself, which is the only cycle the exemption avoids.
+- **The prelude is lowest priority.** Its entries are appended *after* a
+  module's real imports, so those link first; and on a name already bound — an
+  own decl or an explicit import — `link_import_item` sees `from_prelude` and
+  **yields silently** (`link_name_bound`, no diagnostic) where an explicit
+  import would report the clash. This is what keeps a hand-written `enum Result`
+  (or `Option`) working: the prelude's just steps aside. It is Rust's
+  "a local item shadows the prelude" rule.
+- **Lang-item capture falls out for free.** `display_trait`/`ord_trait`/
+  `fmt_pad_*`/`fmt_float` are captured when their module *registers*, and the
+  prelude guarantees it always does — so those fields (see `sema.h`) went from
+  "NULL unless the user imported it" to always-populated. The "you forgot to
+  import `std::fmt`" diagnostics are now unreachable; their NULL guards remain
+  only as defence against a std module failing to load. `print` is deliberately
+  *not* preluded — it is an ordinary function tied to no syntax, so it stays an
+  explicit `use std::io::print`.
+
 ### Module-qualified paths
 
 `use a::b;` naming a module binds `b` as a **qualifier**, so `b::thing`
@@ -573,15 +605,16 @@ Two things carry over from the `Display` design intact:
   about a missing `cmp` method, and it stops an unrelated inherent `cmp` from
   silently qualifying. `TypeChecker.ord_trait` is captured in
   `tc_register_trait` when `<std>/cmp.dt` declares `Ord`, keyed on the module
-  like `display_trait`; NULL when no module imports `std::cmp`, which the
-  diagnostic reports as such.
+  like `display_trait`. Since the prelude imports `std::cmp` into every program
+  (see "Modules"), it is populated everywhere; the NULL guard is now defensive.
 
 **`==`/`!=` are deliberately left out** and stay a structural primitive: `OP_EQ`
 reads no static type, so equality is free, import-less and universal on any two
 values of one type — routing it through an `Eq` trait would make the commonest
-operation import-dependent in a language with no prelude, and hand coherence the
-power to take `[1,2] == [1,2]` away from a program that imported the wrong
-module. `Eq` waits for a concrete consumer that needs *custom* equality.
+operation depend on a trait impl (and, unlike `Ord`, `==` is *not* one of the
+prelude's lang items), handing coherence the power to take `[1,2] == [1,2]` away
+from a program whose modules disagree. `Eq` waits for a concrete consumer that
+needs *custom* equality.
 
 ### Types and inference
 

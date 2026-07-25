@@ -1,5 +1,0 @@
-#! expect: a precision spec needs 'std::fmt'
-use std::io::print;
-fun main() {
-    print("{3.14:.2}");
-}

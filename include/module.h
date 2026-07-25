@@ -111,6 +111,13 @@ bool mod_parse(Module *m, DiagBag *diags, Allocator *al);
 bool mod_collect_imports(Module *m, ModuleRegistry *reg, StringView base_dir,
                          DiagBag *diags, Allocator *al);
 
+// append the implicit prelude to a non-std module: synthesised imports of the
+// vocabulary and lang-item std modules, so their names and lang items are in
+// scope without an explicit `use`. A no-op for std modules (which cannot
+// import themselves). Registers any prelude module not yet seen, extending the
+// discovery worklist the same way mod_collect_imports does. Requires m parsed.
+void mod_inject_prelude(Module *m, ModuleRegistry *reg, Allocator *al);
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // ModuleRegistry
 // ═══════════════════════════════════════════════════════════════════════════════

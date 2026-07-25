@@ -1,0 +1,40 @@
+# The prelude (milestone 45): the vocabulary and lang-item std modules are in
+# scope without an explicit `use`. This program imports only `print`, yet names
+# `Ord`, `Display`, `Option`, `Result` and reaches every lang item —
+# interpolation (`Display`), ordering (`Ord`), a width spec (`std::string`'s
+# `pad_*`) and a precision spec (`std::fmt`'s `float`) — all with no import.
+#> (1, 2) < (1, 9): true
+#> true
+#> [    42]
+#> 3.14
+#> 10
+#> false
+use std::io::print;
+
+struct P { x: Int, y: Int }
+
+impl Ord for P {
+    fun cmp(self, other: P) -> Int {
+        if self.x != other.x { return self.x.cmp(other.x); }
+        return self.y.cmp(other.y);
+    }
+}
+
+impl Display for P {
+    fun to_string(self) -> String { "({self.x}, {self.y})" }
+}
+
+fun main() {
+    var a = P { x: 1, y: 2 };
+    var b = P { x: 1, y: 9 };
+    print("{a} < {b}: {a < b}"); # Display + Ord, unimported
+    print('a' < 'b');            # Char `<` desugars through Ord
+    print("[{42:>6}]");          # a width spec, no `use std::string`
+    print("{3.14159:.2}");       # a precision spec, no `use std::fmt`
+
+    var o = Option::Some(5);     # Option in scope, its methods too
+    print(o.map(|n| => n * 2).unwrap_or(0));
+
+    var r: Result<Int, String> = Result::Err("nope");
+    print(r.is_ok());
+}

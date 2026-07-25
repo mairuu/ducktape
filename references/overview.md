@@ -64,7 +64,11 @@ Driver: `compiler_run` in `src/compiler.c`. Phases, in order:
    the root file's directory, which is the one module search root — except
    `use std::…`, which names a module embedded in the binary and takes its
    source from there instead of the filesystem. It is an ordinary module in
-   every other respect.
+   every other respect. Each non-std module then gets the **prelude**
+   (`mod_inject_prelude`): synthesised imports of the vocabulary/lang-item std
+   modules (`Option`, `Result`, `Ord`, `Display`, and `std::string`), so those
+   names and the lang items are in scope without an explicit `use`. They are
+   ordinary import edges — the later phases don't know the prelude exists.
 2. **dep graph** — tri-colour DFS over the import edges, post-order, so
    dependencies precede their dependents; a back edge is a cycle diagnostic
 3. **register** — `tc_register_module` (`src/sema.c`): create def stubs for

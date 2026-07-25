@@ -204,30 +204,30 @@ struct TypeChecker {
   Type *t_int, *t_float, *t_bool, *t_char, *t_string, *t_strbuf, *t_unit,
       *t_never, *t_poison;
 
-  // `std::fmt`'s `Display`, captured when that module registers — the one name
-  // the compiler knows out of the whole standard library. Interpolation is the
-  // only construct that needs it: `"{v}"` on a non-primitive is a call to
-  // `v.to_string()`, and *which* trait declares that method has to be decided
-  // by the language rather than by whatever happens to be in scope. NULL when
-  // no module in the program imported `std::fmt`, which is what lets the
-  // diagnostic say so.
+  // Lang items: std names the *compiler* resolves for a construct that never
+  // spells them — `"{v}"`, `a < b`, a `{v:>8}` spec. Each is captured when its
+  // module registers. Since milestone 45 the prelude imports every one of
+  // these modules into every user program (`mod_inject_prelude`), so in
+  // practice they are always populated; the NULL guards below survive only as
+  // defensive branches (a std module that fails to load), no longer the
+  // user-facing "you forgot to import it" path the prelude retired.
+  //
+  // `std::fmt`'s `Display`: interpolation of a non-primitive is a call to
+  // `v.to_string()`, and *which* trait declares that method is the language's
+  // decision, not whatever is in scope.
   TraitDef *display_trait;
 
   // `std::cmp`'s `Ord`, captured the same way and for the same reason as
   // `display_trait`: a non-numeric `<`/`<=`/`>`/`>=` desugars to `a.cmp(b) <
-  // 0`, and *which* trait declares `cmp` is the language's decision, not
-  // whatever is in scope. Numeric comparison stays a built-in opcode, so only a
-  // non-primitive operand reaches for this. NULL when no module imported
-  // `std::cmp`, which lets the diagnostic say so. See `rewrite_ord_comparison`.
+  // 0`, and *which* trait declares `cmp` is the language's decision. Numeric
+  // comparison stays a built-in opcode, so only a non-primitive operand
+  // reaches for this. See `rewrite_ord_comparison`.
   TraitDef *ord_trait;
 
   // The format functions a `{v:>8}` / `{f:.3}` spec desugars to, captured the
   // same way `display_trait` is and for the same reason: the user never types
-  // these names, so the language must resolve them rather than leaving the
-  // meaning of a spec to whatever happens to be imported. `pad_*` live in
-  // `std::string`, `fmt_float` in `std::fmt`; each is NULL when no module in
-  // the program imported the module that defines it, which is what lets the
-  // diagnostic say a spec needs that import. See `check_interpol_seg`.
+  // these names. `pad_*` live in `std::string`, `fmt_float` in `std::fmt` —
+  // both preluded. See `check_interpol_seg`.
   FunDef *fmt_pad_start, *fmt_pad_end, *fmt_pad_center, *fmt_float;
 
   DiagBag *diags;

@@ -1,0 +1,21 @@
+# The prelude is lowest priority: a module that defines its own `Option` keeps
+# it. The prelude's `Option` is injected but yields silently on the name clash
+# (see mod_inject_prelude / link_import_item), so this three-variant local type
+# is the one every `Option::` here names — the two-variant std `Option` is not
+# in scope at all. The same silent-yield is what lets `tests/*/propagate` use a
+# hand-written `Result` with `?`.
+enum Option<T> { Some(T), None, Nothing }
+
+fun describe(o: Option<Int>) -> Int {
+    match o {
+        Option::Some(v) => { return v; },
+        Option::None => { return 0; },
+        Option::Nothing => { return 0 - 1; },
+    }
+}
+
+fun main() {
+    var a = describe(Option::Some(7));
+    var b = describe(Option::Nothing);
+    var c = describe(Option::None);
+}

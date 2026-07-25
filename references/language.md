@@ -500,13 +500,21 @@ bodyless function bound to C (see "Native functions" below); `std::cmp`,
 `std::convert`, `std::option`, `std::result` and `std::text` need none, `std::io`
 and `std::panic` are nothing but, and `std::array`, `std::string`, `std::strbuf`
 and `std::char` are the mixed case — a handful of natives, and every other
-function written on top of them in ducktape. `std::fmt::Display` is the only std name the
-*compiler* knows.
+function written on top of them in ducktape.
 
-**There is no prelude.** Every std name, `print` included, has to be imported.
+**There is a small prelude.** Every program implicitly imports `Option`
+(`std::option`), `Result` (`std::result`), `Ord` (`std::cmp`) and `Display`
+(`std::fmt`), plus `std::string` for its format-spec helpers — the vocabulary
+types and the lang items, so a construct whose meaning the compiler resolves
+(`"{v}"`, `a < b`, a `{v:>8}` spec) works without an import the user never
+wrote. The prelude is lowest priority: a module that defines its own `Option`,
+or imports a different `Ord`, keeps it — the prelude's binding steps aside
+silently. **`print` is *not* in the prelude** — it is an ordinary function tied
+to no syntax, so `use std::io::print;` is still required. Everything else in
+std is imported explicitly as before:
 
 ```
-use std::cmp::{Ord, max, min, clamp};
+use std::cmp::{max, min, clamp};   # Ord itself is preluded; these are not
 ```
 
 A std module is an ordinary module in every other respect: it is deduplicated,
@@ -1036,7 +1044,9 @@ stay free because their receiver is a `[String]` / `[Char]`, not a `String`.
 
 **`print` is not a builtin and is not in scope by default** — `use
 std::io::print;` is a real import of a real module, and forgetting it is an
-ordinary "cannot find 'print' in this scope" error. There is no prelude.
+ordinary "cannot find 'print' in this scope" error. It is deliberately kept out
+of the prelude (which does cover `Option`/`Result`/`Ord`/`Display`): `print` is
+a plain function, not tied to any syntax, so it stays explicit.
 
 `String`'s `slice` and `std::fmt::float` are the std operations that can fail
 without a `Result`: a native reports a runtime error by setting `ctx->error`,

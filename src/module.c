@@ -312,6 +312,83 @@ bool mod_collect_imports(Module *m, ModuleRegistry *reg, StringView base_dir,
   return ok;
 }
 
+// ── the prelude ────────────────────────────────────────────────────────────
+//
+// ducktape has no auto-import, so a construct whose meaning lives in std used
+// to need an import the user never wrote: interpolating a struct needed
+// `std::fmt` (for `Display`), `<` on a struct needed `std::cmp` (for `Ord`),
+// a `{v:>8}` spec needed `std::string`. Each is a "lang item" — a name the
+// *compiler* resolves, so leaving it to whatever happens to be imported is the
+// friction this prelude removes. The set is exactly the lang-item modules plus
+// the two vocabulary enums:
+//
+//   std::option  → Option        (vocabulary; the type `for`/`?` speak)
+//   std::result  → Result        (its pair)
+//   std::cmp     → Ord           (ordering operators; a bare `T: Ord` bound)
+//   std::fmt     → Display        (interpolation; captures `float` too)
+//   std::string  → (nothing)     (capture-only: the `pad_*` a width spec needs)
+//
+// `print` is deliberately *not* here: it is an ordinary function, tied to no
+// syntax, so it stays an explicit `use std::io::print`.
+typedef struct {
+  const char *module; // std leaf name
+  const char *items[3]; // pub items to bind; NULL-terminated, may be empty
+} PreludeEntry;
+
+static const PreludeEntry prelude[] = {
+    {"option", {"Option", NULL}},   {"result", {"Result", NULL}},
+    {"cmp", {"Ord", NULL}},         {"fmt", {"Display", NULL}},
+    {"string", {NULL}}, // capture-only, for the pad_* / spec lang items
+};
+#define PRELUDE_COUNT ((int)(sizeof(prelude) / sizeof(prelude[0])))
+
+// Inject the prelude into `m` as ordinary synthesised imports: a `use`-less
+// user module still depends on every prelude module and binds its items. std
+// modules are exempt (a prelude module cannot import itself — that is the
+// cycle the exemption avoids), and the entries carry `from_prelude` so linking
+// yields silently to a local decl or an explicit import of the same name.
+// Appended *after* the real imports so those link first and take priority.
+void mod_inject_prelude(Module *m, ModuleRegistry *reg, Allocator *al) {
+  if (is_std_key(m->file_path)) {
+    return;
+  }
+
+  int old = m->import_count;
+  m->imports = al_realloc(al, m->imports, sizeof(ModImport) * (size_t)old,
+                          sizeof(ModImport) * (size_t)(old + PRELUDE_COUNT));
+
+  for (int i = 0; i < PRELUDE_COUNT; i++) {
+    const PreludeEntry *e = &prelude[i];
+    StringView key = std_mod_key(sv_from_cstr(e->module), al);
+    int dep = modreg_find(reg, key);
+    if (dep < 0) {
+      dep = modreg_add(reg, mod_new(key, al));
+    }
+
+    int item_count = 0;
+    while (e->items[item_count] != NULL) {
+      item_count++;
+    }
+
+    Decl *use = al_alloc_zero_for(al, Decl);
+    use->kind = DECL_USE;
+    use->as.use_decl.from_prelude = true;
+    use->as.use_decl.is_module_import = false;
+    use->as.use_decl.target.count = item_count;
+    if (item_count > 0) {
+      UseAlias *aliases = al_alloc_zero(al, sizeof(UseAlias) * (size_t)item_count);
+      for (int j = 0; j < item_count; j++) {
+        aliases[j].name = sv_from_cstr(e->items[j]);
+        aliases[j].alias = aliases[j].name; // no `as` rename
+      }
+      use->as.use_decl.target.aliases = aliases;
+    }
+
+    m->imports[m->import_count++] =
+        (ModImport){.decl = use, .file_path = key, .module_index = dep};
+  }
+}
+
 bool mod_parse(Module *m, DiagBag *diags, Allocator *al) {
   // ── the one place a std module differs from any other ──────────────────────
   // Everything downstream of here — scanning, parsing, the dependency graph,

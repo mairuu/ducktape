@@ -73,6 +73,12 @@ static bool compiler_phase_discover(Compiler *c, const char *root_path) {
     had_errors |=
         !mod_collect_imports(m, &c->mod_reg, base_dir, &c->diags, &c->al);
 
+    // every non-std module implicitly depends on the prelude. Appended after
+    // its own imports (which therefore link first and win a name clash), and
+    // it may register new modules — the worklist bound is re-read each
+    // iteration, so those get discovered like any other dependency.
+    mod_inject_prelude(m, &c->mod_reg, &c->al);
+
     // must report before the next iteration: mod_parse clears the bag.
     if (diag_has_diags(&c->diags)) {
       diag_report(&c->diags, m->file_path.chars, m->source.chars, stderr);
