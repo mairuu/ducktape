@@ -648,6 +648,30 @@ matches gave:
   is therefore reachable only from within std, which is exactly where a typo
   would be.
 
+### `for` over an iterator
+
+`for x in it` handles an array and a range by their built-in shape. Anything
+else routes through the `Iterator` lang item (`resolve_for_iterator`, the
+`EXPR_FOR` case), in two moves that mirror two features already here:
+
+- **Nominal gate.** `it`'s type must implement `Iterator`, asked through
+  `impl_index_implements` — the same question `display_satisfied` /
+  `ord_satisfied` ask — so the diagnostic is "does not implement 'Iterator'"
+  (with the unimported-impl / blocking-bound notes) rather than a missing
+  method. This is why the design is the *trait*, not a structural "has a
+  `next()`": a bare `next` on an unrelated type does not make it iterable.
+- **Structural unwrap.** The loop synthesises `it.next()` — an `EXPR_METHOD_CALL`
+  resolved with `resolve_method_call_typed`, the receiver already typed, exactly
+  the Display-interpolation desugar — and reads its result's shape with
+  `enum_is_optionish`, the `Some`/`None` sibling of `?`'s `enum_is_resultish`.
+  So the checker needs no handle on `Option` beyond the two variants of whatever
+  `next` returns, and `Item` is that `Option`'s type argument. The resolved call
+  and the two variants are recorded on the `ExprFor` node for codegen (see
+  runtime.md); an array/range loop leaves them NULL.
+
+The split is deliberate: the gate is nominal (the trait is the contract), the
+unwrap is structural (the stance `==` and `?` take on a std-shaped value).
+
 ### Types and inference
 
 `Type` (`include/ast.h`) is a tagged union; structural types are interned so

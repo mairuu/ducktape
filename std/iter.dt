@@ -1,0 +1,24 @@
+# std::iter — a value that yields a sequence, one element at a time.
+#
+# `Iterator` is the trait a `for` loop speaks. `for x in it` drives `it.next()`
+# until it yields `None`, binding each `Some`'s payload to `x`. The advancing
+# cursor is the iterator's own state — a mutable field (milestone 43) that a
+# `pub` type can keep private (milestone 44), which is what lets an iterator hide
+# where it is.
+#
+# The trait is a lang item: `for x in it` never writes the name `Iterator`,
+# `next`, or `Option`, so the language rather than an import has to decide what
+# they mean. Like `Display` and `Ord` it is preluded, so `impl Iterator for T`
+# needs no `use`.
+#
+# A std module gets no prelude of its own, so `Option` is imported here by hand.
+use std::option::Option;
+
+@lang("iterator")
+pub trait Iterator {
+    type Item;
+
+    # The next element, or `None` once the sequence is spent. Advancing the
+    # cursor is a side effect: calling `next` again yields the element after.
+    fun next(self) -> Option<Self.Item>;
+}

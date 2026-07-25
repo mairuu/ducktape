@@ -895,6 +895,14 @@ typedef struct {
   Span var_span;
   Expr *iterable;
   Expr *body;
+
+  // set only when the iterable is a user type implementing `Iterator` (neither
+  // an array nor a range): the synthesised `iterable.next()` call the loop
+  // drives, and the two variants of the `Option` its result is taken apart by.
+  // NULL/absent for an array or range, which codegen compiles by index instead.
+  Expr *next_call;
+  VariantDef *some_variant; // `Some(T)` — its field 0 is the bound value
+  VariantDef *none_variant; // `None` — its tag ends the loop
 } ExprFor;
 
 typedef struct {

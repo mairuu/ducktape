@@ -1088,14 +1088,97 @@ static void compile_for_array(Cg *cg, Expr *expr) {
   emit(cg, OP_UNIT); // loops evaluate to unit
 }
 
+static bool cg_emit_target(Cg *cg, FunDef *fun, const Subst *primary,
+                           const Subst *fallback, Span span);
+
+// `for x in it` over a user iterator (neither array nor range): drive
+// `it.next()` — an `Option<Item>` each turn — binding `Some(x)` and ending on
+// `None`. The scaffold is compile_for_array's — the iterator lives in a hidden
+// local so its cursor advances *in place* across calls, where re-evaluating the
+// `it` expression each turn would restart the sequence — and the Option unwrap
+// is compile_propagate's (tag test, then field 0). The checker left the
+// resolved `next` call and the two variants on the node.
+static void compile_for_iter(Cg *cg, Expr *expr) {
+  ExprFor *for_ = &expr->as.for_expr;
+  ExprMethodCall *mc = &for_->next_call->as.method_call;
+  FunDef *next = mc->resolved_method != NULL ? mc->resolved_method->fun
+                                             : mc->resolved_default;
+  if (next == NULL) {
+    cg_error(cg, expr->span, "this iterator");
+    emit(cg, OP_UNIT);
+    return;
+  }
+
+  int saved_locals = cg->local_count;
+
+  // [iter, var]: `iter` is the receiver, whose cursor advances in place; `var`
+  // is a placeholder (unit) until each `Some` binds it, reused every turn.
+  compile_expr(cg, for_->iterable);
+  int iter_slot = cg_add_local(cg, (StringView){0}, expr->span);
+  emit(cg, OP_UNIT);
+  int var_slot = cg_add_local(cg, for_->var_name, for_->var_span);
+
+  CgLoop loop = {
+      .continue_is_backward = true, // `continue` re-drives next()
+      .continue_base = cg->local_count,
+      .break_base = saved_locals,
+      .parent = cg->loop,
+  };
+  cg->loop = &loop;
+
+  int loop_start = cg->chunk->count;
+  loop.start = loop_start;
+
+  // opt = iter.next() — the receiver is the hidden local, not a re-eval
+  Subst empty = subst_empty();
+  if (!cg_emit_target(cg, next, &mc->inst, &empty, expr->span)) {
+    cg->loop = loop.parent;
+    cg->local_count = saved_locals;
+    emit(cg, OP_UNIT);
+    return;
+  }
+  emit2(cg, OP_GET_LOCAL, (uint8_t)iter_slot);
+  emit2(cg, OP_CALL, (uint8_t)next->param_count); // [opt]
+
+  // Some -> bind and run the body; None -> exit
+  emit2(cg, OP_DUP, 0);                            // [opt, opt]
+  emit(cg, OP_TAG);                                // [opt, tag]
+  emit_const(cg, val_int(for_->some_variant->tag));
+  emit(cg, OP_EQ);                                 // [opt, is_some]
+  int exit_jump = emit_jump(cg, OP_JUMP_IF_FALSE); // peeks is_some
+  emit(cg, OP_POP);                                // is_some (true) -> [opt]
+  emit2(cg, OP_FIELD_GET, 0);                      // [payload] (Some.0)
+  emit2(cg, OP_SET_LOCAL, (uint8_t)var_slot);      // var = payload; [payload]
+  emit(cg, OP_POP);                                // []
+
+  compile_expr(cg, for_->body);
+  emit(cg, OP_POP);
+  emit_loop(cg, loop_start);
+
+  patch_jump(cg, exit_jump);                    // [opt, is_some]
+  emit(cg, OP_POP);                             // is_some -> [opt]
+  emit(cg, OP_POP);                             // the None instance -> []
+  cg_close_scope(cg, saved_locals);            // detach a captured loop var
+  emit2(cg, OP_POPN, 2);                        // var, iter
+  for (int i = 0; i < loop.break_count; i++) { // breaks pop their own locals
+    patch_jump(cg, loop.break_jumps[i]);
+  }
+
+  cg->loop = loop.parent;
+  cg->local_count = saved_locals;
+  emit(cg, OP_UNIT); // loops evaluate to unit
+}
+
 static void compile_for(Cg *cg, Expr *expr) {
   ExprFor *for_ = &expr->as.for_expr;
   Type *iter_ty = for_->iterable->resolved_type;
   assert(iter_ty && "for-loop iterable unresolved after checking");
   if (iter_ty->kind == TY_ARRAY) {
     compile_for_array(cg, expr);
-  } else {
+  } else if (iter_ty->kind == TY_RANGE) {
     compile_for_range(cg, expr);
+  } else {
+    compile_for_iter(cg, expr);
   }
 }
 

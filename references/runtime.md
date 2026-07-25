@@ -296,6 +296,18 @@ its bytes.
   continue target. `break`/`continue` emit `OP_POPN` down to the loop's
   recorded local base (continue keeps the hidden iter locals, break does
   not) before jumping; forward continue targets the increment.
+- `for x in <iterator>` (`compile_for_iter`, the fall-through when the iterable
+  is neither array nor range) materializes two locals — hidden `iter` (the
+  receiver) and the loop variable (starts unit) — and each turn calls
+  `iter.next()` on the *local* (not a re-evaluated expression, so the cursor
+  advances in place). The result is an `Option`, taken apart the way `?` takes
+  apart a `Result`: `OP_DUP`, `OP_TAG`, compare to the `Some` tag; on `Some` pop
+  the flag, `OP_FIELD_GET 0`, `OP_SET_LOCAL` the loop variable, run the body,
+  and loop back; on `None` fall through, pop the flag and the `Option`, and pop
+  the two locals. The checker put the resolved `next` call (with its
+  instantiation) and the two `Option` variants on the `ExprFor`; the call target
+  is emitted with `cg_emit_target` exactly as a method call would. `continue` is
+  backward (it re-drives `next()`), like a `while`.
 - Calls: push callee (`OP_GET_GLOBAL` or a local), args left-to-right,
   `OP_CALL`, whose callee may be a ducktape function (opens a frame), a
   closure, or a native (runs C in place). A call to an `@intrinsic` is not a

@@ -330,6 +330,7 @@ bool mod_collect_imports(Module *m, ModuleRegistry *reg, StringView base_dir,
 //   std::result  → Result        (its pair)
 //   std::cmp     → Ord           (ordering operators; a bare `T: Ord` bound)
 //   std::fmt     → Display        (interpolation; captures `float` too)
+//   std::iter    → Iterator       (`for x in it`; captures the trait lang item)
 //   std::string  → (nothing)     (capture-only: the `pad_*` a width spec needs)
 //
 // `print` is deliberately *not* here: it is an ordinary function, tied to no
@@ -342,6 +343,7 @@ typedef struct {
 static const PreludeEntry prelude[] = {
     {"option", {"Option", NULL}},   {"result", {"Result", NULL}},
     {"cmp", {"Ord", NULL}},         {"fmt", {"Display", NULL}},
+    {"iter", {"Iterator", NULL}},
     {"string", {NULL}}, // capture-only, for the pad_* / spec lang items
 };
 #define PRELUDE_COUNT ((int)(sizeof(prelude) / sizeof(prelude[0])))

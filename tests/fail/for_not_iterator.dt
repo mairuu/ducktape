@@ -1,0 +1,12 @@
+#! expect: cannot iterate over type 'Plain': it does not implement 'Iterator'
+# `for x in it` over a value that is neither an array nor a range requires the
+# type to implement the `Iterator` trait (milestone 46). A plain struct does
+# not, so the loop is rejected against the type.
+struct Plain { x: Int }
+
+fun main() {
+    var p = Plain { x: 1 };
+    for a in p {
+        print(a);
+    }
+}

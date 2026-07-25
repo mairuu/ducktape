@@ -1,0 +1,72 @@
+# `for x in it` over a user type implementing `Iterator` (milestone 46). The
+# loop drives `it.next()` until `None`; the cursor is a private field that
+# advances in place across calls, which is why the iterator lives in a hidden
+# local rather than being re-evaluated each turn. `Iterator` and `Option` are
+# preluded, so nothing but `print` is imported.
+#> 1
+#> 2
+#> 3
+#> 4
+#> 5
+#> sum: 15
+#> y=1
+#> y=2
+#> y=4
+#> y=5
+#> a
+#> aa
+#> aaa
+use std::io::print;
+
+# a private advancing cursor a `pub` type keeps hidden (milestones 43/44)
+pub struct Counter { n: Int, max: Int }
+
+impl Counter {
+    fun to(max: Int) -> Counter { Counter { n: 0, max: max } }
+}
+
+impl Iterator for Counter {
+    type Item = Int;
+    fun next(self) -> Option<Int> {
+        if self.n >= self.max { return Option::None; }
+        self.n += 1;
+        return Option::Some(self.n);
+    }
+}
+
+# a second iterator whose Item is a String, proving the element type is general
+pub struct Repeat { s: String, left: Int }
+
+impl Repeat {
+    fun times(n: Int) -> Repeat { Repeat { s: "", left: n } }
+}
+
+impl Iterator for Repeat {
+    type Item = String;
+    fun next(self) -> Option<String> {
+        if self.left <= 0 { return Option::None; }
+        self.left -= 1;
+        self.s = self.s + "a";
+        return Option::Some(self.s);
+    }
+}
+
+fun main() {
+    var sum = 0;
+    for x in Counter::to(5) {
+        sum += x;
+        print(x);
+    }
+    print("sum: {sum}");
+
+    # break and continue drive the same next()-based loop
+    for y in Counter::to(10) {
+        if y == 3 { continue; }
+        if y == 6 { break; }
+        print("y={y}");
+    }
+
+    for w in Repeat::times(3) {
+        print(w);
+    }
+}

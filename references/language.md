@@ -106,8 +106,8 @@ ending in `return` has type `!` (never), which unifies with anything.
 - Logic: keywords `and`, `or` (short-circuit), `not`. There is no `&&`/`||`.
 - Unary minus `-x` (numeric).
 - `if cond { .. } else { .. }` is an expression; without `else` it is `()`.
-- `while cond { .. }` and `for x in iter { .. }` evaluate to `()`;
-  `iter` may be an array or a range.
+- `while cond { .. }` and `for x in iter { .. }` evaluate to `()`; `iter` may be
+  an array, a range, or any type that implements `Iterator` (see below).
 - Ranges: `a..b`, `a..=b` — Int-only, first-class values (`var r = 0..10;`).
 - Casts: `x as T` — only `Int`↔`Float` and identity casts.
 - String interpolation: `"x = {x}"` — a primitive segment (Int/Float/Bool/
@@ -344,6 +344,46 @@ The result is the `Ok` payload. Nothing about the rule is tied to a particular
 enum, so you may declare your own (`tests/pass/propagate.dt`); `std::result`
 declares the one that fits it. This rule will move to a `Try` trait once traits
 are fully checked.
+
+### Iterators
+
+`for x in it` over a value that is neither an array nor a range requires the
+type to implement `Iterator` (`std::iter`, preluded):
+
+```
+@lang("iterator")
+pub trait Iterator { type Item; fun next(self) -> Option<Self.Item>; }
+```
+
+The loop drives `it.next()` each turn: a `Some(x)` binds `x` and runs the body,
+a `None` ends the loop. The iterator is evaluated once and its cursor advances
+*in place* — `next` mutates the receiver's own fields (a `pub` type can keep them
+private, so the cursor is hidden), which is why an iterator is usually a small
+struct with a mutable position:
+
+```
+pub struct Counter { n: Int, max: Int }
+impl Counter { fun to(max: Int) -> Counter { Counter { n: 0, max: max } } }
+impl Iterator for Counter {
+    type Item = Int;
+    fun next(self) -> Option<Int> {
+        if self.n >= self.max { return Option::None; }
+        self.n += 1;
+        return Option::Some(self.n);
+    }
+}
+for x in Counter::to(3) { print(x); }   # 1 2 3
+```
+
+(The iterable is written as `Counter::to(3)` rather than a `Counter { .. }`
+literal because a `{` right after the `in` expression starts the loop body —
+the same struct-literal restriction `if`/`while` conditions have.)
+
+The gate is **nominal** — the type must implement the `Iterator` trait — but the
+`Option` it returns is unwrapped **structurally**, the same `Some`/`None`-by-shape
+rule `?` uses for `Ok`/`Err`, so nothing is tied to std's particular `Option`
+beyond its two variants. `break` and `continue` work as in any loop; `continue`
+re-drives `next()`.
 
 ## Modules
 

@@ -2400,6 +2400,59 @@
   and be *used* through a bare `for x in it` without the loop ever forcing an
   import.
 
+- **`@lang` items + `for` over an `Iterator` (milestone 46)** — landed in two
+  commits, a mechanism then its first consumer.
+
+  **`@lang`, a marker attribute.** A lang item is a std definition the compiler
+  resolves for a construct that never spells it (`"{v}"` → `Display`, `a < b` →
+  `Ord`, a `{v:>8}` spec → `pad_*`/`float`). These were six hard-coded
+  `mod_is_std(m,"fmt") && name=="Display"` matches in the checker — the fact
+  "this trait is `Display`" living in C, keyed on the spelling. The std source
+  now declares it locally with `@lang("display")`. Unlike `@native`/`@intrinsic`
+  it is a *marker*, not a body, so it sits on a bodied trait/enum/fun and
+  composes with a body attribute (`float` carries both); `parse_decl` sorts a
+  decl's attributes into a body attribute (`DeclFun.attr`) and this marker
+  (`Decl.lang_attr`). Honoured only inside the embedded standard library and
+  **inert** elsewhere — a user's `@lang` can't claim a lang item (so can't
+  hijack what `"{v}"` means), but isn't rejected either, because a std file run
+  by path carries the same marker yet isn't the `<std>/` key, and "a std file is
+  an ordinary module, directly runnable" is worth keeping (`mod_is_std_module`
+  gates it). A pure refactor: the Display/Ord/spec tests proved equivalence.
+
+  **`Iterator`, its first fresh consumer.** `for x in it` over a value that is
+  neither an array nor a range now requires `it` to implement `Iterator`
+  (`std::iter`, `@lang("iterator")`, preluded): `trait Iterator { type Item; fun
+  next(self) -> Option<Self.Item>; }`. The loop drives `it.next()` — `Some(x)`
+  binds and runs the body, `None` ends it — and the cursor advances *in place*,
+  which is exactly the private mutable field milestones 43 and 44 were scouted
+  for. Two moves, each mirroring a feature already here:
+  - **Nominal gate, structural unwrap.** The type must implement the trait
+    (`impl_index_implements`, the question `display_satisfied` asks — so the
+    diagnostic names the missing impl, and a bare `next()` on an unrelated type
+    is *not* enough). But the `Option` `next` returns is taken apart by shape
+    (`enum_is_optionish`, the `Some`/`None` sibling of `?`'s `enum_is_resultish`),
+    so nothing is tied to std's `Option` beyond its two variants. This is the
+    same split `==`/`?` take: the contract is nominal, the value is structural.
+  - **No new codegen shapes.** `compile_for_iter` is `compile_for_array`'s
+    scaffold (the iterator in a hidden local, so a re-evaluated `it` can't
+    restart it) plus `compile_propagate`'s unwrap (tag test, then field 0).
+    `continue` is backward like a `while`'s. The checker synthesises `it.next()`
+    the way interpolation synthesises `v.to_string()` and leaves the resolved
+    call + variants on the `ExprFor`.
+
+  `@lang` paid off immediately: `std/iter.dt` self-declares `@lang("iterator")`
+  rather than adding a seventh magic match. Design: `architecture.md` "Lang
+  items" / "`for` over an iterator", `runtime.md` `compile_for_iter`,
+  `language.md` "Iterators". `tests/run/iter.dt` is the private-cursor `Counter`
+  (plus a `String`-yielding iterator and break/continue); `in_fixed.dt` gains
+  one; `tests/fail/for_not_iterator.dt` is the non-`Iterator` rejection.
+
+  Deliberately left for later: `Iterator` ships only `next` — no `map`/`filter`/
+  `collect` combinators yet (they want closures over an iterator and a growable
+  sink), and a call *through* a `T: Iterator` bound still can't run, since
+  codegen rejects generic functions. `for` over a concrete iterator is the
+  runnable slice, and it is the one that needed the private cursor.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion

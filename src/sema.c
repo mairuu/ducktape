@@ -1205,6 +1205,8 @@ static void tc_register_lang_trait(TypeChecker *tc, Module *m, Decl *decl,
     tc->display_trait = def;
   } else if (sv_equal_cstr(attr->name, "ord")) {
     tc->ord_trait = def;
+  } else if (sv_equal_cstr(attr->name, "iterator")) {
+    tc->iterator_trait = def;
   } else {
     diag_error(tc->diags, attr->span, "unknown trait lang item '" SV_FMT "'",
                SV_ARG(attr->name));
@@ -4485,6 +4487,112 @@ static bool enum_is_resultish(EnumDef *def, VariantDef **out_ok,
   return true;
 }
 
+// an "Option-like" enum: a `Some(T)` single-field tuple variant and a `None`
+// unit variant. `for` takes an iterator's `next()` result apart by this shape —
+// the sibling of `enum_is_resultish`, and the same structural stance `?` takes
+// on `Ok`/`Err`. The loop gates *nominally* (the type must implement the
+// `Iterator` trait) but unwraps *structurally*, so the loop's codegen needs no
+// handle on the `Option` type beyond the two variants of whatever `next`
+// returns.
+static bool enum_is_optionish(EnumDef *def, VariantDef **out_some,
+                              VariantDef **out_none) {
+  if (def->variant_count != 2) {
+    return false;
+  }
+
+  VariantDef *some = NULL, *none = NULL;
+  for (int i = 0; i < def->variant_count; i++) {
+    VariantDef *v = &def->variants[i];
+    if (sv_equal_cstr(v->name, "Some")) {
+      some = v;
+    } else if (sv_equal_cstr(v->name, "None")) {
+      none = v;
+    }
+  }
+
+  if (!some || !none || !some->is_tuple || some->field_count != 1 ||
+      none->field_count != 0) {
+    return false;
+  }
+
+  *out_some = some;
+  *out_none = none;
+  return true;
+}
+
+// `for x in it` where `it` is neither an array nor a range: it must implement
+// the `Iterator` lang-item trait, and the loop drives `it.next()` — an
+// `Option<Item>` each turn, `Some(x)` binding `x`, `None` ending the loop.
+// Returns `Item` (the loop variable's type) and records on `for_` the
+// synthesised call and the two `Option` variants codegen unwraps by; NULL on
+// error, already reported.
+static Type *resolve_for_iterator(CheckCtx *ctx, Expr *for_expr,
+                                  Type *iter_ty) {
+  ExprFor *for_ = &for_expr->as.for_expr;
+  TraitDef *iter = ctx->tc->iterator_trait;
+  Type *iter_ref = iter != NULL ? iter->self_type : NULL;
+
+  // gate nominally: the type has to be an `Iterator`. (The trait is preluded,
+  // so `iter` is NULL only if `std::iter` failed to load — treated as "not an
+  // iterator".)
+  if (iter == NULL ||
+      !impl_index_implements(ctx->impls, iter_ty, iter_ref, ctx->al)) {
+    char buf[64];
+    type_sprintf(iter_ty, buf, sizeof(buf));
+    diag_error(
+        ctx->diags, for_->iterable->span,
+        "cannot iterate over type '%s': it does not implement 'Iterator'", buf);
+    if (iter != NULL) {
+      ImplQuery q = {.self_type = iter_ty,
+                     .trait = iter_ref,
+                     .impls = ctx->impls,
+                     .al = ctx->al};
+      note_unimported_impl(
+          ctx->diags,
+          find_unimported_impl(ctx->tc, ctx->impls, impl_query_matches, &q));
+      note_blocking_bound(ctx->diags, ctx->impls, iter_ty, iter_ref,
+                          (StringView){0}, ctx->al);
+    }
+    return NULL;
+  }
+
+  // synthesise `it.next()`. The receiver is already resolved, so this bypasses
+  // resolve_method_call_expr (which would re-resolve it) — the Display desugar
+  // pattern.
+  Expr *call = al_alloc_zero_for(ctx->al, Expr);
+  *call = (Expr){
+      .kind = EXPR_METHOD_CALL,
+      .span = for_->iterable->span,
+      .as.method_call = {.object = for_->iterable,
+                         .method_name = sv_from_cstr("next")},
+  };
+  Type *ret = resolve_method_call_typed(ctx, call, iter_ty, /*hint=*/NULL);
+  if (type_is_poison(ret)) {
+    return NULL;
+  }
+  call->resolved_type = ret;
+
+  // conformance guarantees `next` returns `Option<Item>`; read the shape rather
+  // than assume it — the structural unwrap `?` does on `Result`, so codegen
+  // needs no handle on `Option` beyond these two variants.
+  VariantDef *some = NULL, *none = NULL;
+  if (ret->kind != TY_ENUM ||
+      !enum_is_optionish(ret->as.enm.def, &some, &none) ||
+      ret->as.enm.type_arg_count < 1) {
+    char buf[64];
+    type_sprintf(ret, buf, sizeof(buf));
+    diag_error(ctx->diags, for_->iterable->span,
+               "'Iterator::next' must yield an 'Option', but returns '%s'",
+               buf);
+    return NULL;
+  }
+
+  for_->next_call = call;
+  for_->some_variant = some;
+  for_->none_variant = none;
+  return ret->as.enm.type_args[0];
+}
+
 static Type *resolve_propagate_expr(CheckCtx *ctx, Expr *expr) {
   ExprPropagate *prop = &expr->as.propagate;
 
@@ -5642,12 +5750,13 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     } else if (iter_ty->kind == TY_RANGE) {
       item_ty = ctx->tc->t_int;
     } else {
-      char it[64];
-      type_sprintf(iter_ty, it, sizeof(it));
-      diag_error(ctx->diags, for_->iterable->span,
-                 "cannot iterate over type '%s' in for loop", it);
-      result = ctx->tc->t_poison;
-      break;
+      // a user type: it must implement `Iterator`, and the loop drives its
+      // `next()`. Records the call and Option variants on `for_` for codegen.
+      item_ty = resolve_for_iterator(ctx, expr, iter_ty);
+      if (item_ty == NULL) {
+        result = ctx->tc->t_poison;
+        break;
+      }
     }
 
     ctx->vscope = vscope_push(ctx->vscope, false, true, ctx->al);

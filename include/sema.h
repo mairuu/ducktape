@@ -224,6 +224,13 @@ struct TypeChecker {
   // reaches for this. See `rewrite_ord_comparison`.
   TraitDef *ord_trait;
 
+  // `std::iter`'s `Iterator`, captured the same way: `for x in it` over a value
+  // that is neither an array nor a range requires `it` to implement this trait,
+  // and drives `it.next()` — a name the loop never spells, so the language must
+  // own it. Preluded, so it is populated in every program. See the `EXPR_FOR`
+  // case in `resolve_expr`.
+  TraitDef *iterator_trait;
+
   // The format functions a `{v:>8}` / `{f:.3}` spec desugars to, captured the
   // same way `display_trait` is and for the same reason: the user never types
   // these names. `pad_*` live in `std::string`, `fmt_float` in `std::fmt` —

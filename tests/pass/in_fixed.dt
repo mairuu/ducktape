@@ -272,6 +272,26 @@ pub fun process_data<T>(data: T) -> Result<Int, String> {
     Result::Ok(count)
 }
 
+# `Iterator` (milestone 46): `for x in it` over a user type drives its `next()`
+# until `None`. The cursor is a private field that advances in place (milestones
+# 43/44); `Iterator`, `Option`, and the loop's unwrap are all lang items the
+# program never spells — and all preluded, so none is imported.
+pub struct Countdown { n: Int }
+
+impl Countdown {
+    fun from(n: Int) -> Countdown { Countdown { n: n } }
+}
+
+impl Iterator for Countdown {
+    type Item = Int;
+    fun next(self) -> Option<Int> {
+        if self.n <= 0 { return Option::None; }
+        var cur = self.n;
+        self.n -= 1;
+        return Option::Some(cur);
+    }
+}
+
 fun main() {
     var r = process_data(1);
     # coercion at a call site, mixing two concrete types in one array
@@ -296,4 +316,9 @@ fun main() {
     # a format spec (milestone 35): a width aligns a Display value, a precision
     # fixes a Float's decimals — both desugar to std::string::pad_* / fmt::float
     var padded = "{Point::new(1, 2):>12} {wide:.2}";
+    # a user Iterator driven by `for`: next() advances a private cursor to None
+    var acc = 0;
+    for k in Countdown::from(3) {
+        acc += k;
+    }
 }
