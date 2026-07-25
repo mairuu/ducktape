@@ -1148,6 +1148,9 @@ static void tc_bind_native(TypeChecker *tc, FunDef *def, const AttrNode *attr) {
   switch (attr->kind) {
   case ATTR_NONE:
     return;
+  case ATTR_LANG:
+    assert(false && "@lang is a marker, never a fun's body attribute");
+    return;
   case ATTR_NATIVE:
     def->native = native_lookup(attr->name);
     if (def->native == NULL) {
@@ -1169,6 +1172,62 @@ static void tc_bind_native(TypeChecker *tc, FunDef *def, const AttrNode *attr) {
     def->intrinsic_op = (uint8_t)op;
     return;
   }
+  }
+}
+
+// `@lang("…")` marks a std definition as a lang item — a name the *compiler*
+// resolves for a construct that never spells it (`"{v}"` → `Display`, `a < b` →
+// `Ord`, a `{v:>8}` spec → `pad_*`/`float`). It replaces the old (module, name)
+// magic-string matches: the std source now declares the intent locally, so a
+// rename can't silently drop the capture, and a typo in the *key* is a loud
+// error (below) rather than a lang item that quietly never fires.
+//
+// Honoured only inside the embedded standard library, and **inert** elsewhere —
+// exactly as the old `mod_is_std` capture was: a user's `@lang` cannot claim a
+// lang item (so it cannot hijack what `"{v}"` dispatches to), but it is not an
+// error either, because a std module loaded by path (`ducktape std/fmt.dt`)
+// carries the same `@lang` yet is not the embedded key — and "a std file is an
+// ordinary module, directly runnable" is a property worth keeping. `@lang` on a
+// definition it grammatically can't mark (a struct, a method) is still a parse
+// error; that check is about placement, not std-ness.
+static bool tc_lang_item_ok(TypeChecker *tc, Module *m, const AttrNode *attr) {
+  (void)tc;
+  return attr->kind == ATTR_LANG && mod_is_std_module(m);
+}
+
+static void tc_register_lang_trait(TypeChecker *tc, Module *m, Decl *decl,
+                                   TraitDef *def) {
+  const AttrNode *attr = &decl->lang_attr;
+  if (!tc_lang_item_ok(tc, m, attr)) {
+    return;
+  }
+  if (sv_equal_cstr(attr->name, "display")) {
+    tc->display_trait = def;
+  } else if (sv_equal_cstr(attr->name, "ord")) {
+    tc->ord_trait = def;
+  } else {
+    diag_error(tc->diags, attr->span, "unknown trait lang item '" SV_FMT "'",
+               SV_ARG(attr->name));
+  }
+}
+
+static void tc_register_lang_fun(TypeChecker *tc, Module *m, Decl *decl,
+                                 FunDef *def) {
+  const AttrNode *attr = &decl->lang_attr;
+  if (!tc_lang_item_ok(tc, m, attr)) {
+    return;
+  }
+  if (sv_equal_cstr(attr->name, "pad_start")) {
+    tc->fmt_pad_start = def;
+  } else if (sv_equal_cstr(attr->name, "pad_end")) {
+    tc->fmt_pad_end = def;
+  } else if (sv_equal_cstr(attr->name, "pad_center")) {
+    tc->fmt_pad_center = def;
+  } else if (sv_equal_cstr(attr->name, "float")) {
+    tc->fmt_float = def;
+  } else {
+    diag_error(tc->diags, attr->span, "unknown function lang item '" SV_FMT "'",
+               SV_ARG(attr->name));
   }
 }
 
@@ -1199,19 +1258,10 @@ static void tc_register_fun(TypeChecker *tc, Module *m, Decl *decl) {
   def->module = m;
 
   // the format functions an interpolation spec desugars to, learned from the
-  // standard library the same way `Display` is (tc_register_trait), and keyed
-  // on the module for the same reason: a user's own `pad_start` is an ordinary
-  // function. See TypeChecker.fmt_pad_start and check_interpol_seg.
-  if (mod_is_std(m, "string")) {
-    if (sv_equal_cstr(def->name, "pad_start"))
-      tc->fmt_pad_start = def;
-    else if (sv_equal_cstr(def->name, "pad_end"))
-      tc->fmt_pad_end = def;
-    else if (sv_equal_cstr(def->name, "pad_center"))
-      tc->fmt_pad_center = def;
-  } else if (mod_is_std(m, "fmt") && sv_equal_cstr(def->name, "float")) {
-    tc->fmt_float = def;
-  }
+  // standard library the same way `Display` is (tc_register_trait): each is
+  // tagged `@lang("pad_start")` / `@lang("float")` in its std source. See
+  // TypeChecker.fmt_pad_start and check_interpol_seg.
+  tc_register_lang_fun(tc, m, decl, def);
 }
 
 static void tc_register_struct(TypeChecker *tc, Module *m, Decl *decl) {
@@ -1313,19 +1363,12 @@ static void tc_register_trait(TypeChecker *tc, Module *m, Decl *decl) {
   trait_decl->def = def;
   def->module = m;
 
-  // the one place the compiler learns a name from the standard library. It is
-  // keyed on the module too, not just the spelling: a user trait called
-  // `Display` is an ordinary trait, and interpolation will not route through
-  // it. See TypeChecker.display_trait.
-  if (mod_is_std(m, "fmt") && sv_equal_cstr(def->name, "Display")) {
-    tc->display_trait = def;
-  }
-  // Ordering operators (`<` etc.) on a non-numeric type route through this, the
-  // way interpolation routes through `display_trait`. Keyed on `std::cmp` too,
-  // so a user trait named `Ord` stays an ordinary trait.
-  if (mod_is_std(m, "cmp") && sv_equal_cstr(def->name, "Ord")) {
-    tc->ord_trait = def;
-  }
+  // a std trait the compiler special-cases — `Display` (interpolation) and
+  // `Ord` (ordering operators) — announces itself with `@lang("display")` /
+  // `@lang("ord")` in its source. A user trait named `Display` carries no such
+  // tag (and `@lang` outside std is rejected), so it stays ordinary. See
+  // TypeChecker.display_trait / ord_trait.
+  tc_register_lang_trait(tc, m, decl, def);
 }
 
 // the name a top-level decl introduces into the module's scopes, if any.

@@ -528,13 +528,12 @@ Two details make the rewrite safe:
   missing method, and it is also what stops an unrelated inherent `to_string`
   from silently qualifying.
 
-**`Display` is the one standard-library name the compiler knows** —
-`TypeChecker.display_trait`, captured in `tc_register_trait` when the trait is
-declared by the module `<std>/fmt.dt`. Keying on the module and not just the
-spelling is deliberate: a user trait called `Display` is an ordinary trait, and
-interpolation will not route through it. When no module in the program imports
-`std::fmt` the field stays NULL, which the diagnostic reports as such rather
-than as a bound that failed.
+**`Display` is a lang item the compiler tracks** — `TypeChecker.display_trait`,
+captured in `tc_register_trait`. Since the prelude imports `std::fmt` into every
+program (see "Modules"), it is always populated; the NULL guard survives only as
+defence against a std module failing to load. A user trait called `Display` is
+an ordinary trait — the capture is gated to the standard library, not keyed on
+the spelling (see "Lang items"), so interpolation never routes through a user's.
 
 `display_satisfied` asks `impl_index_implements`, the same question a trait
 bound and a `dyn` coercion ask — so a bounded type parameter answers from its
@@ -559,13 +558,13 @@ The desugaring's callees are captured as lang items exactly like `Display`, and
 for the same reason: the user never writes `pad_start` or `float`, so leaving
 those names to whatever is imported would make the meaning of `{v:>8}` depend on
 imports. `tc_register_fun` captures `TypeChecker.fmt_pad_start`/`fmt_pad_end`/
-`fmt_pad_center` from `<std>/string.dt` and `fmt_float` from `<std>/fmt.dt`,
-keyed on the module the same way, and a spec whose module is absent from the
-program is reported ("a width spec needs 'std::string'…"). This is the second
-crack in "the compiler knows nothing about std" that `Display` opened: it is now
-five captured names, not one, and the honest framing is that formatting as a
-whole — deciding how a value renders *and* how it is laid out — is the corner of
-the standard library the language is entangled with. The calls themselves are
+`fmt_pad_center` (in `<std>/string.dt`) and `fmt_float` (in `<std>/fmt.dt`) from
+their `@lang` markers (see "Lang items"); the prelude imports both modules, so
+all four are always present. This is the crack in "the compiler knows nothing
+about std" that `Display` opened widened to five names, and the honest framing is
+that formatting as a whole — deciding how a value renders *and* how it is laid
+out — is the corner of the standard library the language is entangled with. The
+calls themselves are
 built by `mk_fun_call`, which sets `resolved_fun` directly on a synthetic
 two-segment path (so codegen skips the local-name lookup) rather than routing
 through `resolve_callee`, which resolves by name and would fail.
@@ -604,9 +603,10 @@ Two things carry over from the `Display` design intact:
   concrete type, with the unimported-impl / blocking-bound notes) rather than
   about a missing `cmp` method, and it stops an unrelated inherent `cmp` from
   silently qualifying. `TypeChecker.ord_trait` is captured in
-  `tc_register_trait` when `<std>/cmp.dt` declares `Ord`, keyed on the module
-  like `display_trait`. Since the prelude imports `std::cmp` into every program
-  (see "Modules"), it is populated everywhere; the NULL guard is now defensive.
+  `tc_register_trait` from `<std>/cmp.dt`'s `@lang("ord")` marker (see "Lang
+  items"), like `display_trait`. Since the prelude imports `std::cmp` into every
+  program (see "Modules"), it is populated everywhere; the NULL guard is now
+  defensive.
 
 **`==`/`!=` are deliberately left out** and stay a structural primitive: `OP_EQ`
 reads no static type, so equality is free, import-less and universal on any two
@@ -615,6 +615,38 @@ operation depend on a trait impl (and, unlike `Ord`, `==` is *not* one of the
 prelude's lang items), handing coherence the power to take `[1,2] == [1,2]` away
 from a program whose modules disagree. `Eq` waits for a concrete consumer that
 needs *custom* equality.
+
+### Lang items
+
+A **lang item** is a std definition the compiler resolves for a construct that
+never spells it: `"{v}"` reaches `Display`, `a < b` reaches `Ord`, a `{v:>8}`
+spec reaches `pad_*`/`float`. The compiler holds each on a `TypeChecker` field
+(`display_trait`, `ord_trait`, `fmt_pad_*`, `fmt_float`) and the std source
+declares which definition fills it with a `@lang("…")` marker
+(`AttrNode`, `AttrKind ATTR_LANG`) — `@lang("display")` on the trait,
+`@lang("float")` stacked on `float`'s `@native`. The parser (`parse_decl`)
+sorts a decl's attributes into a *body* attribute (`@native`/`@intrinsic`, on a
+bodyless fun) and this *marker* (which keeps the definition's body), so the two
+compose; a `@lang` on anything but a trait, enum, or top-level fun is a parse
+error.
+
+Capture is `tc_register_lang_trait`/`tc_register_lang_fun`, called from the
+matching register pass: read the marker's key, dispatch it to the field. Two
+properties replace what the old hard-coded `mod_is_std(m,"fmt") && name=="Display"`
+matches gave:
+
+- **Locality and refactor-safety.** The fact "this trait is `Display`" now lives
+  on the trait, not in a far C `if` keyed on its spelling and module — a rename
+  keeps working, and a typo in the *key* is a loud "unknown lang item" rather
+  than a capture that silently never fires.
+- **Honoured only inside the standard library, inert elsewhere.** A user's
+  `@lang` cannot claim a lang item — so it cannot hijack what `"{v}"` dispatches
+  to — but it is *not* an error, because a std file loaded by path
+  (`ducktape std/fmt.dt`) carries the same marker yet is not the embedded
+  `<std>/…` key, and "a std file is an ordinary module, directly runnable" is a
+  property worth keeping (`mod_is_std_module` is the gate). The unknown-key error
+  is therefore reachable only from within std, which is exactly where a typo
+  would be.
 
 ### Types and inference
 

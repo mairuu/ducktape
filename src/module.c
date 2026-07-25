@@ -137,6 +137,10 @@ bool mod_is_std(const Module *m, const char *name) {
   return sv_equal_cstr(stem, name);
 }
 
+// is this any embedded std module? The gate for `@lang`, which is reserved for
+// the standard library — a user cannot claim a lang item.
+bool mod_is_std_module(const Module *m) { return is_std_key(m->file_path); }
+
 Module *mod_new(StringView file_path, Allocator *al) {
   Module *m = al_alloc_zero_for(al, Module);
   m->file_path = file_path;

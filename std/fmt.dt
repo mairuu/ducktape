@@ -19,6 +19,7 @@
 # debugging view the runtime can always answer; "render this for a reader" is
 # the type's own decision, and only the second needs a trait.
 
+@lang("display")
 pub trait Display {
   fun to_string(self) -> String;
 }
@@ -107,4 +108,5 @@ pub fun to_string<T: Display>(value: T) -> String {
 # and that is the *only* rendering the VM has. A negative precision is a
 # runtime error.
 @native("fmt_float")
+@lang("float")
 pub fun float(value: Float, precision: Int) -> String;

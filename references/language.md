@@ -989,6 +989,32 @@ registry is closed, so the only names available are the ones the binary already
 provides, and the *decision* about what C exposes stays in C. Restricting the
 attribute by module would add a rule without adding a guarantee.
 
+### Lang items (`@lang`)
+
+A handful of constructs desugar to a std definition the user never names: `"{v}"`
+on a non-primitive calls `Display`'s `to_string`, `a < b` on a non-numeric calls
+`Ord`'s `cmp`, a `{v:>8}` spec calls `pad_*`/`float`. The compiler has to know
+*which* definition each is, so the standard library marks them with a third
+attribute, `@lang("…")`:
+
+```
+@lang("display") pub trait Display { fun to_string(self) -> String; }
+@lang("ord")     pub trait Ord     { fun cmp(self, other: Self) -> Int; }
+@native("fmt_float") @lang("float") pub fun float(v: Float, p: Int) -> String;
+```
+
+Unlike `@native`/`@intrinsic`, `@lang` is a **marker**: it does not replace the
+body, so it sits on an ordinary trait, enum, or top-level function — and it can
+share a definition with a body attribute, which is why `float` carries both. The
+key names the item; an unknown key inside std is a compile error.
+
+`@lang` is for the standard library. In a user module it is **inert** — a user
+cannot claim a lang item and so cannot change what `"{v}"` or `a < b` mean — but
+it is not rejected, because a std file run directly (`ducktape std/fmt.dt`)
+carries the same markers and must still work as an ordinary module. (Putting
+`@lang` on something it cannot mark — a struct, a method — is a parse error, the
+one placement it is refused everywhere.)
+
 ### `std::io`, `std::array`, `std::string`, `std::strbuf`
 
 The primitive operations are **methods** (milestone 40); a free-function line is

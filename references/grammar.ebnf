@@ -7,15 +7,20 @@ program        = decl* ;
 
 (* ── declarations ─────────────────────────────────────────────────────── *)
 
-decl           = attribute? "pub"? ( useDecl | varDecl | funDecl | structDecl
+decl           = attribute* "pub"? ( useDecl | varDecl | funDecl | structDecl
                                    | enumDecl | traitDecl | implDecl ) ;
-                 (* an attribute is only accepted on a funDecl — parsed here
-                    and rejected on anything else, so the mistake is reported
-                    rather than reparsed *)
+                 (* a decl may carry up to two attributes: at most one *body*
+                    attribute (@native/@intrinsic, funDecl only) and at most one
+                    @lang marker (funDecl, traitDecl or enumDecl). Each is
+                    parsed here and rejected on a decl kind it cannot mark, so
+                    the mistake is reported rather than reparsed *)
 
-attribute      = "@" ( "native" | "intrinsic" ) "(" STRING ")" ;
-                 (* the string is a key into C's registry — language.md
-                    "Native functions" *)
+attribute      = "@" ( "native" | "intrinsic" | "lang" ) "(" STRING ")" ;
+                 (* native/intrinsic: a key into C's registry (the fun is
+                    bodyless — the attribute *is* the body). lang: a marker that
+                    the definition is a compiler lang item, honoured only in the
+                    standard library — language.md "Native functions" and
+                    "Lang items" *)
 
 useDecl        = "use" usePath ( "as" IDENT )? ";" ;
 usePath        = path ( "::" "{" useItem ( "," useItem )* ","? "}" )? ;
@@ -67,7 +72,8 @@ implDecl       = "impl" typeParams? type ( "for" type )? whereClause?
 implItem       = "type" IDENT "=" type ";"
                | attribute? funDecl ;
                  (* method; no "pub" inside impls. An `@native`/`@intrinsic`
-                    method has its body in C, exactly like a top-level fun —
+                    method has its body in C, exactly like a top-level fun. A
+                    method is never a lang item, so `@lang` here is rejected —
                     language.md "Native functions" *)
 
 typeParams     = "<" typeParam ( "," typeParam )* ">" ;

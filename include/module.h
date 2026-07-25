@@ -136,6 +136,9 @@ struct ModuleRegistry {
 // is this the embedded std module of that name (`mod_is_std(m, "fmt")`)?
 bool mod_is_std(const Module *m, const char *name);
 
+// is this any embedded std module? The gate for `@lang`.
+bool mod_is_std_module(const Module *m);
+
 void modreg_init(ModuleRegistry *reg, Allocator *al);
 
 void modreg_destroy(ModuleRegistry *reg);

@@ -144,6 +144,7 @@ fun char_width(s: String) -> Int {
 }
 
 # `s` at the left of a `width`-wide field, `fill` on the right (left-aligned).
+@lang("pad_end")
 pub fun pad_end(s: String, width: Int, fill: Char) -> String {
     var cur = char_width(s);
     if cur >= width {
@@ -158,6 +159,7 @@ pub fun pad_end(s: String, width: Int, fill: Char) -> String {
 }
 
 # `fill` on the left, `s` at the right of a `width`-wide field (right-aligned).
+@lang("pad_start")
 pub fun pad_start(s: String, width: Int, fill: Char) -> String {
     var cur = char_width(s);
     if cur >= width {
@@ -174,6 +176,7 @@ pub fun pad_start(s: String, width: Int, fill: Char) -> String {
 # `s` centred in a `width`-wide field. An odd remainder puts the extra `fill` on
 # the right, so `pad_center("x", 4, '-')` is `-x--`: the text sits left of centre
 # when it cannot sit on it, which is the convention a reader expects for a label.
+@lang("pad_center")
 pub fun pad_center(s: String, width: Int, fill: Char) -> String {
     var cur = char_width(s);
     if cur >= width {

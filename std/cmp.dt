@@ -45,6 +45,7 @@ use std::char;
 @intrinsic("array_len")
 fun len<T>(xs: [T]) -> Int;
 
+@lang("ord")
 pub trait Ord {
     # <0 if self sorts before other, 0 if equal, >0 if after.
     fun cmp(self, other: Self) -> Int;

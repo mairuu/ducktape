@@ -2322,10 +2322,12 @@ static bool parse_param_list(Parser *p, ParamDeclNode *out, int *count,
   return !had_error;
 }
 
-// `@native("io_print")` / `@intrinsic("array_len")`, already past the '@'.
-// Only these two names exist, and both take exactly one string: the attribute
-// surface is a registry key and nothing more, so there is no attribute
-// *grammar* to grow here — a third tier would be a third name in this switch.
+// `@native("io_print")` / `@intrinsic("array_len")` / `@lang("display")`,
+// already past the '@'. Each takes exactly one string: the attribute surface is
+// a registry key and nothing more, so there is no attribute *grammar* to grow
+// here — a new tier is a new name in this switch. `@native`/`@intrinsic` are
+// body attributes (the fun is bodyless); `@lang` is a marker (the definition
+// keeps its body). The caller (`parse_decl`) sorts them apart.
 static AttrNode parse_attr(Parser *p) {
   Token at_tok = *previous_tok(p);
   AttrNode attr = {.kind = ATTR_NONE, .span = token_span(&at_tok)};
@@ -2339,9 +2341,11 @@ static AttrNode parse_attr(Parser *p) {
     kind = ATTR_NATIVE;
   } else if (sv_equal_cstr(name_tok.lexeme, "intrinsic")) {
     kind = ATTR_INTRINSIC;
+  } else if (sv_equal_cstr(name_tok.lexeme, "lang")) {
+    kind = ATTR_LANG;
   } else {
     error_at(p, token_span(&name_tok),
-             "unknown attribute; expected '@native' or '@intrinsic'");
+             "unknown attribute; expected '@native', '@intrinsic' or '@lang'");
     return attr;
   }
 
@@ -3146,6 +3150,12 @@ static Decl *parse_impl_decl(Parser *p, bool is_pub) {
             had_error = true;
             break;
           }
+          if (attr.kind == ATTR_LANG) {
+            // a method is never a lang item — those are top-level.
+            error_at(p, attr.span,
+                     "'@lang' can only mark a trait, enum, or function");
+            attr.kind = ATTR_NONE;
+          }
         }
         Decl *fun_decl = parse_fun_decl(p, false, attr);
         if (fun_decl->kind == DECL_POISON) {
@@ -3193,14 +3203,29 @@ static Decl *parse_impl_decl(Parser *p, bool is_pub) {
 static Decl *parse_decl(Parser *p) {
   Decl *decl = NULL;
 
-  // an attribute precedes `pub`, and only a `fun` can carry one — everything
-  // else has a body the language can see.
-  AttrNode attr = {.kind = ATTR_NONE};
-  if (match_tok(p, TOKEN_AT)) {
-    attr = parse_attr(p);
-    if (attr.kind == ATTR_NONE) {
+  // attributes precede `pub`. There are two kinds and a decl may carry one of
+  // each: a *body* attribute (`@native`/`@intrinsic`, fun-only, bodyless) and a
+  // *marker* (`@lang`, on a bodied trait/enum/fun). `float` is both. Sort them
+  // into two slots here so the decl parsers below only see the body attribute.
+  AttrNode attr = {.kind = ATTR_NONE};      // body attribute
+  AttrNode lang_attr = {.kind = ATTR_NONE}; // marker
+  while (match_tok(p, TOKEN_AT)) {
+    AttrNode a = parse_attr(p);
+    if (a.kind == ATTR_NONE) {
       sync_to_decl(p);
       return ast_decl(DECL_POISON, previous_tok_span(p), p->al);
+    }
+    if (a.kind == ATTR_LANG) {
+      if (lang_attr.kind != ATTR_NONE) {
+        error_at(p, a.span, "duplicate '@lang' attribute");
+      }
+      lang_attr = a;
+    } else {
+      if (attr.kind != ATTR_NONE) {
+        error_at(p, a.span,
+                 "a definition has at most one '@native'/'@intrinsic'");
+      }
+      attr = a;
     }
   }
 
@@ -3234,6 +3259,18 @@ static Decl *parse_decl(Parser *p) {
   if (attr.kind != ATTR_NONE && decl->kind != DECL_FUN &&
       decl->kind != DECL_POISON) {
     error_at(p, attr.span, "only a function can be '@native' or '@intrinsic'");
+  }
+
+  // a marker may sit on the definitions a lang item can be — a trait, an enum,
+  // or a function — and nowhere else.
+  if (lang_attr.kind != ATTR_NONE && decl->kind != DECL_POISON) {
+    if (decl->kind == DECL_FUN || decl->kind == DECL_TRAIT ||
+        decl->kind == DECL_ENUM) {
+      decl->lang_attr = lang_attr;
+    } else {
+      error_at(p, lang_attr.span,
+               "'@lang' can only mark a trait, enum, or function");
+    }
   }
 
   if (p->panic_mode) {

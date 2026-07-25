@@ -1,0 +1,6 @@
+#! expect: '@lang' can only mark a trait, enum, or function
+# A struct is not one of the definitions a lang item can be.
+@lang("display")
+struct S { x: Int }
+
+fun main() {}

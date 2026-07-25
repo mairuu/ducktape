@@ -369,14 +369,19 @@ typedef struct {
   bool is_self; // implicit "self"
 } ParamDef;
 
-// `@native("io_print")` / `@intrinsic("array_len")` on a bodyless `fun`. The
-// attribute *is* the body — a declaration carrying one has no block, and one
-// without an attribute must have a block, so there is never a question of
-// which wins.
+// `@native("io_print")` / `@intrinsic("array_len")` on a bodyless `fun` — the
+// attribute *is* the body. `@lang("display")` is the odd one out: a *marker*,
+// not a body, so it sits on a normally-bodied `trait`/`enum`/`fun` and tells
+// the compiler to track that definition as a lang item (see
+// `tc_register_lang_*`). A definition may carry a body attribute and a `@lang`
+// at once — `float` is both — which is why the two live in separate fields
+// (`DeclFun.attr` for the body, `Decl.lang_attr` for the marker) rather than
+// one slot.
 typedef enum {
   ATTR_NONE = 0,
   ATTR_NATIVE,    // a C function, called through the ordinary OP_CALL
   ATTR_INTRINSIC, // an opcode the call lowers to inline
+  ATTR_LANG,      // a marker: this definition is a std lang item
 } AttrKind;
 
 typedef struct {
@@ -1219,6 +1224,11 @@ typedef struct {
 struct Decl {
   DeclKind kind;
   bool is_pub;
+  // `@lang("…")` if this decl is marked as a lang item, else `.kind ==
+  // ATTR_NONE`. Lives on the shared Decl because a marker applies uniformly to
+  // a trait, enum, or fun — unlike a body attribute, which is fun-only and
+  // stays on `DeclFun.attr`.
+  AttrNode lang_attr;
   Span span;
   union {
     DeclUse use_decl;
