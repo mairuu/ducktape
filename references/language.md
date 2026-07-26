@@ -449,10 +449,12 @@ element is a projection over a projection (`Filter<Counter>.Item` is
 `Counter.Item` is `Int`), which the checker now collapses so a chain like
 `filter(p).map(f)` type-checks. They are ordinary library code — an adapter is a
 struct with a `fun(..)` field and an `impl Iterator`, nothing built into the
-language. The one thing the standard library cannot yet express is a combinator
-whose closure returns an iterator to flatten (`flat_map`), or one keyed on the
-element type through a non-native call — both wait on the associated-projection
-limits noted in `architecture.md`.
+language. A combinator whose closure returns an iterator to flatten (`flat_map`)
+is expressible as of milestone 50 — its element type is a projection over the
+inner iterator's own type parameter, which now survives to codegen — but is not
+written yet. What is still out of reach is a combinator keyed on a *property* of
+the element (`sum`, `max`): a bound can constrain `I`, but there is no way to
+say `I.Item: Ord`, so the constraint the body needs cannot be written down.
 
 ## Modules
 

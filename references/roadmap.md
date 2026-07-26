@@ -2508,7 +2508,9 @@
     generic `unwrap<T>` — still fails at codegen ("type argument 'T' is not known
     here"), because codegen has no `infer_apply` to collapse `I.Item` once the
     base is concrete. The combinators are written to avoid it; the wart is
-    narrowed, not closed.
+    narrowed, not closed. (Closed in milestone 50, which gave codegen that
+    collapse; the combinators still take their source apart with `match`, which
+    is no longer the only thing that would work.)
 
   Design: `language.md` "Iterators" → combinators, `runtime.md` `compile_for_iter`,
   `architecture.md` "`for` over an iterator" / "Types and inference".
@@ -2517,9 +2519,10 @@
   through a filter; `in_fixed.dt` gains a combinator line.
 
   Deliberately left for later: no `fold`/`enumerate`/`zip`/`take` yet (each is
-  the same adapter shape, added when wanted), and no `flat_map` (a closure
-  yielding an iterator to flatten needs the projection-through-a-bound codegen
-  the wart above describes).
+  the same adapter shape, added when wanted — milestone 49 adds them), and no
+  `flat_map` (a closure yielding an iterator to flatten needs the
+  projection-through-a-bound codegen the wart above describes — milestone 50
+  supplies it, so `flat_map` is now a matter of writing the adapter).
 
   **Combinators are free functions here, not `Iterator` methods** — `collect(map(it,
   f))`, not `it.map(f).collect()`. Two things blocked the method form; both are
@@ -2596,7 +2599,48 @@
   Still deferred: `flat_map` (a closure *returning* an iterator to flatten) and a
   `sum`/`fold`-shaped reduce keyed on `+`/`Ord` over `Self.Item` — both want the
   *codegen* projection-through-a-bound machinery, which is a different wart than
-  the checker one fixed here (see "Known warts").
+  the checker one fixed here (milestone 50 closes it).
+
+- **A projection reaches codegen (milestone 50)** — the wart milestone 47 opened
+  and 49 narrowed, closed. Inside `fun f<I: Iterator>(it: I)`, `I.Item` is
+  abstract and the checker is *right* to accept it: the bound says the projection
+  exists, and that is all a type-check needs. Codegen is where it has to become a
+  real type, because an instantiation is keyed by one — and `subst_apply` binds
+  `I` to `Counter` while leaving `Counter.Item` standing, since the binding lives
+  on an impl and a substitution has no index to read it from. So handing an
+  element to any generic — `it.next().unwrap()`, `unwrap<T>` keyed on `T =
+  I.Item` — was reported as "cannot instantiate 'unwrap': type argument 'T' is
+  not known here", at a call the checker had already accepted. A diagnostic about
+  a type the impl knew all along.
+
+  The checker gets the missing step from `infer_apply`, which codegen has no
+  equivalent of, so the fix gives it one. `subst_apply_` (sema.c) already walks
+  every type constructor; it now takes an optional `ImplIndex`, and in its
+  `TY_ASSOC` case — with an index in hand and a base that is no longer a
+  parameter, an unknown, or a trait's abstract `Self` — it reads the binding off
+  the applicable impl via `impl_index_assoc_type` and *recurses on the answer*.
+  The recursion is what handles a pass-through adapter, whose `Item` is a
+  projection of its own: `Filter<Counter>.Item` → `Counter.Item` → `Int` in one
+  pass. `assoc_apply(impls, t, al)` is that traversal with an empty substitution,
+  exported for codegen; `subst_apply` passes NULL and is unchanged, so no sema
+  caller's behaviour moves. Codegen routes its nine `subst_apply(&cg->subst, ..)`
+  sites through one `cg_subst(cg, t)` that does both steps, rather than fixing
+  the instantiation path alone and waiting for the next site to trip.
+
+  What it unblocks, verified: `flat_map`'s exact shape — an adapter whose element
+  type is a projection over a *bound parameter* (`type Item = J.Item`, `J:
+  Iterator`) — now compiles and runs, driven by both `collect` and `for`.
+  `tests/run/iter_projection.dt` pins that adapter alongside the simpler shapes
+  (a generic call per element, `unwrap` through a bound, an adapter base);
+  `in_fixed.dt` gains a `head<I: Iterator>(it) -> I.Item`. Design:
+  `architecture.md` "Substitution", `runtime.md` "Monomorphisation".
+
+  Two things this deliberately did *not* fix, both separate machinery and both
+  still open: a `sum`/`max`-shaped reduce over `Self.Item` fails in the
+  *checker*, because there is no way to write the bound it needs (`I: Iterator`
+  does not say `I.Item: Ord`, and an associated-type bound has no spelling); and
+  a `dyn Iterator` still does not satisfy an `I: Iterator` bound, which milestone
+  47 special-cased for `for` only. Neither is a projection problem.
 
 ## Next (in recommended order)
 
@@ -2624,8 +2668,9 @@ milestone 47, along with driving a bounded generic or a `dyn Iterator` through
 by partitioning object safety per method. They are ordinary `.dt` code (an
 adapter is a struct with an `impl Iterator`); the one compiler change in 47 was
 inference, so a closure typed by the source's `Item` projection can be checked.
-`fold`/`enumerate`/`zip`/`take` are the same adapter shape when wanted;
-`flat_map` waits on the projection-through-a-bound codegen wart.)
+`fold`/`enumerate`/`zip`/`take` are milestone 49, the same adapter shape;
+`flat_map` waited on the projection-through-a-bound codegen wart, which
+milestone 50 closes, so it is now just an adapter nobody has written.)
 
 (**Padding a rendered value to a width** was the last open piece here and is now
 milestone 34: `std::string` ships `pad_start`/`pad_end`/`pad_center`. The
@@ -2723,19 +2768,16 @@ via `Module.decl_base`) and is not part of the main line.
 - overlapping method names across impls: bare generic paths take the first
   registered impl
 - `Point::new` vs `Point::<Int>::new`: expression paths require turbofish
-- an associated-type projection cannot key an instantiation **through a
-  bound**: handing a `T.Item` / `Self.Item` value to another generic
-  (`id(v.item())`, or `it.next().unwrap()` where the payload is `I.Item`) reports
-  "cannot instantiate 'id': type argument 'T' is not known here", because codegen
-  has no `infer_apply` to collapse the projection once the base is concrete —
-  `subst_apply` passes `TY_ASSOC` through untouched and `impl_index_assoc_type`
-  is checker-side. Affects bounded generic functions and trait default bodies
-  alike. The *checker* collapses these projections wherever it reads them —
-  including, since milestone 47, a later argument's hint once an earlier argument
-  pins the base, and a `for`-loop's element type — so a projection only bites at
-  codegen when it must key a monomorphisation. Through a *trait object* it works
-  (milestone 27): `trait_project` collapses `Self.Item` against the binding the
-  `dyn` names, so codegen only ever sees a concrete type
+- an associated-type projection keying an instantiation **through a bound** was
+  the long-standing one here — handing a `T.Item` / `Self.Item` value to another
+  generic (`id(v.item())`, `it.next().unwrap()` where the payload is `I.Item`)
+  reported "cannot instantiate 'id': type argument 'T' is not known here" — and
+  is **closed as of milestone 50**: `assoc_apply` gives codegen the collapse
+  `infer_apply` was doing for the checker, and `cg_subst` applies it at every
+  site that substitutes. What remains is narrower and is *not* the same problem:
+  there is no way to *bound* an associated type (`I: Iterator` cannot say
+  `I.Item: Ord`), so a reduce keyed on `Ord`/`+` over the element fails in the
+  checker for want of a spelling rather than at codegen for want of a type
 - an impl's own type-param bounds are checked at selection (milestone 20), but
   *coherence* is deliberately blind to them: `impl<T: Ord> Ord for Option<T>`
   and an `impl Ord for Option<Widget>` conflict even though no receiver could

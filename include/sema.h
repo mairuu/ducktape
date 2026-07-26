@@ -26,6 +26,17 @@ void subst_init(Subst *s, StringView *params, Type **args, int count);
 // unmatched generics pass through unchanged.
 Type *subst_apply(const Subst *s, Type *t, Allocator *al);
 
+// collapse every `T.Assoc` projection in `t` whose base has become a real type,
+// reading the binding off the impl that applies — `Counter.Item` becomes `Int`.
+// A projection over a type parameter or a trait's abstract `Self` has no answer
+// yet and is left standing.
+//
+// This is what infer_apply does for the checker, minus the inference: codegen
+// has no InferCtx but does have an impl index, and after substituting a call's
+// type arguments it needs `I.Item` to become the element type before it can key
+// an instantiation on it.
+Type *assoc_apply(ImplIndex *impls, Type *t, Allocator *al);
+
 // instantiate a generic item: for each TY_GENERIC in `type_params`, create
 // a fresh TY_UNKNOWN or use the provided type argument (in case of explicit
 // type arguments) and build a Subst. after unification, apply infer_apply to

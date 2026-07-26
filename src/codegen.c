@@ -53,8 +53,9 @@ typedef struct Cg {
   Allocator *al;
 
   // the instantiation this body is being compiled under: every type parameter
-  // in scope bound to a concrete type. Empty for a non-generic definition, in
-  // which case subst_apply is a no-op and nothing below pays for it.
+  // in scope bound to a concrete type. Empty for a non-generic definition —
+  // where cg_subst still has the projections to collapse, so it is not quite
+  // free, but there is nothing to substitute.
   Subst subst;
   int inst_depth; // instantiations traversed to reach this body
 
@@ -276,6 +277,20 @@ bool mono_seed(Mono *mono, FunDef *entry) {
   return mono_reach(mono, entry) != NULL;
 }
 
+// push a type recorded by the checker through the instantiation this body is
+// being compiled under. Two steps, and both are needed to reach a concrete
+// type: substituting binds the type parameters (`I` → `Counter`), and
+// `assoc_apply` then collapses any projection those parameters were the base of
+// (`Counter.Item` → `Int`) by reading the binding off the impl.
+//
+// The checker gets the second step from infer_apply, which codegen has no
+// equivalent of — leaving it out is what used to make an `I.Item` argument
+// arrive at an instantiation still abstract, and be reported as a type argument
+// that "is not known here" even though the impl knew it all along.
+static Type *cg_subst(Cg *cg, Type *t) {
+  return assoc_apply(cg->impls, subst_apply(&cg->subst, t, cg->al), cg->al);
+}
+
 // what the call site instantiated one type parameter with, made concrete:
 // read from the recorded arguments (`first`, then `second`), then pushed
 // through the instantiation the *caller* is being compiled under. NULL when it
@@ -293,7 +308,7 @@ static Type *cg_bind_param(Cg *cg, StringView name, const Subst *first,
   if (arg == NULL) {
     return NULL;
   }
-  arg = subst_apply(&cg->subst, arg, cg->al);
+  arg = cg_subst(cg, arg);
   return type_is_concrete(arg) ? arg : NULL;
 }
 
@@ -1119,7 +1134,7 @@ static void compile_for_iter(Cg *cg, Expr *expr) {
   } else if (mc->resolved_default != NULL) {
     next = mc->resolved_default;
   } else if (mc->bound_trait != NULL) {
-    Type *self = subst_apply(&cg->subst, mc->bound_self, cg->al);
+    Type *self = cg_subst(cg, mc->bound_self);
     if (self->kind == TY_DYN) {
       // a `dyn Iterator`: the receiver carries the vtable, so the slot is all
       // codegen picks — `next`'s position in the trait's method list.
@@ -1131,7 +1146,7 @@ static void compile_for_iter(Cg *cg, Expr *expr) {
         }
       }
     } else {
-      Type *trait_ref = subst_apply(&cg->subst, mc->bound_trait, cg->al);
+      Type *trait_ref = cg_subst(cg, mc->bound_trait);
       next = cg_bound_target(cg, self, trait_ref, mc->method_name, &impl_subst,
                              expr->span);
     }
@@ -1165,9 +1180,9 @@ static void compile_for_iter(Cg *cg, Expr *expr) {
   // opt = iter.next() — the receiver is the hidden local, not a re-eval, so its
   // cursor advances across turns rather than restarting.
   if (dyn_index >= 0) {
-    // OP_DYN_METHOD pops the trait object and leaves [next, receiver], the shape
-    // OP_CALL already understands; `next` takes only `self`.
-    emit2(cg, OP_GET_LOCAL, (uint8_t)iter_slot); // [iter]
+    // OP_DYN_METHOD pops the trait object and leaves [next, receiver], the
+    // shape OP_CALL already understands; `next` takes only `self`.
+    emit2(cg, OP_GET_LOCAL, (uint8_t)iter_slot);  // [iter]
     emit2(cg, OP_DYN_METHOD, (uint8_t)dyn_index); // [next, recv]
     emit2(cg, OP_CALL, 1);                        // [opt]
   } else {
@@ -1177,13 +1192,13 @@ static void compile_for_iter(Cg *cg, Expr *expr) {
       emit(cg, OP_UNIT);
       return;
     }
-    emit2(cg, OP_GET_LOCAL, (uint8_t)iter_slot);     // [next, iter]
+    emit2(cg, OP_GET_LOCAL, (uint8_t)iter_slot);    // [next, iter]
     emit2(cg, OP_CALL, (uint8_t)next->param_count); // [opt]
   }
 
   // Some -> bind and run the body; None -> exit
-  emit2(cg, OP_DUP, 0);                            // [opt, opt]
-  emit(cg, OP_TAG);                                // [opt, tag]
+  emit2(cg, OP_DUP, 0); // [opt, opt]
+  emit(cg, OP_TAG);     // [opt, tag]
   emit_const(cg, val_int(for_->some_variant->tag));
   emit(cg, OP_EQ);                                 // [opt, is_some]
   int exit_jump = emit_jump(cg, OP_JUMP_IF_FALSE); // peeks is_some
@@ -1196,11 +1211,11 @@ static void compile_for_iter(Cg *cg, Expr *expr) {
   emit(cg, OP_POP);
   emit_loop(cg, loop_start);
 
-  patch_jump(cg, exit_jump);                    // [opt, is_some]
-  emit(cg, OP_POP);                             // is_some -> [opt]
-  emit(cg, OP_POP);                             // the None instance -> []
+  patch_jump(cg, exit_jump);                   // [opt, is_some]
+  emit(cg, OP_POP);                            // is_some -> [opt]
+  emit(cg, OP_POP);                            // the None instance -> []
   cg_close_scope(cg, saved_locals);            // detach a captured loop var
-  emit2(cg, OP_POPN, 2);                        // var, iter
+  emit2(cg, OP_POPN, 2);                       // var, iter
   for (int i = 0; i < loop.break_count; i++) { // breaks pop their own locals
     patch_jump(cg, loop.break_jumps[i]);
   }
@@ -1402,7 +1417,7 @@ static void compile_coerce_dyn(Cg *cg, Expr *expr) {
     cg_error(cg, expr->span, "this trait-object coercion");
     return;
   }
-  self = subst_apply(&cg->subst, self, cg->al);
+  self = cg_subst(cg, self);
   if (!type_is_concrete(self)) {
     char buf[64];
     type_sprintf(self, buf, sizeof(buf));
@@ -1414,7 +1429,7 @@ static void compile_coerce_dyn(Cg *cg, Expr *expr) {
     return;
   }
 
-  Type *trait_ref = subst_apply(&cg->subst, expr->coerce_dyn, cg->al);
+  Type *trait_ref = cg_subst(cg, expr->coerce_dyn);
   int slot = cg_vtable_for(cg, trait_ref, self, expr->span);
   if (slot < 0) {
     return;
@@ -1476,7 +1491,7 @@ static void compile_method_call(Cg *cg, Expr *expr) {
     // abstractly (`T: Show`); pushing it through this instantiation makes it
     // concrete, and the impl index then names the body — which is the whole
     // reason generic code has to be monomorphised rather than erased.
-    Type *self = subst_apply(&cg->subst, mc->bound_self, cg->al);
+    Type *self = cg_subst(cg, mc->bound_self);
 
     // ...unless it is a trait object, where it stays abstract on purpose.
     // The receiver carries the table, so the slot is all codegen picks: the
@@ -1507,7 +1522,7 @@ static void compile_method_call(Cg *cg, Expr *expr) {
 
     // which trait the bound named, in this instantiation's terms: two impls
     // of one generic trait for one type differ only here.
-    Type *trait_ref = subst_apply(&cg->subst, mc->bound_trait, cg->al);
+    Type *trait_ref = cg_subst(cg, mc->bound_trait);
 
     fun = cg_bound_target(cg, self, trait_ref, mc->method_name, &impl_subst,
                           expr->span);
@@ -2076,8 +2091,8 @@ static void compile_expr_inner(Cg *cg, Expr *expr) {
       // This is compile_method_call's bound branch with the receiver moved
       // into the path.
       if (p->bound_trait != NULL) {
-        Type *self = subst_apply(&cg->subst, p->bound_self, cg->al);
-        Type *trait_ref = subst_apply(&cg->subst, p->bound_trait, cg->al);
+        Type *self = cg_subst(cg, p->bound_self);
+        Type *trait_ref = cg_subst(cg, p->bound_trait);
         StringView name = path->segments[path->count - 1].name;
 
         Subst impl_subst = subst_empty();

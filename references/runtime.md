@@ -502,6 +502,25 @@ pushing the caller's own bindings (`Cg.subst`) through them — the step that
 lets `describe_twice<T>` reach `describe<Int>` reach `Int::show` rather than
 stopping one level down.
 
+**Pushing them through is two steps, not one**, and `cg_subst` is where both
+happen. Substituting binds the type parameters (`I` → `Counter`), but a type
+argument may be a *projection over* one — `unwrap<T>` called on the payload of
+`it.next()` inside a `fun f<I: Iterator>` is keyed on `T = I.Item` — and
+substituting inside the base leaves `Counter.Item` standing, because the binding
+lives on an impl. So `cg_subst` follows `subst_apply` with `assoc_apply`, which
+reads the binding off the applicable impl (`architecture.md`,
+"Associated-type projections"). Codegen has no `InferCtx`, so it cannot borrow
+the checker's `infer_apply`; what it does have is the `ImplIndex` the body may
+select from, which is all the collapse actually needs.
+
+Without that second step an instantiation keyed on an element type could not be
+formed, and the failure surfaced as a diagnostic about a type the impl knew
+perfectly well — "cannot instantiate 'unwrap': type argument 'T' is not known
+here", at a call the checker had accepted. It is applied at every site that
+substitutes rather than at the instantiation path alone, so a `dyn` coercion or
+a bound-dispatch target whose type mentions a projection is collapsed the same
+way.
+
 Two call shapes need more than the recorded arguments:
 
 - **A method of a generic impl.** Its body mentions the impl's type params as

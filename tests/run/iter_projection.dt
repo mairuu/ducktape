@@ -1,0 +1,133 @@
+# Handing a projection to a generic, at codegen (milestone 50).
+#
+# `I.Item` inside a `fun f<I: Iterator>` body is abstract while the checker
+# looks at it, and the checker is fine with that: the bound says the projection
+# exists. Codegen is where it has to become a real type, because an
+# instantiation is keyed by one — and `subst_apply` only binds `I`, leaving
+# `Counter.Item` where `Int` was needed. That is what used to be reported as
+# "type argument 'T' is not known here" at a call the checker had accepted.
+#
+# `cg_subst` now collapses the projection after substituting, so every shape
+# below reaches a concrete element type. The last one is the point: a projection
+# whose base is itself a bound parameter, which is what an adapter like
+# `FlatMap` is made of.
+use std::iter::Iterator;
+use std::option::Option;
+use std::io::print;
+
+struct Counter { n: Int, max: Int }
+
+impl Counter {
+    fun to(max: Int) -> Counter { Counter { n: 0, max: max } }
+}
+
+impl Iterator for Counter {
+    type Item = Int;
+    fun next(self) -> Option<Int> {
+        if self.n >= self.max { return Option::None; }
+        var v = self.n;
+        self.n += 1;
+        return Option::Some(v);
+    }
+}
+
+# `T` is keyed on `I.Item`: the call the projection is handed to.
+fun ident<T>(x: T) -> T { return x; }
+
+# the roadmap's own example of the wart — `unwrap<T>` with `T = I.Item`.
+fun first<I: Iterator>(it: I) -> I.Item {
+    return it.next().unwrap();
+}
+
+# a generic call per element, keyed on the source's element type.
+fun echo<I: Iterator>(it: I) -> [I.Item] {
+    var out: [I.Item] = [];
+    while true {
+        match it.next() {
+            Option::Some(v) => { out.push(ident(v)); },
+            Option::None => { return out; },
+        }
+    }
+    return out;
+}
+
+# An adapter whose element type is a projection over a *bound parameter*
+# (`J.Item`, not `Self`'s own), the shape a `flat_map` needs: each element of
+# the source seeds a whole inner iterator, and `next` drains that one before
+# pulling again.
+struct FlatMap<I: Iterator, J: Iterator> {
+    inner: I,
+    f: fun(I.Item) -> J,
+    cur: Option<J>,
+}
+
+impl<I: Iterator, J: Iterator> Iterator for FlatMap<I, J> {
+    type Item = J.Item;
+
+    fun next(self) -> Option<J.Item> {
+        while true {
+            match self.cur {
+                Option::Some(it) => {
+                    match it.next() {
+                        Option::Some(x) => { return Option::Some(x); },
+                        Option::None => { self.cur = Option::None; },
+                    }
+                },
+                Option::None => {
+                    match self.inner.next() {
+                        Option::Some(seed) => {
+                            self.cur = Option::Some((self.f)(seed));
+                        },
+                        Option::None => { return Option::None; },
+                    }
+                },
+            }
+        }
+        return Option::None;
+    }
+}
+
+fun main() {
+    # a generic call keyed on the element of a concrete iterator
+    print(echo(Counter::to(3)));
+#> [0, 1, 2]
+
+    # `unwrap<T>` with `T = I.Item`, through the bound
+    print(first(Counter::to(4)));
+#> 0
+
+    # the base is itself an adapter, so the projection is over a projection:
+    # `Filter<Counter>.Item` is `Counter.Item` is `Int`, collapsed in one pass
+    print(first(Counter::to(6).filter(|x| => x % 2 == 1)));
+#> 1
+
+    # and through an adapter that renames the element type
+    print(echo(Counter::to(3).map(|x| => x * 10)));
+#> [0, 10, 20]
+
+    # nesting the two: a generic call over a mapped, filtered source
+    print(ident(first(Counter::to(9).filter(|x| => x > 4).map(|x| => x * 2))));
+#> 10
+
+    # `J.Item` — a projection over a bound parameter, drained through `collect`
+    var fm = FlatMap {
+        inner: Counter::to(4),
+        f: |n| => Counter { n: 0, max: n },
+        cur: Option::None,
+    };
+    print(fm.collect());
+#> [0, 0, 1, 0, 1, 2]
+
+    # and the same adapter driven by `for`, which reads `Item` the same way
+    var total = 0;
+    var fm2 = FlatMap {
+        inner: Counter::to(4),
+        f: |n| => Counter { n: 0, max: n },
+        cur: Option::None,
+    };
+    for x in fm2 {
+        total += ident(x);
+    }
+    print(total);
+#> 4
+}

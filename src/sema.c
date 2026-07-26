@@ -141,6 +141,9 @@ void subst_init(Subst *s, StringView *params, Type **args, int count) {
 // has a matching one, and resolve_bound_refs reports rather than truncates.
 #define MAX_BOUNDS 16
 
+static Type *impl_index_assoc_type(ImplIndex *idx, Type *self_type,
+                                   StringView name, Allocator *al);
+
 // recursively replace TY_GENERIC nodes whose .name matches an entry.
 //
 // `total` says whether every generic the type mentions is expected to be in
@@ -148,17 +151,32 @@ void subst_init(Subst *s, StringView *params, Type **args, int count) {
 // leftover parameter there is a bug, and the assert is what catches it.
 // Opening a *bound* is the exception: `U: Into<T>` inside an `impl<X>` can
 // mention parameters of three scopes at once, and only one is being opened.
-static Type *subst_apply_(const Subst *s, Type *t, bool total, Allocator *al);
+//
+// `impls` is the second job this traversal can do, and it is optional: with an
+// index in hand a `T.Assoc` whose base has become a real type collapses to
+// whatever the applicable impl bound it to, instead of staying a projection.
+// Every sema caller passes NULL and lets infer_apply do that later against the
+// inference substitution; codegen, which has no InferCtx, passes its index.
+static Type *subst_apply_(const Subst *s, ImplIndex *impls, Type *t, bool total,
+                          Allocator *al);
 
 Type *subst_apply(const Subst *s, Type *t, Allocator *al) {
-  return subst_apply_(s, t, /*total=*/true, al);
+  return subst_apply_(s, NULL, t, /*total=*/true, al);
 }
 
-static Type *subst_apply_(const Subst *s, Type *t, bool total, Allocator *al) {
-// the recursive calls below all propagate `total`; spelling that out at each
-// one would bury the substitution itself in plumbing.
-#define subst_apply(s, t, al) subst_apply_((s), (t), total, (al))
-  if (!s->count) {
+Type *assoc_apply(ImplIndex *impls, Type *t, Allocator *al) {
+  Subst empty = {0};
+  // not an instantiation, so a type parameter left standing is not a bug — a
+  // projection over one simply stays abstract.
+  return subst_apply_(&empty, impls, t, /*total=*/false, al);
+}
+
+static Type *subst_apply_(const Subst *s, ImplIndex *impls, Type *t, bool total,
+                          Allocator *al) {
+// the recursive calls below all propagate `total` and `impls`; spelling those
+// out at each one would bury the substitution itself in plumbing.
+#define subst_apply(s, t, al) subst_apply_((s), impls, (t), total, (al))
+  if (!s->count && impls == NULL) {
     return t;
   }
 
@@ -275,10 +293,22 @@ static Type *subst_apply_(const Subst *s, Type *t, bool total, Allocator *al) {
     return changed ? ty_dyn(trait, args.ptr, args.count, al) : t;
   }
   case TY_ASSOC: {
-    // `T.Item` follows T. The projection can't be collapsed here (the binding
-    // lives on an impl, and subst_apply has no index); infer_apply does that
-    // once the base is concrete.
+    // `T.Item` follows T. Without an index the projection can't be collapsed
+    // here (the binding lives on an impl), so it is left standing and
+    // infer_apply does it once the base is concrete.
     Type *base = subst_apply(s, t->as.assoc.base, al);
+    if (impls != NULL && base->kind != TY_UNKNOWN && base->kind != TY_GENERIC &&
+        base->kind != TY_TRAIT) {
+      // the base is a real type now, so an impl answers what it bound `Item`
+      // to. Recurse on the answer: a pass-through adapter binds `Item` to a
+      // projection of its own (`type Item = I.Item`), so one lookup can land
+      // on another projection rather than on the element type.
+      Type *bound =
+          impl_index_assoc_type(impls, base, t->as.assoc.assoc_name, al);
+      if (bound != NULL) {
+        return subst_apply(s, bound, al);
+      }
+    }
     return base != t->as.assoc.base
                ? ty_assoc(base, t->as.assoc.assoc_name, t->as.assoc.trait, al)
                : t;
@@ -289,8 +319,6 @@ static Type *subst_apply_(const Subst *s, Type *t, bool total, Allocator *al) {
 #undef subst_apply
 }
 
-static Type *impl_index_assoc_type(ImplIndex *idx, Type *self_type,
-                                   StringView name, Allocator *al);
 static bool impl_applies(ImplDef *impl, Type *self_type, Type *trait_ref,
                          Subst *out_subst, ImplIndex *bounds_idx,
                          Allocator *al);
@@ -365,7 +393,7 @@ Subst infer_open_generics(InferCtx *ctx, Type **params, int count,
     bool changed = false;
     for (int b = 0; b < g->as.generic.bound_count && b < MAX_BOUNDS; b++) {
       bounds[b] =
-          subst_apply_(&s, g->as.generic.bounds[b], /*total=*/false, al);
+          subst_apply_(&s, NULL, g->as.generic.bounds[b], /*total=*/false, al);
       changed |= bounds[b] != g->as.generic.bounds[b];
     }
     if (!changed) {
@@ -2433,9 +2461,9 @@ bool tc_resolve_module(TypeChecker *tc, Module *m) {
   // source order. The declare pass binds every struct/enum/trait *name* to a
   // head type; the resolve pass then fills in fields, variants, method
   // signatures and impls, each of which can now name a type declared later —
-  // including a mutual reference (a trait whose method returns an adapter struct
-  // whose own bound is that trait). Only a type-parameter *bound* is still
-  // order-sensitive, since it is resolved in the declare pass itself.
+  // including a mutual reference (a trait whose method returns an adapter
+  // struct whose own bound is that trait). Only a type-parameter *bound* is
+  // still order-sensitive, since it is resolved in the declare pass itself.
   for (int i = 0; i < m->ast->decl_count; i++) {
     Decl *decl = m->ast->decls[i];
     rctx.tyres.tscope = &m->tscope;
@@ -3303,8 +3331,8 @@ static Type *resolve_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     // Fold in what earlier arguments already solved before using this parameter
     // as the hint: for `map(it, |x| => ...)` on `fun(I, fun(I.Item) -> B)`, the
     // first argument binds `I`, so the second's hint collapses `I.Item` to the
-    // concrete element type and the closure body checks against it. Without this
-    // the projection stays abstract and the closure cannot be checked.
+    // concrete element type and the closure body checks against it. Without
+    // this the projection stays abstract and the closure cannot be checked.
     Type *param_ty =
         infer_apply(&ctx->infer, callee_ty->as.fun.param_types[i], ctx->al);
     Type *arg_ty = resolve_expr(ctx, call->args[i], param_ty);
@@ -4650,8 +4678,8 @@ static Type *resolve_for_iterator(CheckCtx *ctx, Expr *for_expr,
   // gate nominally: the type has to be an `Iterator`. (The trait is preluded,
   // so `iter` is NULL only if `std::iter` failed to load — treated as "not an
   // iterator".) A `dyn Iterator` *is* the trait rather than implementing it
-  // through an impl in the index, so it is admitted directly — codegen drives it
-  // through its vtable.
+  // through an impl in the index, so it is admitted directly — codegen drives
+  // it through its vtable.
   bool is_iterator =
       iter != NULL &&
       ((iter_ty->kind == TY_DYN && dyn_trait_def(iter_ty) == iter) ||
@@ -4712,8 +4740,8 @@ static Type *resolve_for_iterator(CheckCtx *ctx, Expr *for_expr,
   for_->none_variant = none;
   // Collapse the element type before it becomes the loop variable's: an adapter
   // whose `type Item = I.Item` yields a projection (`Filter<Counter>.Item` is
-  // `Counter.Item`), which is concrete but unresolved until infer_apply reads it
-  // through the impl — otherwise `x` compares as an abstract `Counter.Item`.
+  // `Counter.Item`), which is concrete but unresolved until infer_apply reads
+  // it through the impl — otherwise `x` compares as an abstract `Counter.Item`.
   return infer_apply(&ctx->infer, ret->as.enm.type_args[0], ctx->al);
 }
 
@@ -6352,7 +6380,7 @@ static void tc_check_impl_conformance(TypeChecker *tc, Decl *decl,
       // name — so the substitution is a partial one, and applying it totally
       // would abort on the leftover `U`. Both sides retain it, so `types_equal`
       // still compares them.
-      expected = subst_apply_(&ms, expected, /*total=*/false, tc->al);
+      expected = subst_apply_(&ms, NULL, expected, /*total=*/false, tc->al);
     }
     expected =
         trait_project(expected, trait, impl_def->self_type, impl_def, tc->al);
@@ -6781,8 +6809,9 @@ static bool type_mentions_self(const Type *t, const TraitDef *trait) {
 // erased; `Self.Item` is exempt because the trait object names it). The three
 // conditions are object safety read one method at a time: a *provided* method
 // that fails them is left out of the vtable rather than sinking the trait,
-// while a *required* one still makes the trait non-object-safe. `undispatchable`
-// caches this answer on the method for codegen; here is the one computation.
+// while a *required* one still makes the trait non-object-safe.
+// `undispatchable` caches this answer on the method for codegen; here is the
+// one computation.
 static const char *trait_method_undispatchable(const TraitMethodDef *m,
                                                const TraitDef *trait) {
   if (m->self_index < 0) {
@@ -7393,7 +7422,7 @@ static bool impl_bounds_satisfied(ImplDef *impl, Type **args, int n,
     for (int b = 0; ok && b < param->as.generic.bound_count; b++) {
       // partial: the bound may also mention the *enclosing* definition's
       // parameters, which this substitution has nothing to say about.
-      Type *bound = subst_apply_(&subst, param->as.generic.bounds[b],
+      Type *bound = subst_apply_(&subst, NULL, param->as.generic.bounds[b],
                                  /*total=*/false, al);
       ok = impl_index_implements(idx, args[j], bound, al);
     }

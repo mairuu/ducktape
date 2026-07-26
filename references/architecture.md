@@ -954,15 +954,28 @@ and associated-type lookup all go through it.
 `T.Assoc` (`TY_ASSOC`, interned like every other structural type) is a
 placeholder for whatever an impl binds. `tyres_resolve` accepts it when a bound
 on `T` — or the trait itself, for `Self.Assoc` — declares that name.
-`subst_apply` substitutes inside the base but cannot collapse the projection
-(it has no impl index); `infer_apply` does, reading the binding off the
-applicable impl as soon as the base is concrete, and `infer_unify` normalises
-`TY_ASSOC` operands up front so `T.Item` and `Int` don't look like different
-kinds. While the base is still abstract the projection survives unchanged,
-which is exactly what a generic body needs. A projection on a *trait object*
-never survives that long: `trait_project` reads it off the binding the `dyn`
-names, since a trait object is the one abstract receiver that says what its
-associated types are.
+`subst_apply` substitutes inside the base but by default does not collapse the
+projection; `infer_apply` does, reading the binding off the applicable impl as
+soon as the base is concrete, and `infer_unify` normalises `TY_ASSOC` operands
+up front so `T.Item` and `Int` don't look like different kinds. While the base
+is still abstract the projection survives unchanged, which is exactly what a
+generic body needs. A projection on a *trait object* never survives that long:
+`trait_project` reads it off the binding the `dyn` names, since a trait object
+is the one abstract receiver that says what its associated types are.
+
+**Collapsing is a capability of the traversal, not of the caller.** What
+`subst_apply` lacks is not the ability but the *index* — the binding lives on an
+impl, and looking it up needs an `ImplIndex`. So `subst_apply_` takes one as an
+optional argument and its `TY_ASSOC` case uses it when present, calling
+`impl_index_assoc_type` and **recursing on the answer**: a pass-through adapter
+binds `Item` to a projection of its own, so `Filter<Counter>.Item` →
+`Counter.Item` → `Int` needs more than one hop. `subst_apply` passes NULL — every
+checker caller wants the projection left standing, because `infer_apply` will
+finish it against the inference substitution — and `assoc_apply(impls, t, al)`
+is the same traversal with an empty substitution and an index, which is how
+**codegen** gets the collapse without an `InferCtx` (see `runtime.md`,
+"Monomorphisation"). Two entry points, one walk; the difference between them is
+one pointer.
 
 ### Trait objects (`dyn Trait`)
 
@@ -1015,9 +1028,11 @@ walk them the way they walk a struct's type arguments.
 Dispatch reads the binding through `trait_project`: with a `TY_DYN` self, a
 `Self.Item` in the method signature collapses to what the trait object says it
 is, rather than being rebased onto a self that has no impl to consult (the
-bounded-`T` case, which stays abstract as `T.Item`). That is also why a
-projection through a trait object *can* key an instantiation while one through
-a bound cannot — it is already a concrete type by the time codegen sees it.
+bounded-`T` case, which stays abstract as `T.Item`). So a projection through a
+trait object reaches codegen *already* concrete, where one through a bound
+arrives as a `T.Item` that codegen has to collapse itself — which since
+milestone 50 it does, so both can key an instantiation; the difference is only
+where the collapse happens.
 
 Dispatch needs nothing new: `resolve_method_call_expr` treats a `TY_DYN`
 receiver as offering exactly the one trait it names, and hands it to

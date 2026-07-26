@@ -292,6 +292,15 @@ impl Iterator for Countdown {
     }
 }
 
+# a projection handed to a generic (milestone 50). `I.Item` is abstract while
+# the checker looks at this body — the bound is all it needs — but `unwrap<T>`
+# is instantiated on it, and an instantiation is keyed by a *real* type. Codegen
+# collapses the projection through the impl once `I` is bound, so this compiles
+# for any iterator rather than only where the element type is written out.
+fun head<I: Iterator>(it: I) -> I.Item {
+    return it.next().unwrap();
+}
+
 fun main() {
     var r = process_data(1);
     # coercion at a call site, mixing two concrete types in one array
@@ -333,4 +342,8 @@ fun main() {
     var total = Countdown::from(10).filter(|k| => k % 2 == 0).take(3).fold(0, |a, k| => a + k);
     var paired = Countdown::from(3).enumerate().collect();
     var zipped = Countdown::from(4).zip(Countdown::from(2)).collect();
+    # and the element type reached through a bound (milestone 50): the base is a
+    # `Filter`, so `I.Item` is a projection over a projection, collapsed at the
+    # instantiation rather than left abstract
+    var biggest = head(Countdown::from(9).filter(|k| => k % 3 == 0));
 }
