@@ -987,6 +987,7 @@ static bool parse_bound_lhs(Parser *p, WhereLhs *out) {
                    "expected type parameter name in where clause predicate")) {
     return false;
   }
+  Span start = previous_tok_span(p);
   bool had_error = false;
 
   StringView segments[4];
@@ -1021,6 +1022,9 @@ static bool parse_bound_lhs(Parser *p, WhereLhs *out) {
   out->segment_count = segment_count;
   out->segments = al_alloc(p->al, sizeof(StringView) * segment_count);
   memcpy(out->segments, segments, sizeof(StringView) * segment_count);
+  // the whole path, so a diagnostic about `T.Item` underlines both segments.
+  // Until milestone 52 nothing reachable read this span, so it went unset.
+  out->span = span_merge(start, previous_tok_span(p));
   return true;
 }
 

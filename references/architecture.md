@@ -963,6 +963,32 @@ generic body needs. A projection on a *trait object* never survives that long:
 `trait_project` reads it off the binding the `dyn` names, since a trait object
 is the one abstract receiver that says what its associated types are.
 
+**A projection can be bounded, and the bound lives on the base.** `where
+I.Item: Ord` is stored as an `AssocBound` (name plus trait refs) on the
+*parameter's* `TY_GENERIC`, not on the `TY_ASSOC` it constrains — `TY_ASSOC`
+stays a plain (base, name) pair and a projection is answered by looking through
+its base. That placement follows from where the bound has to be *discharged*:
+binding `I` to `Counter` is the moment `Counter.Item: Ord` becomes a question
+with an answer, and that moment is keyed by the parameter. It also keeps the
+projection's identity independent of what happens to be known about it.
+
+Three sites read it, mirroring the three a plain bound already has.
+`impl_index_implements` gains a `TY_ASSOC` case that answers from the base's
+declared list, exactly as its `TY_GENERIC` case answers for a parameter — so
+`v > b` on two `I.Item`s resolves, and a bounded projection satisfies another
+definition's bound without being made concrete first. `resolve_method_call_typed`
+offers the same list as the receiver's bounds, so a method call on a projection
+dispatches. And `check_bounds_satisfied` discharges it: project the concrete
+argument through `impl_index_assoc_type`, then ask the ordinary question.
+Soundness is the same argument a bounded parameter already rests on — the
+abstract answer is trusted inside the body because the concrete one is checked
+at every instantiation.
+
+Because a bound is part of what a parameter *is*, `ty_generic` interns on the
+associated-type list too, canonicalising it (by name, then each entry's traits)
+the way it already sorts plain bounds: `I` and `I where I.Item: Ord` accept
+different instantiations and must not share a type.
+
 **Collapsing is a capability of the traversal, not of the caller.** What
 `subst_apply` lacks is not the ability but the *index* — the binding lives on an
 impl, and looking it up needs an `ImplIndex`. So `subst_apply_` takes one as an

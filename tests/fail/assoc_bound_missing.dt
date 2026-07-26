@@ -1,0 +1,25 @@
+#! expect: add the bound 'where I.Item: Ord'
+# Without the bound, the body is exactly as wrong as it was before milestone 52
+# — an element of a bounded iterator is not comparable just because the source
+# is an `Iterator`. What changed is that the fix now has a spelling, so the
+# diagnostic names it: a projection is constrained by a `where`, not by an
+# inline bound, which is the one thing a reader would otherwise guess wrong.
+use std::iter::Iterator;
+use std::option::Option;
+use std::cmp::Ord;
+
+fun largest<I: Iterator>(it: I) -> Option<I.Item> {
+    var best = it.next();
+    while true {
+        match it.next() {
+            Option::Some(v) => {
+                match best {
+                    Option::Some(b) => { if v > b { best = Option::Some(v); } },
+                    Option::None => { best = Option::Some(v); },
+                }
+            },
+            Option::None => { return best; },
+        }
+    }
+    return best;
+}

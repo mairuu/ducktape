@@ -1,0 +1,141 @@
+# A bound on an associated type (milestone 52): `where I.Item: Ord`.
+#
+# A bound constrains a type *parameter*. What it could not constrain until now
+# is what an impl binds that parameter's associated type to — so a generic over
+# `I: Iterator` could name `I.Item` in a signature but could do nothing with a
+# value of that type, because nothing said it was comparable, printable, or
+# anything else. `fold` takes its operation as a closure for exactly that
+# reason.
+#
+# The bound is declared on the parameter and discharged at the instantiation:
+# `largest(Counter::to(5))` is where `I` becomes `Counter`, so `Counter.Item`
+# becomes `Int` and "is it `Ord`?" becomes a question about a real type.
+use std::iter::Iterator;
+use std::option::Option;
+use std::cmp::Ord;
+use std::fmt::Display;
+use std::io::print;
+
+struct Counter { n: Int, max: Int }
+
+impl Counter {
+    fun to(max: Int) -> Counter { Counter { n: 0, max: max } }
+}
+
+impl Iterator for Counter {
+    type Item = Int;
+    fun next(self) -> Option<Int> {
+        if self.n >= self.max { return Option::None; }
+        var v = self.n;
+        self.n += 1;
+        return Option::Some(v);
+    }
+}
+
+# an iterator over Strings, so the bound is exercised on a non-numeric element
+# that implements `Ord` through an impl rather than as a primitive
+struct Words { i: Int }
+
+impl Iterator for Words {
+    type Item = String;
+    fun next(self) -> Option<String> {
+        var v = self.i;
+        self.i += 1;
+        if v == 0 { return Option::Some("pear"); }
+        if v == 1 { return Option::Some("apple"); }
+        if v == 2 { return Option::Some("quince"); }
+        return Option::None;
+    }
+}
+
+# The reduce that could not be written before: `v > b` needs the element to be
+# `Ord`, and only the `where` can say so.
+fun largest<I: Iterator>(it: I) -> Option<I.Item> where I.Item: Ord {
+    var best = it.next();
+    while true {
+        match it.next() {
+            Option::Some(v) => {
+                match best {
+                    Option::Some(b) => { if v > b { best = Option::Some(v); } },
+                    Option::None => { best = Option::Some(v); },
+                }
+            },
+            Option::None => { return best; },
+        }
+    }
+    return best;
+}
+
+# two predicates naming the same projection merge into one constraint, the same
+# reading `T: A, T: B` already gets — here the body needs both at once
+fun describe_smallest<I: Iterator>(it: I) -> String
+    where I.Item: Ord, I.Item: Display
+{
+    var best = it.next();
+    while true {
+        match it.next() {
+            Option::Some(v) => {
+                match best {
+                    Option::Some(b) => { if v < b { best = Option::Some(v); } },
+                    Option::None => { best = Option::Some(v); },
+                }
+            },
+            Option::None => {
+                match best {
+                    Option::Some(b) => { return "min={b}"; },
+                    Option::None => { return "empty"; },
+                }
+            },
+        }
+    }
+    return "unreachable";
+}
+
+# the same bound written with `+` instead of two predicates
+fun bounds_together<I: Iterator>(it: I) -> String where I.Item: Ord + Display {
+    return describe_smallest(it);
+}
+
+struct Peak<I> { src: I }
+
+# a `where` on the impl block: every method inside may rely on it
+impl<I: Iterator> Peak<I> where I.Item: Ord {
+    fun best(self) -> Option<I.Item> {
+        return largest(self.src);
+    }
+}
+
+fun main() {
+    # the element type is a primitive
+    print(largest(Counter::to(5)).unwrap());
+#> 4
+
+    # ...and one whose `Ord` comes from an impl
+    print(largest(Words { i: 0 }).unwrap());
+#> quince
+
+    # an empty source still type-checks; the bound says nothing about length
+    print(largest(Counter::to(0)));
+#> None
+
+    # two bounds on one projection, both used by the body
+    print(describe_smallest(Counter::to(4)));
+#> min=0
+    print(describe_smallest(Words { i: 0 }));
+#> min=apple
+
+    # `Ord + Display` written as one predicate, then passed on — the callee's
+    # bound is satisfied by the caller's, not re-derived from a concrete type
+    print(bounds_together(Counter::to(9)));
+#> min=0
+
+    # a bound declared on an impl block rather than on the function
+    print(Peak { src: Counter::to(7) }.best().unwrap());
+#> 6
+
+    # the projection survives an adapter: `Filter<Counter>.Item` is `Int` too
+    print(largest(Counter::to(10).filter(|x| => x % 3 == 0)).unwrap());
+#> 9
+    print(largest(Counter::to(4).map(|x| => x * 2)).unwrap());
+#> 6
+}

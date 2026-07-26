@@ -178,6 +178,29 @@ ending in `return` has type `!` (never), which unifies with anything.
   A type parameter also *satisfies* the bounds it was declared with, so a
   bounded generic can hand its parameter to another one that requires the same
   trait (`tests/run/generic_impls.dt`).
+- **A bound may constrain an associated type**, written only in a `where`:
+  `fun largest<I: Iterator>(it: I) -> Option<I.Item> where I.Item: Ord`. A
+  plain bound constrains the *parameter*; this constrains what an impl binds
+  the parameter's associated type to, which is the difference between naming
+  `I.Item` in a signature and being able to do anything with a value of that
+  type. Without it a generic over an iterator can move elements around but not
+  compare or print them — which is why `fold` takes its operation as a closure.
+
+  The name must be an associated type some bound on the parameter declares
+  (`I.Nope` is an error, as is a deeper path like `I.Item.Inner`), and repeated
+  predicates merge exactly as plain ones do, so `where I.Item: Ord, I.Item:
+  Display` and `where I.Item: Ord + Display` are the same constraint. Inside
+  the body the projection then satisfies those traits — `v > b` on two
+  `I.Item`s resolves, and `I.Item` can be passed to another generic wanting
+  `Ord`. The promise is discharged at the *instantiation*: `largest(counter)`
+  is where `I` becomes `Counter`, so `Counter.Item` becomes `Int` and the
+  question becomes an ordinary one about a real type ("type 'Widgets' does not
+  satisfy 'I.Item: Ord': its 'Item' is 'Widget', which does not implement
+  'Ord'"). A `where` may appear on a `fun` — free or in an impl block — and on
+  an `impl` itself, where every method inside may rely on it. It may **not**
+  appear on a trait method's signature, so a trait cannot yet offer a provided
+  method that needs one; that is why a bounded reduce is a free function rather
+  than an `Iterator` combinator.
 - A bound may name an *earlier* type parameter of the same list
   (`fun conv<T, U: Into<T>>(v: U) -> T`), which is what a generic trait is for.
   The bound is opened alongside the parameter it mentions, so what gets
@@ -461,14 +484,13 @@ element is a projection over a projection (`Filter<Counter>.Item` is
 struct with a `fun(..)` field and an `impl Iterator`, nothing built into the
 language.
 
-What is still out of reach is a combinator that needs two element types to be
-*the same*, or one to have a property. `chain(other)` — yield one sequence then
-another — wants `J.Item` to be `I.Item`, and a reduce like `sum`/`max` wants
-`I.Item: Ord`; both are constraints on an associated type, and a bound can only
-constrain the type parameter itself. `I: Iterator<Item = Int>` is spellable on a
-`dyn`, but not as a bound, so the constraint these bodies need cannot be written
-down. That is one missing feature holding back two combinators, not two
-problems.
+What is still out of reach as a *combinator* is anything needing a bound on the
+element type. A reduce like `sum`/`max` wants `I.Item: Ord`, which milestone 52
+made writable — but only on a `fun` or an `impl`, not on a trait method's
+signature, so it can be a free function over any iterator and not an
+`it.max()`. `chain(other)` needs something else again: that `J.Item` *be*
+`I.Item`, an equality between two associated types, which only a `dyn` can
+currently spell.
 
 ## Modules
 

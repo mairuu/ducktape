@@ -399,8 +399,9 @@ Subst infer_open_generics(InferCtx *ctx, Type **params, int count,
     if (!changed) {
       continue;
     }
-    Type *rebound =
-        ty_generic(g->as.generic.name, bounds, g->as.generic.bound_count, al);
+    Type *rebound = ty_generic(
+        g->as.generic.name, bounds, g->as.generic.bound_count,
+        g->as.generic.assoc_bounds, g->as.generic.assoc_bound_count, al);
     if (args[i]->kind == TY_UNKNOWN) {
       args[i]->as.unknown.bound = rebound;
     } else {
@@ -1102,6 +1103,47 @@ static void check_bounds_satisfied(InferCtx *ictx, TypeChecker *tc,
       note_unimported_impl(
           diags, find_unimported_impl(tc, idx, impl_query_matches, &q));
       note_blocking_bound(diags, idx, arg, trait, (StringView){0}, al);
+    }
+  }
+
+  // and the bounds on the parameter's associated types. This is where a
+  // `where I.Item: Ord` is discharged: `I` is `Counter` here, so the impl says
+  // what `Counter.Item` is and the question becomes an ordinary one about a
+  // real type. A projection that stays abstract belongs to an enclosing
+  // definition and is re-checked where *that* is instantiated.
+  for (int a = 0; a < param->as.generic.assoc_bound_count; a++) {
+    const AssocBound *ab = &param->as.generic.assoc_bounds[a];
+    Type *projected = impl_index_assoc_type(idx, arg, ab->name, al);
+    if (projected == NULL) {
+      continue; // `arg` does not implement the bound declaring it — reported
+                // above
+    }
+    projected = infer_apply(ictx, projected, al);
+    if (type_is_abstract(projected) || type_is_poison(projected)) {
+      continue;
+    }
+    for (int b = 0; b < ab->bound_count; b++) {
+      Type *trait = infer_apply(ictx, ab->bounds[b], al);
+      if (type_is_abstract(trait)) {
+        continue;
+      }
+      if (!impl_index_implements(idx, projected, trait, al)) {
+        char arg_buf[64], proj_buf[64], trait_buf[64];
+        type_sprintf(arg, arg_buf, sizeof(arg_buf));
+        type_sprintf(projected, proj_buf, sizeof(proj_buf));
+        type_sprintf(trait, trait_buf, sizeof(trait_buf));
+        diag_error(diags, span,
+                   "type '%s' does not satisfy '" SV_FMT
+                   ".%.*s: %s': its '%.*s'"
+                   " is '%s', which does not implement '%s'",
+                   arg_buf, SV_ARG(param->as.generic.name), (int)ab->name.len,
+                   ab->name.chars, trait_buf, (int)ab->name.len, ab->name.chars,
+                   proj_buf, trait_buf);
+        ImplQuery q = {
+            .self_type = projected, .trait = trait, .impls = idx, .al = al};
+        note_unimported_impl(
+            diags, find_unimported_impl(tc, idx, impl_query_matches, &q));
+      }
     }
   }
 }
@@ -1834,12 +1876,22 @@ static void resolve_bound_refs(ResolveCtx *rctx, const TraitBound *bound,
 }
 
 // Build the TY_GENERIC for a declaration's type parameter, gathering bounds
-// from both its inline `<T: A + B>` position and any `where T: C` predicate
-// naming it. Associated-type predicates (`where T::Item: C`) are not supported.
+// from both its inline `<T: A + B>` position and any `where` predicate naming
+// it — either directly (`where T: C`) or through one of its associated types
+// (`where T.Item: C`).
+//
+// Two passes over the `where` clause, because the second kind is checked
+// against the first: `T.Item` only means something if some bound on `T`
+// declares an `Item`, and a clause may write the bound that declares it *after*
+// the predicate that uses it (`where I.Item: Ord, I: Iterator`). Collecting
+// every plain bound before looking at any projection makes the clause's own
+// order stop mattering, which is what a `where` is for.
 static Type *resolve_generic_param(ResolveCtx *rctx, const TypeParamNode *param,
                                    const WhereClause *where) {
   Type *bounds[MAX_BOUNDS];
   int count = 0;
+  AssocBound assoc[MAX_BOUNDS];
+  int assoc_count = 0;
 
   if (param->inline_bound.ref_count > 0) {
     resolve_bound_refs(rctx, &param->inline_bound, bounds, &count);
@@ -1847,18 +1899,77 @@ static Type *resolve_generic_param(ResolveCtx *rctx, const TypeParamNode *param,
   if (where != NULL) {
     for (int i = 0; i < where->pred_count; i++) {
       const WherePred *pred = &where->preds[i];
-      if (pred->lhs.segment_count != 1) {
-        diag_error(
-            rctx->diags, pred->lhs.span,
-            "associated-type bounds in `where` clauses are not supported");
-        continue;
-      }
-      if (sv_equal(pred->lhs.segments[0], param->name)) {
+      if (pred->lhs.segment_count == 1 &&
+          sv_equal(pred->lhs.segments[0], param->name)) {
         resolve_bound_refs(rctx, &pred->bound, bounds, &count);
       }
     }
   }
-  return ty_generic(param->name, bounds, count, rctx->al);
+  if (where != NULL) {
+    for (int i = 0; i < where->pred_count; i++) {
+      const WherePred *pred = &where->preds[i];
+      if (pred->lhs.segment_count < 2 ||
+          !sv_equal(pred->lhs.segments[0], param->name)) {
+        continue;
+      }
+      if (pred->lhs.segment_count > 2) {
+        // `T.Item.Inner` would have to project through a bound of a bound, and
+        // nothing names the trait the middle step belongs to.
+        diag_error(rctx->diags, pred->lhs.span,
+                   "a bound may name one associated type of '" SV_FMT
+                   "', not a path through several",
+                   SV_ARG(param->name));
+        continue;
+      }
+
+      // The projection has to exist before it can be constrained, and what says
+      // it exists is the same thing `T.Item` in a signature consults: a bound
+      // on `T` that declares that associated type.
+      StringView aname = pred->lhs.segments[1];
+      bool declared = false;
+      for (int b = 0; b < count && !declared; b++) {
+        if (bounds[b]->kind != TY_TRAIT) {
+          continue;
+        }
+        TraitDef *td = bounds[b]->as.trait.def;
+        for (int j = 0; j < td->assoc_type_count && !declared; j++) {
+          declared = sv_equal(td->assoc_types[j].name, aname);
+        }
+      }
+      if (!declared) {
+        diag_error(rctx->diags, pred->lhs.span,
+                   "no trait bound on '" SV_FMT
+                   "' declares an associated type '" SV_FMT "'",
+                   SV_ARG(param->name), SV_ARG(aname));
+        continue;
+      }
+
+      // `where T.Item: A, T.Item: B` is one entry with two traits, the same
+      // reading `T: A, T: B` already gets.
+      AssocBound *entry = NULL;
+      for (int k = 0; k < assoc_count; k++) {
+        if (sv_equal(assoc[k].name, aname)) {
+          entry = &assoc[k];
+          break;
+        }
+      }
+      if (entry == NULL) {
+        if (assoc_count >= MAX_BOUNDS) {
+          diag_error(rctx->diags, pred->lhs.span,
+                     "too many associated-type bounds on '" SV_FMT "'",
+                     SV_ARG(param->name));
+          continue;
+        }
+        entry = &assoc[assoc_count++];
+        entry->name = aname;
+        entry->bounds = al_alloc(rctx->al, sizeof(Type *) * MAX_BOUNDS);
+        entry->bound_count = 0;
+      }
+      resolve_bound_refs(rctx, &pred->bound, entry->bounds,
+                         &entry->bound_count);
+    }
+  }
+  return ty_generic(param->name, bounds, count, assoc, assoc_count, rctx->al);
 }
 
 // Resolve a declaration's type parameters into `out`, defining each in the
@@ -2208,7 +2319,7 @@ static Type *trait_self_param(TraitDef *trait, Allocator *al) {
   // makes a call on `self` inside a default body resolve against the very
   // signatures being declared.
   Type *bounds[1] = {trait->self_type};
-  return ty_generic(sv_from_cstr("Self"), bounds, 1, al);
+  return ty_generic(sv_from_cstr("Self"), bounds, 1, NULL, 0, al);
 }
 
 // Give a default body a definition of its own, so it can be compiled like the
@@ -4422,6 +4533,18 @@ static Type *resolve_method_call_typed(CheckCtx *ctx, Expr *expr, Type *self_ty,
   if (self_ty->kind == TY_GENERIC) {
     bounds = self_ty->as.generic.bounds;
     bound_count = self_ty->as.generic.bound_count;
+  } else if (self_ty->kind == TY_ASSOC &&
+             self_ty->as.assoc.base->kind == TY_GENERIC) {
+    // a projection receiver offers whatever a `where T.Item: ..` declared for
+    // it — the same deal a type parameter gets, one level down
+    const TypeGeneric *g = &self_ty->as.assoc.base->as.generic;
+    for (int i = 0; i < g->assoc_bound_count; i++) {
+      if (sv_equal(g->assoc_bounds[i].name, self_ty->as.assoc.assoc_name)) {
+        bounds = g->assoc_bounds[i].bounds;
+        bound_count = g->assoc_bounds[i].bound_count;
+        break;
+      }
+    }
   } else if (self_ty->kind == TY_TRAIT) {
     self_trait[0] = self_ty;
     bounds = self_trait;
@@ -5235,6 +5358,15 @@ static Type *rewrite_ord_comparison(CheckCtx *ctx, Expr *expr, Type *lhs) {
       diag_error(ctx->diags, span,
                  "cannot compare a value of type '%s': add the bound "
                  "'%s: Ord'",
+                 lhs_buf, lhs_buf);
+      return ctx->tc->t_poison;
+    }
+    if (lhs->kind == TY_ASSOC && lhs->as.assoc.base->kind == TY_GENERIC) {
+      // same reasoning one level down, and the fix has its own spelling: a
+      // projection is constrained by a `where`, not by an inline bound
+      diag_error(ctx->diags, span,
+                 "cannot compare a value of type '%s': add the bound "
+                 "'where %s: Ord'",
                  lhs_buf, lhs_buf);
       return ctx->tc->t_poison;
     }
@@ -7949,6 +8081,25 @@ bool impl_index_implements(ImplIndex *idx, Type *type, Type *trait_ref,
     for (int i = 0; i < type->as.generic.bound_count; i++) {
       if (types_equal(type->as.generic.bounds[i], trait_ref)) {
         return true;
+      }
+    }
+    return false;
+  }
+  if (type->kind == TY_ASSOC && type->as.assoc.base->kind == TY_GENERIC) {
+    // `T.Item` is abstract for the same reason `T` is, and answers the same
+    // way: what it satisfies is what the declaration said, here a `where
+    // T.Item: Ord`. Sound on the same terms — the projection is re-checked
+    // against the concrete associated type wherever the definition is
+    // instantiated (check_bounds_satisfied).
+    const TypeGeneric *g = &type->as.assoc.base->as.generic;
+    for (int i = 0; i < g->assoc_bound_count; i++) {
+      if (!sv_equal(g->assoc_bounds[i].name, type->as.assoc.assoc_name)) {
+        continue;
+      }
+      for (int j = 0; j < g->assoc_bounds[i].bound_count; j++) {
+        if (types_equal(g->assoc_bounds[i].bounds[j], trait_ref)) {
+          return true;
+        }
       }
     }
     return false;

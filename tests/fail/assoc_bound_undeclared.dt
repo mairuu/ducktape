@@ -1,0 +1,13 @@
+#! expect: no trait bound on 'I' declares an associated type 'Nope'
+# A `where` can only constrain a projection that exists, and what says it exists
+# is the same thing a `I.Item` in a signature consults: a bound on `I` declaring
+# that associated type. `Iterator` declares `Item` and nothing else, so `I.Nope`
+# names no type to constrain — caught at the declaration rather than left to
+# fail confusingly at a call.
+use std::iter::Iterator;
+use std::option::Option;
+use std::cmp::Ord;
+
+fun f<I: Iterator>(it: I) -> Int where I.Nope: Ord {
+    return 1;
+}

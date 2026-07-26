@@ -2635,12 +2635,12 @@
   `in_fixed.dt` gains a `head<I: Iterator>(it) -> I.Item`. Design:
   `architecture.md` "Substitution", `runtime.md` "Monomorphisation".
 
-  Two things this deliberately did *not* fix, both separate machinery and both
-  still open: a `sum`/`max`-shaped reduce over `Self.Item` fails in the
-  *checker*, because there is no way to write the bound it needs (`I: Iterator`
-  does not say `I.Item: Ord`, and an associated-type bound has no spelling); and
-  a `dyn Iterator` still does not satisfy an `I: Iterator` bound, which milestone
-  47 special-cased for `for` only. Neither is a projection problem.
+  Two things this deliberately did *not* fix, both separate machinery: a
+  `sum`/`max`-shaped reduce over `Self.Item` failed in the *checker*, because
+  there was no way to write the bound it needs (`I: Iterator` does not say
+  `I.Item: Ord`) — milestone 52 gives that a spelling; and a `dyn Iterator`
+  still does not satisfy an `I: Iterator` bound, which milestone 47
+  special-cased for `for` only. Neither is a projection problem.
 
 - **`flat_map` and `skip` (milestone 51)** — spending the unblock milestone 50
   bought, and finding where the next wall is. Both are provided methods on
@@ -2679,6 +2679,65 @@
   including the empty-inner, empty-source and skip-past-the-end edges;
   `in_fixed.dt` gains a `flat_map(..).skip(..)` line. Design: `language.md`
   "Iterators" → combinators.
+
+- **A bound on an associated type (milestone 52)** — `where I.Item: Ord`, the
+  thing milestone 51 walked into. A bound constrains a type *parameter*; nothing
+  could constrain what an impl binds that parameter's associated type to, so a
+  generic over `I: Iterator` could name `I.Item` in a signature and then do
+  nothing with a value of it. That is the whole reason `fold` takes its
+  operation as a closure.
+
+  The syntax was already parsed and rejected — `parse_bound_lhs` has read a
+  dotted path since the `where` clause landed, and `resolve_generic_param`
+  answered "associated-type bounds in `where` clauses are not supported". So
+  this milestone is what the rejection was standing in for.
+
+  **The bound lives on the base, not on the projection.** A new `AssocBound`
+  (name plus trait refs) hangs off the parameter's `TY_GENERIC`; `TY_ASSOC`
+  stays a plain (base, name) pair. That follows from where the promise is
+  *discharged* — binding `I` to `Counter` is the moment `Counter.Item: Ord`
+  becomes a question with an answer, and that moment is keyed by the parameter.
+  Three sites read it, mirroring the three a plain bound already has:
+  `impl_index_implements` gains a `TY_ASSOC` case answering from the base's
+  declared list (so `v > b` on two `I.Item`s resolves, and a bounded projection
+  satisfies another definition's bound without being made concrete);
+  `resolve_method_call_typed` offers that list as a receiver's bounds; and
+  `check_bounds_satisfied` discharges it by projecting the concrete argument
+  through `impl_index_assoc_type` and asking the ordinary question. The
+  soundness argument is the one a bounded parameter already rests on — trusted
+  abstractly inside the body because it is re-checked at every instantiation.
+  `ty_generic` interns on the new list too, canonicalised like the bound list,
+  since `I` and `I where I.Item: Ord` accept different instantiations.
+
+  Resolution takes **two passes over the clause**, so `where I.Item: Ord, I:
+  Iterator` works: `I.Item` only means something if a bound on `I` declares an
+  `Item`, and collecting every plain bound before looking at any projection is
+  what stops the clause's own order from mattering — which is what a `where` is
+  for. Diagnostics are at the declaration where possible (`I.Nope` names no
+  associated type; `I.Item.Inner` is a path through several) and the
+  instantiation failure names all three parts: "type 'Widgets' does not satisfy
+  'I.Item: Ord': its 'Item' is 'Widget', which does not implement 'Ord'". The
+  missing-bound message learned the new spelling too — `add the bound 'where
+  I.Item: Ord'`, since a projection is not constrained inline.
+
+  **A latent bug fell out:** `parse_bound_lhs` never set `out->span`, so every
+  diagnostic about a `where` predicate pointed at uninitialised garbage. Nothing
+  reachable had read it, because the only consumer was the "not supported" error
+  no test covered.
+
+  Scope, honestly: a `where` may appear on a `fun` (free or in an impl block)
+  and on an `impl`, and the feature works in all of those. It may **not** appear
+  on a trait method's signature — the parser has never accepted one there,
+  though `grammar.ebnf` claimed otherwise (drift, now fixed). So a trait cannot
+  yet offer a provided method needing one, which is why this milestone ships a
+  free `largest` rather than an `it.max()` combinator. `chain` is still blocked
+  too: it needs an *equality* binding (`J: Iterator<Item = I.Item>`), a
+  different predicate kind. Both are recorded as "Next" item 2.
+  `tests/run/assoc_type_bound.dt` covers primitive and impl-provided `Ord`, two
+  predicates merging, `Ord + Display`, passing a bounded projection on to
+  another bounded generic, an impl-level `where`, and adapters in between; four
+  `tests/fail` files pin the diagnostics. Design: `language.md` bounds list,
+  `architecture.md` "Associated-type projections", `grammar.ebnf`.
 
 ## Next (in recommended order)
 
@@ -2741,24 +2800,30 @@ settles the rest, without an expected type.)
 recorded — how many `Ord` methods the operator names — was answered `cmp` only,
 the smaller entanglement, matching how `Display` names exactly `to_string`.)
 
-2. **A bound on an associated type** (`J: Iterator<Item = I.Item>`, or
-   `I: Iterator<Item: Ord>`). A bound constrains a type *parameter*; there is no
-   way to constrain what an impl binds that parameter's associated type to. The
-   `dyn` side already has the spelling — `dyn Iterator<Item = Int>` writes an
-   equality binding, and `TypeDyn.assoc_types` stores exactly that table — so
-   the question is whether a bound can carry the same list, and whether
-   `impl_index_implements` can check it (an equality binding is a comparison
-   after `infer_apply`; a *trait* binding like `Item: Ord` is a second
-   `impl_index_implements` on the projected type).
+2. **The two halves of the associated-type bound that milestone 52 left.** The
+   *trait* half landed there (`where I.Item: Ord`); what is left is one
+   placement and one predicate kind, each with a waiting consumer.
 
-   This is now the binding constraint on std breadth rather than a hypothetical:
-   it has two concrete consumers, found by writing the things that need it.
-   `chain(other)` needs `J.Item` to *be* `I.Item` — without it, `Chain`'s `next`
-   cannot return the second source's element where the first's type is declared
-   (milestone 51). A reduce like `sum`/`max`/`min` needs `I.Item: Ord` or a
-   numeric bound, which is why milestone 49's `fold` takes the operation as a
-   closure and no bounded reduce exists. Both are one feature away, and neither
-   is a projection problem — milestone 50 closed that one.
+   **`where` on a trait method's signature.** The parser has never accepted one
+   there, so a trait cannot offer a provided method that needs a bound on
+   `Self.Item` — which is exactly what `it.max()` / `it.min()` / `it.sum()` as
+   `Iterator` combinators would need, and why milestone 52 shipped a free
+   `largest` instead. The parser change is small; the sema question is that
+   `Self.Item` in a *signature* is a projection over the abstract `TY_TRAIT`
+   self rather than over a `TY_GENERIC`, so it needs checking at each call
+   against the concrete receiver rather than at an instantiation. A default
+   *body* is the easy half — `trait_self_param` already builds a real
+   `TY_GENERIC` `Self`, which milestone 52's machinery fits unchanged.
+
+   **An equality binding** (`J: Iterator<Item = I.Item>`) — a different
+   predicate kind, saying not "this projection implements a trait" but "these
+   two types are the same". Its consumer is `chain(other)`, which must bind
+   `type Item = I.Item` and so cannot return the second source's element
+   (milestone 51 verified the failure by hand). The `dyn` side already has the
+   spelling — `dyn Iterator<Item = Int>` writes exactly this, stored in
+   `TypeDyn.assoc_types` — so the question is whether a bound can carry the same
+   list, checked as a comparison after `infer_apply` rather than as an
+   `impl_index_implements`.
 
 3. **A custom equality trait (`Eq`), if a consumer ever needs it.** Not on the
    main line, and deliberately deferred rather than planned — recorded here so
@@ -2832,11 +2897,12 @@ via `Module.decl_base`) and is not part of the main line.
   reported "cannot instantiate 'id': type argument 'T' is not known here" — and
   is **closed as of milestone 50**: `assoc_apply` gives codegen the collapse
   `infer_apply` was doing for the checker, and `cg_subst` applies it at every
-  site that substitutes. What remains is narrower and is *not* the same problem:
-  there is no way to *bound* an associated type — `I: Iterator` can say neither
-  `I.Item: Ord` nor `J: Iterator<Item = I.Item>` — so a reduce keyed on `Ord`/`+`
-  over the element, and `chain`, fail in the checker for want of a spelling
-  rather than at codegen for want of a type. That is "Next" item 2
+  site that substitutes. What remained after it was narrower and *not* the same
+  problem — bounding an associated type — and milestone 52 answered half of it:
+  `where I.Item: Ord` now works on a `fun` or an `impl`. Still missing are the
+  same clause on a *trait method's* signature (so a bounded reduce cannot be an
+  `Iterator` combinator) and an *equality* binding (`J: Iterator<Item = I.Item>`,
+  which `chain` needs). That is "Next" item 2
 - an impl's own type-param bounds are checked at selection (milestone 20), but
   *coherence* is deliberately blind to them: `impl<T: Ord> Ord for Option<T>`
   and an `impl Ord for Option<Widget>` conflict even though no receiver could

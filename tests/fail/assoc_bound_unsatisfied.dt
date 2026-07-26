@@ -1,0 +1,44 @@
+#! expect: does not satisfy 'I.Item: Ord'
+# An associated-type bound (milestone 52) is a promise discharged at the
+# instantiation, not at the declaration. `largest` type-checks on its own — the
+# `where` is what makes `v > b` legal inside it — and the question of whether
+# any *particular* iterator qualifies is asked where `I` is bound to a real
+# type. `Widgets` yields `Widget`, which implements nothing, so the call is
+# where it fails, and the diagnostic names all three parts: the argument, the
+# bound it broke, and what its `Item` actually is.
+use std::iter::Iterator;
+use std::option::Option;
+use std::cmp::Ord;
+
+struct Widget { id: Int }
+
+struct Widgets { n: Int }
+
+impl Iterator for Widgets {
+    type Item = Widget;
+    fun next(self) -> Option<Widget> {
+        if self.n >= 2 { return Option::None; }
+        self.n += 1;
+        return Option::Some(Widget { id: self.n });
+    }
+}
+
+fun largest<I: Iterator>(it: I) -> Option<I.Item> where I.Item: Ord {
+    var best = it.next();
+    while true {
+        match it.next() {
+            Option::Some(v) => {
+                match best {
+                    Option::Some(b) => { if v > b { best = Option::Some(v); } },
+                    Option::None => { best = Option::Some(v); },
+                }
+            },
+            Option::None => { return best; },
+        }
+    }
+    return best;
+}
+
+fun main() {
+    var w = largest(Widgets { n: 0 });
+}

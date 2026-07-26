@@ -301,6 +301,26 @@ fun head<I: Iterator>(it: I) -> I.Item {
     return it.next().unwrap();
 }
 
+# a bound on an *associated* type (milestone 52). A plain bound constrains the
+# parameter; only a `where` can constrain what an impl binds its associated type
+# to — which is what makes an element comparable, so a reduce like this one can
+# be written at all. It is discharged where `I` is bound to a real type.
+fun largest<I: Iterator>(it: I) -> Option<I.Item> where I.Item: Ord {
+    var best = it.next();
+    while true {
+        match it.next() {
+            Option::Some(v) => {
+                match best {
+                    Option::Some(b) => { if v > b { best = Option::Some(v); } },
+                    Option::None => { best = Option::Some(v); },
+                }
+            },
+            Option::None => { return best; },
+        }
+    }
+    return best;
+}
+
 fun main() {
     var r = process_data(1);
     # coercion at a call site, mixing two concrete types in one array
@@ -350,4 +370,7 @@ fun main() {
     # iterator and yields those end to end — its adapter's `Item` is `J.Item`,
     # a projection over a type *parameter*, which is what milestone 50 unblocked
     var flat = Countdown::from(3).flat_map(|k| => Countdown::from(k)).skip(1).collect();
+    # the associated-type bound discharged: `Countdown.Item` is `Int`, which is
+    # `Ord`, so `largest`'s `where` is satisfied at this call
+    var peak = largest(Countdown::from(4).filter(|k| => k % 2 == 0));
 }

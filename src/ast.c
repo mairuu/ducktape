@@ -30,6 +30,13 @@ static uint32_t type_hash(const Type *t) {
       h = h * 31 + (uint8_t)t->as.generic.name.chars[i];
     for (int i = 0; i < t->as.generic.bound_count; i++)
       h = h * 31 + (uint32_t)(uintptr_t)t->as.generic.bounds[i];
+    for (int i = 0; i < t->as.generic.assoc_bound_count; i++) {
+      const AssocBound *ab = &t->as.generic.assoc_bounds[i];
+      for (int j = 0; j < (int)ab->name.len; j++)
+        h = h * 31 + (uint8_t)ab->name.chars[j];
+      for (int j = 0; j < ab->bound_count; j++)
+        h = h * 31 + (uint32_t)(uintptr_t)ab->bounds[j];
+    }
     break;
   case TY_TUPLE:
     for (int i = 0; i < t->as.tuple.elem_count; i++)
@@ -95,6 +102,24 @@ static bool type_structurally_equal(const Type *a, const Type *b) {
         return false;
       }
     }
+    // an associated-type bound is part of what the parameter *is*: `I` and
+    // `I where I.Item: Ord` accept different instantiations, so they cannot
+    // share an interned type. Both lists are canonically ordered by ty_generic.
+    if (a->as.generic.assoc_bound_count != b->as.generic.assoc_bound_count) {
+      return false;
+    }
+    for (int i = 0; i < a->as.generic.assoc_bound_count; i++) {
+      const AssocBound *x = &a->as.generic.assoc_bounds[i];
+      const AssocBound *y = &b->as.generic.assoc_bounds[i];
+      if (!sv_equal(x->name, y->name) || x->bound_count != y->bound_count) {
+        return false;
+      }
+      for (int j = 0; j < x->bound_count; j++) {
+        if (x->bounds[j] != y->bounds[j]) {
+          return false;
+        }
+      }
+    }
     return true;
   case TY_TUPLE:
     if (a->as.tuple.elem_count != b->as.tuple.elem_count)
@@ -155,6 +180,15 @@ static bool type_structurally_equal(const Type *a, const Type *b) {
   default:
     return true; // singletons equal by kind
   }
+}
+
+// lexicographic order over two names, for canonicalising a set keyed by one.
+// Not in string_utils because nothing else needs an *ordering* on a name —
+// every other comparison in the compiler is equality.
+static int sv_order(StringView a, StringView b) {
+  int n = a.len < b.len ? a.len : b.len;
+  int c = n > 0 ? memcmp(a.chars, b.chars, (size_t)n) : 0;
+  return c != 0 ? c : a.len - b.len;
 }
 
 static void sort_bounds(Type **bounds, int count) {
@@ -426,6 +460,7 @@ Type *ty_array(Type *elem, Allocator *al) {
 }
 
 Type *ty_generic(StringView name, Type **bounds, int bound_count,
+                 AssocBound *assoc_bounds, int assoc_bound_count,
                  Allocator *al) {
   // Canonicalise bound order up front: `T: A + B` and `T: B + A` denote the
   // same type, and both type_hash and the probe below are order-sensitive.
@@ -439,11 +474,39 @@ Type *ty_generic(StringView name, Type **bounds, int bound_count,
     sort_bounds(sorted, bound_count);
   }
 
+  // Same argument one level down: the associated-type bounds are a set too, so
+  // `where T.A: X, T.B: Y` and `where T.B: Y, T.A: X` must intern as one type.
+  // Sorted by name, then each entry's own trait list sorted like a bound list.
+  AssocBound *assoc_sorted = NULL;
+  if (assoc_bound_count > 0) {
+    assoc_sorted = al_alloc(al, assoc_bound_count * sizeof(AssocBound));
+    for (int i = 0; i < assoc_bound_count; i++) {
+      assoc_sorted[i] = assoc_bounds[i];
+      Type **b = al_alloc(al, assoc_sorted[i].bound_count * sizeof(Type *));
+      for (int j = 0; j < assoc_sorted[i].bound_count; j++) {
+        b[j] = assoc_bounds[i].bounds[j];
+      }
+      sort_bounds(b, assoc_sorted[i].bound_count);
+      assoc_sorted[i].bounds = b;
+    }
+    for (int i = 0; i < assoc_bound_count - 1; i++) {
+      for (int j = 0; j < assoc_bound_count - i - 1; j++) {
+        if (sv_order(assoc_sorted[j].name, assoc_sorted[j + 1].name) > 0) {
+          AssocBound tmp = assoc_sorted[j];
+          assoc_sorted[j] = assoc_sorted[j + 1];
+          assoc_sorted[j + 1] = tmp;
+        }
+      }
+    }
+  }
+
   Type probe = {.kind = TY_GENERIC,
                 .as.generic = {
                     .name = name,
                     .bounds = sorted,
                     .bound_count = bound_count,
+                    .assoc_bounds = assoc_sorted,
+                    .assoc_bound_count = assoc_bound_count,
                 }};
   Type *interned = type_intern_lookup(&probe);
   if (interned) {
@@ -455,6 +518,8 @@ Type *ty_generic(StringView name, Type **bounds, int bound_count,
   t->as.generic.name = name;
   t->as.generic.bounds = sorted;
   t->as.generic.bound_count = bound_count;
+  t->as.generic.assoc_bounds = assoc_sorted;
+  t->as.generic.assoc_bound_count = assoc_bound_count;
   return type_intern(t, al);
 }
 

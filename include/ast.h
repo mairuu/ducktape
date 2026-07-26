@@ -126,11 +126,29 @@ typedef struct {
   Type *elem_type;
 } TypeArray;
 
+// A bound on one of a type parameter's *associated* types: the `I.Item: Ord`
+// of `fun largest<I: Iterator>(..) where I.Item: Ord`. A plain bound constrains
+// the parameter; this constrains what an impl binds the parameter's associated
+// type to, which is a thing the parameter alone cannot say.
+//
+// It hangs off the parameter rather than off the projection because that is
+// where it is *declared* and where it must be re-checked: instantiating `I`
+// with `Counter` is the moment `Counter.Item: Ord` becomes a question with an
+// answer. `TY_ASSOC` stays a plain (base, name) pair, and a projection is
+// looked up through its base — see impl_index_implements.
+typedef struct {
+  StringView name; // the associated type's name, e.g. "Item"
+  Type **bounds;   // TY_TRAIT refs it must satisfy, e.g. [Ord]
+  int bound_count;
+} AssocBound;
+
 // TY_GENERIC — an unresolved type parameter like T
 typedef struct {
   StringView name; // e.g. "T"
   Type **bounds;   // TY_TRAIT refs, e.g. [Display, Into<Int>]
   int bound_count;
+  AssocBound *assoc_bounds; // `where T.Item: Ord`, by associated-type name
+  int assoc_bound_count;
 } TypeGeneric;
 
 // TY_ASSOC — T.Item before resolution
@@ -179,6 +197,7 @@ Type *ty_fun(Type **params, int param_count, Type *ret, Allocator *al);
 Type *ty_tuple(Type **elems, int elem_count, Allocator *al);
 Type *ty_array(Type *elem, Allocator *al);
 Type *ty_generic(StringView name, Type **bounds, int bound_count,
+                 AssocBound *assoc_bounds, int assoc_bound_count,
                  Allocator *al);
 Type *ty_assoc(Type *base, StringView assoc_name, TraitDef *trait,
                Allocator *al);

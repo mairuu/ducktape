@@ -1,0 +1,13 @@
+#! expect: not a path through several
+# A bound may name one associated type of a parameter, not a path through
+# several. `I.Item.Inner` would have to project through a bound of a bound, and
+# nothing names the trait that middle step would belong to — `I.Item` is
+# constrained *by* this clause, so it cannot also be the thing the clause reads
+# a further associated type off.
+use std::iter::Iterator;
+use std::option::Option;
+use std::cmp::Ord;
+
+fun h<I: Iterator>(it: I) -> Int where I.Item.Inner: Ord {
+    return 1;
+}
