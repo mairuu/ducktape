@@ -1,0 +1,10 @@
+#! expect: trait 'Iterator' has no associated type 'Nope'
+# A binding names an associated type the trait declares, and `Self` differs
+# from a type parameter in having exactly one trait to check that against: the
+# one being bound. `Iterator` declares `Item` and nothing else.
+use std::iter::Iterator;
+use std::option::Option;
+
+fun f<J: Iterator<Nope = Int>>(j: J) -> Int {
+    return 1;
+}

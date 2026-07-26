@@ -1,0 +1,29 @@
+#! expect: does not satisfy 'I.Item = Int'
+# A binding may name a concrete type, which makes `I: Iterator<Item = Int>`
+# read as "an iterator of Ints" — a signature that can then use its elements as
+# Ints. The promise is discharged where `I` is bound, so an iterator of anything
+# else is refused at the call rather than inside the body.
+use std::iter::Iterator;
+use std::option::Option;
+use std::io::print;
+
+struct Words { i: Int }
+
+impl Iterator for Words {
+    type Item = String;
+    fun next(self) -> Option<String> {
+        self.i += 1;
+        if self.i > 2 { return Option::None; }
+        return Option::Some("w");
+    }
+}
+
+fun sum_of<I: Iterator<Item = Int>>(it: I) -> Int {
+    var t = 0;
+    for v in it { t += v; }
+    return t;
+}
+
+fun main() {
+    print(sum_of(Words { i: 0 }));
+}

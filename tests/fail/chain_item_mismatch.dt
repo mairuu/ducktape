@@ -1,0 +1,39 @@
+#! expect: does not satisfy 'J.Item = Int'
+# An equality binding is discharged where the parameter is bound, and this is
+# what makes the rewrite behind it honest: inside `chain`, `J.Item` *was*
+# `Self.Item`, so a `J` whose elements are Strings would have had its `String`s
+# compiled as the `Int`s the signature promised. `Words` is that `J`.
+#
+# The note on the second diagnostic is the same fact reached from the other
+# side: with the bound broken, no `Iterator` impl applies to the `Chain` the
+# call would have built.
+use std::iter::Iterator;
+use std::option::Option;
+use std::io::print;
+
+struct Counter { n: Int, max: Int }
+
+impl Iterator for Counter {
+    type Item = Int;
+    fun next(self) -> Option<Int> {
+        if self.n >= self.max { return Option::None; }
+        var v = self.n;
+        self.n += 1;
+        return Option::Some(v);
+    }
+}
+
+struct Words { i: Int }
+
+impl Iterator for Words {
+    type Item = String;
+    fun next(self) -> Option<String> {
+        self.i += 1;
+        if self.i > 2 { return Option::None; }
+        return Option::Some("w");
+    }
+}
+
+fun main() {
+    print(Counter { n: 0, max: 2 }.chain(Words { i: 0 }).collect());
+}

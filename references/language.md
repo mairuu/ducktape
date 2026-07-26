@@ -225,6 +225,34 @@ ending in `return` has type `!` (never), which unifies with anything.
 
   A `where` may otherwise appear on a `fun` — free or in an impl block — and
   on an `impl` itself, where every method inside may rely on it.
+- **A bound may fix an associated type outright**, written in the trait
+  reference the same way a trait object writes it:
+  `fun chain<J: Iterator<Item = I.Item>>(..)`. Where every other predicate says
+  which *traits* a type satisfies, this one says which type a projection **is**
+  — an equality rather than a constraint — and that difference is what it is
+  for: `chain` yields one sequence then another, so the second source's element
+  type has to *be* the first's, which no trait can express.
+
+  Because it is an equality, it is not a fact checked at each use but a
+  rewrite: `J.Item` is not a type the program can build at all — writing it
+  yields `I.Item` — so the two are the same type rather than convertible ones,
+  and nothing downstream has two spellings to reconcile. Two consequences
+  follow. There is exactly one way to name that element, so a further
+  constraint goes on it (`where I.Item: Ord`) and writing `where J.Item: Ord`
+  is an error naming the spelling to use. And the promise has to hold: it is
+  discharged where the parameter is bound, both at a call ("type 'Words' does
+  not satisfy 'J.Item = Int': its 'Item' is 'String', not 'Int'") and at impl
+  selection, so an adapter built from mismatched sources finds no impl rather
+  than compiling one element type as another.
+
+  The type it names need not be another projection: `I: Iterator<Item = Int>`
+  reads as "an iterator of Ints", and a body may then use its elements as the
+  Ints they are without bounding them further.
+
+  The binding names an associated type the trait declares, may not be repeated
+  with two different types, and may only be written where there is a parameter
+  to constrain — not on a `where I.Item: ..` predicate, whose left side is
+  already a projection.
 - A bound may name an *earlier* type parameter of the same list
   (`fun conv<T, U: Into<T>>(v: U) -> T`), which is what a generic trait is for.
   The bound is opened alongside the parameter it mentions, so what gets
@@ -483,8 +511,9 @@ Alongside them: `take(n)` (at most the first `n`), `skip(n)` (all but the first
 `n`), `enumerate()` (`(index, element)` pairs), `zip(other)` (walk two iterators
 in lockstep, ending with the shorter), `flat_map(f)` (map each element to a
 whole iterator and yield those end to end), `fold(init, f)` (reduce left to
-right into an accumulator — the eager sibling of `map`), and `max()` / `min()`
-(the largest or smallest element, or `None` if there is none).
+right into an accumulator — the eager sibling of `map`), `max()` / `min()`
+(the largest or smallest element, or `None` if there is none), and
+`chain(other)` (this sequence, then `other`'s).
 
 ```
 var sum   = Counter::to(5).fold(0, |acc, x| => acc + x);          # 10
@@ -494,6 +523,7 @@ var rest  = Counter::to(5).skip(2).collect();                     # [2, 3, 4]
 var flat  = Counter::to(4).flat_map(|n| => Counter::to(n)).collect();
 #   flat == [0, 0, 1, 0, 1, 2]
 var peak  = Counter::to(9).filter(|k| => k % 3 == 0).max();       # Some(6)
+var both  = Counter::to(3).chain(Counter::to(2)).collect();       # [0,1,2,0,1]
 ```
 
 `flat_map` is the one that needed the language rather than the library to move.
@@ -520,13 +550,15 @@ signature can say. They are excluded from a `dyn Iterator` vtable for the
 reason that clause implies — the bound is about the concrete type the coercion
 erased — so a trait object keeps `collect` and refuses `max` at the call.
 
-What is still out of reach as a combinator is `chain(other)`, and not for want
-of a bound: it must bind `type Item = I.Item` while yielding the second
-source's elements, so it needs to say that `J.Item` *is* `I.Item` — an equality
-between two associated types rather than a trait they satisfy. Only a `dyn` can
-currently spell that (`dyn Iterator<Item = Int>`). A `sum` waits on something
-different again: there is no `Add` trait, so `+` on an element has nothing to
-bound.
+`chain(other)` is the one that needed a predicate rather than a bound. Its
+adapter binds `type Item = I.Item`, so returning the *second* source's element
+requires saying that `J.Item` **is** `I.Item` — an equality between two
+associated types, not a trait they both satisfy —
+which `J: Iterator<Item = Self.Item>` is exactly. Like `map` it carries a type
+parameter of its own, so it is excluded from a `dyn Iterator` vtable.
+
+What is still out of reach is `sum`, and for a different reason than any of
+these: there is no `Add` trait, so `+` on an element has nothing to bound.
 
 ## Modules
 
@@ -1495,7 +1527,7 @@ overflow: a value past what an `Int` holds wraps.
 | a trait's type arguments at a *bare* method call | the expected type breaks the tie between two impls of one generic trait, and pins an impl parameter the receiver cannot reach (`impl<T, U: From<T>> Into<U> for T`); with no expected type the first impl wins — or, where the parameter was only pinnable that way, no impl applies at all. The trait-qualified spelling (`Into::<Fahrenheit>::into(c)`) settles it explicitly without an expected type |
 | disambiguating a qualified selection whose *argument is itself unresolved* (`Steps::from(None)`) | the argument (for `from`) or the receiver (for a trait-qualified `into`) must type on its own to choose the impl, so a value that would need the impl chosen first cannot be disambiguated |
 | a bound naming a *later* type parameter (`fun f<U: Into<T>, T>`) | "unknown type: T" — bounds resolve left to right |
-| an *equality* binding in a bound (`J: Iterator<Item = I.Item>`) | only a trait *object* can spell it (`dyn Iterator<Item = Int>`); a bound says which traits a projection satisfies, not which type it is — so `chain` cannot be written |
+| an equality binding between two *projections* (`J: Iterator<Item = I.Item2>` where both sides are abstract) | works, and is compared exactly — but only because a projection over a parameter is interned like any type; there is no unification, so nothing *solves* one side from the other |
 | a supertrait (`trait A: B`, or `where Self: B` on a method) | rejected: a bound is a promise a caller discharges, and a trait declaration has no caller |
 | an impl overriding a defaulted method restating its `where` | conformance compares signatures, which carry no bounds, so an override may quietly add or drop one; the trait's own clause is still discharged at every call through the trait |
 | `mod` declarations | no such keyword; `use` is what pulls a file in |

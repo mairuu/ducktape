@@ -1,0 +1,13 @@
+#! expect: is fixed to 'I.Item' by an equality binding
+# Once `J.Item` is bound to `I.Item` there is only one spelling of that type,
+# because `ty_assoc` never builds the other. A trait bound written on the
+# spelling that does not exist would sit there constraining nothing, so it is
+# refused with the one to write instead.
+use std::iter::Iterator;
+use std::option::Option;
+use std::cmp::Ord;
+
+fun f<I: Iterator, J: Iterator<Item = I.Item>>(a: I, b: J) -> Option<I.Item>
+    where J.Item: Ord {
+    return b.max();
+}

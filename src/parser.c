@@ -967,6 +967,13 @@ static int parse_type_args(Parser *p, TypeNode ***out_args) {
   return count;
 }
 
+// The `<..>` after a trait's name is the same bracket in a bound as in a
+// `dyn`, and now the same parser: `Iterator<Item = I.Item>` carries the trait's
+// type arguments and its associated-type bindings in one list. So the path is
+// read in PATH_BARE mode — leaving the `<` to us — and the type arguments are
+// written back into its last segment, where trait_ref_resolve already reads
+// them. Reading it as a plain type-argument list would report "expected '>'" at
+// the `=`, which is exactly why the `dyn` side got its own parser first.
 static bool parse_trait_ref(Parser *p, TraitRef *out) {
   if (!check_tok(p, TOKEN_IDENT)) {
     error_at(p, current_tok_span(p), "expected trait name in trait bound");
@@ -974,9 +981,36 @@ static bool parse_trait_ref(Parser *p, TraitRef *out) {
   }
   Token *start_tok = previous_tok(p);
 
-  if (!parse_path(p, PATH_TYPE, &out->path)) {
+  if (!parse_path(p, PATH_BARE, &out->path)) {
     return false;
   }
+
+  out->bindings = NULL;
+  out->binding_count = 0;
+
+  // `Into::<Int>` spells the arguments the way an expression path does; a
+  // bound accepts both, as PATH_TYPE did before this took the brackets over.
+  if (check_tok(p, TOKEN_COLONCOLON) && peek_ahead(p, 1)->type == TOKEN_LT) {
+    advance_tok(p);
+  }
+  if (check_tok(p, TOKEN_LT) && out->path.count > 0) {
+    TypeNode *type_args[MAX_ASSOC_BINDINGS];
+    AssocBindingNode bindings[MAX_ASSOC_BINDINGS];
+    int type_arg_count = 0, binding_count = 0;
+    if (!parse_dyn_args(p, type_args, &type_arg_count, bindings,
+                        &binding_count)) {
+      return false;
+    }
+    PathSegment *last = &out->path.segments[out->path.count - 1];
+    last->type_args = al_alloc(p->al, sizeof(TypeNode *) * type_arg_count);
+    memcpy(last->type_args, type_args, sizeof(TypeNode *) * type_arg_count);
+    last->type_arg_count = type_arg_count;
+
+    out->bindings = al_alloc(p->al, sizeof(AssocBindingNode) * binding_count);
+    memcpy(out->bindings, bindings, sizeof(AssocBindingNode) * binding_count);
+    out->binding_count = binding_count;
+  }
+
   out->span = span_merge(token_span(start_tok), previous_tok_span(p));
 
   return true;

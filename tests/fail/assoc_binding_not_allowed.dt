@@ -1,0 +1,10 @@
+#! expect: an associated-type binding is not allowed here
+# A binding is a promise about the type being bounded, and a `where I.Item: ..`
+# predicate bounds a *projection* — which has no declaration to hang one on.
+# Constraining `I.Item`'s own associated type would need a parameter for it.
+use std::iter::Iterator;
+use std::option::Option;
+
+fun f<I: Iterator>(i: I) -> Int where I.Item: Iterator<Item = Int> {
+    return 1;
+}

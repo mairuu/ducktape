@@ -1,0 +1,122 @@
+# An equality binding (milestone 54): `J: Iterator<Item = I.Item>`.
+#
+# Every bound before this one said which *traits* a type satisfies. This one
+# says which type a projection **is** — and that is a different thing to do with
+# it: rather than a fact to check at each use, it is a rewrite. `J.Item` is not
+# a type this program can build; writing it yields `I.Item`, so the two cannot
+# be told apart and unification, substitution and codegen need to know nothing.
+#
+# What is left is the promise: an instantiation must make it true, or the
+# rewrite would have compiled one type as another. That is checked where `J` is
+# bound (tests/fail/chain_item_mismatch.dt).
+use std::iter::Iterator;
+use std::option::Option;
+use std::cmp::Ord;
+use std::io::print;
+
+struct Counter { n: Int, max: Int }
+
+impl Counter {
+    fun to(max: Int) -> Counter { Counter { n: 0, max: max } }
+}
+
+impl Iterator for Counter {
+    type Item = Int;
+    fun next(self) -> Option<Int> {
+        if self.n >= self.max { return Option::None; }
+        var v = self.n;
+        self.n += 1;
+        return Option::Some(v);
+    }
+}
+
+fun main() {
+    # `chain` is what the binding was for: `Chain`'s `Item` is the *first*
+    # source's, so returning `self.second.next()` needs the second source's
+    # element type to be that same type — a thing no trait bound could say.
+    print(Counter::to(3).chain(Counter::to(2)).collect());
+#> [0, 1, 2, 0, 1]
+
+    # either side empty, and the seam in both directions
+    print(Counter::to(0).chain(Counter::to(2)).collect());
+#> [0, 1]
+    print(Counter::to(2).chain(Counter::to(0)).collect());
+#> [0, 1]
+    print(Counter::to(0).chain(Counter::to(0)).collect());
+#> []
+
+    # a chain of chains: the receiver of the second `chain` is itself a
+    # `Chain`, so `Self.Item` is a projection that collapses two hops
+    print(Counter::to(2).chain(Counter::to(1)).chain(Counter::to(1)).collect());
+#> [0, 1, 0, 0]
+
+    # adapters on either side, so neither element type is written anywhere
+    print(Counter::to(4).filter(|k| => k % 2 == 0)
+          .chain(Counter::to(2).map(|k| => k + 10)).collect());
+#> [0, 2, 10, 11]
+
+    # and adapters *after*, since a `Chain` is an ordinary iterator
+    print(Counter::to(2).chain(Counter::to(3)).skip(1).take(3).collect());
+#> [1, 0, 1]
+    print(Counter::to(2).chain(Counter::to(3)).max());
+#> Some(2)
+
+    # `for` drives it like any other iterator
+    var total = 0;
+    for v in Counter::to(3).chain(Counter::to(2)) { total += v; }
+    print(total);
+#> 4
+
+    # a program's own generic over the same binding, in both spellings
+    print(first_of_two(Counter::to(0), Counter::to(7)));
+#> Some(0)
+    print(where_spelling(Counter::to(0), Counter::to(7)));
+#> Some(0)
+
+    # the binding and a trait bound on the same element, which is the point of
+    # there being one canonical spelling for it: `J.Item` *is* `I.Item`, so
+    # `where I.Item: Ord` is what constrains both
+    print(larger_of(Counter::to(2), Counter::to(5)));
+#> Some(4)
+
+    # the other half of what the binding buys: naming a *concrete* type, so a
+    # signature can ask for "an iterator of Ints" and then treat its elements
+    # as the Ints they are
+    print(sum_of(Counter::to(4)));
+#> 6
+}
+
+# `I.Item` is `Int` here by construction, so `t += v` needs no further bound —
+# and an iterator of anything else is refused at the call.
+fun sum_of<I: Iterator<Item = Int>>(it: I) -> Int {
+    var t = 0;
+    for v in it { t += v; }
+    return t;
+}
+
+# The inline spelling. `b.next()` returns `Option<J.Item>`, which is
+# `Option<I.Item>` — not convertible to it, but the same interned type.
+fun first_of_two<I: Iterator, J: Iterator<Item = I.Item>>(a: I, b: J)
+    -> Option<I.Item> {
+    match a.next() {
+        Option::Some(v) => { return Option::Some(v); },
+        Option::None => { return b.next(); },
+    }
+}
+
+# The same predicate in a `where`, which is where every other bound may also go.
+fun where_spelling<I: Iterator, J: Iterator>(a: I, b: J) -> Option<I.Item>
+    where J: Iterator<Item = I.Item> {
+    match a.next() {
+        Option::Some(v) => { return Option::Some(v); },
+        Option::None => { return b.next(); },
+    }
+}
+
+# Three milestones in one signature: the equality binding (54) lets the two
+# sources agree, `where I.Item: Ord` (52) makes an element comparable, and
+# `max` is a combinator because a trait method may carry that clause (53).
+fun larger_of<I: Iterator, J: Iterator<Item = I.Item>>(a: I, b: J)
+    -> Option<I.Item> where I.Item: Ord {
+    return a.chain(b).max();
+}

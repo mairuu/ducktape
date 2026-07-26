@@ -971,7 +971,8 @@ generic body needs. A projection on a *trait object* never survives that long:
 is the one abstract receiver that says what its associated types are.
 
 **A projection can be bounded, and the bound lives on the base.** `where
-I.Item: Ord` is stored as an `AssocBound` (name plus trait refs) on the
+I.Item: Ord` is stored as an `AssocBound` (name, trait refs, and — for the
+equality kind below — the type it must *be*) on the
 *parameter's* `TY_GENERIC`, not on the `TY_ASSOC` it constrains — `TY_ASSOC`
 stays a plain (base, name) pair and a projection is answered by looking through
 its base. That placement follows from where the bound has to be *discharged*:
@@ -995,6 +996,40 @@ Because a bound is part of what a parameter *is*, `ty_generic` interns on the
 associated-type list too, canonicalising it (by name, then each entry's traits)
 the way it already sorts plain bounds: `I` and `I where I.Item: Ord` accept
 different instantiations and must not share a type.
+
+**An equality binding is a rewrite, not a check.** `J: Iterator<Item = I.Item>`
+is the second predicate kind, stored as `AssocBound.equals` beside the trait
+list — the same entry, since both constrain one projection. What it says is not
+"satisfies" but "is", and that difference is the whole design: `ty_assoc` reads
+the base parameter's list at *construction*, so building `J.Item` returns
+`I.Item` and the losing spelling never exists. Unification, `subst_apply`,
+`infer_apply`, monomorphisation and the VM therefore need nothing — there are
+not two types to reconcile. (One hop suffices and cannot cycle: the stored type
+came through the same constructor, and a bound may only name a parameter
+declared *earlier*.)
+
+The price of a rewrite is that it must be earned, so the promise is discharged
+in the two places a parameter is bound. `check_bounds_satisfied` compares the
+argument's binding against the required type once inference settles — with
+`infer_open_generics` first rewriting `equals` through the substitution being
+built, since the type it names is usually a *sibling* parameter the same call is
+solving. And `impl_bounds_satisfied` asks at impl selection, which for this
+predicate kind is not a nicety: an `impl<I, J: Iterator<Item = I.Item>> Iterator
+for Chain<I, J>` that applied to a `Chain<Counter, Words>` would compile
+`Words`'s `String`s as the `Int`s the impl bound `Item` to. (Selection had never
+looked at associated-type bounds at all, so `where I.Item: Ord` on an impl was
+unchecked there too.)
+
+Two smaller consequences are worth stating. A trait method's type parameter has
+its bounds written in the trait's terms — `chain<J: Iterator<Item = Self.Item>>`
+— so `check_trait_method_call` projects the *declarations* onto the receiver
+(`trait_project_param`) before opening them, otherwise the discharge would ask
+about the abstract `Self`. That projection needs its own reading of a bound: a
+`TY_TRAIT` naming the trait means `Self` in a type position but the trait itself
+in a bound position, so `trait_project_bound` moves only the arguments. And
+since the rewrite leaves one spelling, a `where J.Item: Ord` written alongside a
+binding would constrain a type nothing builds — refused, naming the spelling to
+use.
 
 **Discharging it against an argument that is itself abstract.** When
 `check_bounds_satisfied` projects the argument and `impl_index_assoc_type`

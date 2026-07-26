@@ -97,9 +97,16 @@ wherePred      = ( IDENT | "Self" ) ( "." IDENT )? ":" traitBound ;
                     "Self" is legal only in a trait method's clause, and only
                     with a "." — it is the receiver, so the bound is a promise
                     each *call site* discharges rather than an instantiation *)
-traitBound     = path ( "+" path )* ;
-                 (* each path may carry the trait's type arguments, as in
-                    T: Into<Int> — the ordinary pathSeg "<" ... ">" *)
+traitBound     = traitRef ( "+" traitRef )* ;
+traitRef       = IDENT dynArgs? ;
+                 (* the same bracket a `dyn` takes, and the same parser: the
+                    trait's own type arguments (T: Into<Int>) and then its
+                    associated-type bindings (J: Iterator<Item = I.Item>).
+                    A binding is an *equality* predicate — it says which type
+                    the projection is, not which traits it satisfies — and it
+                    constrains the parameter being bounded, not the trait, so
+                    two bounds naming one trait with different bindings still
+                    name one trait *)
 
 (* ── types ────────────────────────────────────────────────────────────── *)
 

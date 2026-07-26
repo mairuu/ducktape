@@ -136,10 +136,20 @@ typedef struct {
 // with `Counter` is the moment `Counter.Item: Ord` becomes a question with an
 // answer. `TY_ASSOC` stays a plain (base, name) pair, and a projection is
 // looked up through its base — see impl_index_implements.
+//
+// `equals` is the second predicate kind: `J: Iterator<Item = I.Item>` says not
+// which traits the projection satisfies but *which type it is*. That makes it a
+// rewrite rather than a check — see ty_assoc, which collapses `J.Item` to this
+// type at construction, so the two can never be spelled apart. What is left to
+// verify is that a real instantiation keeps the promise
+// (check_bounds_satisfied). NULL when the parameter only carries trait bounds
+// for this name; the two kinds merge into one entry, since `J: Iterator<Item =
+// I.Item>` and `where J.Item: Ord` constrain the same projection.
 typedef struct {
   StringView name; // the associated type's name, e.g. "Item"
   Type **bounds;   // TY_TRAIT refs it must satisfy, e.g. [Ord]
   int bound_count;
+  Type *equals; // the type it is required to *be*, or NULL
 } AssocBound;
 
 // TY_GENERIC — an unresolved type parameter like T
@@ -646,8 +656,17 @@ struct Pattern {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // A single trait in a bound, optionally generic: Clone, Iterator<Int>, From<T>
+//
+// The `<..>` after the name carries the same two lists a `dyn Trait<..>` does,
+// and is parsed by the same function: the trait's own type arguments (which go
+// into the path's last segment, since they are what makes the *trait
+// reference*) and its associated-type bindings, `Iterator<Item = I.Item>`,
+// which say nothing about the trait and everything about the type being bounded
+// — so they are lifted onto that parameter's `AssocBound` list instead.
 typedef struct {
   Path path; // the trait name, possibly qualified: std::fmt::Display
+  AssocBindingNode *bindings;
+  int binding_count;
   Span span;
 } TraitRef;
 

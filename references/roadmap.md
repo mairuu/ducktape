@@ -2821,6 +2821,77 @@
   restate the clause nor is stopped from adding one, since conformance compares
   signatures and a signature carries no bounds.
 
+- **An equality binding, and `chain` (milestone 54)** — `J: Iterator<Item =
+  I.Item>`, the last of "Next" item 2 and the predicate `chain` has been waiting
+  on since milestone 51. Design: `language.md` bounds list + "Iterators",
+  `architecture.md` "Associated-type projections", `grammar.ebnf`.
+
+  The observation the milestone turns on: **an equality binding is not a
+  constraint to check but a rewrite.** Every predicate before it said which
+  *traits* a type satisfies, which is a fact to be looked up wherever it is
+  needed. This one says which type a projection **is** — so the honest thing is
+  to stop having two spellings. `ty_assoc` reads the base parameter's bindings
+  at construction, and `J.Item` returns `I.Item`: the losing spelling is not a
+  type this compiler can build.
+
+  What that buys is the whole point. Unification, `subst_apply`, `infer_apply`,
+  monomorphisation, codegen, the VM and the image format are **untouched** —
+  there are not two types to reconcile, so nothing downstream has an opinion.
+  `self.second.next()` returning `Option<J.Item>` where `Option<I.Item>` is
+  wanted is not a coercion; it is the same interned pointer.
+
+  A rewrite has to be earned, and the rest of the milestone is earning it:
+  - **The promise is discharged where the parameter is bound**, which is two
+    places rather than one. `check_bounds_satisfied` compares once inference
+    settles — with `infer_open_generics` first rewriting `equals` through the
+    substitution being built, since the type it names is normally a *sibling*
+    parameter the same call is solving. `impl_bounds_satisfied` asks at impl
+    selection, and for this predicate kind that is not a nicety: an
+    `impl<I, J: Iterator<Item = I.Item>> Iterator for Chain<I, J>` applying to a
+    `Chain<Counter, Words>` would compile `Words`'s `String`s as the `Int`s it
+    bound `Item` to. Selection had never looked at associated-type bounds at
+    all, so milestone 52's kind was unchecked there too.
+  - **A trait method's type parameter is declared in the trait's terms.**
+    `chain<J: Iterator<Item = Self.Item>>` asks nothing answerable until the
+    receiver is known, so `check_trait_method_call` projects the *declarations*
+    onto it (`trait_project_param`) before opening them. That needed its own
+    reading of a bound: a `TY_TRAIT` naming the trait means `Self` in a type
+    position — the only way a signature can spell it — but the trait itself in
+    a *bound* position, so `trait_project_bound` moves only the arguments.
+    Projection also has to be followed by the impl's substitution, because
+    `trait_project` answers a `Self.Assoc` in the impl's own terms and leaves
+    that step to its caller.
+  - **One spelling means one place to constrain it.** `where J.Item: Ord`
+    written beside a binding would attach to a type nothing builds and sit
+    there constraining nothing, so it is refused, naming `I.Item` as the
+    spelling to use.
+
+  The syntax was free: `dyn Iterator<Item = Int>` has spelled exactly this
+  since milestone 27, so `parse_dyn_args` — which already separates a trait's
+  type arguments from its associated-type bindings in one bracket list — now
+  parses a trait *bound* too. The arguments go into the path's last segment
+  where `trait_ref_resolve` already reads them; the bindings are lifted onto the
+  bounded parameter, because they say nothing about the trait: two bounds naming
+  `Iterator` with different bindings still name one trait, and putting them on
+  the reference would break the pointer identity every bound comparison rests
+  on.
+
+  `std::iter::chain` is then ordinary library code — a `Chain<I, J>` with a
+  `first_done` flag, which is what keeps an exhausted first source from being
+  re-asked. It carries a type parameter of its own, so the milestone-48
+  partition excludes it from a `dyn Iterator` vtable, like `map`.
+
+  Also improved: `note_blocking_bound` explains an unsatisfied associated-type
+  bound (both kinds), and now fires for an *inherited* method — it only ever
+  considered methods an impl declares itself, so it could never reach a
+  combinator, which is most of what a failing bound on an adapter is reached
+  through. That is what turns "no method named 'collect' found for type
+  'Chain<Counter, Words>'" into a first diagnostic that says why.
+
+  Still missing: `sum`, blocked on there being no `Add` trait rather than on any
+  predicate; and nothing *solves* one side of an equality from the other — it is
+  compared, not unified — so a binding cannot be used to infer a type argument.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -2882,23 +2953,14 @@ settles the rest, without an expected type.)
 recorded — how many `Ord` methods the operator names — was answered `cmp` only,
 the smaller entanglement, matching how `Display` names exactly `to_string`.)
 
-2. **The equality binding, the last of the associated-type-bound work.** The
-   trait half landed in milestone 52 (`where I.Item: Ord`) and the placement
-   half in 53 (the same clause on a trait method's signature, which is what
-   made `it.max()` a combinator). What is left is one predicate kind, with a
-   waiting consumer.
+(**The associated-type-bound work is finished.** The trait half landed in
+milestone 52 (`where I.Item: Ord`), the placement half in 53 (the same clause on
+a trait method's signature, which made `it.max()` a combinator), and the
+equality binding in 54 (`J: Iterator<Item = I.Item>`, which made `chain` one).
+What the family still cannot do is *infer*: an equality is compared, never
+unified, so a binding will not solve a type argument from the other side.)
 
-   **An equality binding** (`J: Iterator<Item = I.Item>`) — a different
-   predicate kind, saying not "this projection implements a trait" but "these
-   two types are the same". Its consumer is `chain(other)`, which must bind
-   `type Item = I.Item` and so cannot return the second source's element
-   (milestone 51 verified the failure by hand). The `dyn` side already has the
-   spelling — `dyn Iterator<Item = Int>` writes exactly this, stored in
-   `TypeDyn.assoc_types` — so the question is whether a bound can carry the same
-   list, checked as a comparison after `infer_apply` rather than as an
-   `impl_index_implements`.
-
-3. **A custom equality trait (`Eq`), if a consumer ever needs it.** Not on the
+2. **A custom equality trait (`Eq`), if a consumer ever needs it.** Not on the
    main line, and deliberately deferred rather than planned — recorded here so
    the reasoning survives. `==`/`!=` stay a structural primitive: `OP_EQ` reads
    no static type, so `a == b` works on any value — Int, struct, generic `T` —
@@ -2971,11 +3033,12 @@ via `Module.decl_base`) and is not part of the main line.
   is **closed as of milestone 50**: `assoc_apply` gives codegen the collapse
   `infer_apply` was doing for the checker, and `cg_subst` applies it at every
   site that substitutes. What remained after it was narrower and *not* the same
-  problem — bounding an associated type — and milestones 52 and 53 answered it
-  between them: `where I.Item: Ord` works on a `fun`, an `impl`, and (53) a
-  trait method's signature, which is what made `it.max()` a combinator. Still
-  missing is an *equality* binding (`J: Iterator<Item = I.Item>`, which `chain`
-  needs). That is "Next" item 2
+  problem — bounding an associated type — and milestones 52, 53 and 54 answered
+  it between them: `where I.Item: Ord` works on a `fun`, an `impl`, and (53) a
+  trait method's signature, which is what made `it.max()` a combinator, while
+  54's equality binding (`J: Iterator<Item = I.Item>`) made `chain` one. The
+  family is closed; what it does not do is *infer*, since an equality is
+  compared rather than unified
 - a trait method's `where` clause is discharged at every call *through the
   trait*, but an impl overriding a defaulted method is neither made to restate
   the clause nor stopped from adding a stronger one: conformance compares

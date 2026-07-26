@@ -88,6 +88,17 @@ pub trait Iterator {
         return Take { inner: self, remaining: n };
     }
 
+    # Yield this sequence, then `other`'s. The two must agree on their element
+    # type, and saying so is what needed a language feature rather than a
+    # library one: `Chain`'s `Item` is *this* iterator's, so `other.next()`
+    # would be yielding some unrelated `J.Item` unless a bound could state that
+    # the two are the same type. `Iterator<Item = Self.Item>` is that statement
+    # — an equality binding (milestone 54), the predicate kind that says which
+    # type a projection *is* rather than which traits it satisfies.
+    fun chain<J: Iterator<Item = Self.Item>>(self, other: J) -> Chain<Self, J> {
+        return Chain { first: self, second: other, first_done: false };
+    }
+
     # Drop the first `n` elements and yield the rest. The mirror of `take`, and
     # lazy in the same way: nothing is pulled until the first `next()`, which is
     # then the call that does the dropping.
@@ -241,6 +252,36 @@ impl<I: Iterator> Iterator for Take<I> {
         if self.remaining <= 0 { return Option::None; }
         self.remaining -= 1;
         return self.inner.next();
+    }
+}
+
+# `Chain` drains `first`, then `second`. `first_done` is what makes that one
+# way: without it a `None` from an exhausted first source would be re-asked for
+# on every later `next()`, which for a stateful iterator is not the same
+# question twice.
+#
+# The bound on `J` is the milestone-54 one: `Item = I.Item` says the second
+# source's element type *is* the first's, which is what lets `self.second.next()`
+# be returned where `Option<I.Item>` is wanted. It is also checked where the
+# impl is selected, so a `Chain<Counter, Words>` finds no `Iterator` impl rather
+# than quietly compiling a `String` as an `Int`.
+pub struct Chain<I: Iterator, J: Iterator> {
+    first: I,
+    second: J,
+    first_done: Bool,
+}
+
+impl<I: Iterator, J: Iterator<Item = I.Item>> Iterator for Chain<I, J> {
+    type Item = I.Item;
+
+    fun next(self) -> Option<I.Item> {
+        if not self.first_done {
+            match self.first.next() {
+                Option::Some(x) => { return Option::Some(x); },
+                Option::None => { self.first_done = true; },
+            }
+        }
+        return self.second.next();
     }
 }
 

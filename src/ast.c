@@ -36,6 +36,7 @@ static uint32_t type_hash(const Type *t) {
         h = h * 31 + (uint8_t)ab->name.chars[j];
       for (int j = 0; j < ab->bound_count; j++)
         h = h * 31 + (uint32_t)(uintptr_t)ab->bounds[j];
+      h = h * 31 + (uint32_t)(uintptr_t)ab->equals;
     }
     break;
   case TY_TUPLE:
@@ -111,7 +112,8 @@ static bool type_structurally_equal(const Type *a, const Type *b) {
     for (int i = 0; i < a->as.generic.assoc_bound_count; i++) {
       const AssocBound *x = &a->as.generic.assoc_bounds[i];
       const AssocBound *y = &b->as.generic.assoc_bounds[i];
-      if (!sv_equal(x->name, y->name) || x->bound_count != y->bound_count) {
+      if (!sv_equal(x->name, y->name) || x->bound_count != y->bound_count ||
+          x->equals != y->equals) {
         return false;
       }
       for (int j = 0; j < x->bound_count; j++) {
@@ -525,6 +527,25 @@ Type *ty_generic(StringView name, Type **bounds, int bound_count,
 
 Type *ty_assoc(Type *base, StringView assoc_name, TraitDef *trait,
                Allocator *al) {
+  // An equality binding is discharged *here*, by never building the projection
+  // at all: if the parameter's declaration says `J: Iterator<Item = I.Item>`,
+  // then `J.Item` **is** `I.Item`, and returning it makes the two the same
+  // interned pointer. Every downstream reader — unification, substitution,
+  // infer_apply, codegen — then needs nothing, because there is no second
+  // spelling left for them to reconcile.
+  //
+  // One hop suffices and cannot cycle: the type stored in `equals` was itself
+  // built through this constructor, so it is already collapsed, and a bound may
+  // only name a type parameter declared *earlier* in the same list.
+  if (base->kind == TY_GENERIC) {
+    for (int i = 0; i < base->as.generic.assoc_bound_count; i++) {
+      const AssocBound *ab = &base->as.generic.assoc_bounds[i];
+      if (ab->equals != NULL && sv_equal(ab->name, assoc_name)) {
+        return ab->equals;
+      }
+    }
+  }
+
   Type probe = {.kind = TY_ASSOC,
                 .as.assoc = {
                     .base = base,
