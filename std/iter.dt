@@ -68,6 +68,40 @@ pub trait Iterator {
         }
         return out;
     }
+
+    # Yield at most the first `n` elements, then stop — a lazy adapter holding a
+    # countdown of its own.
+    fun take(self, n: Int) -> Take<Self> {
+        return Take { inner: self, remaining: n };
+    }
+
+    # Pair each element with its position: `(0, a), (1, b), ...`. The element
+    # type is a tuple, so the adapter's `Item` is `(Int, Self.Item)`.
+    fun enumerate(self) -> Enumerate<Self> {
+        return Enumerate { inner: self, i: 0 };
+    }
+
+    # Walk two iterators in lockstep, yielding pairs until *either* runs out. The
+    # second iterator's type is a parameter of the method itself, so like `map`
+    # this one is excluded from a `dyn Iterator` vtable.
+    fun zip<J: Iterator>(self, other: J) -> Zip<Self, J> {
+        return Zip { a: self, b: other };
+    }
+
+    # Reduce to a single value, left to right: `f` folds each element into the
+    # accumulator, seeded by `init`. The eager sibling of `map` — a consumer, not
+    # an adapter, so there is no struct, just a drain. `B` is the accumulator's
+    # type, a parameter of the method.
+    fun fold<B>(self, init: B, f: fun(B, Self.Item) -> B) -> B {
+        var acc = init;
+        while true {
+            match self.next() {
+                Option::Some(x) => { acc = f(acc, x); },
+                Option::None => { return acc; },
+            }
+        }
+        return acc;
+    }
 }
 
 # ── Adapters ─────────────────────────────────────────────────────────────────
@@ -122,5 +156,67 @@ impl<I: Iterator> Iterator for Filter<I> {
         # `while true` never falls through, but the checker reads the loop as
         # able to end, so a trailing `None` makes every path return.
         return Option::None;
+    }
+}
+
+# `Take` yields the source's elements until its own countdown reaches zero, then
+# reports the sequence spent — even if the source has more.
+pub struct Take<I: Iterator> {
+    inner: I,
+    remaining: Int,
+}
+
+impl<I: Iterator> Iterator for Take<I> {
+    type Item = I.Item;
+
+    fun next(self) -> Option<I.Item> {
+        if self.remaining <= 0 { return Option::None; }
+        self.remaining -= 1;
+        return self.inner.next();
+    }
+}
+
+# `Enumerate` yields `(index, element)`, advancing a counter of its own beside
+# the source's cursor.
+pub struct Enumerate<I: Iterator> {
+    inner: I,
+    i: Int,
+}
+
+impl<I: Iterator> Iterator for Enumerate<I> {
+    type Item = (Int, I.Item);
+
+    fun next(self) -> Option<(Int, I.Item)> {
+        match self.inner.next() {
+            Option::Some(x) => {
+                var idx = self.i;
+                self.i += 1;
+                return Option::Some((idx, x));
+            },
+            Option::None => { return Option::None; },
+        }
+    }
+}
+
+# `Zip` pulls one element from each source per step and pairs them; the sequence
+# ends the moment either source does, so the shorter one sets the length.
+pub struct Zip<I: Iterator, J: Iterator> {
+    a: I,
+    b: J,
+}
+
+impl<I: Iterator, J: Iterator> Iterator for Zip<I, J> {
+    type Item = (I.Item, J.Item);
+
+    fun next(self) -> Option<(I.Item, J.Item)> {
+        match self.a.next() {
+            Option::Some(x) => {
+                match self.b.next() {
+                    Option::Some(y) => { return Option::Some((x, y)); },
+                    Option::None => { return Option::None; },
+                }
+            },
+            Option::None => { return Option::None; },
+        }
     }
 }

@@ -4299,6 +4299,15 @@ static Type *check_trait_method_call(CheckCtx *ctx, Expr *expr, Type *trait_ref,
     fun_ty = subst_apply(&impl_subst, fun_ty, ctx->al);
   }
 
+  // one projection may resolve to another: a pass-through adapter binds
+  // `type Item = I.Item`, so `Filter<Counter>.Item` collapses to `Counter.Item`
+  // — itself a projection, over a *concrete* base this time. `infer_apply`
+  // finishes the job (`Counter.Item` → `Int`) so a closure typed by the element
+  // (`filter(..).map(|x| ..)`, `filter(..).fold(..)`) sees a real type. A base
+  // still abstract — a bound receiver's `T.Item`, `Self.Item` in a default body
+  // — is left as it was, since there is no impl to read.
+  fun_ty = infer_apply(&ctx->infer, fun_ty, ctx->al);
+
   int expected_argc = fun_ty->as.fun.param_count - 1;
   if (mc->arg_count != expected_argc) {
     diag_error(ctx->diags, expr->span, "expected %d arguments but got %d",

@@ -2565,6 +2565,39 @@
   "Trait objects" object-safety paragraph + "Iterators" → combinators,
   `architecture.md` "Trait objects", `runtime.md` "Trait objects" + image format.
 
+- **More combinators + the pass-through projection fix (milestone 49)** — four
+  more provided methods on `Iterator`, and the one-line checker fix they turned
+  up. `take(n)` / `enumerate()` / `zip(other)` are lazy adapters (a `Take` with a
+  countdown, an `Enumerate` with an index, a `Zip` over two sources, each an
+  ordinary struct with an `impl Iterator`); `fold(init, f)` is an eager consumer,
+  a drain with no struct. `zip`/`fold` carry a type parameter of their own, so
+  they join `map`/`filter` as excluded from a `dyn Iterator` vtable; `take`/
+  `enumerate` return a `Self`-shaped adapter, likewise excluded — all fine, they
+  are provided methods (milestone 48).
+
+  The fix is the interesting part, and it was **latent before this milestone —
+  the 48 tests just avoided it.** A pass-through adapter binds `type Item =
+  I.Item`, so a receiver like `Filter<Counter>` has `Item` = `Counter.Item`: a
+  projection whose base is itself concrete, one hop short of `Int`.
+  `check_trait_method_call` projected `Self.Item` through the impl (→
+  `Counter.Item`) but stopped, so a closure typed by that element (`filter(p)
+  .map(f)`, `filter(p).fold(..)`) saw an abstract `Counter.Item` and failed
+  ("arithmetic operator requires numeric types, got 'Counter.Item'"). One
+  `infer_apply` on the projected `fun_ty` finishes the collapse — it already
+  resolves a concrete-based `TY_ASSOC` recursively (`Counter.Item` → `Int` via
+  `impl_index_assoc_type`) and leaves a still-abstract base (a bound receiver's
+  `T.Item`, `Self.Item` in a default body) untouched. So the win is broader than
+  the four combinators: *any* closure over a pass-through adapter's element now
+  checks. `tests/run/iter_more_combinators.dt` covers the four plus the
+  `filter().map()` / `filter().fold()` chains the fix unlocked; `in_fixed.dt`
+  gains a `filter().take().fold()` line. Design: `language.md` "Iterators" →
+  combinators.
+
+  Still deferred: `flat_map` (a closure *returning* an iterator to flatten) and a
+  `sum`/`fold`-shaped reduce keyed on `+`/`Ord` over `Self.Item` — both want the
+  *codegen* projection-through-a-bound machinery, which is a different wart than
+  the checker one fixed here (see "Known warts").
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion

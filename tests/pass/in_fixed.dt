@@ -326,4 +326,11 @@ fun main() {
     # adapters, `collect` draining into an array. The closures are typed by the
     # source's `Item`.
     var evens = Countdown::from(6).map(|k| => k * 2).filter(|v| => v > 4).collect();
+    # more combinators (milestone 49): `take`/`enumerate`/`zip` are lazy adapters,
+    # `fold` an eager consumer. The `filter(..).fold(..)` here also leans on the
+    # projection fix that shipped with them — a closure over a pass-through
+    # adapter's element now sees the real element type.
+    var total = Countdown::from(10).filter(|k| => k % 2 == 0).take(3).fold(0, |a, k| => a + k);
+    var paired = Countdown::from(3).enumerate().collect();
+    var zipped = Countdown::from(4).zip(Countdown::from(2)).collect();
 }

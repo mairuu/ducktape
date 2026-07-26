@@ -428,15 +428,29 @@ var xs = Counter::to(6).map(|x| => x * x).filter(|v| => v > 3).collect();
 for y in Counter::to(3).map(|x| => x + 100) { print(y); }    # 100 101 102
 ```
 
+Alongside them: `take(n)` (at most the first `n`), `enumerate()` (`(index,
+element)` pairs), `zip(other)` (walk two iterators in lockstep, ending with the
+shorter), and `fold(init, f)` (reduce left to right into an accumulator — the
+eager sibling of `map`).
+
+```
+var sum   = Counter::to(5).fold(0, |acc, x| => acc + x);          # 10
+var first = Counter::to(100).map(|x| => x * x).take(4).collect(); # [0, 1, 4, 9]
+var pairs = Counter::to(3).zip(Counter::to(2)).collect();         # [(0,0),(1,1)]
+```
+
 Making them methods rather than free functions took the per-method object
 safety above: `map` (a type parameter of its own) and `filter` (a `Self`-shaped
 return) are excluded from a `dyn Iterator` vtable, while `collect` stays
 dispatchable, so the trait keeps them *and* stays usable as `dyn`. The closures
 are typed by the source's element: `map`'s `|x| => ...` sees `x` at the
-iterator's `Item` type. They are ordinary library code — an adapter is a struct
-with a `fun(..)` field and an `impl Iterator`, nothing built into the language.
-The one thing the standard library cannot yet express is a combinator whose
-closure returns an iterator to flatten (`flat_map`), or one keyed on the
+iterator's `Item` type — including through a *pass-through* adapter, where that
+element is a projection over a projection (`Filter<Counter>.Item` is
+`Counter.Item` is `Int`), which the checker now collapses so a chain like
+`filter(p).map(f)` type-checks. They are ordinary library code — an adapter is a
+struct with a `fun(..)` field and an `impl Iterator`, nothing built into the
+language. The one thing the standard library cannot yet express is a combinator
+whose closure returns an iterator to flatten (`flat_map`), or one keyed on the
 element type through a non-native call — both wait on the associated-projection
 limits noted in `architecture.md`.
 
