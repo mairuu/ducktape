@@ -2194,6 +2194,9 @@ static Type *trait_self_param(TraitDef *trait, Allocator *al) {
 // once, here. Calls on `self` inside the body then dispatch through the bound
 // exactly as they do in a `<T: Show>` function, which is machinery codegen
 // already has.
+static const char *trait_method_undispatchable(const TraitMethodDef *m,
+                                               const TraitDef *trait);
+
 static FunDef *resolve_trait_default_impl(ResolveCtx *rctx, TraitDef *trait_def,
                                           TraitMethodDef *method_def,
                                           TraitItemNode *item) {
@@ -2380,6 +2383,11 @@ static void resolve_trait_decl(ResolveCtx *rctx, Decl *decl) {
 
     method_def->method_type =
         ty_fun(param_types.ptr, param_types.count, return_type, rctx->al);
+
+    // decide now whether this method can sit in a `dyn` vtable — a static
+    // property of its signature, so codegen and object-safety read one answer.
+    method_def->undispatchable =
+        trait_method_undispatchable(method_def, trait_def) != NULL;
 
     // a default body is a definition of its own; its *body* is checked in
     // pass 3 (tc_check_trait), like any other function's.
@@ -4208,6 +4216,19 @@ static Type *check_trait_method_call(CheckCtx *ctx, Expr *expr, Type *trait_ref,
                                      ImplDef *impl, Subst impl_subst) {
   ExprMethodCall *mc = &expr->as.method_call;
   TraitDef *trait = trait_ref->as.trait.def;
+
+  // a trait object can only reach the methods in its vtable: a provided method
+  // that was excluded for not being dispatchable (a combinator like `map`) has
+  // no slot to call through, even though it type-checks fine on a concrete or
+  // bounded receiver. Reject it here rather than let codegen meet a NULL slot.
+  if (self_ty->kind == TY_DYN && tm->undispatchable) {
+    diag_error(ctx->diags, expr->span,
+               "method '" SV_FMT "' cannot be called through 'dyn " SV_FMT
+               "' because %s — call it on a concrete or bounded receiver",
+               SV_ARG(mc->method_name), SV_ARG(trait->name),
+               trait_method_undispatchable(tm, trait));
+    return ctx->tc->t_poison;
+  }
 
   if (tm->self_index < 0) {
     diag_error(ctx->diags, expr->span,
@@ -6743,19 +6764,47 @@ static bool type_mentions_self(const Type *t, const TraitDef *trait) {
   }
 }
 
-// Object safety. A `dyn Trait` value is one vtable slot per method, called
-// with the receiver as its own first argument and nothing else known about
-// it — so a method belongs in a vtable only if that is enough to call it:
-//
-//   • it must take `self` (an associated function has no receiver to dispatch
-//     on, so there is no vtable to find it in);
-//   • it must have no type parameters of its own (each instantiation would
-//     need a slot, and which ones exist isn't known at the coercion site);
-//   • `Self` must not appear anywhere but the receiver — a `-> Self` or a
-//     `other: Self` parameter means the *caller* has to know the concrete
-//     type, which is precisely what the coercion erased. `Self.Item` is
-//     exempt, because the trait object names it (`dyn Iterator<Item = Int>`):
-//     see `type_mentions_self`.
+// Why `m` cannot be reached through a `dyn Trait` vtable, or NULL when it can.
+// A vtable slot is called knowing only the receiver, so a method is
+// dispatchable exactly when the receiver is all it needs — no other `self`, no
+// type parameters of its own, and no `Self` outside the receiver (a `-> Self`
+// or an `other: Self` would ask the caller for the concrete type the coercion
+// erased; `Self.Item` is exempt because the trait object names it). The three
+// conditions are object safety read one method at a time: a *provided* method
+// that fails them is left out of the vtable rather than sinking the trait,
+// while a *required* one still makes the trait non-object-safe. `undispatchable`
+// caches this answer on the method for codegen; here is the one computation.
+static const char *trait_method_undispatchable(const TraitMethodDef *m,
+                                               const TraitDef *trait) {
+  if (m->self_index < 0) {
+    return "it has no 'self' parameter";
+  }
+  if (m->type_param_count > 0) {
+    return "it has type parameters of its own";
+  }
+  if (m->method_type != NULL && type_mentions_self(m->method_type, trait)) {
+    // the receiver is `Self` by construction; look past it.
+    Type *ft = m->method_type;
+    if (type_mentions_self(ft->as.fun.return_type, trait)) {
+      return "'Self' appears in its signature outside the receiver";
+    }
+    for (int p = 0; p < ft->as.fun.param_count; p++) {
+      if (p != m->self_index &&
+          type_mentions_self(ft->as.fun.param_types[p], trait)) {
+        return "'Self' appears in its signature outside the receiver";
+      }
+    }
+  }
+  return NULL;
+}
+
+// Object safety, decided one method at a time. `trait_method_undispatchable`
+// says whether a method could sit in a `dyn Trait` vtable (the receiver and
+// nothing else being enough to call it). A method that can't is fatal only if
+// it is *required*: there is then no body to reach and no default to fall back
+// on. A *provided* one is instead excluded — codegen skips its slot and a call
+// through the `dyn` is rejected — so the trait stays object-safe and can carry
+// generic convenience methods (`Iterator::map`) while remaining a `dyn`.
 //
 // Checked where `dyn Trait` is written rather than at the trait declaration:
 // a trait is free to be statically-dispatch-only (`tests/run/trait_default.dt`
@@ -6764,29 +6813,13 @@ static bool trait_check_object_safe(TypeResolver *r, TraitDef *trait,
                                     Span span) {
   for (int i = 0; i < trait->method_count; i++) {
     TraitMethodDef *m = &trait->methods[i];
-    const char *why = NULL;
+    const char *why = trait_method_undispatchable(m, trait);
 
-    if (m->self_index < 0) {
-      why = "it has no 'self' parameter";
-    } else if (m->type_param_count > 0) {
-      why = "it has type parameters of its own";
-    } else if (m->method_type != NULL &&
-               type_mentions_self(m->method_type, trait)) {
-      // the receiver is `Self` by construction; look past it.
-      Type *ft = m->method_type;
-      bool elsewhere = type_mentions_self(ft->as.fun.return_type, trait);
-      for (int p = 0; !elsewhere && p < ft->as.fun.param_count; p++) {
-        if (p == m->self_index) {
-          continue;
-        }
-        elsewhere = type_mentions_self(ft->as.fun.param_types[p], trait);
-      }
-      if (elsewhere) {
-        why = "'Self' appears in its signature outside the receiver";
-      }
-    }
-
-    if (why != NULL) {
+    // a *provided* method that can't be dispatched is simply excluded from the
+    // vtable (codegen skips its slot, a call through the `dyn` is rejected) —
+    // the trait stays object-safe. Only a *required* one is fatal: there would
+    // be no body to reach, and no default to fall back on.
+    if (why != NULL && !m->has_default) {
       diag_error(r->diags, span,
                  "trait '" SV_FMT "' is not object-safe: method '" SV_FMT
                  "' cannot be called through 'dyn " SV_FMT "' because %s",

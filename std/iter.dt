@@ -23,24 +23,62 @@ pub trait Iterator {
     # The next element, or `None` once the sequence is spent. Advancing the
     # cursor is a side effect: calling `next` again yields the element after.
     fun next(self) -> Option<Self.Item>;
+
+    # ── Combinators, as provided methods ────────────────────────────────────
+    #
+    # `map`/`filter`/`collect` are the pipeline written left to right:
+    # `it.map(f).filter(p).collect()`. Each has a default body, so *every*
+    # iterator gets them for free — an impl fills in `next` and inherits the
+    # rest. They compose by wrapping `self` in an adapter (below), so the source
+    # iterator's cursor lives inside the returned one and advances in place.
+    #
+    # None of these can sit in a `dyn Iterator` vtable: `map` has a type
+    # parameter of its own and `filter` returns a `Self`-shaped adapter, so
+    # object safety excludes them from dispatch (they type-check on a concrete
+    # or bounded receiver, but not through a trait object — the compiler says so
+    # at the call). `collect` returns `[Self.Item]`, a projection the trait
+    # object still names, so it *stays* dispatchable and a `dyn Iterator` keeps
+    # it. That partition is what lets the combinators be methods without taking
+    # `dyn Iterator` away — milestone 48.
+
+    # Adapt so each element is passed through `f`. Lazy: the work happens one
+    # `next()` at a time, so the chain allocates no intermediate sequence.
+    fun map<B>(self, f: fun(Self.Item) -> B) -> Map<Self, B> {
+        return Map { inner: self, f: f };
+    }
+
+    # Adapt to skip elements failing `pred`. Lazy in the same way.
+    fun filter(self, pred: fun(Self.Item) -> Bool) -> Filter<Self> {
+        return Filter { inner: self, pred: pred };
+    }
+
+    # Drain into an array, in order — the eager end of a pipeline. The element
+    # annotation seeds the array's type from `Self.Item` (an empty literal has
+    # nothing else to infer it from) and `push` grows it. A `while` over
+    # `self.next()` rather than `for x in self`: a bound method call needs no
+    # lang item, so the drain works even when this file is run by path (where
+    # the `iterator` gate that `for` consults is inert).
+    fun collect(self) -> [Self.Item] {
+        var out: [Self.Item] = [];
+        while true {
+            match self.next() {
+                Option::Some(x) => { out.push(x); },
+                Option::None => { return out; },
+            }
+        }
+        return out;
+    }
 }
 
-# ── Combinators ──────────────────────────────────────────────────────────────
-#
-# `map` and `filter` are *lazy*: each returns a new iterator that wraps the
-# source and does its work one `next()` at a time, so a chain like
-# `filter(map(it, f), pred)` allocates no intermediate sequence and only ever
-# pulls as far as it is driven. `collect` is the *eager* end of a pipeline — it
-# drains an iterator into an array.
+# ── Adapters ─────────────────────────────────────────────────────────────────
 #
 # An adapter is an ordinary struct with an `impl Iterator`. The source iterator
 # is a field (`inner`), so its cursor is *inside* the adapter and advances in
 # place as the adapter's own `next()` calls it. The transform is a closure held
 # in a `fun(..)` field — nothing here is built into the language; a program can
-# write the same shape. The one thing the compiler had to grow is inference:
-# `map`'s closure parameter is typed `I.Item`, an associated projection, and the
-# first argument (the iterator) is what pins `I` so that projection can collapse
-# to a concrete element type before the closure body is checked.
+# write the same shape. The combinator methods above name these by returning
+# them, and each adapter's bound names `Iterator` back: the two-pass name
+# resolver (declaration order no longer matters) is what closes that cycle.
 
 # `Map` yields `f(x)` for each `x` the source yields. `B` is the mapped element
 # type — the closure's return — carried as a second parameter because nothing
@@ -59,11 +97,6 @@ impl<I: Iterator, B> Iterator for Map<I, B> {
             Option::None => { return Option::None; },
         }
     }
-}
-
-# Adapt `it` so each element is passed through `f`.
-pub fun map<I: Iterator, B>(it: I, f: fun(I.Item) -> B) -> Map<I, B> {
-    return Map { inner: it, f: f };
 }
 
 # `Filter` yields only the elements for which `pred` is true. Its `next` drives
@@ -90,28 +123,4 @@ impl<I: Iterator> Iterator for Filter<I> {
         # able to end, so a trailing `None` makes every path return.
         return Option::None;
     }
-}
-
-# Adapt `it` to skip elements failing `pred`.
-pub fun filter<I: Iterator>(it: I, pred: fun(I.Item) -> Bool) -> Filter<I> {
-    return Filter { inner: it, pred: pred };
-}
-
-# Drain `it` into an array, in order. The element annotation seeds the array's
-# type from the iterator's `Item` — an empty literal has nothing else to infer
-# it from — and `push` (a native, so uniform over the element type) grows it.
-#
-# The drain is a `while` over `it.next()` rather than `for x in it`: `for`'s gate
-# is the `iterator` lang item, which is inert when this file is run by path (it
-# is not the `<std>/` key), so the loop keeps `std::iter` directly runnable. A
-# bound method call needs no lang item.
-pub fun collect<I: Iterator>(it: I) -> [I.Item] {
-    var out: [I.Item] = [];
-    while true {
-        match it.next() {
-            Option::Some(x) => { out.push(x); },
-            Option::None => { return out; },
-        }
-    }
-    return out;
 }

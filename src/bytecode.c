@@ -16,7 +16,7 @@
 //   structs  [u32 name, u8 is_tuple, u16 field_count, u32 field_name*]
 //   enums    [u32 name, u16 variant_count,
 //               [u32 name, u8 is_tuple, u16 field_count, u32 field_name*]*]
-//   vtables  [u16 method_count, u16 fun_index*]*
+//   vtables  [u16 method_count, u32 fun_index*]*   (VTABLE_SLOT_EMPTY == none)
 //   funs     [u32 name, u16 param_count, u8 body_kind,
 //               body_kind == BC_BODY_CHUNK:  u32 code_len, code_len bytes,
 //                                            u16 const_count, const*
@@ -41,6 +41,11 @@
 //
 // Struct/enum slots need no such treatment: OP_STRUCT/OP_ENUM already carry a
 // slot the VM resolves through `exe`, and the tables are written in slot order.
+
+// A vtable slot with no target: the trait excluded an undispatchable provided
+// method, so no function fills it. Out of range for any real globals index
+// (which the loader bounds-checks against `global_count` <= BC_MAX_SLOTS).
+#define VTABLE_SLOT_EMPTY 0xFFFFFFFFu
 
 // what a fun record carries in place of a body.
 typedef enum {
@@ -352,6 +357,12 @@ bool bc_write(const Executable *exe, const FunDef *entry, const char *path,
     const VTable *vt = exe->vtables[i];
     w_u16(&w, (uint16_t)vt->method_count);
     for (int j = 0; j < vt->method_count; j++) {
+      // an excluded method (undispatchable, so never called through the `dyn`)
+      // has no target; a sentinel round-trips the empty slot.
+      if (vt->methods[j] == NULL) {
+        w_u32(&w, VTABLE_SLOT_EMPTY);
+        continue;
+      }
       int idx = fun_index(exe, vt->methods[j]);
       if (idx < 0) {
         w.ok = bc_error("internal: vtable method " SV_FMT " is not linked",
@@ -747,6 +758,10 @@ bool bc_load(const char *path, Allocator *al, Executable *exe, Heap *heap,
     }
     for (int j = 0; j < vt->method_count && r.ok; j++) {
       uint32_t idx = r_u32(&r);
+      if (idx == VTABLE_SLOT_EMPTY) {
+        vt->methods[j] = NULL; // an excluded, never-dispatched slot
+        continue;
+      }
       if (idx >= (uint32_t)exe->global_count) {
         r.ok = bc_error("bytecode image: vtable method index %u out of range",
                         idx);

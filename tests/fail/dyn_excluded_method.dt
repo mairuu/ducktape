@@ -1,0 +1,28 @@
+#! expect: cannot be called through 'dyn Iterator'
+# Object safety is partitioned per method (milestone 48): a provided method that
+# isn't dispatchable is excluded from the vtable rather than sinking the trait,
+# so `dyn Iterator` is still a legal type — but the excluded method has no slot
+# to reach through. `map` has a type parameter of its own, so calling it on a
+# trait object is rejected here, at the call, even though it type-checks fine on
+# a concrete or bounded receiver. `collect` stays dispatchable, so only `map`
+# is the error.
+use std::iter::Iterator;
+use std::option::Option;
+use std::io::print;
+
+struct Counter { n: Int, max: Int }
+
+impl Iterator for Counter {
+    type Item = Int;
+    fun next(self) -> Option<Int> {
+        if self.n >= self.max { return Option::None; }
+        var v = self.n;
+        self.n += 1;
+        return Option::Some(v);
+    }
+}
+
+fun main() {
+    var d: dyn Iterator<Item = Int> = Counter { n: 0, max: 3 };
+    print(d.map(|x| => x * 2).collect());
+}

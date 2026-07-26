@@ -251,13 +251,26 @@ exist, the same question a bound asks; without one the type error is the
 ordinary "expected 'dyn Shape' but got 'Circle'". A bounded type parameter
 coerces too, so a generic function can hand its own parameter over.
 
-Not every trait can be one. A trait is **object-safe** only if every method
-takes `self`, has no type parameters of its own, and does not mention `Self`
-outside the receiver (so no `-> Self`, no `other: Self`) — a trait object has
-erased the concrete type, and those signatures all need it back. The rule is
-checked where `dyn Trait` is *written*, not at the trait declaration, so a
-trait may freely be static-dispatch-only and still be used as a bound
-(`tests/run/trait_default.dt` leans on all three).
+Not every trait can be one. A method is **dispatchable** — reachable through
+the vtable — only if it takes `self`, has no type parameters of its own, and
+does not mention `Self` outside the receiver (so no `-> Self`, no `other:
+Self`) — a trait object has erased the concrete type, and those signatures all
+need it back. The rule is checked where `dyn Trait` is *written*, not at the
+trait declaration, so a trait may freely be static-dispatch-only and still be
+used as a bound (`tests/run/trait_default.dt` leans on all three).
+
+Object safety is decided **one method at a time**. A method that isn't
+dispatchable is fatal only if it is **required**: there would be no body to
+reach and no default to fall back on. A **provided** method (one with a default
+body) that isn't dispatchable is simply *excluded from the vtable* — the trait
+stays object-safe, and calling that method through a `dyn` is a clean error
+naming the method and the reason (`tests/fail/dyn_excluded_method.dt`), while it
+still type-checks on a concrete or bounded receiver. This is what lets a trait
+carry generic convenience methods and remain a `dyn`: `Iterator`'s `map`/
+`filter` are excluded (a type parameter, a `Self`-shaped return), yet `dyn
+Iterator` is a type, and `collect` — dispatchable, since `[Self.Item]` is a
+projection the object still names — stays callable through it. See "Iterators"
+below and `tests/run/iter_combinators.dt`.
 
 **A `Self.Item` is the exception, and it is named at the `dyn`:**
 
@@ -400,26 +413,30 @@ for x in d { print(x); }                 # driven through the vtable
 
 #### Combinators
 
-`std::iter` ships `map`, `filter`, and `collect`. `map` and `filter` are
-**lazy**: each wraps a source iterator in a small adapter that is *itself* an
-`Iterator`, so they chain and only pull as far as they are driven. `collect`
-is the **eager** end — it drains an iterator into an array.
+`Iterator` carries `map`, `filter`, and `collect` as **provided methods**, so
+every iterator gets them for free — an impl fills in `next` and inherits the
+rest. The pipeline reads left to right: `map` and `filter` are **lazy** (each
+wraps `self` in a small adapter that is *itself* an `Iterator`, so they chain
+and only pull as far as they are driven), and `collect` is the **eager** end —
+it drains into an array.
 
 ```
-use std::iter::{map, filter, collect};
-
 # square each element, keep those > 3, drain into an array
-var xs = collect(filter(map(Counter::to(6), |x| => x * x), |v| => v > 3));
+var xs = Counter::to(6).map(|x| => x * x).filter(|v| => v > 3).collect();
 #   xs == [4, 9, 16, 25]
 
-for y in map(Counter::to(3), |x| => x + 100) { print(y); }   # 100 101 102
+for y in Counter::to(3).map(|x| => x + 100) { print(y); }    # 100 101 102
 ```
 
-The closures are typed by the source's element: `map`'s `|x| => ...` sees `x`
-at the iterator's `Item` type. They are ordinary library code — an adapter is a
-struct with a `fun(..)` field and an `impl Iterator`, nothing built into the
-language. The one thing the standard library cannot yet express is a combinator
-whose closure returns an iterator to flatten (`flat_map`), or one keyed on the
+Making them methods rather than free functions took the per-method object
+safety above: `map` (a type parameter of its own) and `filter` (a `Self`-shaped
+return) are excluded from a `dyn Iterator` vtable, while `collect` stays
+dispatchable, so the trait keeps them *and* stays usable as `dyn`. The closures
+are typed by the source's element: `map`'s `|x| => ...` sees `x` at the
+iterator's `Item` type. They are ordinary library code — an adapter is a struct
+with a `fun(..)` field and an `impl Iterator`, nothing built into the language.
+The one thing the standard library cannot yet express is a combinator whose
+closure returns an iterator to flatten (`flat_map`), or one keyed on the
 element type through a non-native call — both wait on the associated-projection
 limits noted in `architecture.md`.
 

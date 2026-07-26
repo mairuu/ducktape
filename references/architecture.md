@@ -984,6 +984,20 @@ static-dispatch-only and only naming it as a type asks for more. A method is
 vtable-able only if a receiver and nothing else is enough to call it:
 `self` required, no method-level type parameters, and `Self` nowhere but the
 receiver (`type_mentions_self` looks past the receiver position).
+`trait_method_undispatchable` is that single test, run once when the signature
+resolves and cached on `TraitMethodDef.undispatchable`.
+
+**Object safety is partitioned per method, not all-or-nothing.** A
+non-dispatchable method sinks the trait only if it is *required*; a *provided*
+one (a default body) is instead **excluded from the vtable** — codegen skips its
+slot (leaving `NULL`, round-tripped through the image as a sentinel index), and
+`check_trait_method_call` rejects a call to it through a `TY_DYN` receiver
+before that `NULL` can be reached. So a trait may carry generic convenience
+methods and stay object-safe: `Iterator`'s `map`/`filter` are excluded (a type
+parameter, a `Self`-shaped return) while `collect` — dispatchable, its
+`[Self.Item]` return a projection the object still names — stays in the vtable,
+which is exactly what lets the combinators be methods without taking `dyn
+Iterator` away.
 
 **`Self.Item` is exempt, and that exemption is what `TypeDyn.assoc_types`
 buys.** `Self` cannot be recovered once a value is coerced — that is what the

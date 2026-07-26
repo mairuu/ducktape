@@ -2521,23 +2521,49 @@
   yielding an iterator to flatten needs the projection-through-a-bound codegen
   the wart above describes).
 
-  **Combinators are free functions, not `Iterator` methods** — `collect(map(it,
-  f))`, not `it.map(f).collect()`. Two things blocked the method form, and one is
-  now fixed. (a) *Name resolution*: a method returning an adapter (`-> Map<Self,
-  B>`) and the adapter naming the trait back (`struct Map<I: Iterator>`) is a
-  definition cycle that source-ordered resolution could not close. This is fixed
-  in a separate commit — `tc_resolve_module` is now two sub-passes, a declare
-  pass binding every type name before a body pass fills signatures, so the cycle
-  resolves and a trait method may return a later-defined adapter (`architecture.md`
-  pass 2). (b) *Object safety*, still open: a combinator is generic or returns a
-  `Self`-composed type, so as a trait method it can't sit in a vtable and
-  `trait_check_object_safe` rejects the whole trait for `dyn` use — and this
-  milestone added `dyn Iterator`. The production fix is Rust's `Self: Sized`
-  read as a mechanism: compute object safety over the *dispatchable* method
-  subset only, auto-excluding a provided method that can't be dispatched (not in
-  the vtable, not object-safety-checked, an error to call through a `dyn`). With
-  that, map/filter/collect move onto `Iterator` and `dyn Iterator` survives. Not
-  done here; the free functions are the honest interim.
+  **Combinators are free functions here, not `Iterator` methods** — `collect(map(it,
+  f))`, not `it.map(f).collect()`. Two things blocked the method form; both are
+  now fixed (the method form is milestone 48). (a) *Name resolution*: a method
+  returning an adapter (`-> Map<Self, B>`) and the adapter naming the trait back
+  (`struct Map<I: Iterator>`) is a definition cycle that source-ordered
+  resolution could not close. Fixed in a separate commit — `tc_resolve_module` is
+  now two sub-passes, a declare pass binding every type name before a body pass
+  fills signatures, so the cycle resolves and a trait method may return a
+  later-defined adapter (`architecture.md` pass 2). (b) *Object safety*: a
+  combinator is generic or returns a `Self`-composed type, so as a trait method
+  it can't sit in a vtable and `trait_check_object_safe` rejected the whole trait
+  for `dyn` use — and this milestone added `dyn Iterator`. Milestone 48 partitions
+  it (below).
+
+- **Partition object safety, combinators as methods (milestone 48)** — the
+  method form the two notes above were waiting on: `it.map(f).filter(p).collect()`,
+  each a provided method on `Iterator`. The one mechanism it needed is Rust's
+  `Self: Sized` read structurally: **object safety decided one method at a time.**
+
+  `trait_check_object_safe` used to reject a trait the moment any method was
+  undispatchable. Now a *provided* undispatchable method is **excluded** from the
+  vtable rather than fatal — only a *required* one still sinks the trait (there
+  would be no body to reach). The single dispatchability test moved into
+  `trait_method_undispatchable` (the three conditions object safety already used)
+  and is cached on `TraitMethodDef.undispatchable` when the signature resolves, so
+  codegen and the checker read one answer. Three touch-points follow from the
+  flag: `cg_vtable_for` skips an excluded slot (leaving `NULL`, round-tripped
+  through the image as the sentinel `0xFFFFFFFF`); `check_trait_method_call`
+  rejects a call to an excluded method through a `TY_DYN` receiver, before codegen
+  can meet that `NULL`; and the vtable stays one-slot-per-method so
+  `OP_DYN_METHOD`'s index is still a plain position.
+
+  The partition falls out cleanly on `Iterator`: `map` (own type parameter) and
+  `filter` (`Self`-shaped return) are excluded, while `collect` — returning
+  `[Self.Item]`, a projection the trait object still names (the milestone 27
+  exemption) — stays **dispatchable**, so `dyn Iterator` not only survives but
+  *gains* `.collect()`. `std::iter`'s three free functions became default methods
+  on the trait; the adapters are unchanged. `tests/run/iter_combinators.dt` is the
+  chained method form plus `dyn Iterator.collect()`;
+  `tests/fail/dyn_excluded_method.dt` is `.map()` on a `dyn` rejected at the call;
+  `in_fixed.dt`'s combinator line is now the method chain. Design: `language.md`
+  "Trait objects" object-safety paragraph + "Iterators" → combinators,
+  `architecture.md` "Trait objects", `runtime.md` "Trait objects" + image format.
 
 ## Next (in recommended order)
 
@@ -2561,11 +2587,12 @@ by appetite rather than by necessity.
 
 (**The first iterator combinators** — `map`/`filter`/`collect` — are now
 milestone 47, along with driving a bounded generic or a `dyn Iterator` through
-`for`. They are ordinary `.dt` code (an adapter is a struct with an `impl
-Iterator`); the one compiler change was inference, so a closure typed by the
-source's `Item` projection can be checked. `fold`/`enumerate`/`zip`/`take` are
-the same adapter shape when wanted; `flat_map` waits on the
-projection-through-a-bound codegen wart.)
+`for`; milestone 48 moved them onto `Iterator` as methods (`it.map(f).collect()`)
+by partitioning object safety per method. They are ordinary `.dt` code (an
+adapter is a struct with an `impl Iterator`); the one compiler change in 47 was
+inference, so a closure typed by the source's `Item` projection can be checked.
+`fold`/`enumerate`/`zip`/`take` are the same adapter shape when wanted;
+`flat_map` waits on the projection-through-a-bound codegen wart.)
 
 (**Padding a rendered value to a width** was the last open piece here and is now
 milestone 34: `std::string` ships `pad_start`/`pad_end`/`pad_center`. The

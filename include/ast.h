@@ -314,6 +314,14 @@ typedef struct {
   int self_index; // position of `self` in method_type, -1 => assoc function
   bool has_default;
 
+  // signature is not vtable-dispatchable (no `self`, own type parameters, or
+  // `Self` outside the receiver), so this method is left out of any `dyn`
+  // vtable — a provided one is excluded silently, a required one makes the
+  // trait non-object-safe. Set once when the signature is resolved; read by
+  // codegen (which skips the slot) and the checker (which rejects a call
+  // through a `dyn`). See `trait_method_undispatchable`.
+  bool undispatchable;
+
   // the default body as a definition of its own: a generic function whose
   // first type parameter is `Self`, bounded by this trait. NULL if required.
   // `method_type` keeps the abstract `Self` (a TY_TRAIT) — it is what impl

@@ -597,7 +597,13 @@ monomorphised globals are, and for the same reason: which `(trait, type)`
 pairs a program needs is a property of its coercion sites. `Mono.vtables`
 memoises the compile-time key so two coercions of one type to one trait share
 a table; the slot is reserved *before* the table is filled, since compiling a
-method body can reach the same pair again (`mono_request` does the same).
+method body can reach the same pair again (`mono_request` does the same). One
+slot per trait method, indexed by position — but a method the trait **excluded
+from dispatch** (an undispatchable *provided* method, e.g. `Iterator::map`) gets
+no target: `cg_vtable_for` skips it, leaving the slot `NULL`. The checker has
+already forbidden reaching it through the `dyn`, so the `NULL` is never indexed;
+keeping the slot (rather than compacting the table) is what keeps
+`OP_DYN_METHOD`'s index the method's plain position.
 Note what the runtime `VTable` does **not** hold: the trait and the self type.
 Those are compiler bookkeeping the VM never reads — the serialization rule,
 one level over. **Nor does it hold the associated-type bindings.** A
@@ -845,7 +851,7 @@ strings  [u32 len, len bytes]*        — every name and string constant
 structs  [u32 name, u8 is_tuple, u16 field_count, u32 field_name*]
 enums    [u32 name, u16 variant_count,
             [u32 name, u8 is_tuple, u16 field_count, u32 field_name*]*]
-vtables  [u16 method_count, u32 fun_index*]*
+vtables  [u16 method_count, u32 fun_index*]*   (0xFFFFFFFF == excluded slot)
 funs     [u32 name, u16 param_count, u8 has_chunk,
             u32 code_len, code_len bytes,
             u32 const_count, const*]*  — globals first, then closures
@@ -877,7 +883,10 @@ already carry a slot the VM resolves through `exe`, and the tables are written
 in slot order. Variant tags are positional, exactly as `exe_assign_tags` assigns them.
 A vtable is likewise written as bare function indices: which trait and which
 self type it was built for is compile-time bookkeeping, so it is not in the
-image at all. Vtables sit between the data definitions and the code — they
+image at all. An **excluded** slot (a `NULL` where the trait left an
+undispatchable provided method out of dispatch) has no function to index, so it
+goes out as the sentinel `0xFFFFFFFF` — out of range for any real globals index
+— and decodes back to `NULL`. Vtables sit between the data definitions and the code — they
 only point *into* globals, which already exist, and being decoded before any
 chunk means an `OP_MAKE_DYN` operand is valid as soon as code carrying it can
 run.

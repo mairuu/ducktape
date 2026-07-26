@@ -1367,6 +1367,14 @@ static int cg_vtable_for(Cg *cg, Type *trait_ref, Type *self, Span span) {
       (DynVTable){.trait = trait_ref, .self_type = self, .index = index};
 
   for (int i = 0; i < trait->method_count; i++) {
+    // a provided method the trait excluded from dispatch (object safety
+    // partitioned per method — a combinator like `map`) gets no slot: the
+    // checker already forbids reaching it through the `dyn`, so the NULL is
+    // never read. Building one would mean instantiating a body whose own type
+    // parameters the coercion site cannot supply.
+    if (trait->methods[i].undispatchable) {
+      continue;
+    }
     FunDef *target =
         cg_dyn_slot_target(cg, trait_ref, self, trait->methods[i].name, span);
     if (target == NULL) {
