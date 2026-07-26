@@ -2642,6 +2642,44 @@
   a `dyn Iterator` still does not satisfy an `I: Iterator` bound, which milestone
   47 special-cased for `for` only. Neither is a projection problem.
 
+- **`flat_map` and `skip` (milestone 51)** — spending the unblock milestone 50
+  bought, and finding where the next wall is. Both are provided methods on
+  `Iterator` with an ordinary adapter behind them, so the compiler is untouched;
+  this milestone is `std/iter.dt` and tests.
+
+  `flat_map(f)` maps each element to a whole iterator and yields those end to
+  end. `FlatMap` holds two cursors — the source's, and whichever inner iterator
+  the closure last produced (`cur: Option<J>`, `None` between them) — so `next`
+  is a loop over "drain the current one, and when it is spent ask the source for
+  another". **This is the combinator that was waiting on machinery rather than
+  on appetite**: its `type Item = J.Item` is a projection over a type
+  *parameter*, and until milestone 50 such a projection could not survive
+  substitution to key the instantiation a call compiles to. It type-checked
+  before and failed at codegen; nothing about it changed except that codegen can
+  now finish the thought. `skip(n)` is the mirror of `take` and needed nothing:
+  the dropping happens on the first `next()`, so the adapter costs nothing until
+  driven, and a source shorter than `n` simply ends (zeroing the countdown so a
+  later `next()` does not re-drive it).
+
+  Both are excluded from a `dyn Iterator` vtable by the milestone-48 partition —
+  `flat_map` has a type parameter of its own, `skip` returns a `Self`-shaped
+  adapter — and both are *provided*, so the trait stays object-safe and
+  `dyn Iterator` keeps `.collect()`. `d.skip(1)` on a trait object is refused at
+  the call with the reason, which is the partition working rather than a gap.
+
+  **Where the wall is now: `chain`.** The obvious third combinator here —
+  yield one sequence then another — cannot be written, and not for want of
+  machinery this time. `Chain<I, J>` must bind `type Item = I.Item`, so
+  `self.b.next()` returns `Option<J.Item>` where `Option<I.Item>` is wanted, and
+  there is no way to *say* the two are the same: a bound constrains a type
+  parameter, and an associated-type bound (`J: Iterator<Item = I.Item>`) has no
+  spelling. That is the same missing feature a `sum`/`max`-shaped reduce wants
+  (`I.Item: Ord`), so it now has two concrete consumers rather than one
+  hypothetical. `tests/run/iter_flat_map.dt` covers both new combinators
+  including the empty-inner, empty-source and skip-past-the-end edges;
+  `in_fixed.dt` gains a `flat_map(..).skip(..)` line. Design: `language.md`
+  "Iterators" → combinators.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -2670,7 +2708,8 @@ adapter is a struct with an `impl Iterator`); the one compiler change in 47 was
 inference, so a closure typed by the source's `Item` projection can be checked.
 `fold`/`enumerate`/`zip`/`take` are milestone 49, the same adapter shape;
 `flat_map` waited on the projection-through-a-bound codegen wart, which
-milestone 50 closes, so it is now just an adapter nobody has written.)
+milestone 50 closes and milestone 51 spends, adding it and `skip`. What is left
+is `chain`, and it waits on a *bound* rather than on machinery — see item 2.)
 
 (**Padding a rendered value to a width** was the last open piece here and is now
 milestone 34: `std::string` ships `pad_start`/`pad_end`/`pad_center`. The
@@ -2702,7 +2741,26 @@ settles the rest, without an expected type.)
 recorded — how many `Ord` methods the operator names — was answered `cmp` only,
 the smaller entanglement, matching how `Display` names exactly `to_string`.)
 
-2. **A custom equality trait (`Eq`), if a consumer ever needs it.** Not on the
+2. **A bound on an associated type** (`J: Iterator<Item = I.Item>`, or
+   `I: Iterator<Item: Ord>`). A bound constrains a type *parameter*; there is no
+   way to constrain what an impl binds that parameter's associated type to. The
+   `dyn` side already has the spelling — `dyn Iterator<Item = Int>` writes an
+   equality binding, and `TypeDyn.assoc_types` stores exactly that table — so
+   the question is whether a bound can carry the same list, and whether
+   `impl_index_implements` can check it (an equality binding is a comparison
+   after `infer_apply`; a *trait* binding like `Item: Ord` is a second
+   `impl_index_implements` on the projected type).
+
+   This is now the binding constraint on std breadth rather than a hypothetical:
+   it has two concrete consumers, found by writing the things that need it.
+   `chain(other)` needs `J.Item` to *be* `I.Item` — without it, `Chain`'s `next`
+   cannot return the second source's element where the first's type is declared
+   (milestone 51). A reduce like `sum`/`max`/`min` needs `I.Item: Ord` or a
+   numeric bound, which is why milestone 49's `fold` takes the operation as a
+   closure and no bounded reduce exists. Both are one feature away, and neither
+   is a projection problem — milestone 50 closed that one.
+
+3. **A custom equality trait (`Eq`), if a consumer ever needs it.** Not on the
    main line, and deliberately deferred rather than planned — recorded here so
    the reasoning survives. `==`/`!=` stay a structural primitive: `OP_EQ` reads
    no static type, so `a == b` works on any value — Int, struct, generic `T` —
@@ -2775,9 +2833,10 @@ via `Module.decl_base`) and is not part of the main line.
   is **closed as of milestone 50**: `assoc_apply` gives codegen the collapse
   `infer_apply` was doing for the checker, and `cg_subst` applies it at every
   site that substitutes. What remains is narrower and is *not* the same problem:
-  there is no way to *bound* an associated type (`I: Iterator` cannot say
-  `I.Item: Ord`), so a reduce keyed on `Ord`/`+` over the element fails in the
-  checker for want of a spelling rather than at codegen for want of a type
+  there is no way to *bound* an associated type — `I: Iterator` can say neither
+  `I.Item: Ord` nor `J: Iterator<Item = I.Item>` — so a reduce keyed on `Ord`/`+`
+  over the element, and `chain`, fail in the checker for want of a spelling
+  rather than at codegen for want of a type. That is "Next" item 2
 - an impl's own type-param bounds are checked at selection (milestone 20), but
   *coherence* is deliberately blind to them: `impl<T: Ord> Ord for Option<T>`
   and an `impl Ord for Option<Widget>` conflict even though no receiver could

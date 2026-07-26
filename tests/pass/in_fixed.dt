@@ -346,4 +346,8 @@ fun main() {
     # `Filter`, so `I.Item` is a projection over a projection, collapsed at the
     # instantiation rather than left abstract
     var biggest = head(Countdown::from(9).filter(|k| => k % 3 == 0));
+    # `flat_map`/`skip` (milestone 51). `flat_map` maps each element to a whole
+    # iterator and yields those end to end — its adapter's `Item` is `J.Item`,
+    # a projection over a type *parameter*, which is what milestone 50 unblocked
+    var flat = Countdown::from(3).flat_map(|k| => Countdown::from(k)).skip(1).collect();
 }

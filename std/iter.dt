@@ -52,6 +52,18 @@ pub trait Iterator {
         return Filter { inner: self, pred: pred };
     }
 
+    # Map each element to a whole *iterator* and yield those flattened end to
+    # end. `map` with a closure returning an iterator would give a sequence of
+    # sequences; this drains each one before pulling the next element.
+    #
+    # This is the combinator that waited on machinery rather than on appetite:
+    # its adapter's element type is `J.Item`, a projection over a *bound
+    # parameter*, and until milestone 50 a projection could not survive to
+    # codegen to key an instantiation.
+    fun flat_map<J: Iterator>(self, f: fun(Self.Item) -> J) -> FlatMap<Self, J> {
+        return FlatMap { inner: self, f: f, cur: Option::None };
+    }
+
     # Drain into an array, in order — the eager end of a pipeline. The element
     # annotation seeds the array's type from `Self.Item` (an empty literal has
     # nothing else to infer it from) and `push` grows it. A `while` over
@@ -73,6 +85,13 @@ pub trait Iterator {
     # countdown of its own.
     fun take(self, n: Int) -> Take<Self> {
         return Take { inner: self, remaining: n };
+    }
+
+    # Drop the first `n` elements and yield the rest. The mirror of `take`, and
+    # lazy in the same way: nothing is pulled until the first `next()`, which is
+    # then the call that does the dropping.
+    fun skip(self, n: Int) -> Skip<Self> {
+        return Skip { inner: self, remaining: n };
     }
 
     # Pair each element with its position: `(0, a), (1, b), ...`. The element
@@ -173,6 +192,78 @@ impl<I: Iterator> Iterator for Take<I> {
         if self.remaining <= 0 { return Option::None; }
         self.remaining -= 1;
         return self.inner.next();
+    }
+}
+
+# `Skip` discards the first `remaining` elements, then becomes a pass-through.
+# The dropping happens on the first `next()` rather than when the adapter is
+# built, so `skip` costs nothing until the sequence is actually driven — and a
+# source shorter than `n` simply ends.
+pub struct Skip<I: Iterator> {
+    inner: I,
+    remaining: Int,
+}
+
+impl<I: Iterator> Iterator for Skip<I> {
+    type Item = I.Item;
+
+    fun next(self) -> Option<I.Item> {
+        while self.remaining > 0 {
+            self.remaining -= 1;
+            match self.inner.next() {
+                Option::Some(x) => { },
+                # the source ran out mid-skip: nothing is left to yield, and
+                # zeroing the countdown keeps a later `next()` from re-driving it
+                Option::None => {
+                    self.remaining = 0;
+                    return Option::None;
+                },
+            }
+        }
+        return self.inner.next();
+    }
+}
+
+# `FlatMap` holds two cursors: the source's, and the one belonging to whichever
+# iterator the closure most recently produced. `cur` is that inner iterator, or
+# `None` between them — so `next` is a loop over "drain the current one, and
+# when it is spent, ask the source for another".
+#
+# Its `Item` is `J.Item`: the element type of an iterator named only by a type
+# *parameter*. That is a projection whose base is itself a parameter, which is
+# why this adapter could not be written before milestone 50 — the checker was
+# always fine with it, but codegen could not key an instantiation on it.
+pub struct FlatMap<I: Iterator, J: Iterator> {
+    inner: I,
+    f: fun(I.Item) -> J,
+    cur: Option<J>,
+}
+
+impl<I: Iterator, J: Iterator> Iterator for FlatMap<I, J> {
+    type Item = J.Item;
+
+    fun next(self) -> Option<J.Item> {
+        while true {
+            match self.cur {
+                Option::Some(it) => {
+                    match it.next() {
+                        Option::Some(x) => { return Option::Some(x); },
+                        # that one is spent — fall through to pull another seed
+                        Option::None => { self.cur = Option::None; },
+                    }
+                },
+                Option::None => {
+                    match self.inner.next() {
+                        Option::Some(seed) => {
+                            self.cur = Option::Some((self.f)(seed));
+                        },
+                        # both cursors are done, so the sequence is
+                        Option::None => { return Option::None; },
+                    }
+                },
+            }
+        }
+        return Option::None;
     }
 }
 

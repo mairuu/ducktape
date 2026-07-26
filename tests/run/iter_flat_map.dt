@@ -1,0 +1,97 @@
+# `flat_map` and `skip` (milestone 51) — the two combinators left over from
+# milestone 49's list, one of which was waiting on machinery rather than on
+# appetite.
+#
+# `flat_map` maps each element to a whole iterator and yields those end to end.
+# Its adapter's element type is `J.Item` — a projection over a type *parameter*,
+# not over `Self` — which is the shape milestone 50 taught codegen to collapse.
+# Before that it type-checked and then failed to compile.
+#
+# `skip` is the mirror of `take` and needed nothing new.
+use std::iter::Iterator;
+use std::option::Option;
+use std::io::print;
+
+struct Counter { n: Int, max: Int }
+
+impl Counter {
+    fun to(max: Int) -> Counter { Counter { n: 0, max: max } }
+}
+
+impl Iterator for Counter {
+    type Item = Int;
+    fun next(self) -> Option<Int> {
+        if self.n >= self.max { return Option::None; }
+        var v = self.n;
+        self.n += 1;
+        return Option::Some(v);
+    }
+}
+
+# a source of Strings, so the flattened element type is visibly not the source's
+struct Words { i: Int }
+
+impl Iterator for Words {
+    type Item = String;
+    fun next(self) -> Option<String> {
+        if self.i >= 3 { return Option::None; }
+        var v = self.i;
+        self.i += 1;
+        if v == 0 { return Option::Some("ab"); }
+        if v == 1 { return Option::Some(""); }
+        return Option::Some("c");
+    }
+}
+
+fun main() {
+    # each element seeds an iterator of its own length: [] [0] [0,1] [0,1,2]
+    print(Counter::to(4).flat_map(|n| => Counter::to(n)).collect());
+#> [0, 0, 1, 0, 1, 2]
+
+    # an inner iterator that is always empty flattens to nothing
+    print(Counter::to(4).flat_map(|n| => Counter::to(0)).collect());
+#> []
+
+    # an empty source never asks the closure for anything
+    print(Counter::to(0).flat_map(|n| => Counter::to(3)).collect());
+#> []
+
+    # a constant inner iterator: the source's length times the inner's
+    print(Counter::to(3).flat_map(|n| => Counter::to(2)).collect());
+#> [0, 1, 0, 1, 0, 1]
+
+    # skip: drop the first n, keep the rest
+    print(Counter::to(5).skip(2).collect());
+#> [2, 3, 4]
+
+    # skipping past the end leaves nothing, and does not re-drive the source
+    print(Counter::to(3).skip(10).collect());
+#> []
+
+    # skip(0) is a pass-through
+    print(Counter::to(3).skip(0).collect());
+#> [0, 1, 2]
+
+    # the two ends of the pipeline compose with everything else
+    print(Counter::to(6).skip(1).take(3).collect());
+#> [1, 2, 3]
+    print(Counter::to(4).flat_map(|n| => Counter::to(n)).skip(2).collect());
+#> [1, 0, 1, 2]
+    print(Counter::to(3).flat_map(|n| => Counter::to(2)).map(|x| => x * 10).collect());
+#> [0, 10, 0, 10, 0, 10]
+    print(Counter::to(4).flat_map(|n| => Counter::to(n)).fold(0, |a, x| => a + x));
+#> 4
+
+    # the flattened element type is the *inner* iterator's, not the source's:
+    # an Int source with a String inner yields Strings
+    print(Counter::to(2).flat_map(|n| => Words { i: 0 }).collect());
+#> [ab, , c, ab, , c]
+
+    # and `for` drives a flattened sequence like any other
+    var seen = 0;
+    for x in Counter::to(4).flat_map(|n| => Counter::to(n)) {
+        seen += x;
+    }
+    print(seen);
+#> 4
+}

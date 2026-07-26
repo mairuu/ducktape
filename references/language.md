@@ -428,16 +428,26 @@ var xs = Counter::to(6).map(|x| => x * x).filter(|v| => v > 3).collect();
 for y in Counter::to(3).map(|x| => x + 100) { print(y); }    # 100 101 102
 ```
 
-Alongside them: `take(n)` (at most the first `n`), `enumerate()` (`(index,
-element)` pairs), `zip(other)` (walk two iterators in lockstep, ending with the
-shorter), and `fold(init, f)` (reduce left to right into an accumulator — the
-eager sibling of `map`).
+Alongside them: `take(n)` (at most the first `n`), `skip(n)` (all but the first
+`n`), `enumerate()` (`(index, element)` pairs), `zip(other)` (walk two iterators
+in lockstep, ending with the shorter), `flat_map(f)` (map each element to a
+whole iterator and yield those end to end), and `fold(init, f)` (reduce left to
+right into an accumulator — the eager sibling of `map`).
 
 ```
 var sum   = Counter::to(5).fold(0, |acc, x| => acc + x);          # 10
 var first = Counter::to(100).map(|x| => x * x).take(4).collect(); # [0, 1, 4, 9]
 var pairs = Counter::to(3).zip(Counter::to(2)).collect();         # [(0,0),(1,1)]
+var rest  = Counter::to(5).skip(2).collect();                     # [2, 3, 4]
+var flat  = Counter::to(4).flat_map(|n| => Counter::to(n)).collect();
+#   flat == [0, 0, 1, 0, 1, 2]
 ```
+
+`flat_map` is the one that needed the language rather than the library to move.
+Its adapter's element type is `J.Item` — the element of an iterator named only
+by a type *parameter* — and a projection over a parameter has to survive
+substitution to key the instantiation the call compiles to. The `skip` beside it
+needed nothing new.
 
 Making them methods rather than free functions took the per-method object
 safety above: `map` (a type parameter of its own) and `filter` (a `Self`-shaped
@@ -449,12 +459,16 @@ element is a projection over a projection (`Filter<Counter>.Item` is
 `Counter.Item` is `Int`), which the checker now collapses so a chain like
 `filter(p).map(f)` type-checks. They are ordinary library code — an adapter is a
 struct with a `fun(..)` field and an `impl Iterator`, nothing built into the
-language. A combinator whose closure returns an iterator to flatten (`flat_map`)
-is expressible as of milestone 50 — its element type is a projection over the
-inner iterator's own type parameter, which now survives to codegen — but is not
-written yet. What is still out of reach is a combinator keyed on a *property* of
-the element (`sum`, `max`): a bound can constrain `I`, but there is no way to
-say `I.Item: Ord`, so the constraint the body needs cannot be written down.
+language.
+
+What is still out of reach is a combinator that needs two element types to be
+*the same*, or one to have a property. `chain(other)` — yield one sequence then
+another — wants `J.Item` to be `I.Item`, and a reduce like `sum`/`max` wants
+`I.Item: Ord`; both are constraints on an associated type, and a bound can only
+constrain the type parameter itself. `I: Iterator<Item = Int>` is spellable on a
+`dyn`, but not as a bound, so the constraint these bodies need cannot be written
+down. That is one missing feature holding back two combinators, not two
+problems.
 
 ## Modules
 
