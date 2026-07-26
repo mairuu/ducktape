@@ -1,0 +1,28 @@
+#! expect: does not satisfy 'Self.Item: Ord'
+# `max` is a provided method carrying `where Self.Item: Ord`, which is one of
+# the reasons a method is undispatchable — the coercion cannot know whether the
+# bound holds. Milestone 56 lets it be called on a trait object anyway, because
+# the body is monomorphised at `Self = dyn Iterator<Item = Pt>` rather than
+# reached through the vtable, and *that* site can read the binding off the type.
+#
+# So the predicate is discharged here rather than waived: `Pt` has no `Ord`, and
+# this is the error the old blanket rejection used to hide behind a complaint
+# about dispatch.
+use std::iter::Iterator;
+use std::option::Option;
+use std::cmp::Ord;
+use std::io::print;
+
+struct Pt { x: Int }
+
+struct Points { n: Int }
+
+impl Iterator for Points {
+    type Item = Pt;
+    fun next(self) -> Option<Pt> { return Option::None; }
+}
+
+fun main() {
+    var d: dyn Iterator<Item = Pt> = Points { n: 0 };
+    print(d.max().unwrap().x);
+}

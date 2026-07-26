@@ -4829,18 +4829,19 @@ static Type *check_trait_method_call(CheckCtx *ctx, Expr *expr, Type *trait_ref,
   ExprMethodCall *mc = &expr->as.method_call;
   TraitDef *trait = trait_ref->as.trait.def;
 
-  // a trait object can only reach the methods in its vtable: a provided method
-  // that was excluded for not being dispatchable (a combinator like `map`) has
-  // no slot to call through, even though it type-checks fine on a concrete or
-  // bounded receiver. Reject it here rather than let codegen meet a NULL slot.
-  if (self_ty->kind == TY_DYN && tm->undispatchable) {
-    diag_error(ctx->diags, expr->span,
-               "method '" SV_FMT "' cannot be called through 'dyn " SV_FMT
-               "' because %s — call it on a concrete or bounded receiver",
-               SV_ARG(mc->method_name), SV_ARG(trait->name),
-               trait_method_undispatchable(tm, trait));
-    return ctx->tc->t_poison;
-  }
+  // A provided method object safety left out of the vtable used to be rejected
+  // here, because a trait object could only reach what its table carried.
+  // Milestone 56 removed that: the table is not the only way in. Such a method
+  // is a generic function over `Self`, so codegen instantiates its body at
+  // `Self = dyn Trait` exactly as it does for any other bounded receiver (see
+  // compile_method_call). Keeping the rejection once a `dyn` satisfied its own
+  // bound would have made `d.map(f)` an error while `f(d)` — passing the same
+  // value to a `<I: Iterator>` function that calls `it.map(f)` — compiled the
+  // very same body.
+  //
+  // An *associated function* is still refused just below, and that is the one
+  // undispatchable shape no instantiation can rescue: there is no receiver to
+  // carry the value at all.
 
   if (tm->self_index < 0) {
     diag_error(ctx->diags, expr->span,
@@ -5318,13 +5319,13 @@ static Type *resolve_for_iterator(CheckCtx *ctx, Expr *for_expr,
 
   // gate nominally: the type has to be an `Iterator`. (The trait is preluded,
   // so `iter` is NULL only if `std::iter` failed to load — treated as "not an
-  // iterator".) A `dyn Iterator` *is* the trait rather than implementing it
-  // through an impl in the index, so it is admitted directly — codegen drives
-  // it through its vtable.
-  bool is_iterator =
-      iter != NULL &&
-      ((iter_ty->kind == TY_DYN && dyn_trait_def(iter_ty) == iter) ||
-       impl_index_implements(ctx->impls, iter_ty, iter_ref, ctx->al));
+  // iterator".) A `dyn Iterator` used to need a second disjunct here — it *is*
+  // the trait rather than implementing it through an impl in the index, and
+  // the index was the only thing asked. Milestone 56 moved that answer into
+  // `impl_index_implements` itself, where every other bound reads it too, so
+  // the special case is gone and `for` gates on exactly one question again.
+  bool is_iterator = iter != NULL && impl_index_implements(ctx->impls, iter_ty,
+                                                           iter_ref, ctx->al);
   if (!is_iterator) {
     char buf[64];
     type_sprintf(iter_ty, buf, sizeof(buf));
@@ -8141,6 +8142,28 @@ static Type *impl_index_assoc_type(ImplIndex *idx, Type *self_type,
     return NULL;
   }
 
+  if (self_type->kind == TY_DYN) {
+    // a trait object states what each of its associated types *is* — that is
+    // what makes two `dyn Iterator`s one type — so the binding is read off the
+    // value's own type rather than searched for in the index, where the
+    // coercion left nothing behind. The table is total and in the trait's
+    // declaration order (see TYNODE_DYN), so the name picks the slot.
+    //
+    // This is the one lookup that makes `I.Item` collapse when `I` is
+    // instantiated at a trait object: subst_apply and infer_apply both project
+    // through here, so `where I.Item: Ord` and the loop variable's type are
+    // answered by the same edit.
+    TraitDef *trait = dyn_trait_def(self_type);
+    for (int i = 0;
+         i < trait->assoc_type_count && i < self_type->as.dyn.assoc_type_count;
+         i++) {
+      if (sv_equal(trait->assoc_types[i].name, name)) {
+        return self_type->as.dyn.assoc_types[i];
+      }
+    }
+    return NULL;
+  }
+
   for (int i = 0; i < idx->count; i++) {
     ImplDef *impl = idx->all[i];
     if (impl->assoc_type_count == 0 || impl->self_type == NULL ||
@@ -8792,6 +8815,23 @@ bool impl_index_implements(ImplIndex *idx, Type *type, Type *trait_ref,
       }
     }
     return false;
+  }
+  if (type->kind == TY_DYN) {
+    // a trait object neither has an impl nor was promised anything: it *is*
+    // the trait, so it satisfies exactly the one it names. Milestone 13 put
+    // the coercion this way already — "a trait object is a bound whose
+    // witness travels with the value instead of being resolved" — and this is
+    // that sentence read in the other direction. Trait references are
+    // interned, so the comparison covers the trait's type arguments too; the
+    // *associated* bindings are not part of the question, because they are
+    // part of the type (`impl_index_assoc_type` reads them off it).
+    //
+    // Object safety does not enter. It partitions which methods a *vtable*
+    // can carry, and a bound reaches more than the vtable does: a required
+    // method is dispatchable by the time `dyn Trait` was writable at all,
+    // and a provided one is a generic function over `Self` that codegen
+    // monomorphises at `Self = dyn Trait` — see compile_method_call.
+    return types_equal(type->as.dyn.trait, trait_ref);
   }
   if (type->kind == TY_ASSOC && type->as.assoc.base->kind == TY_GENERIC) {
     // `T.Item` is abstract for the same reason `T` is, and answers the same

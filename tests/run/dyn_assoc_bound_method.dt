@@ -1,0 +1,45 @@
+# A method whose signature carries `where Self.Item: Ord` cannot sit in a `dyn`
+# vtable, and joins `map`/`filter`/`skip` in the milestone-48 partition. The
+# reason is what a vtable is: it is built where the value is *coerced*, and
+# whether the bound holds is a question about the concrete type and the impls
+# visible at that point — precisely what the coercion throws away.
+#
+# This file used to conclude from that that `d.max()` was an error. Milestone 56
+# says the conclusion does not follow: the vtable is not the only way to reach a
+# provided method. Its body is a generic function over `Self`, so it is
+# monomorphised at `Self = dyn Iterator<Item = Int>` — and *that* site can read
+# the binding off the trait object's own type and ask whether `Int: Ord`, which
+# it is. The coercion never had to know.
+#
+# So the partition still describes the vtable exactly; it just no longer
+# describes what a program may call.
+#> [0, 1, 2]
+#> None
+#> Some(2)
+use std::iter::Iterator;
+use std::option::Option;
+use std::cmp::Ord;
+use std::io::print;
+
+struct Counter { n: Int, max: Int }
+
+impl Iterator for Counter {
+    type Item = Int;
+    fun next(self) -> Option<Int> {
+        if self.n >= self.max { return Option::None; }
+        var v = self.n;
+        self.n += 1;
+        return Option::Some(v);
+    }
+}
+
+fun main() {
+    var d: dyn Iterator<Item = Int> = Counter { n: 0, max: 3 };
+    print(d.collect());
+    # `collect` drained it, so this one is empty — the trait object is a single
+    # mutable iterator, not a fresh one per call.
+    print(d.max());
+
+    var e: dyn Iterator<Item = Int> = Counter { n: 0, max: 3 };
+    print(e.max());
+}

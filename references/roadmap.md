@@ -2956,6 +2956,81 @@
   `tests/fail/unary_not_numeric.dt` used to say `-` requires a number and now
   reports a missing `impl Neg`.
 
+- **A trait object satisfies its own bound (milestone 56)** — `first(d)` where
+  `d: dyn Iterator<Item = Int>` and `first` takes an `I: Iterator` compiles.
+  Design: `architecture.md` "Trait objects", `language.md` "Trait objects".
+
+  The observation the milestone turns on was already written down, in milestone
+  13's own words: **"a trait object is a bound whose witness travels with the
+  value instead of being resolved."** That sentence describes a *coercion* there.
+  Read in the other direction it describes a *bound*, and the code had never
+  taken it that way — `impl_index_implements` searched the impl index for a
+  `dyn Iterator`, found no `impl Iterator for dyn Iterator`, and reported that
+  the trait object of `Iterator` does not implement `Iterator`.
+
+  So the fix is a third early return next to the two that were already there.
+  That function answers in registers: a concrete type searches the index, a
+  `TY_GENERIC` reads the parameter's own declared bounds, a `T.Assoc` over one
+  reads its `where` clauses. A `TY_DYN` is the most direct of the four — it has
+  no impl and was promised nothing, because it *is* the trait — so the answer is
+  `types_equal(dyn.trait, trait_ref)`, which covers the trait's type arguments
+  for free since trait references are interned.
+
+  Two things follow, and the second is the whole design question:
+  - **The associated bindings come off the value, not the index.**
+    `impl_index_assoc_type` reads a `TY_DYN`'s own table, where the coercion left
+    nothing behind. Because `subst_apply` and `infer_apply` both project through
+    that one function, this is what collapses `I.Item` to `Int` everywhere at
+    once — a `for` loop's variable, `collect`'s element type, and the
+    `where I.Item: Ord` a combinator carries.
+  - **The object-safe subset governs the vtable, not the bound.** This is the
+    question the milestone was recorded as blocked on ("a trait object can only
+    witness the object-safe subset"), and the answer is that it never had to
+    bite. A method reached on a `T: Trait` receiver instantiated at `dyn Trait`
+    splits: a *required* one goes through the vtable, and object safety already
+    guarantees it is dispatchable, or `dyn Trait` would not have been writable.
+    A *provided* one is a generic function over `Self`, so monomorphising its
+    body at `Self = dyn Trait` compiles it like any other instance and the
+    `self.next()` calls inside dispatch through the table on their own.
+    Dispatchability never enters, because nothing goes through a slot.
+
+  That last one was also a live miscompile: codegen's `TY_DYN` branch was
+  unconditional, so `it.map(f)` under `I = dyn Iterator` emitted `OP_DYN_METHOD`
+  into the slot object safety deliberately leaves empty and the VM pushed a NULL
+  function — a segfault, reproduced before the fix. Codegen now branches on
+  `undispatchable` and takes `TraitMethodDef.default_impl` instead.
+
+  **Two special cases died, which is the measure of whether the rule is the
+  right one.** `resolve_for_iterator` had carried a second disjunct admitting a
+  `dyn Iterator` by trait-def identity (milestone 47) precisely because the
+  bound would not; it now gates on one question. And
+  `check_trait_method_call`'s rejection of an excluded method through a `TY_DYN`
+  receiver went too — keeping it would have made `d.map(f)` an error while
+  `f(d)`, handing the same value to a `<I: Iterator>` function whose body is
+  `it.map(f)`, compiled the very same code. Its diagnostic had even advised
+  "call it on a concrete or bounded receiver", which by then named a workaround
+  producing identical output. What is still refused is an *associated function*:
+  no receiver means no value to carry, the one undispatchable shape no
+  instantiation rescues.
+
+  Two existing `tests/fail` entries became `tests/run` entries, their premises
+  inverted rather than their expectations adjusted:
+  `dyn_excluded_method.dt` (asserting `d.map(..)` was an error) and
+  `dyn_assoc_bound_method.dt` (asserting `d.max()` was, because "whether the
+  bound holds is a question about the concrete type ... precisely what the
+  coercion throws away"). The premise is true of the vtable and false of the
+  bound; the *call site* can read `Item` off the trait object and ask whether it
+  is `Ord`. So the predicate is now discharged rather than waived, and
+  `tests/fail/dyn_bound_assoc_unsatisfied.dt` is the case where it genuinely
+  fails — an error the old blanket rejection used to hide behind a complaint
+  about dispatch.
+
+  The one cost worth recording: a concrete impl that *overrides* an excluded
+  provided method is bypassed through a trait object, since nothing vtable-less
+  can see it — `dyn Iterator`'s `map` is always `Iterator::map`. Rust makes the
+  same trade for the same reason, and it is confined to methods the vtable
+  cannot carry.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -3259,6 +3334,11 @@ via `Module.decl_base`) and is not part of the main line.
 - a trait object cannot be made from the abstract `Self` of a default body:
   `check_coerce_dyn` refuses a `TY_TRAIT`, so `self` inside a default body
   can't be handed on as a `dyn Trait` even when the trait is object-safe
+- an impl that **overrides a provided method the vtable excludes** is bypassed
+  through a trait object: nothing outside the table can find it, so `dyn
+  Iterator`'s `map` is `Iterator::map` even for a type that wrote its own
+  (milestone 56). Rust behaves the same way, and it is confined to exactly the
+  methods object safety could not carry
 - no downcast from `dyn Trait` back to a concrete type
 - a trait's type arguments are never *inferred* at the place the trait is
   named: an impl head, a bound and a `dyn` each write them out, and a bare

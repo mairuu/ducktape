@@ -1,0 +1,25 @@
+#! expect: type 'dyn Display' does not implement trait 'Ord'
+# The milestone-56 rule is "a trait object *is* the trait it names", not "a
+# trait object satisfies any bound". A `dyn Display` carries a Display vtable
+# and witnesses nothing else, so an `Ord` bound is still unmet — which is the
+# same answer the impl index gave before, arrived at without searching it.
+use std::cmp::Ord;
+use std::fmt::Display;
+use std::io::print;
+
+struct Tag;
+
+impl Display for Tag {
+    fun to_string(self) -> String { return "tag"; }
+}
+
+fun biggest<T: Ord>(a: T, b: T) -> T {
+    if a > b { return a; }
+    return b;
+}
+
+fun main() {
+    var a: dyn Display = Tag;
+    var b: dyn Display = Tag;
+    print(biggest(a, b));
+}

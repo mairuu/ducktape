@@ -1,0 +1,22 @@
+#! expect: does not satisfy 'I.Item = String'
+# A trait object satisfies the trait it names (milestone 56), and nothing more.
+# Its associated bindings are part of the type, so they are checked against the
+# bound's equality clause the same way a concrete impl's are — the trait object
+# is the one thing in the language that states them itself.
+use std::iter::Iterator;
+use std::option::Option;
+use std::io::print;
+
+struct Counter { n: Int }
+
+impl Iterator for Counter {
+    type Item = Int;
+    fun next(self) -> Option<Int> { return Option::None; }
+}
+
+fun joined<I: Iterator<Item = String>>(it: I) -> Int { return 0; }
+
+fun main() {
+    var d: dyn Iterator<Item = Int> = Counter { n: 0 };
+    print(joined(d));
+}

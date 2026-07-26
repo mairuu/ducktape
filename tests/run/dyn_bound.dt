@@ -1,0 +1,77 @@
+# A trait object satisfies its own bound (milestone 56). `dyn Iterator<Item =
+# Int>` is not a type with an `impl Iterator` in the index — it *is* the trait,
+# so `impl_index_implements` answers from the type itself and a `<I: Iterator>`
+# function accepts one.
+#
+# The associated bindings come off the value's type rather than off an impl,
+# which is what collapses `I.Item` to `Int` here — the loop variable, the
+# `where I.Item: Ord` and the element type of `collect` are all that one lookup.
+#> 3
+#> 3
+#> [0, 2, 4]
+#> 7
+#> 106
+#> 3
+#> [1, 2, 3]
+use std::io::print;
+use std::iter::Iterator;
+use std::option::Option;
+use std::cmp::Ord;
+
+struct Counter { n: Int, max: Int }
+
+impl Iterator for Counter {
+    type Item = Int;
+    fun next(self) -> Option<Int> {
+        if self.n >= self.max { return Option::None; }
+        var v = self.n;
+        self.n += 1;
+        return Option::Some(v);
+    }
+}
+
+# the plain case: a bounded parameter driven by `for`, which is the shape
+# milestone 47 had to special-case because the bound itself would not admit a
+# trait object. The special case is gone; this is an ordinary instantiation
+# at `I = dyn Iterator<Item = Int>`.
+fun total<I: Iterator<Item = Int>>(it: I) -> Int {
+    var n = 0;
+    for x in it {
+        n += x;
+    }
+    return n;
+}
+
+# a `where` on the projection, discharged against the binding the trait object
+# carries: `dyn Iterator<Item = Int>.Item` is `Int`, and `Int: Ord`.
+fun largest<I: Iterator>(it: I) -> Option<I.Item> where I.Item: Ord {
+    return it.max();
+}
+
+fun main() {
+    var a: dyn Iterator<Item = Int> = Counter { n: 0, max: 3 };
+    print(total(a));
+
+    var b: dyn Iterator<Item = Int> = Counter { n: 1, max: 4 };
+    print(largest(b).unwrap());
+
+    # an adapter over a trait object: `Map<dyn Iterator<Item = Int>, Int>`'s
+    # own `I: Iterator` bound is satisfied by the same rule, so the recursion
+    # closes rather than bottoming out at the coercion.
+    var c: dyn Iterator<Item = Int> = Counter { n: 0, max: 3 };
+    print(c.map(|x| => x * 2).collect());
+
+    var d: dyn Iterator<Item = Int> = Counter { n: 0, max: 5 };
+    print(d.filter(|x| => x > 2).sum().unwrap());
+
+    var e: dyn Iterator<Item = Int> = Counter { n: 1, max: 4 };
+    print(e.fold(100, |acc, x| => acc + x));
+
+    # the trait object also flows on *into* another bounded generic, one level
+    # further from the coercion site.
+    var f: dyn Iterator<Item = Int> = Counter { n: 0, max: 3 };
+    print(total(f));
+
+    var g: dyn Iterator<Item = Int> = Counter { n: 1, max: 4 };
+    print(g.collect());
+}

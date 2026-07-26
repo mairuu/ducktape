@@ -1168,14 +1168,31 @@ resolves and cached on `TraitMethodDef.undispatchable`.
 **Object safety is partitioned per method, not all-or-nothing.** A
 non-dispatchable method sinks the trait only if it is *required*; a *provided*
 one (a default body) is instead **excluded from the vtable** — codegen skips its
-slot (leaving `NULL`, round-tripped through the image as a sentinel index), and
-`check_trait_method_call` rejects a call to it through a `TY_DYN` receiver
-before that `NULL` can be reached. So a trait may carry generic convenience
-methods and stay object-safe: `Iterator`'s `map`/`filter` are excluded (a type
-parameter, a `Self`-shaped return) while `collect` — dispatchable, its
-`[Self.Item]` return a projection the object still names — stays in the vtable,
-which is exactly what lets the combinators be methods without taking `dyn
-Iterator` away.
+slot, leaving `NULL`, round-tripped through the image as a sentinel index. So a
+trait may carry generic convenience methods and stay object-safe: `Iterator`'s
+`map`/`filter` are excluded (a type parameter, a `Self`-shaped return) while
+`collect` — dispatchable, its `[Self.Item]` return a projection the object still
+names — stays in the vtable, which is exactly what lets the combinators be
+methods without taking `dyn Iterator` away.
+
+**The partition governs the vtable, not what a program may call** (milestone
+56). An excluded method used to be rejected at the call, because the vtable was
+the only way in. It is not: a provided method is a generic function over `Self`
+(`TraitMethodDef.default_impl`, see "Trait default bodies"), so
+`compile_method_call` instantiates its body at `Self = dyn Trait` instead of
+emitting `OP_DYN_METHOD` into the empty slot, and the `self.next()` calls inside
+it dispatch through the table on their own. `d.map(f)` therefore runs. The
+`NULL` slot is still never read — codegen branches on `undispatchable` before
+reaching for it — but the branch is now a choice of strategy rather than a
+guard behind a checker rejection.
+
+Two consequences worth stating plainly. A method excluded for
+`self_assoc_bound_count` (`max`, carrying `where Self.Item: Ord`) has its
+predicate *discharged* at the instantiation rather than waived: the call site can
+read `Item` off the trait object's own type and ask the question the coercion
+could not. And a concrete impl that *overrides* an excluded provided method is
+bypassed — nothing vtable-less can see it, so `dyn Iterator`'s `map` is always
+`Iterator::map`. Rust makes the same trade for the same reason.
 
 **`Self.Item` is exempt, and that exemption is what `TypeDyn.assoc_types`
 buys.** `Self` cannot be recovered once a value is coerced — that is what the
@@ -1233,6 +1250,34 @@ folded into its type, so the node keeps saying what it *is*. That is the same
 collect-then-consume shape `inst` uses for monomorphisation, and for the same
 reason: at the moment the coercion is discovered the type may still be an
 unsolved unknown, and codegen is the consumer either way.
+
+**A trait object satisfies its own bound** (milestone 56), which is the sentence
+above — "a bound whose witness travels with the value" — read in the other
+direction. `impl_index_implements` already answers in three registers: a
+concrete type searches the impl index, a `TY_GENERIC` reads the parameter's own
+declared bounds, a `T.Assoc` over one reads its `where` clauses. A `TY_DYN` is
+the fourth and the most direct — it has no impl and was promised nothing,
+because it *is* the trait — so the answer is `types_equal(dyn.trait,
+trait_ref)`. Trait references are interned, so that covers the trait's type
+arguments; the *associated* bindings are not part of the question, because they
+are part of the type.
+
+`impl_index_assoc_type` is the other half: for a `TY_DYN` it reads the binding
+off the value's own type rather than searching an index the coercion left
+nothing in. Because `subst_apply` and `infer_apply` both project through that
+one function, this is what collapses `I.Item` to `Int` everywhere at once — the
+loop variable of a `for` over a bounded parameter, the element type of
+`collect`, and the `where I.Item: Ord` a combinator carries.
+
+Two special cases died with it. `resolve_for_iterator` had carried a second
+disjunct admitting a `dyn Iterator` by trait-def identity (milestone 47), since
+the index was the only thing it asked; it now gates on the one question. And
+`check_trait_method_call`'s rejection of an excluded method through a `TY_DYN`
+receiver went too — keeping it would have made `d.map(f)` an error while
+`f(d)`, handing the same value to a `<I: Iterator>` function that calls
+`it.map(f)`, compiled the very same body. What is still refused there is an
+*associated function*: no receiver means no value to carry, which is the one
+undispatchable shape no instantiation rescues.
 
 **Poison convention:** on error, emit one `diag_error` and return
 `t_poison`; poison operands propagate silently so one mistake produces one

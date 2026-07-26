@@ -221,9 +221,11 @@ ending in `return` has type `!` (never), which unifies with anything.
   whether the bound holds is a question about the concrete type and the impls
   visible where the value was coerced, which is exactly what the coercion
   erased — so it joins `map`/`filter` in the per-method object-safety
-  partition, and `dyn Iterator` keeps `collect` while refusing `max` at the
-  call. A bound on `Self` *itself* (`where Self: Ord`) is rejected: that is a
-  supertrait, which ducktape does not have.
+  partition. It is still callable on a trait object, since the body is
+  compiled at `Self = dyn Trait` instead of dispatched, and the clause is
+  discharged there against the binding the object states. A bound on `Self`
+  *itself* (`where Self: Ord`) is rejected: that is a supertrait, which
+  ducktape does not have.
 
   A `where` may otherwise appear on a `fun` — free or in an impl block — and
   on an `impl` itself, where every method inside may rely on it.
@@ -343,15 +345,48 @@ Object safety is decided **one method at a time**. A method that isn't
 dispatchable is fatal only if it is **required**: there would be no body to
 reach and no default to fall back on. A **provided** method (one with a default
 body) that isn't dispatchable is simply *excluded from the vtable* — the trait
-stays object-safe, and calling that method through a `dyn` is a clean error
-naming the method and the reason (`tests/fail/dyn_excluded_method.dt`), while it
-still type-checks on a concrete or bounded receiver. This is what lets a trait
-carry generic convenience methods and remain a `dyn`: `Iterator`'s `map`/
-`filter` are excluded (a type parameter, a `Self`-shaped return) and so are
-`max`/`min` (a bound on `Self.Item`), yet `dyn Iterator` is a type, and
-`collect` — dispatchable, since `[Self.Item]` is a projection the object still
-names — stays callable through it. See "Iterators" below,
-`tests/run/iter_combinators.dt` and `tests/fail/dyn_assoc_bound_method.dt`.
+stays object-safe. This is what lets a trait carry generic convenience methods
+and remain a `dyn`: `Iterator`'s `map`/`filter` are excluded (a type parameter,
+a `Self`-shaped return) and so are `max`/`min` (a bound on `Self.Item`), yet
+`dyn Iterator` is a type, and `collect` — dispatchable, since `[Self.Item]` is a
+projection the object still names — stays in the table. See "Iterators" below
+and `tests/run/iter_combinators.dt`.
+
+Being excluded from the vtable does **not** make a method uncallable. A provided
+method is a generic function over `Self`, so calling it on a trait object
+compiles its body at `Self = dyn Trait` rather than dispatching through a slot,
+and the calls it makes on `self` go through the table on their own. `d.map(f)`,
+`d.max()` and `d.fold(..)` all run
+(`tests/run/dyn_excluded_method.dt`, `tests/run/dyn_assoc_bound_method.dt`).
+A `where Self.Item: Ord` is then *checked* at that call rather than skipped —
+the trait object states what `Item` is, so the question can finally be asked
+(`tests/fail/dyn_bound_assoc_unsatisfied.dt`). The one thing still out of reach
+is an **associated function**: with no `self` there is no value to carry, and no
+instantiation rescues that.
+
+The exclusion has one visible consequence. If a concrete impl writes its own
+version of an excluded method, a trait object will not find it — nothing outside
+the vtable can — so `dyn Iterator`'s `map` is always `Iterator::map`, even for a
+type that overrode it. Rust behaves the same way.
+
+**A `dyn Trait` satisfies `T: Trait`.** A trait object is a bound whose witness
+travels with the value, so it meets the bound naming that trait — it *is* the
+trait, rather than implementing it:
+
+```
+fun total<I: Iterator<Item = Int>>(it: I) -> Int { .. }
+
+var d: dyn Iterator<Item = Int> = Counter { n: 0, max: 3 };
+print(total(d));   # 3
+```
+
+It satisfies that trait and no other: a `dyn Display` still fails a `T: Ord`
+bound. Its associated bindings are part of the type, so they are checked
+against the bound's own clauses — a `dyn Iterator<Item = Int>` does not satisfy
+`I: Iterator<Item = String>` — and they are what a `where I.Item: Ord`
+discharges against. See `tests/run/dyn_bound.dt`,
+`tests/fail/dyn_bound_wrong_trait.dt` and
+`tests/fail/dyn_bound_item_mismatch.dt`.
 
 **A `Self.Item` is the exception, and it is named at the `dyn`:**
 
@@ -552,7 +587,9 @@ language.
 two elements requires `Self.Item: Ord`, which only a `where` on the method's
 signature can say. They are excluded from a `dyn Iterator` vtable for the
 reason that clause implies — the bound is about the concrete type the coercion
-erased — so a trait object keeps `collect` and refuses `max` at the call.
+erased. A trait object calls them anyway: the body is compiled at
+`Self = dyn Iterator<Item = ..>`, and that site *can* read `Item` off the type
+and ask whether it is `Ord`, which is the question the coercion could not.
 
 `sum`/`product` are the same shape one trait over (`where Self.Item: Add` /
 `Mul`), and they are what the operator traits unlocked: before `std::ops` a `+`
@@ -569,8 +606,10 @@ associated types, not a trait they both satisfy —
 which `J: Iterator<Item = Self.Item>` is exactly. Like `map` it carries a type
 parameter of its own, so it is excluded from a `dyn Iterator` vtable.
 
-What is still out of reach is `sum`, and for a different reason than any of
-these: there is no `Add` trait, so `+` on an element has nothing to bound.
+What is left in this direction is breadth with no design question behind it —
+`any`, `all`, `find`, `position`, `count`, `for_each`, `take_while`,
+`skip_while` — plus `rev`, which does have one: reversing needs an iterator
+that can be driven from both ends.
 
 ## Modules
 

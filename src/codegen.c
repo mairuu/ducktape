@@ -1509,26 +1509,49 @@ static void compile_method_call(Cg *cg, Expr *expr) {
         cg_error(cg, expr->span, "this method call");
         return;
       }
-      // OP_DYN_METHOD leaves [fun, receiver], so the arguments push straight
-      // on top of it and the ordinary OP_CALL below closes the call.
-      compile_expr(cg, mc->object);
-      emit2(cg, OP_DYN_METHOD, (uint8_t)index);
-      for (int i = 0; i < mc->arg_count; i++) {
-        compile_expr(cg, mc->args[i]);
+
+      // A provided method object safety left out of the vtable has no slot to
+      // dispatch through — but it does not need one. It is a generic function
+      // over `Self` (TraitMethodDef.default_impl), so instantiating it at
+      // `Self = dyn Trait` compiles a body like any other, and the `self.m()`
+      // calls inside it become vtable dispatches on their own. That is why a
+      // trait object can satisfy the whole bound and not just the dispatchable
+      // part of it: the vtable is what the *subset* governs.
+      //
+      // The cost is that this reaches the trait's default rather than an
+      // override the concrete impl may have written for the same name, which
+      // no vtable-less path can see. Rust makes the same trade for the same
+      // reason (`dyn Iterator`'s `map` is `Iterator::map`).
+      if (trait->methods[index].undispatchable) {
+        fun = trait->methods[index].default_impl;
+        if (fun == NULL) {
+          // unreachable: a *required* undispatchable method makes the trait
+          // non-object-safe, so no `dyn Trait` exists to have got here.
+          cg_error(cg, expr->span, "this method call");
+          return;
+        }
+      } else {
+        // OP_DYN_METHOD leaves [fun, receiver], so the arguments push straight
+        // on top of it and the ordinary OP_CALL below closes the call.
+        compile_expr(cg, mc->object);
+        emit2(cg, OP_DYN_METHOD, (uint8_t)index);
+        for (int i = 0; i < mc->arg_count; i++) {
+          compile_expr(cg, mc->args[i]);
+        }
+        emit2(cg, OP_CALL, (uint8_t)(mc->arg_count + 1));
+        return;
       }
-      emit2(cg, OP_CALL, (uint8_t)(mc->arg_count + 1));
-      return;
-    }
+    } else {
+      // which trait the bound named, in this instantiation's terms: two impls
+      // of one generic trait for one type differ only here.
+      Type *trait_ref = cg_subst(cg, mc->bound_trait);
 
-    // which trait the bound named, in this instantiation's terms: two impls
-    // of one generic trait for one type differ only here.
-    Type *trait_ref = cg_subst(cg, mc->bound_trait);
-
-    fun = cg_bound_target(cg, self, trait_ref, mc->method_name, &impl_subst,
-                          expr->span);
-    if (fun == NULL) {
-      cg_error(cg, expr->span, "this method call");
-      return;
+      fun = cg_bound_target(cg, self, trait_ref, mc->method_name, &impl_subst,
+                            expr->span);
+      if (fun == NULL) {
+        cg_error(cg, expr->span, "this method call");
+        return;
+      }
     }
   } else if (mc->resolved_default != NULL) {
     // the receiver's impl omitted the method: the body is the trait's default,
