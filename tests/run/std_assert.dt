@@ -1,0 +1,65 @@
+# std::assert — the passing path, and what it does not evaluate.
+#> checked
+#> checked
+#> checked
+#> built once
+#> checked
+#> checked
+#> checked
+#> checked
+#> checked
+
+use std::io::print;
+use std::fmt::Display;
+use std::assert::{assert, assert_with, assert_else, assert_eq, assert_ne};
+
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+impl Display for Point {
+    fun to_string(self) -> String {
+        return "({self.x}, {self.y})";
+    }
+}
+
+fun noisy() -> String {
+    print("built once");
+    return "never used";
+}
+
+fun main() {
+    assert(1 + 1 == 2);
+    print("checked");
+
+    assert_with(true, "unreachable");
+    print("checked");
+
+    # The closure does not run: nothing between here and the next `print` may
+    # emit "built once". `assert_with` below is the contrast — its argument is
+    # an ordinary expression, so it is built whether or not it is needed.
+    assert_else(true, || => noisy());
+    print("checked");
+    assert_with(true, noisy());
+    print("checked");
+
+    # `==` is structural, so the comparison itself needs no impl at all; the
+    # `Display` bound is what renders a mismatch, and every argument below has
+    # one for that reason alone.
+    assert_eq(7, 7);
+    assert_eq("abc", "abc");
+    assert_eq(3.5, 3.5);
+    print("checked");
+
+    assert_eq([1, 2, 3], [1, 2, 3]);
+    assert_eq((1, "a"), (1, "a"));
+    print("checked");
+
+    assert_eq(Point { x: 1, y: 2 }, Point { x: 1, y: 2 });
+    print("checked");
+
+    assert_ne(1, 2);
+    assert_ne(Point { x: 1, y: 2 }, Point { x: 2, y: 1 });
+    print("checked");
+}

@@ -1,0 +1,10 @@
+#! expect: no room: 10 of 8 used
+# The closure is not run on the passing path (tests/run/std_assert.dt pins
+# that); on the failing one it is, and its result is the panic message.
+use std::assert::assert_else;
+
+fun main() {
+    var used = 10;
+    var cap = 8;
+    assert_else(used <= cap, || => "no room: {used} of {cap} used");
+}

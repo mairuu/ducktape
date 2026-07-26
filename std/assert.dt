@@ -1,0 +1,89 @@
+# std::assert — stating what you believe, and stopping when it is wrong.
+#
+# Everything here is a thin wrapper over `std::panic`, so the only real
+# questions this module answers are about *shape*: where it lives, what a
+# failure is allowed to say, and which of those messages costs something when
+# the assertion holds.
+#
+# **Why a module of its own.** These five functions would fit inside
+# `std::panic` on any measure of size, and they still must not live there:
+# `assert_eq` needs `Display` to *report* a failure, impl visibility is
+# transitive, and so folding it in would hand every program that only wanted
+# `panic("...")` the whole of `std::fmt`'s impls — and with them coherence's
+# refusal to let it write its own `impl Display for Int`. That is the same
+# argument `std::cmp` makes about where `impl Ord for String` belongs: with
+# transitive visibility an import is measured in impls, not in code, so the
+# dependency points at the impl-poor module. `assert` imports `panic`; `panic`
+# must never import `assert`.
+#
+# **An assertion cannot name itself.** Rust's `assert!` is a macro so that a
+# failure can quote the source text back at you — `assertion failed: a == b`,
+# with `a == b` copied from the call. ducktape has no macros, and a function
+# sees a `Bool`, not the expression that produced it. So the message from
+# `assert` is the fixed "assertion failed" and cannot ever be more, and saying
+# more means saying it yourself. That is exactly the split `Option` already
+# has between `unwrap` and `expect`, forced here by the same absence: nothing
+# in the language lets a callee describe its own argument.
+#
+# **Arguments are evaluated.** `assert_with(ok, "index {i} of {n}")` builds
+# that string on every call, including all the ones that pass — the cost a
+# macro would have hidden. `assert_else` is the way out, and it is the shape
+# `std::option` already chose for the same reason: `unwrap_or` takes a value,
+# `unwrap_or_else` takes a closure, and the second exists precisely because
+# the first cannot decline to evaluate.
+#
+# **`assert_eq` is bounded, and `==` is not.** Comparing the two values needs
+# nothing at all: `==` lowers to `OP_EQ`, which reads no static type and walks
+# any pair of values structurally, so a `T` with no impls whatsoever can be
+# checked for equality. The entire `T: Display` bound below is bought by the
+# failure *message* — the runtime can render any value, but only to stdout,
+# and `panic` takes a `String` that nothing structural produces. So the bound
+# is on the reporting, not on the comparison, and `assert_eq` is a consumer
+# of equality that specifically does *not* motivate an `Eq` trait: it wants a
+# way to print, which it has.
+#
+# **An assertion always runs.** There is no conditional compilation, so
+# nothing here is a debug-only check that vanishes from a release build; an
+# `assert` in a hot loop is a branch in a hot loop. Treat these as ordinary
+# code that happens to end the program, not as free annotations.
+
+use std::fmt::Display;
+use std::panic::panic;
+
+# The bare check. Its message is fixed, for the reason above — reach for
+# `assert_with` the moment "assertion failed" is not enough to locate it.
+pub fun assert(condition: Bool) {
+    if not condition {
+        panic("assertion failed");
+    }
+}
+
+# `assert` with a message of your own, the way `expect` is `unwrap` with one.
+pub fun assert_with(condition: Bool, message: String) {
+    if not condition {
+        panic(message);
+    }
+}
+
+# `assert_with` for a message that costs something to build: the closure runs
+# only on the failing path.
+pub fun assert_else(condition: Bool, message: fun() -> String) {
+    if not condition {
+        panic(message());
+    }
+}
+
+# The two values are compared structurally; the bound renders them if they
+# differ. The message reads as the claim that turned out to be false, with the
+# values substituted in — `assert_eq(1, 2)` reports `1 == 2`.
+pub fun assert_eq<T: Display>(left: T, right: T) {
+    if left != right {
+        panic("assertion failed: {left} == {right}");
+    }
+}
+
+pub fun assert_ne<T: Display>(left: T, right: T) {
+    if left == right {
+        panic("assertion failed: {left} != {right}");
+    }
+}

@@ -1,0 +1,12 @@
+#! expect: expected a positive count, got -3
+# Saying more than "assertion failed" means saying it yourself. The message is
+# an ordinary interpolated String, built before the call like any argument.
+use std::assert::assert_with;
+
+fun check(n: Int) {
+    assert_with(n > 0, "expected a positive count, got {n}");
+}
+
+fun main() {
+    check(-3);
+}

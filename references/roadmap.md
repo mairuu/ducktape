@@ -3031,6 +3031,60 @@
   same trade for the same reason, and it is confined to methods the vtable
   cannot carry.
 
+- **`std::assert` (milestone 57)** — `assert`, `assert_with`, `assert_else`,
+  `assert_eq`, `assert_ne`. Design: `language.md` "`std::assert`".
+
+  **Zero compiler change, and the first milestone in a while that is only a
+  `.dt` file.** Everything it needed had already landed: `Never` and `panic`
+  (37), the `Display` bound and interpolation through a type parameter (20),
+  closures as parameters (long before). What was left was the decisions, and
+  there are three.
+
+  - **An assertion cannot name itself.** Rust's `assert!` is a macro *for this
+    reason* — a macro sees the source text `a == b` and can put it in the
+    message. A ducktape function sees a `Bool`. So `assert(cond)`'s message is
+    the fixed "assertion failed" and no amount of work inside the function can
+    improve it; saying more means the caller saying it, which is
+    `assert_with`. That is the same split `Option` already has between `unwrap`
+    and `expect`, and it is worth noticing it comes from the same absence twice:
+    a callee cannot describe its own argument, whether the argument is a value
+    it cannot render or an expression it never saw.
+  - **Arguments are evaluated, so laziness needs a closure.** `assert_with(ok,
+    "index {i} of {n}")` builds that string on every passing call — precisely
+    the cost a macro hides. `assert_else` takes a `fun() -> String` instead, and
+    the shape is not new: it is `unwrap_or` / `unwrap_or_else`, chosen for the
+    same reason a third time. `tests/run/std_assert.dt` pins the difference by
+    *observing* it — the closure's body prints, so laziness is an output diff
+    rather than a claim.
+  - **The bound is on the reporting, not on the comparison.** `assert_eq<T:
+    Display>` looks like it needs `Display` to be an equality function, and it
+    does not: `==` lowers to `OP_EQ`, which reads no static type at all, so two
+    values of a type with no impls compare fine. The bound is bought entirely by
+    the failure message — the runtime can render any value, but only to stdout,
+    and `panic` takes a `String` no native produces from a structural walk.
+    `tests/fail/assert_eq_needs_display.dt` is that seam: a `Widget` the
+    comparison would accept and the message cannot name.
+
+  That last point is the milestone's contribution to item 2 below. `assert_eq`
+  is the closest thing to a *consumer* of equality std has, and it turns out to
+  argue **against** an `Eq` trait rather than for one: what it wanted from the
+  language was a way to print, not a way to compare. A hash map keyed by user
+  types would still be the real test.
+
+  **It is a module of its own, and would be even at five short functions.**
+  `Display` drags in `std::fmt`'s impls, impl visibility is transitive, so
+  folding these into `std::panic` would hand a program that only wanted
+  `panic("...")` every `impl Display for` in std — and with them coherence's
+  refusal to let it write its own. That is `std::cmp`'s argument about where
+  `impl Ord for String` belongs, applied again: an import is measured in impls,
+  not in code, so the dependency points at the impl-poor module. `assert`
+  imports `panic`; the reverse would be the expensive direction.
+
+  Recorded as a limitation rather than fixed: there is **no conditional
+  compilation**, so an assertion is ordinary code that always runs and always
+  costs. Nothing here is a debug-only check that disappears from a release
+  build, and the language has no notion of one to hang it on.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -3108,6 +3162,14 @@ combinator direction is breadth with no design question behind it — `any`,
 plus `rev`, which *does* have one, since reversing needs an iterator that can be
 driven from both ends.)
 
+(**`std::assert`** is milestone 57, and is the shape "breadth" takes when a
+piece needs no registry entry at all: five functions over `std::panic`, zero
+compiler change, and the only decisions are where they live and which messages
+cost something when the assertion holds. Its findings — that a callee cannot
+name its own argument without macros, and that `assert_eq`'s `Display` bound is
+bought by the *message* rather than the comparison — belong to item 2 as much
+as here.)
+
 2. **A custom equality trait (`Eq`), if a consumer ever needs it.** Not on the
    main line, and deliberately deferred rather than planned — recorded here so
    the reasoning survives. Since milestone 55 it is the *only* operator that is
@@ -3124,7 +3186,11 @@ driven from both ends.)
    `Display`/`Ord`-for-`[T]` wart applied to `==` — and (c) cost a monomorphised
    call where an opcode
    stands now, all to buy *custom* equality that would need specialisation (which
-   the language does not have) to coexist with the structural default. Nothing
+   the language does not have) to coexist with the structural default.
+   Milestone 57 supplies the nearest thing to a consumer std has, and it lands
+   on the *other* side: `assert_eq<T: Display>` compares with `OP_EQ` on any `T`
+   whatsoever and spends its only bound on rendering the two values, so what it
+   wanted from the language was a way to *print*, not a way to compare. Nothing
    needs custom equality yet, so `Eq` waits for a concrete consumer — a hash map
    keyed by user types, or a first type whose equality is genuinely not
    structural. The `PartialEq`/`PartialOrd` split waits with it; its one live

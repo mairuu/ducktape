@@ -762,11 +762,12 @@ involved.
 `use std::cmp;` needs no install path, environment variable or search
 directory. `std::` never touches the filesystem, so a local `std.dt` is
 unreachable. Where ducktape cannot express the operation, a module declares a
-bodyless function bound to C (see "Native functions" below); `std::cmp`,
-`std::convert`, `std::ops`, `std::option`, `std::result` and `std::text` need
-none, `std::io` and `std::panic` are nothing but, and `std::array`,
-`std::string`, `std::strbuf` and `std::char` are the mixed case — a handful of
-natives, and every other function written on top of them in ducktape.
+bodyless function bound to C (see "Native functions" below); `std::assert`,
+`std::cmp`, `std::convert`, `std::ops`, `std::option`, `std::result` and
+`std::text` need none, `std::io` and `std::panic` are nothing but, and
+`std::array`, `std::string`, `std::strbuf` and `std::char` are the mixed case —
+a handful of natives, and every other function written on top of them in
+ducktape.
 
 **There is a small prelude.** Every program implicitly imports `Option`
 (`std::option`), `Result` (`std::result`), `Ord` (`std::cmp`), `Display`
@@ -788,6 +789,51 @@ A std module is an ordinary module in every other respect: it is deduplicated,
 takes part in the dependency graph, honours `pub`, and is loaded **only if
 some `use` names it** — a program that ignores std pays nothing. Naming a std
 module that does not exist is an error listing the ones that do.
+
+### `std::assert`
+
+```
+pub fun assert(condition: Bool)                       # "assertion failed"
+pub fun assert_with(condition: Bool, message: String)
+pub fun assert_else(condition: Bool, message: fun() -> String)
+pub fun assert_eq<T: Display>(left: T, right: T)      # "assertion failed: 1 == 2"
+pub fun assert_ne<T: Display>(left: T, right: T)
+```
+
+Five wrappers over `std::panic`, so what the module actually decides is shape
+rather than behaviour.
+
+**An assertion cannot name itself.** Rust's `assert!` is a *macro* so that a
+failure can quote the source text back — `assertion failed: a == b`, copied
+from the call. ducktape has no macros, and a function receives a `Bool`, not
+the expression that produced it, so `assert`'s message is the fixed string and
+can never be more. `assert_with` is the way round it, and that is exactly the
+`unwrap`/`expect` split one section down, forced by the same absence.
+
+**Arguments are evaluated**, so `assert_with(ok, "index {i} of {n}")` builds
+that string on the passing calls too — the cost a macro would have hidden.
+`assert_else` takes a closure instead, the shape `unwrap_or` / `unwrap_or_else`
+already established for the same reason.
+
+**`assert_eq` is bounded and `==` is not.** The comparison needs nothing:
+`==` lowers to `OP_EQ`, which reads no static type and walks any pair of values
+structurally, so two values of a type with no impls at all can be compared. The
+whole `T: Display` bound is bought by the failure *message* — the runtime can
+render any value, but only to stdout, and `panic` takes a `String` that nothing
+structural produces. So it is a consumer of equality that specifically does not
+motivate an `Eq` trait (see `roadmap.md` item 2): it wants a way to print, and
+it has one (`tests/fail/assert_eq_needs_display.dt`).
+
+**The module is separate from `std::panic` for one reason**: `Display` brings
+`std::fmt`'s impls, impl visibility is transitive, and a program that only
+wanted `panic("...")` must not inherit them — nor coherence's refusal to let it
+write its own `impl Display for Int`. Same argument `std::cmp` makes about
+where `impl Ord for String` belongs; the dependency points at the impl-poor
+module, so `assert` imports `panic` and never the reverse.
+
+There is **no conditional compilation**, so nothing here vanishes from a
+release build: an `assert` in a hot loop is a branch in a hot loop
+(`tests/run/std_assert.dt`).
 
 ### `std::cmp`
 

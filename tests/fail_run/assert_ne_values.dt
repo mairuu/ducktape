@@ -1,0 +1,8 @@
+#! expect: assertion failed: abc != abc
+# The message reads as the claim that turned out to be false, with the values
+# substituted in — so `assert_ne` reports `!=`, not `==`.
+use std::assert::assert_ne;
+
+fun main() {
+    assert_ne("abc", "abc");
+}

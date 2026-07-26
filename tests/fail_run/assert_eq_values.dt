@@ -1,0 +1,20 @@
+#! expect: assertion failed: (1, 2) == (3, 4)
+# The `Display` bound doing the work it was added for: a struct's own
+# `to_string` renders the mismatch, not the runtime's structural walk.
+use std::assert::assert_eq;
+use std::fmt::Display;
+
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+impl Display for Point {
+    fun to_string(self) -> String {
+        return "({self.x}, {self.y})";
+    }
+}
+
+fun main() {
+    assert_eq(Point { x: 1, y: 2 }, Point { x: 3, y: 4 });
+}

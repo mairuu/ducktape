@@ -1,0 +1,13 @@
+#! expect: type 'Widget' does not implement trait 'Display'
+# The bound is on the *reporting*, not on the comparison: `==` would compare
+# two Widgets happily, since OP_EQ reads no static type. What `assert_eq`
+# cannot do without `Display` is say which two values differed.
+use std::assert::assert_eq;
+
+struct Widget {
+    id: Int,
+}
+
+fun main() {
+    assert_eq(Widget { id: 1 }, Widget { id: 2 });
+}
