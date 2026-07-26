@@ -385,6 +385,44 @@ rule `?` uses for `Ok`/`Err`, so nothing is tied to std's particular `Option`
 beyond its two variants. `break` and `continue` work as in any loop; `continue`
 re-drives `next()`.
 
+The iterable may also be a **bounded generic** or a **trait object**, not just a
+concrete type:
+
+```
+fun count<I: Iterator>(it: I) -> Int {   # driven through the `I: Iterator` bound
+    var n = 0;
+    for x in it { n += 1; }
+    return n;
+}
+var d: dyn Iterator<Item = Int> = Counter::to(5);
+for x in d { print(x); }                 # driven through the vtable
+```
+
+#### Combinators
+
+`std::iter` ships `map`, `filter`, and `collect`. `map` and `filter` are
+**lazy**: each wraps a source iterator in a small adapter that is *itself* an
+`Iterator`, so they chain and only pull as far as they are driven. `collect`
+is the **eager** end — it drains an iterator into an array.
+
+```
+use std::iter::{map, filter, collect};
+
+# square each element, keep those > 3, drain into an array
+var xs = collect(filter(map(Counter::to(6), |x| => x * x), |v| => v > 3));
+#   xs == [4, 9, 16, 25]
+
+for y in map(Counter::to(3), |x| => x + 100) { print(y); }   # 100 101 102
+```
+
+The closures are typed by the source's element: `map`'s `|x| => ...` sees `x`
+at the iterator's `Item` type. They are ordinary library code — an adapter is a
+struct with a `fun(..)` field and an `impl Iterator`, nothing built into the
+language. The one thing the standard library cannot yet express is a combinator
+whose closure returns an iterator to flatten (`flat_map`), or one keyed on the
+element type through a non-native call — both wait on the associated-projection
+limits noted in `architecture.md`.
+
 ## Modules
 
 A program is one root `.dt` file plus every file reachable from it through

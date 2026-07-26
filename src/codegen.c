@@ -609,6 +609,9 @@ static FieldInit *find_field_init(FieldInit *fields, int count, bool is_tuple,
 
 static void compile_expr(Cg *cg, Expr *expr);
 static void compile_closure(Cg *cg, Expr *expr);
+static FunDef *cg_bound_target(Cg *cg, Type *self, Type *trait_ref,
+                               StringView name, Subst *out_impl_subst,
+                               Span span);
 static void compile_destructure(Cg *cg, Pattern *pat, int subject_slot);
 
 static void compile_stmt(Cg *cg, Stmt *stmt) {
@@ -1101,9 +1104,39 @@ static bool cg_emit_target(Cg *cg, FunDef *fun, const Subst *primary,
 static void compile_for_iter(Cg *cg, Expr *expr) {
   ExprFor *for_ = &expr->as.for_expr;
   ExprMethodCall *mc = &for_->next_call->as.method_call;
-  FunDef *next = mc->resolved_method != NULL ? mc->resolved_method->fun
-                                             : mc->resolved_default;
-  if (next == NULL) {
+
+  // Which `next` to call — the same three shapes the checker leaves on any
+  // method call (compile_method_call): a concrete impl method, an inherited
+  // default, or dispatch through a bound. The last is what a `for` over a
+  // generic `I: Iterator` (or a `dyn Iterator`) needs — the checker knew the
+  // receiver only abstractly, so codegen makes it concrete and re-selects the
+  // body, exactly as monomorphisation does for a bounded method call.
+  FunDef *next = NULL;
+  Subst impl_subst = subst_empty();
+  int dyn_index = -1; // >= 0 when the receiver is a trait object
+  if (mc->resolved_method != NULL) {
+    next = mc->resolved_method->fun;
+  } else if (mc->resolved_default != NULL) {
+    next = mc->resolved_default;
+  } else if (mc->bound_trait != NULL) {
+    Type *self = subst_apply(&cg->subst, mc->bound_self, cg->al);
+    if (self->kind == TY_DYN) {
+      // a `dyn Iterator`: the receiver carries the vtable, so the slot is all
+      // codegen picks — `next`'s position in the trait's method list.
+      TraitDef *trait = dyn_trait_def(self);
+      for (int i = 0; i < trait->method_count; i++) {
+        if (sv_equal(trait->methods[i].name, mc->method_name)) {
+          dyn_index = i;
+          break;
+        }
+      }
+    } else {
+      Type *trait_ref = subst_apply(&cg->subst, mc->bound_trait, cg->al);
+      next = cg_bound_target(cg, self, trait_ref, mc->method_name, &impl_subst,
+                             expr->span);
+    }
+  }
+  if (next == NULL && dyn_index < 0) {
     cg_error(cg, expr->span, "this iterator");
     emit(cg, OP_UNIT);
     return;
@@ -1129,16 +1162,24 @@ static void compile_for_iter(Cg *cg, Expr *expr) {
   int loop_start = cg->chunk->count;
   loop.start = loop_start;
 
-  // opt = iter.next() — the receiver is the hidden local, not a re-eval
-  Subst empty = subst_empty();
-  if (!cg_emit_target(cg, next, &mc->inst, &empty, expr->span)) {
-    cg->loop = loop.parent;
-    cg->local_count = saved_locals;
-    emit(cg, OP_UNIT);
-    return;
+  // opt = iter.next() — the receiver is the hidden local, not a re-eval, so its
+  // cursor advances across turns rather than restarting.
+  if (dyn_index >= 0) {
+    // OP_DYN_METHOD pops the trait object and leaves [next, receiver], the shape
+    // OP_CALL already understands; `next` takes only `self`.
+    emit2(cg, OP_GET_LOCAL, (uint8_t)iter_slot); // [iter]
+    emit2(cg, OP_DYN_METHOD, (uint8_t)dyn_index); // [next, recv]
+    emit2(cg, OP_CALL, 1);                        // [opt]
+  } else {
+    if (!cg_emit_target(cg, next, &mc->inst, &impl_subst, expr->span)) {
+      cg->loop = loop.parent;
+      cg->local_count = saved_locals;
+      emit(cg, OP_UNIT);
+      return;
+    }
+    emit2(cg, OP_GET_LOCAL, (uint8_t)iter_slot);     // [next, iter]
+    emit2(cg, OP_CALL, (uint8_t)next->param_count); // [opt]
   }
-  emit2(cg, OP_GET_LOCAL, (uint8_t)iter_slot);
-  emit2(cg, OP_CALL, (uint8_t)next->param_count); // [opt]
 
   // Some -> bind and run the body; None -> exit
   emit2(cg, OP_DUP, 0);                            // [opt, opt]

@@ -8,6 +8,7 @@ use std::array;
 use std::string;               # the module, bound as a qualifier
 use std::fmt::Display;
 use std::convert::{From, Into};
+use std::iter::{map, filter, collect}; # the Iterator trait is preluded; not these
 
 enum Result<T, E> {
     Ok(T),
@@ -321,4 +322,8 @@ fun main() {
     for k in Countdown::from(3) {
         acc += k;
     }
+    # combinators (milestone 47): `map`/`filter` are lazy adapters — each is
+    # itself an `Iterator`, so they chain — and `collect` drains the pipeline
+    # into an array. The closures are typed by the source's `Item`.
+    var evens = collect(filter(map(Countdown::from(6), |k| => k * 2), |v| => v > 4));
 }

@@ -305,9 +305,16 @@ its bytes.
   the flag, `OP_FIELD_GET 0`, `OP_SET_LOCAL` the loop variable, run the body,
   and loop back; on `None` fall through, pop the flag and the `Option`, and pop
   the two locals. The checker put the resolved `next` call (with its
-  instantiation) and the two `Option` variants on the `ExprFor`; the call target
-  is emitted with `cg_emit_target` exactly as a method call would. `continue` is
-  backward (it re-drives `next()`), like a `while`.
+  instantiation) and the two `Option` variants on the `ExprFor`. Which `next` to
+  emit is the same three-way choice `compile_method_call` makes, and it is read
+  the same way: a concrete impl method (`resolved_method`), an inherited default
+  (`resolved_default`), or **dispatch through a bound** when the receiver is only
+  known abstractly — a generic `I: Iterator` (codegen substitutes the receiver
+  to a concrete type and re-runs `cg_bound_target`, monomorphising the body) or a
+  `dyn Iterator` (`OP_DYN_METHOD` picks the slot off the vtable). The last two are
+  what let `for` drive a value whose iterator type the loop cannot see; milestone
+  46 emitted only the concrete case. `continue` is backward (it re-drives
+  `next()`), like a `while`.
 - Calls: push callee (`OP_GET_GLOBAL` or a local), args left-to-right,
   `OP_CALL`, whose callee may be a ducktape function (opens a frame), a
   closure, or a native (runs C in place). A call to an `@intrinsic` is not a

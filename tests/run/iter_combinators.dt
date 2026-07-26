@@ -1,0 +1,81 @@
+# Iterator combinators (milestone 47): `map`/`filter` are lazy adapters,
+# `collect` drains into an array, and a chain of them pulls one element at a
+# time. Also the two `for`-through-a-bound cases the milestone unlocked — a
+# generic `I: Iterator` and a `dyn Iterator` — which milestone 46 left refused
+# by codegen ("this iterator is not supported by the VM yet").
+use std::iter::{Iterator, map, filter, collect};
+use std::option::Option;
+use std::io::print;
+
+# a private advancing cursor, yielding 0, 1, ... max-1
+struct Counter { n: Int, max: Int }
+
+impl Counter {
+    fun to(max: Int) -> Counter { Counter { n: 0, max: max } }
+}
+
+impl Iterator for Counter {
+    type Item = Int;
+    fun next(self) -> Option<Int> {
+        if self.n >= self.max { return Option::None; }
+        var v = self.n;
+        self.n += 1;
+        return Option::Some(v);
+    }
+}
+
+# `for x in it` over a bounded generic drives it through the Iterator bound —
+# the receiver is only known abstractly here, so codegen makes it concrete and
+# re-selects `next` (the same move a bounded method call makes).
+fun count<I: Iterator>(it: I) -> Int {
+    var n = 0;
+    for x in it {
+        n += 1;
+    }
+    return n;
+}
+
+fun main() {
+    # map + collect
+    print(collect(map(Counter::to(5), |x| => x * 10)));
+#> [0, 10, 20, 30, 40]
+
+    # filter + collect
+    print(collect(filter(Counter::to(8), |v| => v % 2 == 0)));
+#> [0, 2, 4, 6]
+
+    # a full pipeline: square, keep > 3, drain — nothing intermediate allocates
+    print(collect(filter(map(Counter::to(6), |x| => x * x), |v| => v > 3)));
+#> [4, 9, 16, 25]
+
+    # a lazy adapter is itself an iterator, so `for` drives it directly
+    for y in map(Counter::to(3), |x| => x + 100) {
+        print(y);
+    }
+#> 100
+#> 101
+#> 102
+
+    # break/continue work through a filtered adapter
+    for w in filter(Counter::to(20), |v| => v % 3 == 0) {
+        if w == 0 { continue; }
+        if w > 9 { break; }
+        print(w);
+    }
+#> 3
+#> 6
+#> 9
+
+    # `for` over a bounded generic (Part 1)
+    print(count(Counter::to(4)));
+#> 4
+
+    # `for` over a `dyn Iterator` — the trait object carries its own vtable
+    var d: dyn Iterator<Item = Int> = Counter::to(5);
+    var total = 0;
+    for x in d {
+        total += x;
+    }
+    print(total);
+#> 10
+}

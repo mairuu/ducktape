@@ -659,15 +659,23 @@ else routes through the `Iterator` lang item (`resolve_for_iterator`, the
   `ord_satisfied` ask — so the diagnostic is "does not implement 'Iterator'"
   (with the unimported-impl / blocking-bound notes) rather than a missing
   method. This is why the design is the *trait*, not a structural "has a
-  `next()`": a bare `next` on an unrelated type does not make it iterable.
+  `next()`": a bare `next` on an unrelated type does not make it iterable. A
+  `dyn Iterator` is admitted directly — it *is* the trait rather than
+  implementing it through an impl in the index — so the gate also accepts a
+  `TY_DYN` whose trait def is the iterator trait, and codegen drives it through
+  the vtable.
 - **Structural unwrap.** The loop synthesises `it.next()` — an `EXPR_METHOD_CALL`
   resolved with `resolve_method_call_typed`, the receiver already typed, exactly
   the Display-interpolation desugar — and reads its result's shape with
   `enum_is_optionish`, the `Some`/`None` sibling of `?`'s `enum_is_resultish`.
   So the checker needs no handle on `Option` beyond the two variants of whatever
-  `next` returns, and `Item` is that `Option`'s type argument. The resolved call
-  and the two variants are recorded on the `ExprFor` node for codegen (see
-  runtime.md); an array/range loop leaves them NULL.
+  `next` returns, and `Item` is that `Option`'s type argument. `Item` is run
+  through `infer_apply` before it becomes the loop variable's type: an adapter
+  whose `type Item = I.Item` yields a *projection* (`Filter<Counter>.Item` is
+  `Counter.Item`), which is concrete but only resolves to the element type once
+  read through the impl. The resolved call and the two variants are recorded on
+  the `ExprFor` node for codegen (see runtime.md); an array/range loop leaves
+  them NULL.
 
 The split is deliberate: the gate is nominal (the trait is the contract), the
 unwrap is structural (the stance `==` and `?` take on a std-shaped value).
@@ -739,6 +747,16 @@ where the value is used. This is what makes `Opt::None` work in every position
 that supplies a hint, including an argument to a *non-generic* function, where
 the parameter is compared with `types_equal` and an unsolved unknown would
 never have been bound.
+
+Call arguments are checked **left to right, each hinted by what the earlier ones
+already solved.** `resolve_call_expr` runs the parameter type through
+`infer_apply` before handing it to the argument as a hint, rather than using the
+raw `param_types[i]`. This matters when one argument's type mentions another's:
+`map(it, |x| => ...)` on `fun(I, fun(I.Item) -> B)` binds `I` from the first
+argument, so the second's hint collapses the projection `I.Item` to the concrete
+element type — and the closure body can be checked at all, since an abstract
+`I.Item` is neither numeric nor comparable. Without the progressive apply the
+projection would stay abstract and the closure could not resolve.
 
 All three spellings of a variant constructor reach the same `EXPR_VARIANT`
 case: `resolve_call_expr` and the struct-init path re-resolve after

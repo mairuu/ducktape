@@ -3212,9 +3212,14 @@ static Type *resolve_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   // check arguments
   bool had_error = false;
   for (int i = 0; i < call->arg_count; i++) {
-    Type *param_ty = callee_ty->as.fun.param_types[i];
-    Type *arg_ty =
-        resolve_expr(ctx, call->args[i], callee_ty->as.fun.param_types[i]);
+    // Fold in what earlier arguments already solved before using this parameter
+    // as the hint: for `map(it, |x| => ...)` on `fun(I, fun(I.Item) -> B)`, the
+    // first argument binds `I`, so the second's hint collapses `I.Item` to the
+    // concrete element type and the closure body checks against it. Without this
+    // the projection stays abstract and the closure cannot be checked.
+    Type *param_ty =
+        infer_apply(&ctx->infer, callee_ty->as.fun.param_types[i], ctx->al);
+    Type *arg_ty = resolve_expr(ctx, call->args[i], param_ty);
 
     if (type_is_poison(arg_ty) || type_is_poison(param_ty)) {
       had_error = true;
@@ -4534,9 +4539,14 @@ static Type *resolve_for_iterator(CheckCtx *ctx, Expr *for_expr,
 
   // gate nominally: the type has to be an `Iterator`. (The trait is preluded,
   // so `iter` is NULL only if `std::iter` failed to load — treated as "not an
-  // iterator".)
-  if (iter == NULL ||
-      !impl_index_implements(ctx->impls, iter_ty, iter_ref, ctx->al)) {
+  // iterator".) A `dyn Iterator` *is* the trait rather than implementing it
+  // through an impl in the index, so it is admitted directly — codegen drives it
+  // through its vtable.
+  bool is_iterator =
+      iter != NULL &&
+      ((iter_ty->kind == TY_DYN && dyn_trait_def(iter_ty) == iter) ||
+       impl_index_implements(ctx->impls, iter_ty, iter_ref, ctx->al));
+  if (!is_iterator) {
     char buf[64];
     type_sprintf(iter_ty, buf, sizeof(buf));
     diag_error(
@@ -4590,7 +4600,11 @@ static Type *resolve_for_iterator(CheckCtx *ctx, Expr *for_expr,
   for_->next_call = call;
   for_->some_variant = some;
   for_->none_variant = none;
-  return ret->as.enm.type_args[0];
+  // Collapse the element type before it becomes the loop variable's: an adapter
+  // whose `type Item = I.Item` yields a projection (`Filter<Counter>.Item` is
+  // `Counter.Item`), which is concrete but unresolved until infer_apply reads it
+  // through the impl — otherwise `x` compares as an abstract `Counter.Item`.
+  return infer_apply(&ctx->infer, ret->as.enm.type_args[0], ctx->al);
 }
 
 static Type *resolve_propagate_expr(CheckCtx *ctx, Expr *expr) {

@@ -12,7 +12,9 @@
 # needs no `use`.
 #
 # A std module gets no prelude of its own, so `Option` is imported here by hand.
+# `collect` builds an array, so `std::array` is imported for its `push` method.
 use std::option::Option;
+use std::array;
 
 @lang("iterator")
 pub trait Iterator {
@@ -21,4 +23,95 @@ pub trait Iterator {
     # The next element, or `None` once the sequence is spent. Advancing the
     # cursor is a side effect: calling `next` again yields the element after.
     fun next(self) -> Option<Self.Item>;
+}
+
+# ── Combinators ──────────────────────────────────────────────────────────────
+#
+# `map` and `filter` are *lazy*: each returns a new iterator that wraps the
+# source and does its work one `next()` at a time, so a chain like
+# `filter(map(it, f), pred)` allocates no intermediate sequence and only ever
+# pulls as far as it is driven. `collect` is the *eager* end of a pipeline — it
+# drains an iterator into an array.
+#
+# An adapter is an ordinary struct with an `impl Iterator`. The source iterator
+# is a field (`inner`), so its cursor is *inside* the adapter and advances in
+# place as the adapter's own `next()` calls it. The transform is a closure held
+# in a `fun(..)` field — nothing here is built into the language; a program can
+# write the same shape. The one thing the compiler had to grow is inference:
+# `map`'s closure parameter is typed `I.Item`, an associated projection, and the
+# first argument (the iterator) is what pins `I` so that projection can collapse
+# to a concrete element type before the closure body is checked.
+
+# `Map` yields `f(x)` for each `x` the source yields. `B` is the mapped element
+# type — the closure's return — carried as a second parameter because nothing
+# can project "the return type of `F`".
+pub struct Map<I: Iterator, B> {
+    inner: I,
+    f: fun(I.Item) -> B,
+}
+
+impl<I: Iterator, B> Iterator for Map<I, B> {
+    type Item = B;
+
+    fun next(self) -> Option<B> {
+        match self.inner.next() {
+            Option::Some(x) => { return Option::Some((self.f)(x)); },
+            Option::None => { return Option::None; },
+        }
+    }
+}
+
+# Adapt `it` so each element is passed through `f`.
+pub fun map<I: Iterator, B>(it: I, f: fun(I.Item) -> B) -> Map<I, B> {
+    return Map { inner: it, f: f };
+}
+
+# `Filter` yields only the elements for which `pred` is true. Its `next` drives
+# the source until one passes, so a single `next()` may pull several — the loop
+# is where laziness earns its keep.
+pub struct Filter<I: Iterator> {
+    inner: I,
+    pred: fun(I.Item) -> Bool,
+}
+
+impl<I: Iterator> Iterator for Filter<I> {
+    type Item = I.Item;
+
+    fun next(self) -> Option<I.Item> {
+        while true {
+            match self.inner.next() {
+                Option::Some(x) => {
+                    if (self.pred)(x) { return Option::Some(x); }
+                },
+                Option::None => { return Option::None; },
+            }
+        }
+        # `while true` never falls through, but the checker reads the loop as
+        # able to end, so a trailing `None` makes every path return.
+        return Option::None;
+    }
+}
+
+# Adapt `it` to skip elements failing `pred`.
+pub fun filter<I: Iterator>(it: I, pred: fun(I.Item) -> Bool) -> Filter<I> {
+    return Filter { inner: it, pred: pred };
+}
+
+# Drain `it` into an array, in order. The element annotation seeds the array's
+# type from the iterator's `Item` — an empty literal has nothing else to infer
+# it from — and `push` (a native, so uniform over the element type) grows it.
+#
+# The drain is a `while` over `it.next()` rather than `for x in it`: `for`'s gate
+# is the `iterator` lang item, which is inert when this file is run by path (it
+# is not the `<std>/` key), so the loop keeps `std::iter` directly runnable. A
+# bound method call needs no lang item.
+pub fun collect<I: Iterator>(it: I) -> [I.Item] {
+    var out: [I.Item] = [];
+    while true {
+        match it.next() {
+            Option::Some(x) => { out.push(x); },
+            Option::None => { return out; },
+        }
+    }
+    return out;
 }

@@ -2453,6 +2453,74 @@
   codegen rejects generic functions. `for` over a concrete iterator is the
   runnable slice, and it is the one that needed the private cursor.
 
+- **Iterators through a bound + the first combinators (milestone 47)** — the two
+  things milestone 46 deferred, and the small inference fix that stood between
+  them. `std::iter` ships `map`, `filter`, `collect`.
+
+  **`for` over a bounded/`dyn` iterator.** Milestone 46 drove only a *concrete*
+  iterator; a `for x in it` where `it` is a generic `I: Iterator` or a
+  `dyn Iterator` hit codegen's "this iterator is not supported by the VM yet".
+  The cause was exactly the one a bounded *method* call already solved: the
+  checker resolves `it.next()` against the trait *signature*, so the node carries
+  `bound_trait`/`bound_self` and no `resolved_method`, and `compile_for_iter`
+  only read the concrete fields. The fix is the three-way target selection
+  `compile_method_call` has had since milestone 10 — concrete method, inherited
+  default, or **dispatch through a bound** (substitute the receiver to a concrete
+  type and re-run `cg_bound_target`, monomorphising the body; or, for a `dyn`,
+  pick the slot off the vtable with `OP_DYN_METHOD`). No new runtime shape: the
+  loop scaffold is unchanged, only *which* `next` it emits. The checker's nominal
+  gate also learned to admit a `dyn Iterator` directly (it *is* the trait rather
+  than implementing it through the index).
+
+  **The combinators are ordinary library code, and that is the whole point.** An
+  adapter is a struct with a `fun(..)` field and an `impl Iterator`; `map`/
+  `filter` are lazy (each wraps its source and pulls one element per `next()`),
+  `collect` drains into a native-backed array. Nothing here is built into the
+  language — a program can write the same shapes — which is milestone 14's claim
+  read once more: a std module needs no compiler support the language doesn't
+  already give a user.
+
+  What *did* need a compiler change was one inference gap, and it is the
+  interesting part. `map`'s closure parameter is typed `I.Item`, an associated
+  projection; the closure body (`|x| => x * 2`) cannot be checked while `x` is an
+  abstract `I.Item` — a projection is neither numeric nor comparable. The element
+  type *is* known — the first argument (the iterator) pins `I` — but
+  `resolve_call_expr` hinted each argument with the raw `param_types[i]`, so the
+  second argument's hint still read `I.Item` after the first had solved `I`. The
+  fix is one `infer_apply` on the parameter type before it becomes the hint:
+  **arguments are checked left to right, each hinted by what the earlier ones
+  solved.** Once `I = Counter`, `I.Item` collapses to `Int` and the closure
+  checks. The mirror fix — `infer_apply` on the `for`-loop's element type — is
+  what lets a `Filter` (whose `type Item = I.Item`) bind a usable loop variable
+  rather than an abstract `Counter.Item`.
+
+  Two design lines worth recording:
+  - **`collect` drains with `while it.next()`, not `for x in it`.** The `for`
+    desugaring's gate is the `iterator` lang item, which is *inert* when a std
+    file is run by path (it is not the `<std>/` key), so a `for` inside
+    `std::iter` would break "every std file is directly runnable" — a property
+    milestone 46 went out of its way to keep. A bound method call needs no lang
+    item, so the `while` form is the one that survives both ways of loading the
+    file.
+  - **The projection-through-a-bound *codegen* wart still stands.** `map`/
+    `filter` take their source apart with `match`, never by handing a projection-
+    typed value to another generic. `it.next().unwrap()` — a projection into the
+    generic `unwrap<T>` — still fails at codegen ("type argument 'T' is not known
+    here"), because codegen has no `infer_apply` to collapse `I.Item` once the
+    base is concrete. The combinators are written to avoid it; the wart is
+    narrowed, not closed.
+
+  Design: `language.md` "Iterators" → combinators, `runtime.md` `compile_for_iter`,
+  `architecture.md` "`for` over an iterator" / "Types and inference".
+  `tests/run/iter_combinators.dt` exercises map/filter/collect, a chained
+  pipeline, `for` over a bounded generic and a `dyn Iterator`, and break/continue
+  through a filter; `in_fixed.dt` gains a combinator line.
+
+  Deliberately left for later: no `fold`/`enumerate`/`zip`/`take` yet (each is
+  the same adapter shape, added when wanted), and no `flat_map` (a closure
+  yielding an iterator to flatten needs the projection-through-a-bound codegen
+  the wart above describes).
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -2472,6 +2540,14 @@ by appetite rather than by necessity.
    each piece is one registry entry plus a decision about the type it needs.
    Every piece with a design question behind it is now done — the last open one,
    padding, is milestone 34 (below).
+
+(**The first iterator combinators** — `map`/`filter`/`collect` — are now
+milestone 47, along with driving a bounded generic or a `dyn Iterator` through
+`for`. They are ordinary `.dt` code (an adapter is a struct with an `impl
+Iterator`); the one compiler change was inference, so a closure typed by the
+source's `Item` projection can be checked. `fold`/`enumerate`/`zip`/`take` are
+the same adapter shape when wanted; `flat_map` waits on the
+projection-through-a-bound codegen wart.)
 
 (**Padding a rendered value to a width** was the last open piece here and is now
 milestone 34: `std::string` ships `pad_start`/`pad_end`/`pad_center`. The
@@ -2571,11 +2647,15 @@ via `Module.decl_base`) and is not part of the main line.
 - `Point::new` vs `Point::<Int>::new`: expression paths require turbofish
 - an associated-type projection cannot key an instantiation **through a
   bound**: handing a `T.Item` / `Self.Item` value to another generic
-  (`id(v.item())`) reports "cannot instantiate 'id': type argument 'T' is not
-  known here", because codegen has no `infer_apply` to collapse the projection
-  once the base is concrete — `subst_apply` passes `TY_ASSOC` through untouched
-  and `impl_index_assoc_type` is checker-side. Affects bounded generic
-  functions and trait default bodies alike. Through a *trait object* it works
+  (`id(v.item())`, or `it.next().unwrap()` where the payload is `I.Item`) reports
+  "cannot instantiate 'id': type argument 'T' is not known here", because codegen
+  has no `infer_apply` to collapse the projection once the base is concrete —
+  `subst_apply` passes `TY_ASSOC` through untouched and `impl_index_assoc_type`
+  is checker-side. Affects bounded generic functions and trait default bodies
+  alike. The *checker* collapses these projections wherever it reads them —
+  including, since milestone 47, a later argument's hint once an earlier argument
+  pins the base, and a `for`-loop's element type — so a projection only bites at
+  codegen when it must key a monomorphisation. Through a *trait object* it works
   (milestone 27): `trait_project` collapses `Self.Item` against the binding the
   `dyn` names, so codegen only ever sees a concrete type
 - an impl's own type-param bounds are checked at selection (milestone 20), but
