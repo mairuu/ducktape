@@ -70,11 +70,21 @@ Three passes over each module, mirroring compiler phases:
    is diagnosed here: every slot space the linker builds is a definition
    table, so a global has nowhere to live.
 2. **resolve** — `tc_link_imports` first (see "Modules"), then
-   `tc_resolve_module`: resolve signatures and types into
-   interned `Type`s; define names in the module's scopes (so declaration
-   order matters). Impls resolve self/trait heads, then associated types in a
-   pre-pass, then method signatures; `impl_index_add` runs before item
-   resolution so `Self.Assoc` is visible to the impl's own methods.
+   `tc_resolve_module`: resolve signatures and types into interned `Type`s.
+   This is itself **two sub-passes** so declaration order does *not* matter: a
+   **declare** pass (`declare_struct_decl`/`declare_enum_decl`/
+   `declare_trait_decl`) binds every top-level type *name* to a head type,
+   then a **body** pass fills fields, variants, method signatures, impls and
+   functions — each free to name a type declared later, including a mutual
+   reference (a trait method returning an adapter struct whose own bound is
+   that trait). A definition's type parameters are resolved once, in the
+   declare pass; the body pass re-enters them by name (`redeclare_type_params`)
+   rather than re-resolving their bounds, so a bad bound is diagnosed once.
+   The one thing still order-sensitive is a type-parameter *bound* itself,
+   since it is resolved in the declare pass (a `struct Map<I: Trait>` needs
+   `Trait` declared earlier). Impls resolve self/trait heads, then associated
+   types in a pre-pass, then method signatures; `impl_index_add` runs before
+   item resolution so `Self.Assoc` is visible to the impl's own methods.
    `resolve_trait_decl` resolves trait item signatures the same way, with
    `Self` bound to the abstract trait type (`ty_trait`): each `TraitMethodDef`
    gets a `method_type` (with `self_index` recording where `self` sits, typed

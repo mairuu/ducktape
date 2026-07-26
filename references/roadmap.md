@@ -2521,6 +2521,24 @@
   yielding an iterator to flatten needs the projection-through-a-bound codegen
   the wart above describes).
 
+  **Combinators are free functions, not `Iterator` methods** — `collect(map(it,
+  f))`, not `it.map(f).collect()`. Two things blocked the method form, and one is
+  now fixed. (a) *Name resolution*: a method returning an adapter (`-> Map<Self,
+  B>`) and the adapter naming the trait back (`struct Map<I: Iterator>`) is a
+  definition cycle that source-ordered resolution could not close. This is fixed
+  in a separate commit — `tc_resolve_module` is now two sub-passes, a declare
+  pass binding every type name before a body pass fills signatures, so the cycle
+  resolves and a trait method may return a later-defined adapter (`architecture.md`
+  pass 2). (b) *Object safety*, still open: a combinator is generic or returns a
+  `Self`-composed type, so as a trait method it can't sit in a vtable and
+  `trait_check_object_safe` rejects the whole trait for `dyn` use — and this
+  milestone added `dyn Iterator`. The production fix is Rust's `Self: Sized`
+  read as a mechanism: compute object safety over the *dispatchable* method
+  subset only, auto-excluding a provided method that can't be dispatched (not in
+  the vtable, not object-safety-checked, an error to call through a `dyn`). With
+  that, map/filter/collect move onto `Iterator` and `dyn Iterator` survives. Not
+  done here; the free functions are the honest interim.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
