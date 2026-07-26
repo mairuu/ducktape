@@ -1,4 +1,8 @@
-#! expect: unary '-' requires a numeric type
+#! expect: cannot apply '-' to a value of type 'String': it does not implement 'Neg'
+# Unary `-` is the same rewrite the binary operators get (milestone 55), with
+# the operand as the receiver and no argument: `-a` is `a.neg()`. A `String` has
+# no `impl Neg`, and since `std::ops` is preluded the failure is about the
+# missing impl rather than about a missing import.
 fun main() {
     var x = -"hello";
 }

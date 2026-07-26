@@ -13,9 +13,12 @@
 #
 # A std module gets no prelude of its own, so `Option` is imported here by hand.
 # `collect` builds an array, so `std::array` is imported for its `push` method.
+# `std::ops` is what makes `sum`/`product` expressible: a reduce needs to know
+# the element can be *combined*, which before milestone 55 no bound could say.
 use std::option::Option;
 use std::array;
 use std::cmp::Ord;
+use std::ops::{Add, Mul};
 
 @lang("iterator")
 pub trait Iterator {
@@ -180,6 +183,53 @@ pub trait Iterator {
             }
         }
         return best;
+    }
+
+    # The sum of every element, or `None` for an empty sequence. `product` is
+    # the mirror, over `Mul`.
+    #
+    # The same shape as `max`, one trait over — and the reason it returns an
+    # `Option` rather than starting from zero is the same reason `max` does:
+    # there is no way to write "the identity element of `T`". That would need a
+    # second method on the trait (Rust's `Sum`, or a `Default`), and the value
+    # it would produce for an empty sequence is exactly the value the caller has
+    # an opinion about. `it.sum().unwrap_or(0)` says which one it wants.
+    #
+    # `where Self.Item: Add` is what milestone 55 makes writable. Before it, `+`
+    # on an element had nothing to bound: the operators were built-in numeric
+    # opcodes, so a sequence of anything else could only be reduced through
+    # `fold` with a closure spelling the operation out.
+    fun sum(self) -> Option<Self.Item> where Self.Item: Add {
+        var total = self.next();
+        while true {
+            match self.next() {
+                Option::Some(v) => {
+                    match total {
+                        Option::Some(t) => { total = Option::Some(t + v); },
+                        Option::None => { total = Option::Some(v); },
+                    }
+                },
+                Option::None => { return total; },
+            }
+        }
+        return total;
+    }
+
+    # The product of every element, or `None` for an empty sequence.
+    fun product(self) -> Option<Self.Item> where Self.Item: Mul {
+        var total = self.next();
+        while true {
+            match self.next() {
+                Option::Some(v) => {
+                    match total {
+                        Option::Some(t) => { total = Option::Some(t * v); },
+                        Option::None => { total = Option::Some(v); },
+                    }
+                },
+                Option::None => { return total; },
+            }
+        }
+        return total;
     }
 }
 

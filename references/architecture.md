@@ -626,6 +626,57 @@ prelude's lang items), handing coherence the power to take `[1,2] == [1,2]` away
 from a program whose modules disagree. `Eq` waits for a concrete consumer that
 needs *custom* equality.
 
+### Arithmetic operators and `std::ops`
+
+`+`/`-`/`*`/`/`/`%` and unary `-` are the same move one operator family over
+(milestone 55). The split is identical: two numeric operands keep the opcode
+(`OP_ADD` and friends, no import, no frame), and anything else asks a trait what
+the operator means. The six traits — `Add`, `Sub`, `Mul`, `Div`, `Rem`, `Neg` —
+live in `std::ops`, each declaring exactly one method named for the operation.
+
+The compiler treats them as **one mechanism, not six**. `OpsTrait`
+(`include/sema.h`) indexes `TypeChecker.ops_traits[]`, and `ops_trait_table`
+(`src/sema.c`) is a row per operator holding the three strings that differ: the
+`@lang` marker (which *is* the method name — the marker names the operation, not
+the trait), the trait's spelling for a diagnostic asking for a bound, and the
+operator as written. `ops_trait_for_token` maps the token to the row; unary `-`
+names `OPS_NEG` directly.
+
+**Where this rewrite differs from `Ord`'s is where the rewritten node ends.**
+`a.cmp(b)` is an `Int` that the outer `< 0` still consumes, so that rewrite
+*reshapes* the binary node and keeps it. `a.add(b)` is the whole answer — its
+type is the operator's type — so `rewrite_ops_call` *replaces* the node:
+`*expr = *call` after `resolve_method_call_typed` has typed the call against the
+already-known receiver. The caller must not touch the old payload afterwards,
+which is why `EXPR_BINARY` reads `binary->left`/`right` out before calling.
+Either way an arithmetic operator has stopped existing by the time codegen runs,
+so the opcodes, the VM and the image format are untouched.
+
+Three details are the design:
+
+- **The choice is made on the operands' *solved* types.** The arith branch
+  `infer_find`s both before asking `type_is_numeric`, since a closure parameter
+  typed by its hint arrives as an unknown; a still-unsolved operand is an
+  inference failure ("cannot infer the type of this operand of '+'") rather than
+  a missing impl, because nothing can be asked of a type that is not yet decided.
+- **`ops_satisfied` gates the rewrite**, exactly as `ord_satisfied` and
+  `display_satisfied` do, and for the same two reasons: the diagnostic stays
+  about the operator (naming the `T: Add` bound, or the `where T.Item: Add` one
+  level down, or the missing impl with its unimported-impl / blocking-bound
+  notes) instead of degrading to "no method named 'add'", and an unrelated
+  inherent `add` cannot silently become what `+` means.
+- **The traits are homogeneous** (`fun add(self, other: Self) -> Self`) where
+  Rust writes `Add<Rhs = Self>` with an associated `Output`. That is forced, not
+  chosen: a generic trait's parameters are never *inferred* where the trait is
+  named, so a heterogeneous `V2 * Float` would need the operator to select an
+  impl by its right operand — selection by argument type, which exists only
+  through the written `Meters::from(x)` / `Into::<U>::into(x)` spellings, and an
+  operator has neither. A mixed `Cents + Int` is therefore reported by the
+  ordinary argument check on the rewritten call.
+
+Since `other: Self` (and, for `Neg`, `-> Self`) is an object-safety violation,
+none of the six can be a `dyn`; they are bounds, the position `Ord` is in.
+
 ### Lang items
 
 A **lang item** is a std definition the compiler resolves for a construct that

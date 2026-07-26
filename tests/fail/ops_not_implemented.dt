@@ -1,0 +1,19 @@
+#! expect: cannot apply '*' to a value of type 'Tag': it does not implement 'Mul'
+# A concrete type with no impl. The diagnostic is about the *operator* rather
+# than about a missing method named 'mul', which is what gating the rewrite on
+# the trait buys — and what stops an unrelated inherent `mul` from silently
+# becoming what `*` means.
+struct Tag { name: String }
+
+impl Add for Tag {
+    fun add(self, other: Tag) -> Tag {
+        return Tag { name: self.name + other.name };
+    }
+}
+
+fun main() {
+    var a = Tag { name: "a" };
+    var b = Tag { name: "b" };
+    var ok = a + b;
+    var bad = a * b;
+}

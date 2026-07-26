@@ -332,19 +332,28 @@ bool mod_collect_imports(Module *m, ModuleRegistry *reg, StringView base_dir,
 //   std::fmt     → Display        (interpolation; captures `float` too)
 //   std::iter    → Iterator       (`for x in it`; captures the trait lang item)
 //   std::string  → (nothing)     (capture-only: the `pad_*` a width spec needs)
+//   std::ops     → Add/Sub/…     (arithmetic operators; the bounds a generic
+//                                 doing arithmetic has to write)
 //
 // `print` is deliberately *not* here: it is an ordinary function, tied to no
 // syntax, so it stays an explicit `use std::io::print`.
 typedef struct {
-  const char *module; // std leaf name
-  const char *items[3]; // pub items to bind; NULL-terminated, may be empty
+  const char *module;   // std leaf name
+  const char *items[7]; // pub items to bind; NULL-terminated, may be empty
 } PreludeEntry;
 
 static const PreludeEntry prelude[] = {
-    {"option", {"Option", NULL}},   {"result", {"Result", NULL}},
-    {"cmp", {"Ord", NULL}},         {"fmt", {"Display", NULL}},
+    {"option", {"Option", NULL}},
+    {"result", {"Result", NULL}},
+    {"cmp", {"Ord", NULL}},
+    {"fmt", {"Display", NULL}},
     {"iter", {"Iterator", NULL}},
     {"string", {NULL}}, // capture-only, for the pad_* / spec lang items
+    // All six are bound, not just captured: unlike `Display` and `Ord`, whose
+    // bounds a program can usually leave to a call, a generic that does
+    // arithmetic must *write* `T: Add` — so the name has to be in scope for the
+    // diagnostic asking for it to be followable.
+    {"ops", {"Add", "Sub", "Mul", "Div", "Rem", "Neg", NULL}},
 };
 #define PRELUDE_COUNT ((int)(sizeof(prelude) / sizeof(prelude[0])))
 
@@ -382,7 +391,8 @@ void mod_inject_prelude(Module *m, ModuleRegistry *reg, Allocator *al) {
     use->as.use_decl.is_module_import = false;
     use->as.use_decl.target.count = item_count;
     if (item_count > 0) {
-      UseAlias *aliases = al_alloc_zero(al, sizeof(UseAlias) * (size_t)item_count);
+      UseAlias *aliases =
+          al_alloc_zero(al, sizeof(UseAlias) * (size_t)item_count);
       for (int j = 0; j < item_count; j++) {
         aliases[j].name = sv_from_cstr(e->items[j]);
         aliases[j].alias = aliases[j].name; // no `as` rename

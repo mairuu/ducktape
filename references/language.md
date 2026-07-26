@@ -86,10 +86,11 @@ ending in `return` has type `!` (never), which unifies with anything.
   without a point (`1e-7`, `3E2`, `1.5e+10`). `1e` with no digits after it is
   the `Int` `1` followed by the identifier `e`.
 - Arithmetic `+ - * / %` on numerics; `Int op Float` widens to `Float`.
-  `+` also concatenates `String`s. There is no operator overloading, so these
-  want a concrete numeric type: on a bare generic `T` they report ("requires
-  numeric types, got 'T'"). Comparison is the one exception — it desugars to
-  `Ord` for a non-numeric operand (below) — but arithmetic never does.
+  `+` also concatenates `String`s. Two numeric operands stay a built-in opcode
+  (no import, no frame); a non-numeric operand desugars to `std::ops`, so
+  `a + b` becomes `a.add(b)` — see `std::ops` below. On an unbounded generic
+  the diagnostic asks for the bound (`add the bound 'T: Add'`) rather than
+  refusing arithmetic outright.
 - Comparison `< <= > >=`: numeric operands stay a built-in opcode (no import,
   no frame); a non-numeric operand desugars to `std::cmp::Ord`, so `a < b`
   becomes `a.cmp(b) < 0`, dispatched by the ordinary method machinery. A `Point`
@@ -104,7 +105,8 @@ ending in `return` has type `!` (never), which unifies with anything.
   trait: it is a free, import-less, universal primitive, and routing it through
   an `Eq` would make the commonest operation depend on an import.
 - Logic: keywords `and`, `or` (short-circuit), `not`. There is no `&&`/`||`.
-- Unary minus `-x` (numeric).
+- Unary minus `-x`: numeric, or a type implementing `std::ops::Neg` — the same
+  rewrite with the operand as receiver and no argument (`-v` is `v.neg()`).
 - `if cond { .. } else { .. }` is an expression; without `else` it is `()`.
 - `while cond { .. }` and `for x in iter { .. }` evaluate to `()`; `iter` may be
   an array, a range, or any type that implements `Iterator` (see below).
@@ -512,7 +514,8 @@ Alongside them: `take(n)` (at most the first `n`), `skip(n)` (all but the first
 in lockstep, ending with the shorter), `flat_map(f)` (map each element to a
 whole iterator and yield those end to end), `fold(init, f)` (reduce left to
 right into an accumulator — the eager sibling of `map`), `max()` / `min()`
-(the largest or smallest element, or `None` if there is none), and
+(the largest or smallest element, or `None` if there is none), `sum()` /
+`product()` (combine every element, or `None` if there are none), and
 `chain(other)` (this sequence, then `other`'s).
 
 ```
@@ -524,6 +527,7 @@ var flat  = Counter::to(4).flat_map(|n| => Counter::to(n)).collect();
 #   flat == [0, 0, 1, 0, 1, 2]
 var peak  = Counter::to(9).filter(|k| => k % 3 == 0).max();       # Some(6)
 var both  = Counter::to(3).chain(Counter::to(2)).collect();       # [0,1,2,0,1]
+var tot   = Counter::to(5).sum();                                 # Some(10)
 ```
 
 `flat_map` is the one that needed the language rather than the library to move.
@@ -549,6 +553,14 @@ two elements requires `Self.Item: Ord`, which only a `where` on the method's
 signature can say. They are excluded from a `dyn Iterator` vtable for the
 reason that clause implies — the bound is about the concrete type the coercion
 erased — so a trait object keeps `collect` and refuses `max` at the call.
+
+`sum`/`product` are the same shape one trait over (`where Self.Item: Add` /
+`Mul`), and they are what the operator traits unlocked: before `std::ops` a `+`
+on an element had nothing to bound, so reducing a sequence meant spelling the
+operation out through `fold`. Both return an `Option` for the reason `max` does
+— there is no way to write "the identity element of `T`" — so an empty sequence
+answers `None` and the caller decides with `unwrap_or(0)`. `impl Add for String`
+is why they are not numeric-only: a sequence of words sums to a sentence.
 
 `chain(other)` is the one that needed a predicate rather than a bound. Its
 adapter binds `type Item = I.Item`, so returning the *second* source's element
@@ -712,17 +724,18 @@ involved.
 directory. `std::` never touches the filesystem, so a local `std.dt` is
 unreachable. Where ducktape cannot express the operation, a module declares a
 bodyless function bound to C (see "Native functions" below); `std::cmp`,
-`std::convert`, `std::option`, `std::result` and `std::text` need none, `std::io`
-and `std::panic` are nothing but, and `std::array`, `std::string`, `std::strbuf`
-and `std::char` are the mixed case — a handful of natives, and every other
-function written on top of them in ducktape.
+`std::convert`, `std::ops`, `std::option`, `std::result` and `std::text` need
+none, `std::io` and `std::panic` are nothing but, and `std::array`,
+`std::string`, `std::strbuf` and `std::char` are the mixed case — a handful of
+natives, and every other function written on top of them in ducktape.
 
 **There is a small prelude.** Every program implicitly imports `Option`
-(`std::option`), `Result` (`std::result`), `Ord` (`std::cmp`) and `Display`
-(`std::fmt`), plus `std::string` for its format-spec helpers — the vocabulary
+(`std::option`), `Result` (`std::result`), `Ord` (`std::cmp`), `Display`
+(`std::fmt`), `Iterator` (`std::iter`) and the six operator traits
+(`std::ops`), plus `std::string` for its format-spec helpers — the vocabulary
 types and the lang items, so a construct whose meaning the compiler resolves
-(`"{v}"`, `a < b`, a `{v:>8}` spec) works without an import the user never
-wrote. The prelude is lowest priority: a module that defines its own `Option`,
+(`"{v}"`, `a < b`, `a + b`, `for x in it`, a `{v:>8}` spec) works without an
+import the user never wrote. The prelude is lowest priority: a module that defines its own `Option`,
 or imports a different `Ord`, keeps it — the prelude's binding steps aside
 silently. **`print` is *not* in the prelude** — it is an ordinary function tied
 to no syntax, so `use std::io::print;` is still required. Everything else in
@@ -1026,6 +1039,62 @@ itself — so they are lang items like `Display`, and a spec needs its module
 reported if it is not. What has no spelling is a *dynamic* width (`{v:>{n}}`):
 the width and precision are literals.
 
+### `std::ops`
+
+```
+pub trait Add { fun add(self, other: Self) -> Self; }   # +
+pub trait Sub { fun sub(self, other: Self) -> Self; }   # -
+pub trait Mul { fun mul(self, other: Self) -> Self; }   # *
+pub trait Div { fun div(self, other: Self) -> Self; }   # /
+pub trait Rem { fun rem(self, other: Self) -> Self; }   # %
+pub trait Neg { fun neg(self) -> Self; }                # unary -
+```
+
+What `std::cmp` is to `<`, this is to `+`: a trait decides what the operator
+means, so `a + b` on a non-numeric operand is the call `a.add(b)`, rewritten by
+the checker (`tests/run/ops_operators.dt`).
+
+```
+struct V2 { x: Int, y: Int }
+impl Add for V2 {
+    fun add(self, other: V2) -> V2 {
+        return V2 { x: self.x + other.x, y: self.y + other.y };
+    }
+}
+impl Neg for V2 { fun neg(self) -> V2 { return V2 { x: -self.x, y: -self.y }; } }
+
+var c = V2 { x: 1, y: 2 } + V2 { x: 10, y: 20 };   # (11, 22)
+var d = -c;                                        # (-11, -22)
+
+fun twice<T: Add>(v: T) -> T { return v + v; }     # and so a generic can add
+print(twice(3));                                   # 6      — via impl Add for Int
+print(twice("ab"));                                # abab   — via impl Add for String
+```
+
+Three things are worth knowing about the shape:
+
+- **A numeric operand never reaches for these.** `1 + 2` is still `OP_ADD` — no
+  import, no frame, no impl lookup — exactly as `1 < 2` stays an opcode and
+  `"{1}"` stays the VM's own rendering. The impls `std::ops` ships for `Int`,
+  `Float` and `String` are not what makes `1 + 2` work; they exist so a generic
+  bounded `T: Add` can instantiate at a primitive, and each of their bodies is
+  the built-in path (`return self + other;` on two Ints is the opcode, so it
+  does not call itself).
+- **They are homogeneous**, `Self` on both sides. There is no `Rhs` parameter
+  and no `Output` associated type, so `V2 * Float` has no spelling: the operator
+  would have to select an impl by its right operand, and selection by argument
+  type exists only through the written `Meters::from(x)` / `Into::<U>::into(x)`
+  forms. A mixed `Cents + Int` is reported as an argument mismatch on the
+  rewritten call.
+- **None is object-safe** (`other: Self`, and `-> Self` for `Neg`), so they are
+  bounds and never a `dyn Add` — the position `Ord` is in, and the same rule:
+  object safety is demanded only where `dyn` is written.
+
+All six are preluded, so `impl Add for Point` and a `T: Add` bound need no
+`use`. As with `Display` and `Ord`, that also means the impls for the primitives
+are always visible, so a program cannot write its own `impl Add for Int` —
+coherence rejects the pair.
+
 ### `std::option`
 
 ```
@@ -1208,15 +1277,20 @@ attribute by module would add a rule without adding a guarantee.
 
 A handful of constructs desugar to a std definition the user never names: `"{v}"`
 on a non-primitive calls `Display`'s `to_string`, `a < b` on a non-numeric calls
-`Ord`'s `cmp`, a `{v:>8}` spec calls `pad_*`/`float`. The compiler has to know
-*which* definition each is, so the standard library marks them with a third
-attribute, `@lang("…")`:
+`Ord`'s `cmp`, `a + b` calls `Add`'s `add`, a `{v:>8}` spec calls
+`pad_*`/`float`. The compiler has to know *which* definition each is, so the
+standard library marks them with a third attribute, `@lang("…")`:
 
 ```
 @lang("display") pub trait Display { fun to_string(self) -> String; }
 @lang("ord")     pub trait Ord     { fun cmp(self, other: Self) -> Int; }
+@lang("add")     pub trait Add     { fun add(self, other: Self) -> Self; }
 @native("fmt_float") @lang("float") pub fun float(v: Float, p: Int) -> String;
 ```
+
+The six operator traits are one key each (`add`/`sub`/`mul`/`div`/`rem`/`neg`),
+and the key is the *method* name rather than the trait's: a marker names the
+operation it stands for.
 
 Unlike `@native`/`@intrinsic`, `@lang` is a **marker**: it does not replace the
 body, so it sits on an ordinary trait, enum, or top-level function — and it can
@@ -1529,6 +1603,8 @@ overflow: a value past what an `Int` holds wraps.
 | a bound naming a *later* type parameter (`fun f<U: Into<T>, T>`) | "unknown type: T" — bounds resolve left to right |
 | an equality binding between two *projections* (`J: Iterator<Item = I.Item2>` where both sides are abstract) | works, and is compared exactly — but only because a projection over a parameter is interned like any type; there is no unification, so nothing *solves* one side from the other |
 | a supertrait (`trait A: B`, or `where Self: B` on a method) | rejected: a bound is a promise a caller discharges, and a trait declaration has no caller |
+| a heterogeneous operator (`V2 * Float`, `Matrix * Vec`) | the `std::ops` traits are homogeneous (`other: Self`, no `Output`): an operator would have to select an impl by its *right* operand, which only the written `Meters::from(x)` / `Into::<U>::into(x)` forms can do. A mixed pair is an argument mismatch on the rewritten call |
+| custom `==` (an `Eq` trait) | equality stays structural and import-less for every type; only ordering and arithmetic are traits |
 | an impl overriding a defaulted method restating its `where` | conformance compares signatures, which carry no bounds, so an override may quietly add or drop one; the trait's own clause is still discharged at every call through the trait |
 | `mod` declarations | no such keyword; `use` is what pulls a file in |
 | glob imports (`use a::*`) | not parsed; name each item, or bind the module (`use a;`) and qualify |
@@ -1546,5 +1622,5 @@ overflow: a value past what an `Int` holds wraps.
 | more than 65536 functions, counting one per instantiation | each instantiation takes a global slot, so a heavily generic program can outgrow the two-byte operand space (`runtime.md` "Bytecode") |
 | an `@intrinsic` named as a value (`var f = len::<Int>;`) | an intrinsic is an opcode, so there is no body for a global slot to address — "is an intrinsic and can only be called directly" (an `@native` *can* be a value) |
 | a generic function named as a value (`var p = print;`) | its type arguments have nothing to solve them — "cannot infer type for 'T'"; call it, or use a non-generic one |
-| `@native` on an impl or trait method | attributes are only accepted on a top-level `fun` |
+| `@native` on a *trait-declaration* method | rejected: its default body is generic over `Self`, so there is no concrete C body to bind. An *impl* method may be native (milestone 39) |
 | generic `main` | nothing calls the entry point, so no instance is ever made — "'main' must not be generic" |

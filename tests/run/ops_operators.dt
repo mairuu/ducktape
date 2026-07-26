@@ -1,0 +1,101 @@
+# Milestone 55: `+`/`-`/`*`/`/`/`%` and unary `-` on a non-numeric operand are
+# calls through `std::ops`. A numeric operand keeps the opcode, so the two paths
+# have to be exercised side by side: `1 + 2` never leaves the VM, while
+# `a + b` on a struct is `a.add(b)`.
+use std::io::print;
+
+# The operators are ordinary methods with a `@lang`-marked trait behind them —
+# nothing here is built into the language, and a program can implement as few of
+# them as it means.
+struct V2 { x: Int, y: Int }
+
+impl Add for V2 {
+    fun add(self, other: V2) -> V2 {
+        return V2 { x: self.x + other.x, y: self.y + other.y };
+    }
+}
+
+impl Sub for V2 {
+    fun sub(self, other: V2) -> V2 {
+        return V2 { x: self.x - other.x, y: self.y - other.y };
+    }
+}
+
+# Componentwise, because the trait is homogeneous: `V2 * Int` would need the
+# operator to select an impl by its right operand, which no written form of
+# selection reaches.
+impl Mul for V2 {
+    fun mul(self, other: V2) -> V2 {
+        return V2 { x: self.x * other.x, y: self.y * other.y };
+    }
+}
+
+impl Neg for V2 {
+    fun neg(self) -> V2 { return V2 { x: -self.x, y: -self.y }; }
+}
+
+impl Display for V2 {
+    fun to_string(self) -> String { return "({self.x}, {self.y})"; }
+}
+
+# A bound is what lets a generic body use an operator at all, and it
+# instantiates at a struct and at a primitive alike — the impls `std::ops` ships
+# for `Int`/`Float`/`String` are what make the second work.
+fun twice<T: Add>(v: T) -> T { return v + v; }
+
+fun negate<T: Neg>(v: T) -> T { return -v; }
+
+# `/` and `%` on a type parameter are the same rewrite: `Int` is only reachable
+# through its impl here, since a concrete `10 / 3` would take the opcode.
+fun quot<T: Div>(a: T, b: T) -> T { return a / b; }
+
+fun rest<T: Rem>(a: T, b: T) -> T { return a % b; }
+
+fun main() {
+    var a = V2 { x: 1, y: 2 };
+    var b = V2 { x: 10, y: 20 };
+
+    print("{a + b}");
+#> (11, 22)
+    print("{b - a}");
+#> (9, 18)
+    print("{a * b}");
+#> (10, 40)
+    print("{-a}");
+#> (-1, -2)
+
+    # the operators compose and associate as they always did — the rewrite is
+    # per node, so a chain is a chain of calls
+    print("{a + b - a}");
+#> (10, 20)
+
+    print("{twice(a)}");
+#> (2, 4)
+    print("{negate(b)}");
+#> (-10, -20)
+
+    # the same generic, instantiated at each primitive `std::ops` ships
+    print("{twice(3)}");
+#> 6
+    print("{twice(1.5)}");
+#> 3.0
+    print(twice("ab"));
+#> abab
+    print("{negate(7)}");
+#> -7
+
+    print("{quot(10, 3)}");
+#> 3
+    print("{rest(10, 3)}");
+#> 1
+    print("{quot(7.5, 2.5)}");
+#> 3.0
+
+    # and the built-in path is untouched: these are opcodes, not calls
+    print(1 + 2 * 3);
+#> 7
+    print(-4);
+#> -4
+    print("con" + "cat");
+#> concat
+}

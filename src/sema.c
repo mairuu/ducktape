@@ -1429,6 +1429,22 @@ static bool tc_lang_item_ok(TypeChecker *tc, Module *m, const AttrNode *attr) {
   return attr->kind == ATTR_LANG && mod_is_std_module(m);
 }
 
+// The one place the six operator traits are enumerated. They differ only by
+// row, which is why they are a table and not six fields: the `@lang` marker
+// `std::ops` writes *is* the method the operator calls (the marker names the
+// operation, not the trait), and the other two columns exist for diagnostics —
+// the trait as a bound would spell it, and the operator the user actually
+// typed.
+static const struct {
+  const char *name;  // @lang marker, and the method the rewrite calls
+  const char *trait; // as written in a bound
+  const char *op;    // as written in the source
+} ops_trait_table[OPS_TRAIT_COUNT] = {
+    [OPS_ADD] = {"add", "Add", "+"}, [OPS_SUB] = {"sub", "Sub", "-"},
+    [OPS_MUL] = {"mul", "Mul", "*"}, [OPS_DIV] = {"div", "Div", "/"},
+    [OPS_REM] = {"rem", "Rem", "%"}, [OPS_NEG] = {"neg", "Neg", "-"},
+};
+
 static void tc_register_lang_trait(TypeChecker *tc, Module *m, Decl *decl,
                                    TraitDef *def) {
   const AttrNode *attr = &decl->lang_attr;
@@ -1437,14 +1453,24 @@ static void tc_register_lang_trait(TypeChecker *tc, Module *m, Decl *decl,
   }
   if (sv_equal_cstr(attr->name, "display")) {
     tc->display_trait = def;
-  } else if (sv_equal_cstr(attr->name, "ord")) {
-    tc->ord_trait = def;
-  } else if (sv_equal_cstr(attr->name, "iterator")) {
-    tc->iterator_trait = def;
-  } else {
-    diag_error(tc->diags, attr->span, "unknown trait lang item '" SV_FMT "'",
-               SV_ARG(attr->name));
+    return;
   }
+  if (sv_equal_cstr(attr->name, "ord")) {
+    tc->ord_trait = def;
+    return;
+  }
+  if (sv_equal_cstr(attr->name, "iterator")) {
+    tc->iterator_trait = def;
+    return;
+  }
+  for (int i = 0; i < OPS_TRAIT_COUNT; i++) {
+    if (sv_equal_cstr(attr->name, ops_trait_table[i].name)) {
+      tc->ops_traits[i] = def;
+      return;
+    }
+  }
+  diag_error(tc->diags, attr->span, "unknown trait lang item '" SV_FMT "'",
+             SV_ARG(attr->name));
 }
 
 static void tc_register_lang_fun(TypeChecker *tc, Module *m, Decl *decl,
@@ -5903,6 +5929,153 @@ static Type *rewrite_ord_comparison(CheckCtx *ctx, Expr *expr, Type *lhs) {
   return ctx->tc->t_bool;
 }
 
+// Milestone 55: `+`/`-`/`*`/`/`/`%` and unary `-` on a non-numeric operand
+// desugar to `std::ops`, the same move one operator family over. The difference
+// from `Ord` is where the rewritten node ends: `a.cmp(b)` is an Int the outer
+// `< 0` still consumes, so that rewrite *reshapes* the binary node, while
+// `a.add(b)` is the whole answer — its type is the operator's type — so this
+// one *replaces* the node with the call. Codegen, the opcodes, the VM and the
+// image format are untouched either way; an arithmetic operator simply stops
+// existing before it gets there.
+
+// does `type` implement the operator trait? Mirrors `ord_satisfied`: none of
+// these is object-safe (`other: Self`, `-> Self`) so a TY_DYN never reaches
+// here, but a bounded generic and a default body's abstract `Self` both answer
+// from the trait they name.
+static bool ops_satisfied(CheckCtx *ctx, Type *type, TraitDef *trait) {
+  if (trait == NULL) {
+    return false;
+  }
+  if (type->kind == TY_TRAIT) {
+    return type->as.trait.def == trait;
+  }
+  // an operator trait takes no type parameters, so its reference is the
+  // trait's own self type
+  return impl_index_implements(ctx->impls, type, trait->self_type, ctx->al);
+}
+
+// Replace `a OP b` (or `OP a`, with `rhs` NULL) with the method call the trait
+// names, gating on the trait first for the two reasons the `Ord` and `Display`
+// rewrites do: the diagnostic stays about the *operator* — naming the bound to
+// add for a type parameter — instead of degrading to "no method named 'add'",
+// and an unrelated inherent `add` cannot silently qualify.
+//
+// Returns the method's return type on success, poison (after one diagnostic)
+// otherwise. On success `*expr` *becomes* the call, so the caller must not
+// touch its old payload afterwards.
+static Type *rewrite_ops_call(CheckCtx *ctx, Expr *expr, OpsTrait which,
+                              Expr *recv, Type *recv_ty, Expr *rhs) {
+  Span span = expr->span;
+  const char *op = ops_trait_table[which].op;
+  const char *trait_name = ops_trait_table[which].trait;
+  char buf[64];
+  type_sprintf(recv_ty, buf, sizeof(buf));
+
+  if (recv_ty->kind == TY_UNKNOWN) {
+    // nothing can be asked of an unsolved type: which path the operator takes
+    // is decided by the operand's type, so this is an inference failure rather
+    // than a missing impl, and saying so is what keeps it from being reported
+    // as one
+    diag_error(ctx->diags, recv->span,
+               "cannot infer the type of this operand of '%s'", op);
+    return ctx->tc->t_poison;
+  }
+
+  TraitDef *trait = ctx->tc->ops_traits[which];
+  if (trait == NULL) {
+    diag_error(ctx->diags, span,
+               "cannot apply '%s' to a value of type '%s': only a numeric type "
+               "has it built in, and this program does not import 'std::ops' "
+               "to get the '%s' trait",
+               op, buf, trait_name);
+    return ctx->tc->t_poison;
+  }
+  if (!ops_satisfied(ctx, recv_ty, trait)) {
+    if (recv_ty->kind == TY_GENERIC) {
+      // a type parameter satisfies exactly what it was declared to, so the fix
+      // is at the declaration rather than at an impl
+      diag_error(ctx->diags, span,
+                 "cannot apply '%s' to a value of type '%s': add the bound "
+                 "'%s: %s'",
+                 op, buf, buf, trait_name);
+      return ctx->tc->t_poison;
+    }
+    if (recv_ty->kind == TY_ASSOC &&
+        recv_ty->as.assoc.base->kind == TY_GENERIC) {
+      // same reasoning one level down, and the fix has its own spelling: a
+      // projection is constrained by a `where`, not by an inline bound
+      diag_error(ctx->diags, span,
+                 "cannot apply '%s' to a value of type '%s': add the bound "
+                 "'where %s: %s'",
+                 op, buf, buf, trait_name);
+      return ctx->tc->t_poison;
+    }
+    diag_error(ctx->diags, span,
+               "cannot apply '%s' to a value of type '%s': it does not "
+               "implement '%s'",
+               op, buf, trait_name);
+    Type *trait_ref = trait->self_type;
+    ImplQuery q = {.self_type = recv_ty,
+                   .trait = trait_ref,
+                   .impls = ctx->impls,
+                   .al = ctx->al};
+    note_unimported_impl(
+        ctx->diags,
+        find_unimported_impl(ctx->tc, ctx->impls, impl_query_matches, &q));
+    note_blocking_bound(ctx->diags, ctx->impls, recv_ty, trait_ref,
+                        (StringView){0}, ctx->al);
+    return ctx->tc->t_poison;
+  }
+
+  Expr **args = NULL;
+  int arg_count = 0;
+  if (rhs != NULL) {
+    args = al_alloc(ctx->al, sizeof(Expr *));
+    args[0] = rhs;
+    arg_count = 1;
+  }
+  Expr *call = al_alloc_zero_for(ctx->al, Expr);
+  *call = (Expr){
+      .kind = EXPR_METHOD_CALL,
+      .span = span,
+      .as.method_call = {.object = recv,
+                         .method_name =
+                             sv_from_cstr(ops_trait_table[which].name),
+                         .args = args,
+                         .arg_count = arg_count},
+  };
+  // resolved against the already-known receiver type, so this must not re-enter
+  // resolve_method_call_expr and re-resolve the operands. If the right operand
+  // is not the receiver's `Self`, that resolution reports it.
+  Type *ty = resolve_method_call_typed(ctx, call, recv_ty, /*hint=*/NULL);
+  if (type_is_poison(ty)) {
+    return ctx->tc->t_poison;
+  }
+
+  *expr = *call; // the operator node *is* the call now
+  return ty;
+}
+
+// which trait an operator token reaches for. Only ever asked about the five
+// arithmetic tokens; unary `-` names OPS_NEG directly.
+static OpsTrait ops_trait_for_token(TokenType op) {
+  switch (op) {
+  case TOKEN_PLUS:
+    return OPS_ADD;
+  case TOKEN_MINUS:
+    return OPS_SUB;
+  case TOKEN_STAR:
+    return OPS_MUL;
+  case TOKEN_SLASH:
+    return OPS_DIV;
+  case TOKEN_PERCENT:
+    return OPS_REM;
+  default:
+    assert(false && "not an arithmetic operator");
+    return OPS_ADD;
+  }
+}
+
 static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   (void)hint;
   (void)ctx;
@@ -5980,19 +6153,20 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     if (op == TOKEN_PLUS && lhs->kind == TY_STRING && rhs->kind == TY_STRING) {
       result = ty_string();
     } else if (is_arith) {
-      if (!type_is_numeric(lhs) || !type_is_numeric(rhs)) {
-        char lhs_buf[64], rhs_buf[64];
-        type_sprintf(lhs, lhs_buf, sizeof(lhs_buf));
-        type_sprintf(rhs, rhs_buf, sizeof(rhs_buf));
-        diag_error(
-            ctx->diags, expr->span,
-            "arithmetic operator requires numeric types, got '%s' and '%s'",
-            lhs_buf, rhs_buf);
-        result = ty_poison();
-      } else {
+      // The built-in/trait choice is made on the operands' *solved* types, so
+      // an operand that is still an unknown at this point is followed first —
+      // a closure parameter typed by its hint arrives here as one.
+      Type *l = infer_find(&ctx->infer, lhs);
+      Type *r = infer_find(&ctx->infer, rhs);
+      if (type_is_numeric(l) && type_is_numeric(r)) {
         // Int op Float widens to Float.
-        result = (lhs->kind == TY_FLOAT || rhs->kind == TY_FLOAT) ? ty_float()
-                                                                  : ty_int();
+        result = (l->kind == TY_FLOAT || r->kind == TY_FLOAT) ? ty_float()
+                                                              : ty_int();
+      } else {
+        // a non-numeric operand asks a trait what the operator means:
+        // `a + b` → `a.add(b)`, replacing this node with the call.
+        result = rewrite_ops_call(ctx, expr, ops_trait_for_token(op),
+                                  binary->left, l, binary->right);
       }
     } else if (is_cmp) {
       if (type_is_numeric(lhs) && type_is_numeric(rhs)) {
@@ -6620,11 +6794,11 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       }
     } else {
       if (!type_is_numeric(op_ty)) {
-        char buf[64];
-        type_sprintf(op_ty, buf, sizeof(buf));
-        diag_error(ctx->diags, unary->operand->span,
-                   "unary '-' requires a numeric type, got '%s'", buf);
-        result = ctx->tc->t_poison;
+        // `-a` → `a.neg()`, the unary case of the same rewrite `+` gets. The
+        // operand is the receiver and there is no second one, so the call has
+        // no arguments.
+        result = rewrite_ops_call(ctx, expr, OPS_NEG, unary->operand, op_ty,
+                                  /*rhs=*/NULL);
       } else {
         result = op_ty;
       }

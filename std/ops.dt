@@ -1,0 +1,141 @@
+# std::ops — the arithmetic operators, as traits.
+#
+# The mirror of what `std::cmp` did for ordering (milestone 38) and `std::fmt`
+# for interpolation: once a trait decides what an operator means, `a + b` is not
+# an operator on `a` and `b` at all — it is the call `a.add(b)`. So the compiler
+# rewrites the node and the operator disappears; nothing below the checker knows
+# these traits exist.
+#
+# A numeric operand never reaches for them. `1 + 2` keeps `OP_ADD` — no import,
+# no frame, no impl lookup — exactly as `1 < 2` keeps `OP_LT` and `"{1}"` keeps
+# the VM's own rendering. Only a *non-numeric* operand asks a trait what the
+# operator means, which is why the impls for `Int` and `Float` below are not
+# what makes `1 + 2` work. They exist for the other direction: so a generic
+# bounded `T: Add` can instantiate at a primitive.
+#
+# That is also why each of those impls is free. `self + other` inside `impl Add
+# for Int` is two Ints, so it takes the built-in path and compiles to the
+# opcode — it does not call itself. `std::fmt`'s four impls are written the same
+# way (`return "{self}";`) and carry the same asymmetry, which there is a wart
+# (a `Display` impl for a *non*-primitive written that way recurses forever) and
+# here is not: an operator's built-in path is decided by the operand types, and
+# an impl for a primitive is the only place those types are primitive.
+#
+# ── the shape of the traits ──────────────────────────────────────────────────
+#
+# Each trait is homogeneous — `fun add(self, other: Self) -> Self` — where Rust
+# writes `Add<Rhs = Self>` with an associated `Output`. That is not a
+# simplification for its own sake: a generic trait's parameters are never
+# *inferred* at the place the trait is named (an impl head, a bound and a `dyn`
+# each write them out), so `Vec2 * Float` would need the operator to pick an
+# impl by its right operand — selection by argument type, which exists only
+# through the written `Meters::from(x)` / `Into::<U>::into(x)` spellings, and
+# an operator has neither. Homogeneous is the shape the language can actually
+# check today; a heterogeneous one would type-check its impls and then fail to
+# select them.
+#
+# `other: Self` also means none of these is object-safe, so they are bounds and
+# never a `dyn Add` — the same position `Ord` is in, and the same rule working
+# as designed: object safety is demanded only where `dyn` is written.
+
+@lang("add")
+pub trait Add {
+    fun add(self, other: Self) -> Self;
+}
+
+@lang("sub")
+pub trait Sub {
+    fun sub(self, other: Self) -> Self;
+}
+
+@lang("mul")
+pub trait Mul {
+    fun mul(self, other: Self) -> Self;
+}
+
+@lang("div")
+pub trait Div {
+    fun div(self, other: Self) -> Self;
+}
+
+# `%`. Named for the operation rather than the operator, and "remainder" rather
+# than "modulo" because that is what the VM computes: the sign follows the
+# dividend (C's `%` on Int, `fmod` on Float), so `-7 % 3` is -1 and not 2.
+@lang("rem")
+pub trait Rem {
+    fun rem(self, other: Self) -> Self;
+}
+
+# Unary `-`. The only one with no right operand, so it is the only one whose
+# `Self` appears solely in the return — which does not make it object-safe
+# either (`-> Self` is its own object-safety violation: a caller of a `dyn Neg`
+# could not name what it got back).
+@lang("neg")
+pub trait Neg {
+    fun neg(self) -> Self;
+}
+
+# ── the primitives ───────────────────────────────────────────────────────────
+#
+# Every body here is the built-in path, so these impls cost a frame at the call
+# and nothing else. Shipping them is what lets `T: Add` instantiate at `Int` —
+# and, as with `Display` and `Ord`, it takes the pair away from a program that
+# would write its own `impl Add for Int`, since naming the trait makes this impl
+# visible and coherence rejects the second.
+
+impl Add for Int {
+    fun add(self, other: Int) -> Int { return self + other; }
+}
+
+impl Sub for Int {
+    fun sub(self, other: Int) -> Int { return self - other; }
+}
+
+impl Mul for Int {
+    fun mul(self, other: Int) -> Int { return self * other; }
+}
+
+impl Div for Int {
+    fun div(self, other: Int) -> Int { return self / other; }
+}
+
+impl Rem for Int {
+    fun rem(self, other: Int) -> Int { return self % other; }
+}
+
+impl Neg for Int {
+    fun neg(self) -> Int { return 0 - self; }
+}
+
+impl Add for Float {
+    fun add(self, other: Float) -> Float { return self + other; }
+}
+
+impl Sub for Float {
+    fun sub(self, other: Float) -> Float { return self - other; }
+}
+
+impl Mul for Float {
+    fun mul(self, other: Float) -> Float { return self * other; }
+}
+
+impl Div for Float {
+    fun div(self, other: Float) -> Float { return self / other; }
+}
+
+impl Rem for Float {
+    fun rem(self, other: Float) -> Float { return self % other; }
+}
+
+impl Neg for Float {
+    fun neg(self) -> Float { return 0.0 - self; }
+}
+
+# `+` on two Strings is a built-in concat, decided before any trait is
+# consulted, so this impl changes nothing about `s + t`. It is here so that a
+# `T: Add` generic can instantiate at `String` — `it.sum()` over a sequence of
+# words is the reason it earns its place — and its body is the same built-in
+# path the primitives' are.
+impl Add for String {
+    fun add(self, other: String) -> String { return self + other; }
+}

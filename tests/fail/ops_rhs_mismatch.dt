@@ -1,0 +1,18 @@
+#! expect: expected 'Cents' but got 'Int'
+# The operator traits are homogeneous — `fun add(self, other: Self) -> Self` —
+# so a mixed `Cents + Int` is reported by the ordinary argument check on the
+# rewritten call, not by a rule about operators. That is the same division of
+# labour the `Ord` rewrite has: the trait decides what `+` means, and the method
+# signature decides what it may be applied to.
+struct Cents { v: Int }
+
+impl Add for Cents {
+    fun add(self, other: Cents) -> Cents {
+        return Cents { v: self.v + other.v };
+    }
+}
+
+fun main() {
+    var a = Cents { v: 100 };
+    var b = a + 5;
+}

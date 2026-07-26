@@ -188,6 +188,21 @@ void infer_check_bounds(InferCtx *ctx, TypeChecker *tc, DiagBag *diags,
 // TypeChecker
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// The arithmetic operator traits of `std::ops`, in one enum because the
+// compiler treats them as one mechanism: an operator token selects a slot, and
+// everything after that (the lang-item name, the trait's name in a diagnostic,
+// the method the rewrite calls) is a row of `ops_trait_table` in sema.c. `Neg`
+// is the unary one and sits last for that reason.
+typedef enum {
+  OPS_ADD,
+  OPS_SUB,
+  OPS_MUL,
+  OPS_DIV,
+  OPS_REM,
+  OPS_NEG,
+  OPS_TRAIT_COUNT,
+} OpsTrait;
+
 struct TypeChecker {
   // StructDef **structs;
   // int struct_count, struct_cap;
@@ -241,6 +256,15 @@ struct TypeChecker {
   // own it. Preluded, so it is populated in every program. See the `EXPR_FOR`
   // case in `resolve_expr`.
   TraitDef *iterator_trait;
+
+  // `std::ops`'s six operator traits, captured the same way and for the same
+  // reason: `a + b` on a non-numeric operand desugars to `a.add(b)`, and which
+  // trait declares `add` is the language's decision. Indexed by `OpsTrait` so
+  // one array and one table serve all six — they differ only in the token that
+  // reaches for them and the method they name. Numeric arithmetic stays a
+  // built-in opcode, so only a non-primitive operand looks here. See
+  // `rewrite_ops_binary` / `rewrite_ops_unary`.
+  TraitDef *ops_traits[OPS_TRAIT_COUNT];
 
   // The format functions a `{v:>8}` / `{f:.3}` spec desugars to, captured the
   // same way `display_trait` is and for the same reason: the user never types

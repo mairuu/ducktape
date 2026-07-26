@@ -1,7 +1,9 @@
-#! expect: arithmetic operator requires numeric types, got 'T' and 'T'
-# There is no operator overloading: `+` wants a concrete numeric type, so it
-# cannot apply to a bare generic. The diagnostic names the parameter rather
-# than silently poisoning (which is what the removed `// todo:` did).
+#! expect: cannot apply '+' to a value of type 'T': add the bound 'T: Add'
+# Arithmetic on a type parameter goes through `std::ops` (milestone 55), so the
+# fix is a bound rather than a concrete type: `+` asks what the operator means
+# for `T`, and a type parameter satisfies exactly what it was declared to. The
+# diagnostic names the bound to add, and `Add` is preluded, so that is a name
+# the reader can write without adding an import first.
 fun sum<T>(a: T, b: T) -> T {
     return a + b;
 }

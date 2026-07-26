@@ -2892,6 +2892,70 @@
   predicate; and nothing *solves* one side of an equality from the other — it is
   compared, not unified — so a binding cannot be used to infer a type argument.
 
+- **Arithmetic operators over `std::ops` (milestone 55)** — `a + b` on a
+  non-numeric type is the call `a.add(b)`, and `sum`/`product` are combinators.
+  Design: `architecture.md` "Arithmetic operators and `std::ops`", `language.md`
+  operators / `std::ops`.
+
+  The observation is milestone 38's, one operator family over: **once a trait
+  decides what an operator means, the operator is not an operation on its
+  operands — it is a method call.** `+`/`-`/`*`/`/`/`%` reach `Add`/`Sub`/`Mul`/
+  `Div`/`Rem` and unary `-` reaches `Neg`, six traits of one method each in a
+  new `std::ops`. Two numeric operands still keep the opcode — no import, no
+  frame, no impl lookup — exactly as `1 < 2` keeps `OP_LT` and `"{1}"` keeps the
+  VM's own rendering.
+
+  Three things follow, and they are the whole milestone:
+  - **The rewrite *replaces* the node rather than reshaping it, and that is the
+    only structural difference from `Ord`'s.** `a.cmp(b)` is an Int the outer
+    `< 0` still consumes, so milestone 38 could keep the `EXPR_BINARY` node and
+    swap its children. `a.add(b)` is the whole answer — its type *is* the
+    operator's type — so `rewrite_ops_call` does `*expr = *call` once
+    `resolve_method_call_typed` has typed it against the already-known receiver.
+    Either way the operator has stopped existing before codegen, so **the
+    opcodes, the VM and the image format did not change at all**.
+  - **Six traits, one mechanism.** They differ only by row: `OpsTrait` indexes
+    `TypeChecker.ops_traits[]` and `ops_trait_table` holds the three strings
+    that vary — the `@lang` marker (which *is* the method name, since a marker
+    names the operation rather than the trait), the trait as a bound would spell
+    it, and the operator as written. So the checker's diff is one table, one
+    gate (`ops_satisfied`, the mirror of `ord_satisfied`), and two call sites.
+  - **The traits are homogeneous, and that is forced rather than chosen.** Rust
+    writes `Add<Rhs = Self>` with an associated `Output`; ducktape cannot,
+    because a generic trait's parameters are never *inferred* where the trait is
+    named — so a heterogeneous `V2 * Float` would need the operator to select an
+    impl by its right operand, which exists only through the written
+    `Meters::from(x)` / `Into::<U>::into(x)` spellings. An operator has neither,
+    so a heterogeneous impl would type-check and then fail to be selected. The
+    honest shape is the one the language can check.
+
+  The payoff is `it.sum()` and `it.product()`, which fall straight out of
+  milestone 53: `where Self.Item: Add` is the same clause `max` needed, one
+  trait over. Both return an `Option` for the reason `max` does — there is no
+  way to write "the identity element of `T`" — and both are excluded from a
+  `dyn Iterator` vtable by the same object-safety condition, at no cost.
+  `impl Add for String` is what keeps them from being numeric-only.
+
+  The impls `std::ops` ships for `Int`/`Float`/`String` are *not* what makes
+  `1 + 2` work; they exist so a bounded `T: Add` can instantiate at a primitive,
+  and each body (`return self + other;`) is the built-in path, so it costs a
+  frame and nothing else. That is the same asymmetry `std::fmt`'s four `Display`
+  impls carry — and here it is not a wart, because an operator's built-in path
+  is decided by the operand types, and an impl for a primitive is the only place
+  those types *are* primitive.
+
+  `std::ops` joins the prelude, binding all six names rather than only being
+  captured: unlike `Display` and `Ord`, whose bounds a program can often leave
+  to a call, a generic that does arithmetic must *write* `T: Add`, so the
+  diagnostic asking for it has to be followable without an import. The cost is
+  the documented one — a program can no longer write its own `impl Add for Int`.
+
+  Two existing tests changed their premise rather than their expectation, which
+  is the clearest measure of what moved: `tests/fail/generic_add.dt` used to
+  assert "there is no operator overloading" and now asks for the bound, and
+  `tests/fail/unary_not_numeric.dt` used to say `-` requires a number and now
+  reports a missing `impl Neg`.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -2960,9 +3024,22 @@ equality binding in 54 (`J: Iterator<Item = I.Item>`, which made `chain` one).
 What the family still cannot do is *infer*: an equality is compared, never
 unified, so a binding will not solve a type argument from the other side.)
 
+(**`sum`/`product` are no longer blocked** — they were waiting on an `Add` trait
+rather than on any predicate, and that is milestone 55: the arithmetic operators
+desugar to `std::ops` the way `<` desugars to `Ord`, so `where Self.Item: Add`
+is writable and the reduce is an ordinary combinator. What is left in the
+combinator direction is breadth with no design question behind it — `any`,
+`all`, `find`, `position`, `count`, `for_each`, `take_while`, `skip_while` —
+plus `rev`, which *does* have one, since reversing needs an iterator that can be
+driven from both ends.)
+
 2. **A custom equality trait (`Eq`), if a consumer ever needs it.** Not on the
    main line, and deliberately deferred rather than planned — recorded here so
-   the reasoning survives. `==`/`!=` stay a structural primitive: `OP_EQ` reads
+   the reasoning survives. Since milestone 55 it is the *only* operator that is
+   not a trait, which sharpens the question rather than settling it: ordering and
+   arithmetic went to traits because they had no meaning for a non-primitive at
+   all, while equality already has one that works for every type.
+   `==`/`!=` stay a structural primitive: `OP_EQ` reads
    no static type, so `a == b` works on any value — Int, struct, generic `T` —
    with nothing imported. Routing it through an `Eq`/`PartialEq` trait would
    (a) make the commonest operation depend on a trait impl — and unlike `Ord`,
@@ -2996,6 +3073,18 @@ via `Module.decl_base`) and is not part of the main line.
   correct there only because a primitive receiver takes the built-in path —
   the asymmetry is invisible from the source. A cycle check would have to run
   where the impl is written, not where it is called
+- an operator is homogeneous, so `V2 * Float` has no spelling: the `std::ops`
+  traits take `other: Self` and return `Self`, because a heterogeneous one would
+  need the operator to select an impl by its *right* operand and selection by
+  argument type exists only through the written `Meters::from(x)` /
+  `Into::<U>::into(x)` forms. Adding an `Output` associated type alone would not
+  help — it is the `Rhs` parameter that cannot be inferred where the trait is
+  named. A mixed pair is reported as an argument mismatch on the rewritten call,
+  which describes the desugaring rather than the mistake
+- `std::ops` ships `impl Add for Int` (and the other eleven primitive impls), so
+  a program can no longer write its own — the `Display`/`Ord`-for-primitives
+  cost, one module over, and unavoidable for the same reason: without them a
+  bounded `T: Add` could not instantiate at a number
 - `Display` ships for `[T]`, `(A, B)`, `Option<T>` and `Result<T, E>`, which
   means a program can no longer write its own for those: naming the trait makes
   the std impl visible and coherence rejects the pair. A tuple of any other

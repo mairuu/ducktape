@@ -1,0 +1,55 @@
+# `sum`/`product`: the reduce `fold` could only do with a closure, now that
+# `where Self.Item: Add` can say the element combines (milestone 55 over
+# milestone 53's clause).
+use std::io::print;
+use std::iter::Iterator;
+
+struct Counter { n: Int, limit: Int }
+
+impl Iterator for Counter {
+    type Item = Int;
+
+    fun next(self) -> Option<Int> {
+        if self.n >= self.limit { return Option::None; }
+        var v = self.n;
+        self.n = v + 1;
+        return Option::Some(v);
+    }
+}
+
+fun upto(n: Int) -> Counter { return Counter { n: 1, limit: n + 1 }; }
+
+# A bounded iterator has to declare the projection's bound itself — the same
+# discharge-at-every-call-site rule `max` meets, one trait over.
+fun total<I: Iterator>(it: I) -> Option<I.Item> where I.Item: Add {
+    return it.sum();
+}
+
+fun main() {
+    print("{upto(5).sum()}");
+#> Some(15)
+    print("{upto(5).product()}");
+#> Some(120)
+
+    # an empty sequence has no sum: there is no way to write the identity
+    # element of an arbitrary `T`, so the caller says what it wants instead
+    print("{Counter { n: 0, limit: 0 }.sum()}");
+#> None
+    print("{Counter { n: 0, limit: 0 }.sum().unwrap_or(0)}");
+#> 0
+
+    # a pipeline reduces at the end, and the adapter's element type is what the
+    # bound is discharged against
+    print("{upto(4).map(|x| => x * 10).sum()}");
+#> Some(100)
+    print("{upto(6).filter(|x| => x % 2 == 0).sum()}");
+#> Some(12)
+
+    # `impl Add for String` is why this is not a numeric-only combinator
+    var words = upto(3).map(|x| => "n{x}");
+    print("{words.sum()}");
+#> Some(n1n2n3)
+
+    print("{total(upto(4))}");
+#> Some(10)
+}
