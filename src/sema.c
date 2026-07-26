@@ -1849,6 +1849,20 @@ static void resolve_type_params(ResolveCtx *rctx, const TypeParamNode *params,
   }
 }
 
+// Re-enter already-resolved type parameters into the current scope by name.
+// The two-pass resolver (see `tc_resolve_module`) resolves a definition's
+// parameters — and their bounds — once, in the declare pass; a later body pass
+// needs the same parameters back in scope to resolve fields/variants/method
+// signatures, but must not re-run `resolve_generic_param`, which would resolve
+// each bound a second time and double every diagnostic a bad bound produces.
+static void redeclare_type_params(ResolveCtx *rctx, const TypeParamNode *params,
+                                  int count, Type *const *resolved) {
+  for (int i = 0; i < count; i++) {
+    tscope_define(rctx->tyres.tscope, params[i].name, resolved[i], rctx->diags,
+                  params[i].span, NULL);
+  }
+}
+
 static void resolve_fun_decl(ResolveCtx *rctx, Decl *decl) {
   assert(decl->kind == DECL_FUN && "expected fun decl");
   DeclFun *fun_decl = &decl->as.fun_decl;
@@ -1895,33 +1909,20 @@ static void resolve_fun_decl(ResolveCtx *rctx, Decl *decl) {
   te->as.fun_def = fun_def;
 }
 
-static void resolve_struct_decl(ResolveCtx *rctx, Decl *decl) {
+// Declare pass: resolve the struct's type parameters and bind its name to a
+// head type, so any later definition can name it. Its *fields* are resolved in
+// the body pass, once every top-level name is in scope.
+static void declare_struct_decl(ResolveCtx *rctx, Decl *decl) {
   assert(decl->kind == DECL_STRUCT && "expected struct decl");
   DeclStruct *struct_decl = &decl->as.struct_decl;
   StructDef *struct_def = struct_decl->def;
 
-  // begin struct local type scope
+  // resolve the type parameters in a throwaway scope: only the head type and
+  // the def keep them; the body pass re-enters them (by name) for the fields.
   rctx->tyres.tscope = tscope_push(rctx->tyres.tscope, rctx->al);
-
   resolve_type_params(rctx, struct_decl->type_params,
                       struct_decl->type_param_count, struct_decl->where_clause,
                       struct_def->type_params);
-
-  TypeScratch field_types;
-  ts_init(&field_types, struct_decl->field_count, rctx->al);
-  for (int i = 0; i < struct_decl->field_count; i++) {
-    field_types.ptr[i] =
-        rctx_resolve(rctx, struct_decl->fields[i].type_annotation);
-    struct_def->fields[i].type = field_types.ptr[i];
-    struct_def->fields[i].is_pub = struct_decl->fields[i].is_pub;
-    if (struct_def->is_tuple) {
-      struct_def->fields[i].ident.index = struct_decl->fields[i].ident.index;
-    } else {
-      struct_def->fields[i].ident.name = struct_decl->fields[i].ident.name;
-    }
-  }
-
-  // end struct local type scope
   rctx->tyres.tscope = tscope_pop(rctx->tyres.tscope);
 
   Type *struct_ty = ty_struct(struct_def, struct_def->type_params,
@@ -1934,16 +1935,63 @@ static void resolve_struct_decl(ResolveCtx *rctx, Decl *decl) {
   te->as.struct_def = struct_def;
 }
 
+static void resolve_struct_decl(ResolveCtx *rctx, Decl *decl) {
+  assert(decl->kind == DECL_STRUCT && "expected struct decl");
+  DeclStruct *struct_decl = &decl->as.struct_decl;
+  StructDef *struct_def = struct_decl->def;
+
+  // begin struct local type scope; the parameters were resolved in the declare
+  // pass, so re-enter them by name rather than resolving their bounds again.
+  rctx->tyres.tscope = tscope_push(rctx->tyres.tscope, rctx->al);
+  redeclare_type_params(rctx, struct_decl->type_params,
+                        struct_decl->type_param_count, struct_def->type_params);
+
+  for (int i = 0; i < struct_decl->field_count; i++) {
+    struct_def->fields[i].type =
+        rctx_resolve(rctx, struct_decl->fields[i].type_annotation);
+    struct_def->fields[i].is_pub = struct_decl->fields[i].is_pub;
+    if (struct_def->is_tuple) {
+      struct_def->fields[i].ident.index = struct_decl->fields[i].ident.index;
+    } else {
+      struct_def->fields[i].ident.name = struct_decl->fields[i].ident.name;
+    }
+  }
+
+  // end struct local type scope
+  rctx->tyres.tscope = tscope_pop(rctx->tyres.tscope);
+}
+
+// Declare pass: resolve the enum's type parameters and bind its name. Its
+// variants are resolved in the body pass (see `declare_struct_decl`).
+static void declare_enum_decl(ResolveCtx *rctx, Decl *decl) {
+  assert(decl->kind == DECL_ENUM && "expected enum decl");
+  DeclEnum *enum_decl = &decl->as.enum_decl;
+  EnumDef *enum_def = enum_decl->def;
+
+  rctx->tyres.tscope = tscope_push(rctx->tyres.tscope, rctx->al);
+  resolve_type_params(rctx, enum_decl->type_params, enum_decl->type_param_count,
+                      enum_decl->where_clause, enum_def->type_params);
+  rctx->tyres.tscope = tscope_pop(rctx->tyres.tscope);
+
+  Type *enum_ty = ty_enum(enum_def, enum_def->type_params,
+                          enum_def->type_param_count, rctx->al);
+  enum_def->self_type = enum_ty;
+
+  TypeEntry *te = NULL;
+  tscope_define(rctx->tyres.tscope, enum_def->name, enum_ty, rctx->diags,
+                decl->span, &te);
+  te->as.enum_def = enum_def;
+}
+
 static void resolve_enum_decl(ResolveCtx *rctx, Decl *decl) {
   assert(decl->kind == DECL_ENUM && "expected enum decl");
   DeclEnum *enum_decl = &decl->as.enum_decl;
   EnumDef *enum_def = enum_decl->def;
 
-  // begin type scope
+  // begin type scope; parameters were resolved in the declare pass.
   rctx->tyres.tscope = tscope_push(rctx->tyres.tscope, rctx->al);
-
-  resolve_type_params(rctx, enum_decl->type_params, enum_decl->type_param_count,
-                      enum_decl->where_clause, enum_def->type_params);
+  redeclare_type_params(rctx, enum_decl->type_params,
+                        enum_decl->type_param_count, enum_def->type_params);
 
   // resolve variants
   for (int i = 0; i < enum_decl->variant_count; i++) {
@@ -1970,15 +2018,6 @@ static void resolve_enum_decl(ResolveCtx *rctx, Decl *decl) {
 
   // end type scope
   rctx->tyres.tscope = tscope_pop(rctx->tyres.tscope);
-
-  Type *enum_ty = ty_enum(enum_def, enum_def->type_params,
-                          enum_def->type_param_count, rctx->al);
-  enum_def->self_type = enum_ty;
-
-  TypeEntry *te = NULL;
-  tscope_define(rctx->tyres.tscope, enum_def->name, enum_ty, rctx->diags,
-                decl->span, &te);
-  te->as.enum_def = enum_def;
 }
 
 static void resolve_impl_decl(ResolveCtx *rctx, Decl *decl) {
@@ -2220,39 +2259,55 @@ static FunDef *resolve_trait_default_impl(ResolveCtx *rctx, TraitDef *trait_def,
   return fun;
 }
 
-static void resolve_trait_decl(ResolveCtx *rctx, Decl *decl) {
+// Declare pass: resolve the trait's own type parameters and bind its name to a
+// head type. `Self`, the associated types, and the method signatures are
+// resolved in the body pass, once every top-level name is in scope — which is
+// what lets a method signature name a type defined later in the module (an
+// adapter struct whose own bound is this very trait).
+//
+// `Self` inside the trait is the trait applied to its own parameters: inside
+// `trait Into<T>`, `Self` is `Into<T>`, and an impl head reading `Into<Int>` is
+// what binds T. So a trait's type parameters are ordinary generic parameters of
+// every signature it declares, and everything that already knew how to
+// substitute one — conformance, a call through a bound, monomorphisation —
+// needs nothing new to carry them.
+static void declare_trait_decl(ResolveCtx *rctx, Decl *decl) {
   assert(decl->kind == DECL_TRAIT && "expected trait decl");
   DeclTrait *trait_decl = &decl->as.trait_decl;
   TraitDef *trait_def = trait_decl->def;
 
-  // begin; trait level type scope — the trait's own type parameters are in
-  // scope for its item signatures, and `Self` names them as arguments.
-  rctx->tyres.tscope = tscope_push(rctx->tyres.tscope, rctx->al);
-
   trait_def->type_param_count = trait_decl->type_param_count;
   trait_def->type_params =
       al_alloc_zero(rctx->al, sizeof(Type *) * trait_decl->type_param_count);
+
+  rctx->tyres.tscope = tscope_push(rctx->tyres.tscope, rctx->al);
   resolve_type_params(rctx, trait_decl->type_params,
                       trait_decl->type_param_count, trait_decl->where_clause,
                       trait_def->type_params);
+  rctx->tyres.tscope = tscope_pop(rctx->tyres.tscope);
 
-  // `Self` inside the trait is the trait applied to its own parameters:
-  // inside `trait Into<T>`, `Self` is `Into<T>`, and an impl head reading
-  // `Into<Int>` is what binds T. So a trait's type parameters are ordinary
-  // generic parameters of every signature it declares, and everything that
-  // already knew how to substitute one — conformance, a call through a bound,
-  // monomorphisation — needs nothing new to carry them.
   Type *trait_ty = ty_trait(trait_def, trait_def->type_params,
                             trait_def->type_param_count, rctx->al);
   trait_def->self_type = trait_ty;
 
-  // define the trait name up front so its own item signatures (and, in source
-  // order, later impls) can reference it. The name is defined in the *parent*
-  // scope: the type parameters shadow nothing, and the trait outlives them.
   TypeEntry *te = NULL;
-  tscope_define(rctx->tyres.tscope->parent, trait_def->name, trait_ty,
-                rctx->diags, decl->span, &te);
+  tscope_define(rctx->tyres.tscope, trait_def->name, trait_ty, rctx->diags,
+                decl->span, &te);
   te->as.trait_def = trait_def;
+}
+
+static void resolve_trait_decl(ResolveCtx *rctx, Decl *decl) {
+  assert(decl->kind == DECL_TRAIT && "expected trait decl");
+  DeclTrait *trait_decl = &decl->as.trait_decl;
+  TraitDef *trait_def = trait_decl->def;
+  Type *trait_ty = trait_def->self_type; // built in the declare pass
+
+  // begin; trait level type scope — the trait's own type parameters are in
+  // scope for its item signatures, and `Self` names them as arguments. The
+  // parameters were resolved in the declare pass, so re-enter them by name.
+  rctx->tyres.tscope = tscope_push(rctx->tyres.tscope, rctx->al);
+  redeclare_type_params(rctx, trait_decl->type_params,
+                        trait_decl->type_param_count, trait_def->type_params);
 
   // count items by kind and allocate the def tables.
   for (int i = 0; i < trait_decl->item_count; i++) {
@@ -2365,6 +2420,31 @@ static void resolve_decl(ResolveCtx *rctx, Decl *decl) {
 bool tc_resolve_module(TypeChecker *tc, Module *m) {
   ResolveCtx rctx;
   rctx_init(&rctx, tc, m, tc->diags, tc->al);
+
+  // Two passes so a definition may reference any top-level type regardless of
+  // source order. The declare pass binds every struct/enum/trait *name* to a
+  // head type; the resolve pass then fills in fields, variants, method
+  // signatures and impls, each of which can now name a type declared later —
+  // including a mutual reference (a trait whose method returns an adapter struct
+  // whose own bound is that trait). Only a type-parameter *bound* is still
+  // order-sensitive, since it is resolved in the declare pass itself.
+  for (int i = 0; i < m->ast->decl_count; i++) {
+    Decl *decl = m->ast->decls[i];
+    rctx.tyres.tscope = &m->tscope;
+    switch (decl->kind) {
+    case DECL_STRUCT:
+      declare_struct_decl(&rctx, decl);
+      break;
+    case DECL_ENUM:
+      declare_enum_decl(&rctx, decl);
+      break;
+    case DECL_TRAIT:
+      declare_trait_decl(&rctx, decl);
+      break;
+    default:
+      break;
+    }
+  }
 
   for (int i = 0; i < m->ast->decl_count; i++) {
     Decl *decl = m->ast->decls[i];
