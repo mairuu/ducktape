@@ -373,4 +373,10 @@ fun main() {
     # the associated-type bound discharged: `Countdown.Item` is `Int`, which is
     # `Ord`, so `largest`'s `where` is satisfied at this call
     var peak = largest(Countdown::from(4).filter(|k| => k % 2 == 0));
+    # the same bound on a trait *method's* signature (milestone 53), which is
+    # what lets the reduce above be a combinator instead of a free function.
+    # Discharged at the call, against this receiver rather than at an
+    # instantiation — `Self` is decided by whoever calls
+    var peak2 = Countdown::from(4).filter(|k| => k % 2 == 0).max();
+    var trough = Countdown::from(4).min();
 }

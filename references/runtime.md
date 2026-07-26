@@ -618,8 +618,10 @@ memoises the compile-time key so two coercions of one type to one trait share
 a table; the slot is reserved *before* the table is filled, since compiling a
 method body can reach the same pair again (`mono_request` does the same). One
 slot per trait method, indexed by position — but a method the trait **excluded
-from dispatch** (an undispatchable *provided* method, e.g. `Iterator::map`) gets
-no target: `cg_vtable_for` skips it, leaving the slot `NULL`. The checker has
+from dispatch** (an undispatchable *provided* method: `Iterator::map`, or
+`Iterator::max`, whose `where Self.Item: Ord` asks about the very type the
+coercion erased) gets no target: `cg_vtable_for` skips it, leaving the slot
+`NULL`. The checker has
 already forbidden reaching it through the `dyn`, so the `NULL` is never indexed;
 keeping the slot (rather than compacting the table) is what keeps
 `OP_DYN_METHOD`'s index the method's plain position.

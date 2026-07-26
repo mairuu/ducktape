@@ -196,11 +196,35 @@ ending in `return` has type `!` (never), which unifies with anything.
   is where `I` becomes `Counter`, so `Counter.Item` becomes `Int` and the
   question becomes an ordinary one about a real type ("type 'Widgets' does not
   satisfy 'I.Item: Ord': its 'Item' is 'Widget', which does not implement
-  'Ord'"). A `where` may appear on a `fun` — free or in an impl block — and on
-  an `impl` itself, where every method inside may rely on it. It may **not**
-  appear on a trait method's signature, so a trait cannot yet offer a provided
-  method that needs one; that is why a bounded reduce is a free function rather
-  than an `Iterator` combinator.
+  'Ord'"). Handing a bounded projection to something wanting the same bound
+  requires restating it: inside a generic there is no impl to consult, so
+  `I.Item` satisfies exactly what *this* declaration promised, and dropping the
+  `where` is an error naming the one to add
+  (`tests/fail/assoc_bound_relay.dt`).
+- **A trait method's signature may carry a `where` too**, and it is the one
+  place `Self` may be bound: `fun max(self) -> Option<Self.Item> where
+  Self.Item: Ord`. This is what lets a *provided* method use an element rather
+  than only pass it along, so a bounded reduce can be a combinator
+  (`it.max()`, `it.min()`) instead of a free function. The clause may also
+  constrain the method's own type parameters (`where T: Ord`), which is the
+  ordinary kind.
+
+  A bound on a parameter is discharged where that parameter is bound — one
+  place, the instantiation. `Self` has no such place: it is decided by
+  whichever receiver a call has, so the promise is discharged at *each call*,
+  against that receiver. A concrete one reads its impl's binding and asks the
+  ordinary question; an abstract one (a bounded `I`, or `Self` inside another
+  default body) answers from its own declaration and so must restate the
+  bound. A method carrying such a clause is left out of a `dyn` vtable —
+  whether the bound holds is a question about the concrete type and the impls
+  visible where the value was coerced, which is exactly what the coercion
+  erased — so it joins `map`/`filter` in the per-method object-safety
+  partition, and `dyn Iterator` keeps `collect` while refusing `max` at the
+  call. A bound on `Self` *itself* (`where Self: Ord`) is rejected: that is a
+  supertrait, which ducktape does not have.
+
+  A `where` may otherwise appear on a `fun` — free or in an impl block — and
+  on an `impl` itself, where every method inside may rely on it.
 - A bound may name an *earlier* type parameter of the same list
   (`fun conv<T, U: Into<T>>(v: U) -> T`), which is what a generic trait is for.
   The bound is opened alongside the parameter it mentions, so what gets
@@ -275,12 +299,15 @@ ordinary "expected 'dyn Shape' but got 'Circle'". A bounded type parameter
 coerces too, so a generic function can hand its own parameter over.
 
 Not every trait can be one. A method is **dispatchable** — reachable through
-the vtable — only if it takes `self`, has no type parameters of its own, and
-does not mention `Self` outside the receiver (so no `-> Self`, no `other:
-Self`) — a trait object has erased the concrete type, and those signatures all
-need it back. The rule is checked where `dyn Trait` is *written*, not at the
-trait declaration, so a trait may freely be static-dispatch-only and still be
-used as a bound (`tests/run/trait_default.dt` leans on all three).
+the vtable — only if it takes `self`, has no type parameters of its own, does
+not mention `Self` outside the receiver (so no `-> Self`, no `other: Self`),
+and carries no bound on an associated type (`where Self.Item: Ord`) — a trait
+object has erased the concrete type, and every one of those needs it back: the
+last because whether the bound holds is a question about that type and the
+impls visible where it was coerced. The rule is checked where `dyn Trait` is
+*written*, not at the trait declaration, so a trait may freely be
+static-dispatch-only and still be used as a bound
+(`tests/run/trait_default.dt` leans on the first three).
 
 Object safety is decided **one method at a time**. A method that isn't
 dispatchable is fatal only if it is **required**: there would be no body to
@@ -290,10 +317,11 @@ stays object-safe, and calling that method through a `dyn` is a clean error
 naming the method and the reason (`tests/fail/dyn_excluded_method.dt`), while it
 still type-checks on a concrete or bounded receiver. This is what lets a trait
 carry generic convenience methods and remain a `dyn`: `Iterator`'s `map`/
-`filter` are excluded (a type parameter, a `Self`-shaped return), yet `dyn
-Iterator` is a type, and `collect` — dispatchable, since `[Self.Item]` is a
-projection the object still names — stays callable through it. See "Iterators"
-below and `tests/run/iter_combinators.dt`.
+`filter` are excluded (a type parameter, a `Self`-shaped return) and so are
+`max`/`min` (a bound on `Self.Item`), yet `dyn Iterator` is a type, and
+`collect` — dispatchable, since `[Self.Item]` is a projection the object still
+names — stays callable through it. See "Iterators" below,
+`tests/run/iter_combinators.dt` and `tests/fail/dyn_assoc_bound_method.dt`.
 
 **A `Self.Item` is the exception, and it is named at the `dyn`:**
 
@@ -454,8 +482,9 @@ for y in Counter::to(3).map(|x| => x + 100) { print(y); }    # 100 101 102
 Alongside them: `take(n)` (at most the first `n`), `skip(n)` (all but the first
 `n`), `enumerate()` (`(index, element)` pairs), `zip(other)` (walk two iterators
 in lockstep, ending with the shorter), `flat_map(f)` (map each element to a
-whole iterator and yield those end to end), and `fold(init, f)` (reduce left to
-right into an accumulator — the eager sibling of `map`).
+whole iterator and yield those end to end), `fold(init, f)` (reduce left to
+right into an accumulator — the eager sibling of `map`), and `max()` / `min()`
+(the largest or smallest element, or `None` if there is none).
 
 ```
 var sum   = Counter::to(5).fold(0, |acc, x| => acc + x);          # 10
@@ -464,6 +493,7 @@ var pairs = Counter::to(3).zip(Counter::to(2)).collect();         # [(0,0),(1,1)
 var rest  = Counter::to(5).skip(2).collect();                     # [2, 3, 4]
 var flat  = Counter::to(4).flat_map(|n| => Counter::to(n)).collect();
 #   flat == [0, 0, 1, 0, 1, 2]
+var peak  = Counter::to(9).filter(|k| => k % 3 == 0).max();       # Some(6)
 ```
 
 `flat_map` is the one that needed the language rather than the library to move.
@@ -484,13 +514,19 @@ element is a projection over a projection (`Filter<Counter>.Item` is
 struct with a `fun(..)` field and an `impl Iterator`, nothing built into the
 language.
 
-What is still out of reach as a *combinator* is anything needing a bound on the
-element type. A reduce like `sum`/`max` wants `I.Item: Ord`, which milestone 52
-made writable — but only on a `fun` or an `impl`, not on a trait method's
-signature, so it can be a free function over any iterator and not an
-`it.max()`. `chain(other)` needs something else again: that `J.Item` *be*
-`I.Item`, an equality between two associated types, which only a `dyn` can
-currently spell.
+`max`/`min` are the combinators that need a bound on the *element*: comparing
+two elements requires `Self.Item: Ord`, which only a `where` on the method's
+signature can say. They are excluded from a `dyn Iterator` vtable for the
+reason that clause implies — the bound is about the concrete type the coercion
+erased — so a trait object keeps `collect` and refuses `max` at the call.
+
+What is still out of reach as a combinator is `chain(other)`, and not for want
+of a bound: it must bind `type Item = I.Item` while yielding the second
+source's elements, so it needs to say that `J.Item` *is* `I.Item` — an equality
+between two associated types rather than a trait they satisfy. Only a `dyn` can
+currently spell that (`dyn Iterator<Item = Int>`). A `sum` waits on something
+different again: there is no `Add` trait, so `+` on an element has nothing to
+bound.
 
 ## Modules
 
@@ -1459,6 +1495,9 @@ overflow: a value past what an `Int` holds wraps.
 | a trait's type arguments at a *bare* method call | the expected type breaks the tie between two impls of one generic trait, and pins an impl parameter the receiver cannot reach (`impl<T, U: From<T>> Into<U> for T`); with no expected type the first impl wins — or, where the parameter was only pinnable that way, no impl applies at all. The trait-qualified spelling (`Into::<Fahrenheit>::into(c)`) settles it explicitly without an expected type |
 | disambiguating a qualified selection whose *argument is itself unresolved* (`Steps::from(None)`) | the argument (for `from`) or the receiver (for a trait-qualified `into`) must type on its own to choose the impl, so a value that would need the impl chosen first cannot be disambiguated |
 | a bound naming a *later* type parameter (`fun f<U: Into<T>, T>`) | "unknown type: T" — bounds resolve left to right |
+| an *equality* binding in a bound (`J: Iterator<Item = I.Item>`) | only a trait *object* can spell it (`dyn Iterator<Item = Int>`); a bound says which traits a projection satisfies, not which type it is — so `chain` cannot be written |
+| a supertrait (`trait A: B`, or `where Self: B` on a method) | rejected: a bound is a promise a caller discharges, and a trait declaration has no caller |
+| an impl overriding a defaulted method restating its `where` | conformance compares signatures, which carry no bounds, so an override may quietly add or drop one; the trait's own clause is still discharged at every call through the trait |
 | `mod` declarations | no such keyword; `use` is what pulls a file in |
 | glob imports (`use a::*`) | not parsed; name each item, or bind the module (`use a;`) and qualify |
 | re-exporting a module qualifier (`pub use a;`) | a qualifier is not an item; `pub use` re-exports named items only |

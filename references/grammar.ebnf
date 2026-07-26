@@ -63,13 +63,14 @@ variantFieldDecl = IDENT ":" type ;
 traitDecl      = "trait" IDENT typeParams? "{" traitItem* "}" ;
 traitItem      = "type" IDENT ";"
                | "fun" IDENT typeParams? "(" paramList? ")"
-                 ( "->" type )?
+                 ( "->" type )? whereClause?
                  ( ";" | "=>" expr ";" | block ) ;
-                 (* no whereClause: a trait method's signature does not take
-                    one, so a provided method cannot say `where Self.Item: Ord`
-                    — which is why a bounded reduce is a free function rather
-                    than a combinator. `fun` and `impl` are where a `where` may
-                    appear *)
+                 (* the whereClause may constrain the method's own type
+                    parameters and, uniquely here, `Self`'s associated types:
+                    `where Self.Item: Ord` is what lets a provided method use
+                    an element rather than only pass it along (Iterator::max).
+                    A bound on `Self` itself is rejected — that would be a
+                    supertrait *)
 
 implDecl       = "impl" typeParams? type ( "for" type )? whereClause?
                  "{" implItem* "}" ;
@@ -86,13 +87,16 @@ typeParam      = IDENT ( ":" traitBound )? ;
                  (* a bound may name an earlier parameter of the same list:
                     <T, U: Into<T>> *)
 whereClause    = "where" wherePred ( "," wherePred )* ;
-wherePred      = IDENT ( "." IDENT )? ":" traitBound ;
+wherePred      = ( IDENT | "Self" ) ( "." IDENT )? ":" traitBound ;
                  (* the left side is a type *parameter* of the enclosing
                     declaration, not a general type. With a ".", it is one of
                     that parameter's associated types (`where I.Item: Ord`) —
                     the only way to constrain what an impl binds it to. Deeper
                     paths parse and are then rejected: nothing names the trait
-                    a second step would project through *)
+                    a second step would project through.
+                    "Self" is legal only in a trait method's clause, and only
+                    with a "." — it is the receiver, so the bound is a promise
+                    each *call site* discharges rather than an instantiation *)
 traitBound     = path ( "+" path )* ;
                  (* each path may carry the trait's type arguments, as in
                     T: Into<Int> — the ordinary pathSeg "<" ... ">" *)

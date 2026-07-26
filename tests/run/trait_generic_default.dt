@@ -1,0 +1,61 @@
+# A *generic* trait's default bodies: the trait's own type parameters and the
+# method's are different scopes, and both are in play at once.
+#
+# A default body is a generic function whose parameters are `Self`, then the
+# trait's, then the method's (milestone 12, extended by 28). Two things went
+# wrong when a method had its own on top of a generic trait's, both fixed in
+# milestone 53 while the same lines were being rewritten for `where`:
+#
+#   - the body was checked with the method's parameters bound *by position*
+#     into that list, off by however many the trait declared — so `<U>` here
+#     resolved to `T`, and the instantiation then had no `U` to bind and
+#     aborted the compiler on `subst_apply`'s totality assert;
+#   - the trait's own parameters were never put in scope for a body at all, so
+#     a default body could return a `T` but not name one in an annotation.
+use std::io::print;
+
+trait Pack<T> {
+    fun one(self) -> T;
+
+    # the trait's parameter, named in the body rather than only in the
+    # signature: `var held: T` is what used to be "unknown type: T"
+    fun doubled(self) -> (T, T) {
+        var held: T = self.one();
+        return (held, self.one());
+    }
+
+    # a type parameter of the method's own, alongside the trait's. `U` and `T`
+    # are independent: the call decides `U`, the impl decides `T`.
+    fun tagged<U>(self, tag: U) -> (U, T) {
+        return (tag, self.one());
+    }
+}
+
+struct Box1 { v: Int }
+struct Box2 { v: String }
+
+impl Pack<Int> for Box1 {
+    fun one(self) -> Int { return self.v; }
+}
+
+impl Pack<String> for Box2 {
+    fun one(self) -> String { return self.v; }
+}
+
+fun main() {
+    print(Box1 { v: 7 }.doubled());
+#> (7, 7)
+    print(Box2 { v: "hi" }.doubled());
+#> (hi, hi)
+
+    # the same method at two different `U`s over two different `T`s: four
+    # instantiations, and each has to keep the two parameters apart
+    print(Box1 { v: 7 }.tagged(true));
+#> (true, 7)
+    print(Box1 { v: 7 }.tagged("label"));
+#> (label, 7)
+    print(Box2 { v: "hi" }.tagged(3));
+#> (3, hi)
+    print(Box2 { v: "hi" }.tagged('c'));
+#> (c, hi)
+}

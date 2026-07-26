@@ -982,8 +982,20 @@ static bool parse_trait_ref(Parser *p, TraitRef *out) {
   return true;
 }
 
-static bool parse_bound_lhs(Parser *p, WhereLhs *out) {
-  if (!consume_tok(p, TOKEN_IDENT,
+// `allow_self` says whether `Self` may head a predicate. It may in a trait
+// method's clause, where `where Self.Item: Ord` is the whole point — and
+// nowhere else: on a `fun` or an `impl`, `Self` names no type parameter, so
+// the predicate would match nothing and be dropped without a word. Refusing it
+// here is what keeps that from being a silent no-op.
+static bool parse_bound_lhs(Parser *p, WhereLhs *out, bool allow_self) {
+  if (check_tok(p, TOKEN_SELF_TYPE) && !allow_self) {
+    error_at(p, current_tok_span(p),
+             "'Self' may only be bound in a trait method's 'where' clause");
+    return false;
+  }
+  // `Self` is a keyword rather than an identifier, so it needs its own match.
+  if (!match_tok(p, TOKEN_SELF_TYPE) &&
+      !consume_tok(p, TOKEN_IDENT,
                    "expected type parameter name in where clause predicate")) {
     return false;
   }
@@ -1052,7 +1064,7 @@ static bool parse_trait_bound(Parser *p, TraitBound *out) {
   return !had_error;
 }
 
-static bool parse_where_clause(Parser *p, WhereClause **out) {
+static bool parse_where_clause(Parser *p, WhereClause **out, bool allow_self) {
   if (!consume_tok(p, TOKEN_WHERE, "expected 'where'")) {
     return false;
   }
@@ -1074,7 +1086,7 @@ static bool parse_where_clause(Parser *p, WhereClause **out) {
     }
 
     WherePred *pred = &preds[pred_count++];
-    had_error = had_error || !parse_bound_lhs(p, &pred->lhs);
+    had_error = had_error || !parse_bound_lhs(p, &pred->lhs, allow_self);
     if (had_error) {
       break;
     }
@@ -2426,7 +2438,7 @@ static Decl *parse_fun_decl(Parser *p, bool is_pub, AttrNode attr) {
   WhereClause *where_clause = NULL;
 
   if (check_tok(p, TOKEN_WHERE)) {
-    if (!parse_where_clause(p, &where_clause)) {
+    if (!parse_where_clause(p, &where_clause, /*allow_self=*/false)) {
       had_error = true;
     }
   }
@@ -2908,7 +2920,11 @@ static Decl *parse_trait_decl(Parser *p, bool is_pub) {
     }
   }
 
-  TraitItemNode items[64];
+  // zeroed: an associated-type item fills in only kind/name/span, so every
+  // method-only field has to start NULL rather than hold whatever the stack
+  // had — nothing reads them for an assoc item, but nothing should have to
+  // know that.
+  TraitItemNode items[64] = {0};
   int item_count = 0;
   bool had_error = false;
 
@@ -2991,6 +3007,16 @@ static Decl *parse_trait_decl(Parser *p, bool is_pub) {
           }
         }
 
+        // a `where` on a trait method's signature constrains `Self`'s
+        // associated types (`where Self.Item: Ord`) or the method's own type
+        // parameters — see resolve_self_assoc_bounds.
+        WhereClause *where_clause = NULL;
+        if (check_tok(p, TOKEN_WHERE)) {
+          if (!parse_where_clause(p, &where_clause, /*allow_self=*/true)) {
+            had_error = true;
+          }
+        }
+
         Expr *body = NULL;
         if (match_tok(p, TOKEN_SEMICOLON)) {
           // no default implementation
@@ -3026,6 +3052,7 @@ static Decl *parse_trait_decl(Parser *p, bool is_pub) {
           memcpy(items[item_count].params, params,
                  sizeof(ParamDeclNode) * param_count);
           items[item_count].return_type = return_type;
+          items[item_count].where_clause = where_clause;
           items[item_count].default_body = body;
           item_count++;
         }
@@ -3094,7 +3121,7 @@ static Decl *parse_impl_decl(Parser *p, bool is_pub) {
 
   WhereClause *where_clause = NULL;
   if (check_tok(p, TOKEN_WHERE)) {
-    if (!parse_where_clause(p, &where_clause)) {
+    if (!parse_where_clause(p, &where_clause, /*allow_self=*/false)) {
       had_error = true;
     }
   }

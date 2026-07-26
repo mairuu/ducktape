@@ -937,6 +937,13 @@ Everything downstream then falls out of machinery that already existed:
 so `self.other()` inside it is an ordinary call through a bound, and codegen
 instantiates it like any other generic definition.
 
+`tc_check_trait` builds that scope from `fun->type_params` **by name**, since
+that list is the body's actual signature. Reading it positionally off the
+*item* instead — as it did until milestone 53 — silently binds a method's own
+`<U>` to the trait's `<T>` for any generic trait, and the instantiation then
+has no `U` to bind; it also left the trait's parameters out of scope entirely,
+so a body could return a `T` but not name one in an annotation.
+
 A type parameter satisfies exactly the bounds it was declared with:
 `impl_index_implements` answers for a `TY_GENERIC` from `bounds` rather than
 from the index, which is what lets one bounded generic hand its parameter to
@@ -988,6 +995,52 @@ Because a bound is part of what a parameter *is*, `ty_generic` interns on the
 associated-type list too, canonicalising it (by name, then each entry's traits)
 the way it already sorts plain bounds: `I` and `I where I.Item: Ord` accept
 different instantiations and must not share a type.
+
+**Discharging it against an argument that is itself abstract.** When
+`check_bounds_satisfied` projects the argument and `impl_index_assoc_type`
+finds no impl, the argument may be *another definition's* type parameter — a
+generic handing its `J` to a generic wanting `where I.Item: Ord`. There is
+nothing concrete to consult, so the question is asked one level up: build
+`J.Item` and hand it to `impl_index_implements`, whose `TY_ASSOC` case answers
+from what *that* declaration promised. Without this the assoc half simply gave
+up where the plain half (whose `TY_GENERIC` case has always answered this way)
+did not, so a bound could be dropped in transit and the mistake surfaced as a
+codegen error inside the callee at some later instantiation.
+
+#### On a trait method's signature
+
+`where Self.Item: Ord` is the same predicate in the one position where the
+thing it constrains is not a parameter. `Self` in a signature is the abstract
+`TY_TRAIT` — there is no `TY_GENERIC` to hang an `AssocBound` on, and a
+required method has no default body to borrow one from — so the list is stored
+twice, for two readers with different jobs:
+
+- **the obligation**, `TraitMethodDef.self_assoc_bounds`, resolved by
+  `resolve_self_assoc_bounds` from the same `where` clause the method's own
+  type parameters already consumed. `method_type` keeps the abstract `Self`,
+  because conformance and call sites check against the trait rather than
+  against the body copy;
+- **the assumption**, copied onto `trait_self_param`'s `TY_GENERIC` `Self`, so
+  the default body reads it exactly as a `<I: Iterator>` function reads its
+  own — `v > b` on two `Self.Item`s resolves through the machinery above with
+  nothing added. `Self` is therefore per *method*; interning makes it the same
+  node for every method that declares no such bound.
+
+The discharge site is what differs from a parameter's bound. A parameter is
+bound in one place, so `infer_check_bounds` can wait for inference and ask
+there. `Self` is decided by whichever receiver a call has, so
+`check_trait_method_call` records the obligation — a `TY_GENERIC` carrying just
+these bounds, paired with the receiver, pushed onto the same
+`InferCtx.explicit_bounds` list an explicit turbofish argument uses — and
+`check_bounds_satisfied` answers it after `infer_finalize`, since the receiver
+may still be an unsolved unknown when the call is checked (`xs.iter().max()`).
+Concrete receiver, abstract receiver and the relay case above are then one code
+path, not three.
+
+The fourth object-safety condition falls out of the same asymmetry: a method
+with such a clause is `undispatchable`, because a vtable is built where the
+value is *coerced* and whether the bound holds is a question about the concrete
+type and the impls visible there.
 
 **Collapsing is a capability of the traversal, not of the caller.** What
 `subst_apply` lacks is not the ability but the *index* — the binding lives on an

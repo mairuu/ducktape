@@ -15,6 +15,7 @@
 # `collect` builds an array, so `std::array` is imported for its `push` method.
 use std::option::Option;
 use std::array;
+use std::cmp::Ord;
 
 @lang("iterator")
 pub trait Iterator {
@@ -120,6 +121,54 @@ pub trait Iterator {
             }
         }
         return acc;
+    }
+
+    # The largest element, or `None` for an empty sequence. `min` is the mirror.
+    #
+    # These are the first combinators that need to *use* an element rather than
+    # only pass it along, and what says they may is `where Self.Item: Ord` — a
+    # bound on the signature's associated type, which a trait method's `where`
+    # clause could not carry until milestone 53. Without it a reduce has to take
+    # its operation as a closure, which is why `fold` does.
+    #
+    # The bound is discharged at each call against whatever receiver it has:
+    # `Counter.Item` is `Int`, so the question is about a real type; a bounded
+    # `I: Iterator` answers with its own `where I.Item: Ord`, and so has to
+    # declare one. Neither can sit in a `dyn Iterator` vtable — whether the
+    # bound holds is a question about the concrete type, which is what the
+    # coercion erased — so both are excluded from dispatch like `map` is, and
+    # `dyn Iterator` keeps `collect`.
+    fun max(self) -> Option<Self.Item> where Self.Item: Ord {
+        var best = self.next();
+        while true {
+            match self.next() {
+                Option::Some(v) => {
+                    match best {
+                        Option::Some(b) => { if v > b { best = Option::Some(v); } },
+                        Option::None => { best = Option::Some(v); },
+                    }
+                },
+                Option::None => { return best; },
+            }
+        }
+        return best;
+    }
+
+    # The smallest element, or `None` for an empty sequence.
+    fun min(self) -> Option<Self.Item> where Self.Item: Ord {
+        var best = self.next();
+        while true {
+            match self.next() {
+                Option::Some(v) => {
+                    match best {
+                        Option::Some(b) => { if v < b { best = Option::Some(v); } },
+                        Option::None => { best = Option::Some(v); },
+                    }
+                },
+                Option::None => { return best; },
+            }
+        }
+        return best;
     }
 }
 

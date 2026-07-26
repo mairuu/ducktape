@@ -1,0 +1,148 @@
+# A `where` clause on a trait method's signature (milestone 53).
+#
+# Milestone 52 put a bound on an associated type — `where I.Item: Ord` — but
+# only on a `fun` or an `impl`. A trait method could not carry one, so a trait
+# could not *offer* a method that needs to use an element rather than only pass
+# it along. That is why 52 shipped a free `largest` and `fold` takes its
+# operation as a closure.
+#
+# The bound is declared on the signature and discharged at each *call*, against
+# whatever receiver that call has — unlike a parameter's bound, which is
+# discharged at the one place the parameter is bound. `Self` has no such place:
+# it is decided by the receiver.
+use std::iter::Iterator;
+use std::option::Option;
+use std::cmp::Ord;
+use std::fmt::Display;
+use std::io::print;
+
+struct Counter { n: Int, max: Int }
+
+impl Counter {
+    fun to(max: Int) -> Counter { Counter { n: 0, max: max } }
+}
+
+impl Iterator for Counter {
+    type Item = Int;
+    fun next(self) -> Option<Int> {
+        if self.n >= self.max { return Option::None; }
+        var v = self.n;
+        self.n += 1;
+        return Option::Some(v);
+    }
+}
+
+# an element that implements `Ord` through an impl rather than as a primitive,
+# so the bound is exercised on something the compiler does not know about
+struct Word { text: String, rank: Int }
+
+impl Ord for Word {
+    fun cmp(self, other: Word) -> Int { return self.rank.cmp(other.rank); }
+}
+
+impl Display for Word {
+    fun to_string(self) -> String { return self.text; }
+}
+
+struct Words { i: Int }
+
+impl Iterator for Words {
+    type Item = Word;
+    fun next(self) -> Option<Word> {
+        var v = self.i;
+        self.i += 1;
+        if v == 0 { return Option::Some(Word { text: "pear", rank: 2 }); }
+        if v == 1 { return Option::Some(Word { text: "apple", rank: 1 }); }
+        if v == 2 { return Option::Some(Word { text: "quince", rank: 3 }); }
+        return Option::None;
+    }
+}
+
+# `max`/`min` are the std consumers: provided methods whose bodies need the
+# element to be comparable, which only a `where` on the signature can say.
+fun main() {
+    print(Counter::to(5).max());
+#> Some(4)
+    print(Counter::to(5).min());
+#> Some(0)
+
+    # an empty sequence has no largest element, and the bound has nothing to do
+    # with that: `None` is a value, not a failure
+    print(Counter::to(0).max());
+#> None
+
+    # through adapters, so the receiver is `Map<Filter<Counter>, Int>` and the
+    # projection collapses two hops before the bound is asked about it
+    print(Counter::to(9).filter(|x| => x % 3 == 0).map(|x| => x * 2).max());
+#> Some(12)
+
+    # an impl-provided `Ord`, so the answer comes from the impl index rather
+    # than from a primitive
+    print(Words { i: 0 }.max().unwrap().text);
+#> quince
+    print(Words { i: 0 }.min().unwrap().text);
+#> apple
+
+    # a bounded receiver: the call is checked against the trait signature, and
+    # the obligation is answered by the *caller's* own `where`
+    print(best(Counter::to(4)));
+#> Some(3)
+    print(best(Words { i: 0 }).unwrap().text);
+#> quince
+
+    # a user trait, to show none of this is special to `Iterator`, and a
+    # predicate naming two traits at once — the element is rendered, so the
+    # `Display` half is load-bearing
+    print(Counter::to(4).describe_largest(7));
+#> largest so far: 7
+    print(Words { i: 0 }.describe_largest(Word { text: "fig", rank: 9 }));
+#> largest so far: fig
+
+    # a trait object still works — the trait is object-safe, `max` is merely
+    # excluded from its vtable (tests/fail/dyn_assoc_bound_method.dt)
+    var d: dyn Iterator<Item = Int> = Counter::to(3);
+    print(d.collect());
+#> [0, 1, 2]
+}
+
+# Passing the obligation on: `best` may call `max` only because it restates the
+# bound. Dropping the `where` here is tests/fail/assoc_bound_relay.dt — it used
+# to be accepted and fail much later, inside the callee, at codegen.
+fun best<I: Iterator>(it: I) -> Option<I.Item> where I.Item: Ord {
+    return it.max();
+}
+
+# The same clause on a trait of the program's own. Three things at once: a
+# predicate naming two traits (`Ord + Display`), a second predicate on the
+# method's *own* type parameter — a trait method's `where` carries both kinds —
+# and a clause written before the associated type it names, since resolution
+# reads the trait's own declarations rather than the clause's order.
+trait Pick {
+    fun current(self) -> Option<Self.Item2>;
+
+    fun describe_largest<T>(self, other: T) -> String
+        where Self.Item2: Ord + Display, T: Display
+    {
+        match self.current() {
+            Option::Some(mine) => {
+                # `mine` is a `Self.Item2`, usable as a value only because the
+                # bound says what it is: comparable, and renderable
+                if mine.cmp(mine) == 0 { return "largest so far: {other}"; }
+                return "unreachable";
+            },
+            Option::None => { return "largest so far: {other}"; },
+        }
+    }
+
+    type Item2;
+}
+
+impl Pick for Counter {
+    type Item2 = Int;
+    fun current(self) -> Option<Int> { return Option::Some(self.n); }
+}
+
+impl Pick for Words {
+    type Item2 = Word;
+    fun current(self) -> Option<Word> { return Option::None; }
+}

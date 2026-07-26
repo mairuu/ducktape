@@ -961,6 +961,31 @@ void infer_finalize(InferCtx *ctx, DiagBag *diags) {
   }
 }
 
+// The trait among a type parameter's bounds that declares an associated type
+// called `name`, or NULL if none does. This is what makes `T.Item` mean
+// anything at all: a projection over a parameter is only writable when the
+// parameter was declared to implement a trait offering it. Three readers ask
+// the same question — resolving `T.Item` in a signature, declaring a bound on
+// it, and discharging that bound against another parameter.
+static TraitDef *generic_assoc_owner(const Type *g, StringView name) {
+  if (g->kind != TY_GENERIC) {
+    return NULL;
+  }
+  for (int i = 0; i < g->as.generic.bound_count; i++) {
+    Type *bound = g->as.generic.bounds[i];
+    if (bound->kind != TY_TRAIT) {
+      continue;
+    }
+    TraitDef *def = bound->as.trait.def;
+    for (int j = 0; j < def->assoc_type_count; j++) {
+      if (sv_equal(def->assoc_types[j].name, name)) {
+        return def;
+      }
+    }
+  }
+  return NULL;
+}
+
 // An impl that would have applied had `m` imported it. Since impls became
 // module-granular this is the likeliest reason a lookup fails, and it is the
 // one thing the visible set cannot tell you — so a "diagnostics only" list of
@@ -1113,13 +1138,28 @@ static void check_bounds_satisfied(InferCtx *ictx, TypeChecker *tc,
   // definition and is re-checked where *that* is instantiated.
   for (int a = 0; a < param->as.generic.assoc_bound_count; a++) {
     const AssocBound *ab = &param->as.generic.assoc_bounds[a];
+
+    // `arg` may be *another* definition's type parameter, whose associated
+    // type is then abstract for the same reason it is — so there is no impl to
+    // read the binding off, and the question is instead what that declaration
+    // promised. Asking it as a projection is what stops a bound being dropped
+    // on the way through (`fun relay<J: Iterator>(j: J) { largest(j) }`
+    // without a `where J.Item: Ord`), which was silently accepted and surfaced
+    // as a codegen error inside `largest` at the instantiation.
+    bool abstract_proj = false;
     Type *projected = impl_index_assoc_type(idx, arg, ab->name, al);
     if (projected == NULL) {
-      continue; // `arg` does not implement the bound declaring it — reported
-                // above
+      TraitDef *owner = generic_assoc_owner(arg, ab->name);
+      if (owner == NULL) {
+        continue; // `arg` does not implement the bound declaring it — reported
+                  // above
+      }
+      projected = ty_assoc(arg, ab->name, owner, al);
+      abstract_proj = true;
     }
     projected = infer_apply(ictx, projected, al);
-    if (type_is_abstract(projected) || type_is_poison(projected)) {
+    if (type_is_poison(projected) ||
+        (!abstract_proj && type_is_abstract(projected))) {
       continue;
     }
     for (int b = 0; b < ab->bound_count; b++) {
@@ -1127,23 +1167,34 @@ static void check_bounds_satisfied(InferCtx *ictx, TypeChecker *tc,
       if (type_is_abstract(trait)) {
         continue;
       }
-      if (!impl_index_implements(idx, projected, trait, al)) {
-        char arg_buf[64], proj_buf[64], trait_buf[64];
-        type_sprintf(arg, arg_buf, sizeof(arg_buf));
-        type_sprintf(projected, proj_buf, sizeof(proj_buf));
-        type_sprintf(trait, trait_buf, sizeof(trait_buf));
-        diag_error(diags, span,
-                   "type '%s' does not satisfy '" SV_FMT
-                   ".%.*s: %s': its '%.*s'"
-                   " is '%s', which does not implement '%s'",
-                   arg_buf, SV_ARG(param->as.generic.name), (int)ab->name.len,
-                   ab->name.chars, trait_buf, (int)ab->name.len, ab->name.chars,
-                   proj_buf, trait_buf);
-        ImplQuery q = {
-            .self_type = projected, .trait = trait, .impls = idx, .al = al};
-        note_unimported_impl(
-            diags, find_unimported_impl(tc, idx, impl_query_matches, &q));
+      if (impl_index_implements(idx, projected, trait, al)) {
+        continue;
       }
+      char proj_buf[64], trait_buf[64];
+      type_sprintf(projected, proj_buf, sizeof(proj_buf));
+      type_sprintf(trait, trait_buf, sizeof(trait_buf));
+      if (abstract_proj) {
+        // nothing concrete to report about: the fix is at the *caller's*
+        // declaration, and a projection is constrained by a `where` rather
+        // than by an inline bound.
+        diag_error(diags, span,
+                   "'%s' is not known to implement '%s': add the bound "
+                   "'where %s: %s'",
+                   proj_buf, trait_buf, proj_buf, trait_buf);
+        continue;
+      }
+      char arg_buf[64];
+      type_sprintf(arg, arg_buf, sizeof(arg_buf));
+      diag_error(diags, span,
+                 "type '%s' does not satisfy '" SV_FMT ".%.*s: %s': its '%.*s'"
+                 " is '%s', which does not implement '%s'",
+                 arg_buf, SV_ARG(param->as.generic.name), (int)ab->name.len,
+                 ab->name.chars, trait_buf, (int)ab->name.len, ab->name.chars,
+                 proj_buf, trait_buf);
+      ImplQuery q = {
+          .self_type = projected, .trait = trait, .impls = idx, .al = al};
+      note_unimported_impl(
+          diags, find_unimported_impl(tc, idx, impl_query_matches, &q));
     }
   }
 }
@@ -1924,19 +1975,15 @@ static Type *resolve_generic_param(ResolveCtx *rctx, const TypeParamNode *param,
 
       // The projection has to exist before it can be constrained, and what says
       // it exists is the same thing `T.Item` in a signature consults: a bound
-      // on `T` that declares that associated type.
+      // on `T` that declares that associated type. Asked through the bounds
+      // collected by the first pass, since the parameter itself is not built
+      // yet.
       StringView aname = pred->lhs.segments[1];
-      bool declared = false;
-      for (int b = 0; b < count && !declared; b++) {
-        if (bounds[b]->kind != TY_TRAIT) {
-          continue;
-        }
-        TraitDef *td = bounds[b]->as.trait.def;
-        for (int j = 0; j < td->assoc_type_count && !declared; j++) {
-          declared = sv_equal(td->assoc_types[j].name, aname);
-        }
-      }
-      if (!declared) {
+      Type probe = {.kind = TY_GENERIC,
+                    .as.generic = {.name = param->name,
+                                   .bounds = bounds,
+                                   .bound_count = count}};
+      if (generic_assoc_owner(&probe, aname) == NULL) {
         diag_error(rctx->diags, pred->lhs.span,
                    "no trait bound on '" SV_FMT
                    "' declares an associated type '" SV_FMT "'",
@@ -2313,13 +2360,22 @@ static Type *trait_project(Type *t, TraitDef *trait, Type *self_to,
 // any other generic, so every mention of it — the body's signature, the type
 // scope it is checked under, the key an instantiation is compiled under — is
 // the same type.
-static Type *trait_self_param(TraitDef *trait, Allocator *al) {
+//
+// A method's `where Self.Item: Ord` rides along as the parameter's associated-
+// type bounds, which is what lets the body use an element (`v > b`) with no
+// new machinery: milestone 52 already answers "what does `T.Item` satisfy?"
+// from the declaration. So `Self` is per *method* rather than per trait —
+// interning makes it the same node for every method that declares no such
+// bound, which is all of them until one does.
+static Type *trait_self_param(TraitDef *trait, AssocBound *assoc_bounds,
+                              int assoc_bound_count, Allocator *al) {
   // bounded by the trait *reference* stating the trait's own parameters as
   // its arguments (`Self: Into<T>` inside `trait Into<T>`), which is what
   // makes a call on `self` inside a default body resolve against the very
   // signatures being declared.
   Type *bounds[1] = {trait->self_type};
-  return ty_generic(sv_from_cstr("Self"), bounds, 1, NULL, 0, al);
+  return ty_generic(sv_from_cstr("Self"), bounds, 1, assoc_bounds,
+                    assoc_bound_count, al);
 }
 
 // Give a default body a definition of its own, so it can be compiled like the
@@ -2339,7 +2395,9 @@ static const char *trait_method_undispatchable(const TraitMethodDef *m,
 static FunDef *resolve_trait_default_impl(ResolveCtx *rctx, TraitDef *trait_def,
                                           TraitMethodDef *method_def,
                                           TraitItemNode *item) {
-  Type *self_param = trait_self_param(trait_def, rctx->al);
+  Type *self_param =
+      trait_self_param(trait_def, method_def->self_assoc_bounds,
+                       method_def->self_assoc_bound_count, rctx->al);
 
   FunDef *fun = al_alloc_zero_for(rctx->al, FunDef);
   fun->name = item->name;
@@ -2399,6 +2457,113 @@ static FunDef *resolve_trait_default_impl(ResolveCtx *rctx, TraitDef *trait_def,
     fun->params[i].param_type = fun_ty->as.fun.param_types[i];
   }
   return fun;
+}
+
+// Resolve the `Self.Assoc: Trait` predicates of a trait method's `where`
+// clause onto the method def. The method's own type parameters have already
+// consumed their predicates (resolve_type_params, which takes the same clause),
+// so what is left here names `Self`.
+//
+// A bound on a *parameter* is discharged where that parameter is bound, which
+// is one place: the instantiation. `Self` has no such place — it is decided by
+// whichever receiver a call has — so the list stays on the signature and every
+// call site discharges it against its own receiver (check_trait_method_call).
+static void resolve_self_assoc_bounds(ResolveCtx *rctx, TraitDef *trait_def,
+                                      TraitItemNode *item,
+                                      TraitMethodDef *method_def) {
+  const WhereClause *where = item->where_clause;
+  if (where == NULL) {
+    return;
+  }
+
+  AssocBound assoc[MAX_BOUNDS];
+  int assoc_count = 0;
+
+  for (int i = 0; i < where->pred_count; i++) {
+    const WherePred *pred = &where->preds[i];
+    StringView head = pred->lhs.segments[0];
+
+    if (!sv_equal(head, sv_from_cstr("Self"))) {
+      bool is_method_param = false;
+      for (int j = 0; j < item->type_param_count && !is_method_param; j++) {
+        is_method_param = sv_equal(item->type_params[j].name, head);
+      }
+      if (!is_method_param) {
+        // in a `fun`'s clause an unmatched predicate is simply not any
+        // parameter's; here the candidates are few enough to name, and the
+        // mistake (writing the receiver parameter's name) is likely enough to
+        // be worth catching.
+        diag_error(rctx->diags, pred->lhs.span,
+                   "a bound in a trait method's 'where' clause must name "
+                   "'Self' or one of the method's type parameters, not '" SV_FMT
+                   "'",
+                   SV_ARG(head));
+      }
+      continue;
+    }
+
+    if (pred->lhs.segment_count == 1) {
+      // `where Self: Ord` is a supertrait — a trait requiring another — and
+      // ducktape has none: a bound is a promise the *caller* discharges, and
+      // there is no caller of a trait declaration.
+      diag_error(rctx->diags, pred->lhs.span,
+                 "a bound on 'Self' itself is not supported: a trait cannot "
+                 "require another trait");
+      continue;
+    }
+    if (pred->lhs.segment_count > 2) {
+      diag_error(rctx->diags, pred->lhs.span,
+                 "a bound may name one associated type of 'Self', not a path "
+                 "through several");
+      continue;
+    }
+
+    // unlike a type parameter, `Self` has exactly one trait offering it
+    // associated types: the one being declared.
+    StringView aname = pred->lhs.segments[1];
+    bool declared = false;
+    for (int j = 0; j < trait_def->assoc_type_count && !declared; j++) {
+      declared = sv_equal(trait_def->assoc_types[j].name, aname);
+    }
+    if (!declared) {
+      diag_error(rctx->diags, pred->lhs.span,
+                 "trait '" SV_FMT "' has no associated type '" SV_FMT "'",
+                 SV_ARG(trait_def->name), SV_ARG(aname));
+      continue;
+    }
+
+    // `where Self.Item: A, Self.Item: B` is one entry with two traits, the
+    // same reading `T: A, T: B` gets.
+    AssocBound *entry = NULL;
+    for (int k = 0; k < assoc_count; k++) {
+      if (sv_equal(assoc[k].name, aname)) {
+        entry = &assoc[k];
+        break;
+      }
+    }
+    if (entry == NULL) {
+      if (assoc_count >= MAX_BOUNDS) {
+        diag_error(rctx->diags, pred->lhs.span,
+                   "too many associated-type bounds on 'Self'");
+        continue;
+      }
+      entry = &assoc[assoc_count++];
+      entry->name = aname;
+      entry->bounds = al_alloc(rctx->al, sizeof(Type *) * MAX_BOUNDS);
+      entry->bound_count = 0;
+    }
+    resolve_bound_refs(rctx, &pred->bound, entry->bounds, &entry->bound_count);
+  }
+
+  if (assoc_count == 0) {
+    return;
+  }
+  method_def->self_assoc_bounds =
+      al_alloc(rctx->al, sizeof(AssocBound) * (size_t)assoc_count);
+  for (int i = 0; i < assoc_count; i++) {
+    method_def->self_assoc_bounds[i] = assoc[i];
+  }
+  method_def->self_assoc_bound_count = assoc_count;
 }
 
 // Declare pass: resolve the trait's own type parameters and bind its name to a
@@ -2498,7 +2663,12 @@ static void resolve_trait_decl(ResolveCtx *rctx, Decl *decl) {
     // begin; method level type scope
     rctx->tyres.tscope = tscope_push(rctx->tyres.tscope, rctx->al);
     resolve_type_params(rctx, item->type_params, item->type_param_count,
-                        /*where=*/NULL, method_def->type_params);
+                        item->where_clause, method_def->type_params);
+
+    // and the `Self.Assoc` half of the same clause, which no parameter owns.
+    // Before the signature, so `trait_method_undispatchable` and the default
+    // body's `Self` can both read it.
+    resolve_self_assoc_bounds(rctx, trait_def, item, method_def);
 
     // resolve parameters (self resolves to the abstract trait type) and return.
     TypeScratch param_types;
@@ -4408,6 +4578,22 @@ static Type *check_trait_method_call(CheckCtx *ctx, Expr *expr, Type *trait_ref,
     mc->bound_self = self_ty;
   }
 
+  // `where Self.Item: Ord` on the signature is the receiver's obligation, and
+  // this call is where it comes due. Recorded rather than asked now, because
+  // `self_ty` may still be an unsolved unknown here (`xs.iter().max()`) — the
+  // same collect-then-discharge shape `inst` and a `dyn` coercion need. A
+  // TY_GENERIC carrying just these bounds is the carrier, so
+  // check_bounds_satisfied answers it exactly as it answers a `where I.Item:
+  // Ord` at an instantiation: concrete receiver → read the impl's binding and
+  // ask; abstract one → answer from what the caller's own declaration promised.
+  if (tm->self_assoc_bound_count > 0) {
+    Type *self_obligation =
+        ty_generic(sv_from_cstr("Self"), /*bounds=*/NULL, 0,
+                   tm->self_assoc_bounds, tm->self_assoc_bound_count, ctx->al);
+    infer_note_explicit_bound(&ctx->infer, self_obligation, self_ty,
+                              expr->span);
+  }
+
   // the trait's own type parameters are generic parameters of every signature
   // it declares, and the reference is what binds them: inside `trait Into<T>`,
   // a call through `S: Into<Int>` reads `into` as `fun(Self) -> Int`. Dropped
@@ -4426,7 +4612,15 @@ static Type *check_trait_method_call(CheckCtx *ctx, Expr *expr, Type *trait_ref,
                    subst_with_self(subst_concat(trait_subst, subst, ctx->al),
                                    self_ty, ctx->al));
 
-  Type *fun_ty = subst_apply(&subst, tm->method_type, ctx->al);
+  // partial: this opens the *method's* parameters and no others, so what is
+  // left standing is the trait's own (substituted next) and `Self` — not a
+  // bug, and totality would be the wrong question to ask until every scope has
+  // had its turn. Asking it anyway aborted the compiler on any call to a
+  // generic trait's defaulted method that had a type parameter of its own,
+  // since the receiver parameter's type is the trait applied to *its*
+  // parameters (`Into<T>`) and `T` is not the method's to bind.
+  Type *fun_ty =
+      subst_apply_(&subst, NULL, tm->method_type, /*total=*/false, ctx->al);
   if (trait_subst.count > 0) {
     fun_ty = subst_apply(&trait_subst, fun_ty, ctx->al);
   }
@@ -6631,13 +6825,12 @@ static void tc_check_trait(TypeChecker *tc, Decl *decl) {
   CheckCtx cctx;
   cctx_init(&cctx, tc, trait_def->module, tc->diags, tc->al);
 
-  // begin trait type scope. Only bodies are checked here, and a body is
-  // written against the `Self` type parameter its own definition introduced —
-  // the abstract trait type never appears in one.
+  // begin trait type scope. Nothing is defined at this level: only bodies are
+  // checked here, and a body is written against the type parameters its own
+  // definition introduced — including `Self`, which is one of them, so the
+  // abstract trait type never appears in one and neither do the trait's
+  // parameters as the *trait* declared them.
   cctx.tyres.tscope = tscope_push(cctx.tyres.tscope, cctx.al);
-  tscope_define(cctx.tyres.tscope, sv_from_cstr("Self"),
-                trait_self_param(trait_def, cctx.al), cctx.diags, decl->span,
-                NULL);
 
   for (int i = 0, method_idx = 0; i < trait_decl->item_count; i++) {
     TraitItemNode *item = &trait_decl->items[i];
@@ -6653,13 +6846,21 @@ static void tc_check_trait(TypeChecker *tc, Decl *decl) {
     cctx.fun = fun;
     cctx.return_type = fun->return_type;
 
-    // begin method type scope. `Self` is fun->type_params[0], already in scope
-    // from the trait level; the method's own follow it.
+    // begin method type scope. The body is a generic function over exactly
+    // `fun->type_params` — `Self`, then the trait's own parameters, then the
+    // method's (resolve_trait_default_impl builds them in that order, dropping
+    // a trait parameter the method shadows) — so each is defined here by its
+    // own name rather than by a position guessed from the *item*. Guessing is
+    // what it used to do (`type_params[j + 1]`), which bound a method's `<U>`
+    // to the trait's `<T>` for any generic trait, and then aborted the compiler
+    // on subst_apply's assert when the instantiation had no `U` to bind. Naming
+    // them also puts the trait's parameters in scope, so a default body may
+    // annotate with `T` and not just return it.
     cctx.tyres.tscope = tscope_push(cctx.tyres.tscope, cctx.al);
-    for (int j = 0; j < item->type_param_count; j++) {
-      tscope_define(cctx.tyres.tscope, item->type_params[j].name,
-                    fun->type_params[j + 1], cctx.diags,
-                    item->type_params[j].span, NULL);
+    for (int j = 0; j < fun->type_param_count; j++) {
+      Type *param = fun->type_params[j];
+      tscope_define(cctx.tyres.tscope, param->as.generic.name, param,
+                    cctx.diags, item->span, NULL);
     }
 
     // begin method var scope
@@ -6951,6 +7152,14 @@ static const char *trait_method_undispatchable(const TraitMethodDef *m,
   }
   if (m->type_param_count > 0) {
     return "it has type parameters of its own";
+  }
+  if (m->self_assoc_bound_count > 0) {
+    // the vtable is built where the value is coerced, and whether the bound
+    // holds is a question about the concrete type and the impls visible
+    // *there* — which is exactly what the coercion throws away. `Self.Item`
+    // being nameable through the trait object (milestone 27) says what the
+    // type is, not that anything implements a trait for it.
+    return "it requires a bound on an associated type";
   }
   if (m->method_type != NULL && type_mentions_self(m->method_type, trait)) {
     // the receiver is `Self` by construction; look past it.

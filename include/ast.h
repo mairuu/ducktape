@@ -333,6 +333,16 @@ typedef struct {
   int self_index; // position of `self` in method_type, -1 => assoc function
   bool has_default;
 
+  // `where Self.Item: Ord` on the signature. This is the *obligation*: the
+  // list a call site discharges against whatever concrete receiver it has,
+  // since `method_type` keeps the abstract `Self` (a TY_TRAIT) that conformance
+  // and call sites check against. The matching *assumption* — what the default
+  // body may lean on — lives on `default_impl->type_params[0]`, the real
+  // `TY_GENERIC` `Self` those same bounds are copied onto, where milestone 52's
+  // machinery reads them like any other parameter's. Same fact, two readers.
+  AssocBound *self_assoc_bounds;
+  int self_assoc_bound_count;
+
   // signature is not vtable-dispatchable (no `self`, own type parameters, or
   // `Self` outside the receiver), so this method is left out of any `dyn`
   // vtable — a provided one is excluded silently, a required one makes the
@@ -1150,8 +1160,9 @@ typedef struct {
   int type_param_count;
   ParamDeclNode *params;
   int param_count;
-  TypeNode *return_type; // NULL -> unit
-  Expr *default_body;    // NULL -> required
+  TypeNode *return_type;     // NULL -> unit
+  WhereClause *where_clause; // NULL if no where clause
+  Expr *default_body;        // NULL -> required
 
   // TRAIT_ITEM_ACSOC_TYPE
   // no additional fields (only name)

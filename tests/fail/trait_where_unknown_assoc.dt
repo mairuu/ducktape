@@ -1,0 +1,13 @@
+#! expect: trait 'Feed' has no associated type 'Nope'
+# `Self` differs from a type parameter in having exactly one trait that could
+# offer it associated types: the one being declared. So an undeclared name is
+# caught at the declaration, without having to search a bound list — the same
+# check `where I.Nope: Ord` gets on a parameter
+# (tests/fail/assoc_bound_undeclared.dt), with a shorter answer.
+use std::cmp::Ord;
+use std::option::Option;
+
+trait Feed {
+    type Item;
+    fun best(self) -> Option<Self.Item> where Self.Nope: Ord;
+}

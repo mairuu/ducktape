@@ -1,0 +1,38 @@
+#! expect: add the bound 'where I.Item: Ord'
+# Handing a bounded projection on to something that needs the same bound.
+#
+# `max` requires `Self.Item: Ord`. Inside `relay`, `I` is abstract, so there is
+# no impl to read `I.Item` off and the question can only be answered by what
+# *this* declaration promised — and it promised `I: Iterator` and nothing more.
+# So the bound has to be restated here, exactly as a plain bound does when one
+# generic hands its parameter to another (tests/fail/bound_forward_missing.dt).
+#
+# This was silently accepted before milestone 53: the assoc half of
+# `check_bounds_satisfied` gave up when the argument had no impl to consult, so
+# the mistake surfaced as "this method call is not supported by the VM yet"
+# pointing inside the *callee*, at whichever instantiation first met an element
+# that was not `Ord`.
+use std::iter::Iterator;
+use std::option::Option;
+use std::cmp::Ord;
+use std::io::print;
+
+fun relay<I: Iterator>(it: I) -> Option<I.Item> {
+    return it.max();
+}
+
+fun main() {
+    print(relay(Counter { n: 0, max: 3 }));
+}
+
+struct Counter { n: Int, max: Int }
+
+impl Iterator for Counter {
+    type Item = Int;
+    fun next(self) -> Option<Int> {
+        if self.n >= self.max { return Option::None; }
+        var v = self.n;
+        self.n += 1;
+        return Option::Some(v);
+    }
+}

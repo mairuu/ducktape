@@ -1,0 +1,33 @@
+#! expect: because it requires a bound on an associated type
+# A method whose signature carries `where Self.Item: Ord` cannot sit in a
+# `dyn` vtable, and joins `map`/`filter`/`skip` in the milestone-48 partition.
+#
+# The reason is what a vtable is: it is built where the value is *coerced*, and
+# whether the bound holds is a question about the concrete type and the impls
+# visible at that point — precisely what the coercion throws away. That
+# `Self.Item` is nameable through the trait object (`dyn Iterator<Item = Int>`)
+# says what the type is, not that anything implements `Ord` for it.
+#
+# `max` is a *provided* method, so this excludes it rather than sinking the
+# trait: `dyn Iterator` is still a legal type and still has `collect`.
+use std::iter::Iterator;
+use std::option::Option;
+use std::io::print;
+
+struct Counter { n: Int, max: Int }
+
+impl Iterator for Counter {
+    type Item = Int;
+    fun next(self) -> Option<Int> {
+        if self.n >= self.max { return Option::None; }
+        var v = self.n;
+        self.n += 1;
+        return Option::Some(v);
+    }
+}
+
+fun main() {
+    var d: dyn Iterator<Item = Int> = Counter { n: 0, max: 3 };
+    print(d.collect());
+    print(d.max());
+}

@@ -2739,6 +2739,88 @@
   `tests/fail` files pin the diagnostics. Design: `language.md` bounds list,
   `architecture.md` "Associated-type projections", `grammar.ebnf`.
 
+- **A `where` on a trait method's signature (milestone 53)** — the placement
+  milestone 52 left, and the one that makes a bounded reduce a *combinator*:
+  `it.max()` / `it.min()` are provided methods on `Iterator` now, not a free
+  `largest`. Design: `language.md` bounds list + "Iterators" + "Trait objects",
+  `architecture.md` "Associated-type projections" → on a trait method's
+  signature, `grammar.ebnf`.
+
+  The observation the milestone turns on: **a bound on a type parameter is
+  discharged in one place, and `Self` has no such place.** Binding `I` to
+  `Counter` is a moment — the instantiation — so `where I.Item: Ord` can wait
+  for inference and be checked there. `Self` is not bound anywhere; it is
+  *decided by whoever calls*. So the same predicate, moved onto a trait method,
+  stops being a fact about a definition and becomes an obligation every call
+  site discharges against its own receiver.
+
+  Everything follows from taking that literally:
+  - **The bound is stored twice, because it has two readers with different
+    jobs.** The *obligation* is `TraitMethodDef.self_assoc_bounds`, checked at
+    each call; the *assumption* is the same list copied onto the default body's
+    `TY_GENERIC` `Self`, which is what the body may lean on. It cannot be one
+    field: `method_type` keeps the abstract `TY_TRAIT` `Self` (conformance and
+    call sites check against the trait, not the body copy — milestone 12), and
+    a *required* method has no body to hang anything on. The copy makes `Self`
+    per method, which interning renders invisible for every method without such
+    a clause.
+  - **The assumption side needed no new machinery at all.** Once `Self` is a
+    `TY_GENERIC` carrying an `AssocBound`, `v > b` on two `Self.Item`s is the
+    question milestone 52 already answers for `I.Item`. The diff there is one
+    argument on `trait_self_param`.
+  - **The obligation side is a recording, not a check.** The receiver may still
+    be an unsolved unknown when the call is checked (`xs.iter().max()`), so
+    `check_trait_method_call` pushes a `TY_GENERIC` carrying just these bounds
+    onto `InferCtx.explicit_bounds` — the list an explicit turbofish argument
+    already uses — and `check_bounds_satisfied` answers it after
+    `infer_finalize`. Concrete receiver, bounded receiver and `Self` inside
+    another default body are then one code path. The same collect-then-consume
+    shape `inst` and a `dyn` coercion needed.
+  - **Object safety gains a fourth condition**, and it is forced rather than
+    chosen: a vtable is built where the value is *coerced*, and whether the
+    bound holds is a question about the concrete type and the impls visible
+    there. So `max`/`min` join `map`/`filter`/`skip` in the milestone-48
+    partition — excluded silently because they are provided, refused at the
+    call with the reason, and `dyn Iterator` keeps `.collect()`.
+
+  **A hole in milestone 52 fell out of writing the discharge**, and it was the
+  same asymmetry one level down: `check_bounds_satisfied`'s assoc half gave up
+  when the argument had no impl to consult, while its plain half has always
+  answered a `TY_GENERIC` from the parameter's own declaration. So `fun
+  relay<J: Iterator>(j: J) { largest(j) }` was *accepted* without a `where
+  J.Item: Ord`, and the mistake surfaced as "this method call is not supported
+  by the VM yet" pointing inside `largest`, at whichever instantiation first
+  met an element that was not `Ord`. Building the projection and asking
+  `impl_index_implements` — the `TY_ASSOC` case 52 added — moves it to the call
+  that dropped the bound, with the bound to add (`tests/fail/assoc_bound_relay.dt`).
+
+  Also fixed, both pre-existing and both in the lines the milestone had to
+  rewrite anyway — a *generic* trait's default bodies were the untested corner:
+  - `tc_check_trait` built the method's type scope by reading the *item's*
+    parameters positionally into `fun->type_params[j + 1]`, but that list is
+    `Self`, then the trait's parameters, then the method's. With a generic
+    trait, a method's own `<U>` was therefore bound to the trait's `<T>`, and
+    the instantiation — which has no `U` — **aborted the compiler** on
+    `subst_apply`'s totality assert. Now defined by name off `fun->type_params`,
+    which is the body's actual signature.
+  - the same loop never put the trait's own parameters in scope, so a default
+    body could *return* a `T` but not name one (`var held: T` was "unknown
+    type: T"). Naming the list fixes both at once.
+  - `check_trait_method_call` applied the method's substitution with
+    `total=true`, asserting on any parameter it did not bind — but that
+    substitution opens the *method's* parameters only, and the receiver's type
+    is the trait applied to *its* parameters. Every other partial application
+    in the file already passes `total=false`; this one is now the fourth.
+    (`tests/run/trait_generic_default.dt` covers all three.)
+
+  Scope, honestly: `chain` is still blocked, and on the other half of "Next"
+  item 2 — an *equality* binding (`J: Iterator<Item = I.Item>`), which says two
+  types are the same rather than which traits one satisfies. `sum` is blocked
+  on something else entirely: there is no `Add` trait, so `+` on an element has
+  nothing to bound. And an impl overriding a defaulted method neither must
+  restate the clause nor is stopped from adding one, since conformance compares
+  signatures and a signature carries no bounds.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -2800,20 +2882,11 @@ settles the rest, without an expected type.)
 recorded — how many `Ord` methods the operator names — was answered `cmp` only,
 the smaller entanglement, matching how `Display` names exactly `to_string`.)
 
-2. **The two halves of the associated-type bound that milestone 52 left.** The
-   *trait* half landed there (`where I.Item: Ord`); what is left is one
-   placement and one predicate kind, each with a waiting consumer.
-
-   **`where` on a trait method's signature.** The parser has never accepted one
-   there, so a trait cannot offer a provided method that needs a bound on
-   `Self.Item` — which is exactly what `it.max()` / `it.min()` / `it.sum()` as
-   `Iterator` combinators would need, and why milestone 52 shipped a free
-   `largest` instead. The parser change is small; the sema question is that
-   `Self.Item` in a *signature* is a projection over the abstract `TY_TRAIT`
-   self rather than over a `TY_GENERIC`, so it needs checking at each call
-   against the concrete receiver rather than at an instantiation. A default
-   *body* is the easy half — `trait_self_param` already builds a real
-   `TY_GENERIC` `Self`, which milestone 52's machinery fits unchanged.
+2. **The equality binding, the last of the associated-type-bound work.** The
+   trait half landed in milestone 52 (`where I.Item: Ord`) and the placement
+   half in 53 (the same clause on a trait method's signature, which is what
+   made `it.max()` a combinator). What is left is one predicate kind, with a
+   waiting consumer.
 
    **An equality binding** (`J: Iterator<Item = I.Item>`) — a different
    predicate kind, saying not "this projection implements a trait" but "these
@@ -2898,11 +2971,20 @@ via `Module.decl_base`) and is not part of the main line.
   is **closed as of milestone 50**: `assoc_apply` gives codegen the collapse
   `infer_apply` was doing for the checker, and `cg_subst` applies it at every
   site that substitutes. What remained after it was narrower and *not* the same
-  problem — bounding an associated type — and milestone 52 answered half of it:
-  `where I.Item: Ord` now works on a `fun` or an `impl`. Still missing are the
-  same clause on a *trait method's* signature (so a bounded reduce cannot be an
-  `Iterator` combinator) and an *equality* binding (`J: Iterator<Item = I.Item>`,
-  which `chain` needs). That is "Next" item 2
+  problem — bounding an associated type — and milestones 52 and 53 answered it
+  between them: `where I.Item: Ord` works on a `fun`, an `impl`, and (53) a
+  trait method's signature, which is what made `it.max()` a combinator. Still
+  missing is an *equality* binding (`J: Iterator<Item = I.Item>`, which `chain`
+  needs). That is "Next" item 2
+- a trait method's `where` clause is discharged at every call *through the
+  trait*, but an impl overriding a defaulted method is neither made to restate
+  the clause nor stopped from adding a stronger one: conformance compares
+  signatures with `types_equal`, and a signature carries no bounds. An
+  override's own bounds are checked where it is called *concretely*, so the gap
+  is a strengthened override reached through a bound or a `dyn`
+- a `where` predicate naming nothing is silently dropped on a `fun` or an
+  `impl` (it simply matches no type parameter). Only a trait method's clause
+  reports it, because there the candidates are few enough to name
 - an impl's own type-param bounds are checked at selection (milestone 20), but
   *coherence* is deliberately blind to them: `impl<T: Ord> Ord for Option<T>`
   and an `impl Ord for Option<Widget>` conflict even though no receiver could

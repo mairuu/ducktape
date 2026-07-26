@@ -1,0 +1,27 @@
+#! expect: does not satisfy 'Self.Item: Ord'
+# A `where` on a trait method's signature (milestone 53) is discharged at each
+# *call*, against whatever receiver that call has — unlike a parameter's bound,
+# which has one place to come due. `Iterator::max` declares `where Self.Item:
+# Ord`; `Widgets` yields a `Widget`, which implements nothing, so the receiver
+# is what fails and the diagnostic names all three parts: the type, the bound it
+# broke, and what its `Item` actually is.
+use std::iter::Iterator;
+use std::option::Option;
+use std::io::print;
+
+struct Widget { id: Int }
+
+struct Widgets { n: Int }
+
+impl Iterator for Widgets {
+    type Item = Widget;
+    fun next(self) -> Option<Widget> {
+        if self.n >= 2 { return Option::None; }
+        self.n += 1;
+        return Option::Some(Widget { id: self.n });
+    }
+}
+
+fun main() {
+    print(Widgets { n: 0 }.max());
+}

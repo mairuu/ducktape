@@ -1,0 +1,13 @@
+#! expect: a bound on 'Self' itself is not supported
+# `where Self: Ord` on a trait method is a supertrait — a trait requiring
+# another — and ducktape has none. A bound is a promise the *caller* discharges,
+# and a trait declaration has no caller; the thing a method's `where` can
+# constrain is what an impl binds an associated type to, which is a question
+# each call site can answer about its own receiver.
+use std::cmp::Ord;
+use std::option::Option;
+
+trait Sized2 {
+    type Item;
+    fun first(self) -> Option<Self.Item> where Self: Ord;
+}

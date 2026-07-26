@@ -1,0 +1,10 @@
+#! expect: 'Self' may only be bound in a trait method's 'where' clause
+# A `where` predicate names a type *parameter*, and `Self` is one only inside a
+# trait method's signature, where it stands for the receiver. On a `fun` it
+# names nothing, so the predicate would match no parameter and be dropped
+# without a word — which is the failure mode the parser refuses here.
+use std::cmp::Ord;
+
+fun f<T>(x: T) -> Int where Self.Item: Ord {
+    return 1;
+}
