@@ -60,7 +60,14 @@ variantDecl    = IDENT ( "(" type ( "," type )* ")"
                        | "{" variantFieldDecl ( "," variantFieldDecl )* ","? "}" )? ;
 variantFieldDecl = IDENT ":" type ;
 
-traitDecl      = "trait" IDENT typeParams? "{" traitItem* "}" ;
+traitDecl      = "trait" IDENT typeParams? ( ":" traitBound )?
+                 "{" traitItem* "}" ;
+                 (* the bound after ":" is the trait's *supertraits*: every type
+                    implementing this trait must implement those too, and every
+                    bound on this trait offers their methods and associated
+                    types. Spelled like a type parameter's bound because that is
+                    what it is — a bound on `Self`, which has no `<..>` list to
+                    sit in *)
 traitItem      = "type" IDENT ";"
                | "fun" IDENT typeParams? "(" paramList? ")"
                  ( "->" type )? whereClause?
@@ -69,8 +76,8 @@ traitItem      = "type" IDENT ";"
                     parameters and, uniquely here, `Self`'s associated types:
                     `where Self.Item: Ord` is what lets a provided method use
                     an element rather than only pass it along (Iterator::max).
-                    A bound on `Self` itself is rejected — that would be a
-                    supertrait *)
+                    A bound on `Self` itself is rejected here — a supertrait is
+                    a property of the trait, so it has the one spelling above *)
 
 implDecl       = "impl" typeParams? type ( "for" type )? whereClause?
                  "{" implItem* "}" ;

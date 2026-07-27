@@ -2954,6 +2954,13 @@ static Decl *parse_trait_decl(Parser *p, bool is_pub) {
     }
   }
 
+  // supertraits, spelled exactly like a type parameter's bound because that is
+  // what they are — a bound on `Self`, which has no `<..>` list to sit in.
+  TraitBound supers = {.ref_count = 0, .refs = NULL};
+  if (match_tok(p, TOKEN_COLON) && !parse_trait_bound(p, &supers)) {
+    return ast_decl(DECL_POISON, token_span(&trait_tok), p->al);
+  }
+
   // zeroed: an associated-type item fills in only kind/name/span, so every
   // method-only field has to start NULL rather than hold whatever the stack
   // had — nothing reads them for an assoc item, but nothing should have to
@@ -3114,6 +3121,7 @@ static Decl *parse_trait_decl(Parser *p, bool is_pub) {
   trait_decl->name = name_sv;
   trait_decl->type_params = type_params;
   trait_decl->type_param_count = type_param_count;
+  trait_decl->supers = supers;
   trait_decl->items = al_alloc(p->al, sizeof(TraitItemNode) * item_count);
   memcpy(trait_decl->items, items, sizeof(TraitItemNode) * item_count);
   trait_decl->item_count = item_count;

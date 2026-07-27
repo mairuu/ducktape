@@ -1,0 +1,12 @@
+#! expect: is a supertrait of itself
+# A supertrait cycle has no meaning — every impl of either would owe the other
+# forever — and it has to be *reported* rather than merely survived: the closure
+# walk is what answers "what does this bound offer", so a cycle it only
+# terminated on would silently answer with whichever half it reached first.
+trait A: B {
+    fun a(self) -> Int;
+}
+
+trait B: A {
+    fun b(self) -> Int;
+}

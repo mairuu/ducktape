@@ -3085,6 +3085,77 @@
   costs. Nothing here is a debug-only check that disappears from a release
   build, and the language has no notion of one to hang it on.
 
+- **Supertraits, and `rev` (milestone 58)** — `trait DoubleEnded: Iterator`, so
+  a trait may require another. Design: `architecture.md` "Supertraits",
+  `language.md` "Supertraits" / `std::iter` → "`DoubleEnded` and `rev`",
+  `runtime.md` "Trait objects".
+
+  The observation the milestone turns on: **a supertrait is not a new kind of
+  thing, it is an edge.** Four questions the checker already asked of an
+  abstract type — what does it implement, what methods may it name, what
+  associated types has it, and what can a vtable carry — were each answered by
+  scanning one trait's own list. A supertrait makes each of those scans
+  transitive. Nothing else about a trait, an impl, a call or a coercion
+  changed, and the closure a trait with *no* supers has is one entry, itself,
+  so every reader **dropped** a special case rather than gaining one.
+
+  It says one thing with two readings, and the milestone is only usable because
+  both are enforced:
+  - **As an obligation**, `impl DoubleEnded for Span` requires
+    `impl Iterator for Span`, checked in `tc_check_impl_conformance` against
+    the impl's own module.
+  - **As an assumption**, a `T: DoubleEnded` bound hands you all of `Iterator`
+    — answered off the declaration, without searching for an impl at all.
+
+  The second is only sound because of the first, and that is the whole of why
+  the obligation is not a nicety: `impl_index_implements` reads a super
+  straight off a `TY_GENERIC`'s bounds, so an `impl DoubleEnded` without an
+  `impl Iterator` would be a lie the checker had already believed.
+
+  Three things follow, and the third is the one worth recording:
+  - **The pass structure had to grow a third sub-pass.** A signature may
+    project through a super (`Self.Item` where `Item` is the super's), so every
+    trait's supers must be resolved before *any* signature is — but resolving a
+    super needs every trait's name bound. So `resolve_trait_supers` and
+    `trait_build_closure` sit between declare and body, and the associated-type
+    *names* moved into the declare pass, where they are a straight copy off the
+    AST. The result is that a supertrait declared later in the file works, which
+    a bound on a type parameter still does not.
+  - **`trait_project` has to look past the impl it was handed.** A supertrait's
+    associated type is bound by the impl of the trait that *declares* it, so
+    `impl DoubleEnded for Rev<I>` says nothing about `Item` and the projection
+    used to survive to a signature comparison as an unresolved
+    `DoubleEnded.Item`. It now falls back to `impl_index_assoc_type` on the self
+    type. That is the one place the feature cost a real edit rather than a
+    substituted scan.
+  - **`dyn Sub` works, and there is no diamond problem to solve.** This was the
+    question the milestone looked blocked on: a flat vtable numbering over a
+    closure seems to require that `dyn A`'s and `dyn B`'s tables agree about
+    `B`'s methods, which a diamond breaks. They never have to. **A trait object
+    always carries the table of the trait it was *written* as, and every
+    dispatch on it indexes that same trait's closure** — the language has no
+    `dyn A` → `dyn B` coercion, so two tables are never compared. So the vtable
+    and the associated-type table both flatten, object safety is decided over
+    the closure, and a `dyn DoubleEnded<Item = Int>` is an `Iterator` in every
+    sense a bound or a `for` loop can ask about.
+
+  `std::iter` gains `DoubleEnded` (`next_back`, `rev`), the `Rev<I>` adapter and
+  its two impls, and forwarding impls on `Map` and `Filter`. Which adapters
+  forward is the library's one judgement call, and each refusal has its own
+  reason rather than a shared one: `take`/`skip` would need a length to know
+  where the far end is, `enumerate`'s index counts from the front, `zip` pairs
+  by position, and a `chain` driven from both ends needs its halves to agree on
+  where they met — which two independent `done` flags cannot say.
+
+  `DoubleEnded` is deliberately **not** a lang item and not preluded: nothing
+  the compiler desugars names it, unlike `Iterator`, which `for` speaks.
+
+  One existing test changed its premise rather than its expectation, which is
+  the usual measure: `tests/fail/trait_where_self_bound.dt` asserted that
+  `where Self: Ord` was rejected *because ducktape has no supertraits*, and now
+  asserts it is rejected because a supertrait belongs on the trait rather than
+  on one method — one spelling, not two.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -3156,11 +3227,14 @@ unified, so a binding will not solve a type argument from the other side.)
 (**`sum`/`product` are no longer blocked** — they were waiting on an `Add` trait
 rather than on any predicate, and that is milestone 55: the arithmetic operators
 desugar to `std::ops` the way `<` desugars to `Ord`, so `where Self.Item: Add`
-is writable and the reduce is an ordinary combinator. What is left in the
-combinator direction is breadth with no design question behind it — `any`,
-`all`, `find`, `position`, `count`, `for_each`, `take_while`, `skip_while` —
-plus `rev`, which *does* have one, since reversing needs an iterator that can be
-driven from both ends.)
+is writable and the reduce is an ordinary combinator.)
+
+(**`rev` was the last combinator with a design question**, and it is milestone
+58: reversing needs an iterator that can be driven from both ends, which needs a
+trait that requires `Iterator` — so the answer was **supertraits**, a language
+feature rather than another adapter struct. What is left in the combinator
+direction is breadth with no design question behind it: `any`, `all`, `find`,
+`position`, `count`, `for_each`, `take_while`, `skip_while`.)
 
 (**`std::assert`** is milestone 57, and is the shape "breadth" takes when a
 piece needs no registry entry at all: five functions over `std::panic`, zero
@@ -3269,6 +3343,15 @@ via `Module.decl_base`) and is not part of the main line.
   54's equality binding (`J: Iterator<Item = I.Item>`) made `chain` one. The
   family is closed; what it does not do is *infer*, since an equality is
   compared rather than unified
+- a supertrait obligation is *checked*, never discharged: `impl DoubleEnded for
+  X` requires an `impl Iterator for X` written out, and nothing derives one. Nor
+  is a supertrait inherited by an impl of the sub in any weaker sense — the two
+  impls are wholly separate definitions
+- a supertrait is resolved in its own sub-pass, so it may name a trait declared
+  *later* in the file — unlike a type-parameter bound, which is still resolved
+  in the declare pass and so stays order-sensitive. The two spellings of "a
+  bound" therefore differ in one respect, for an implementation reason rather
+  than a design one
 - a trait method's `where` clause is discharged at every call *through the
   trait*, but an impl overriding a defaulted method is neither made to restate
   the clause nor stopped from adding a stronger one: conformance compares

@@ -718,14 +718,97 @@ bool type_is_abstract(const Type *t) {
   }
 }
 
-Type *ty_dyn_assoc(const Type *dyn, StringView name) {
-  const TraitDef *trait = dyn_trait_def(dyn);
-  for (int i = 0; i < dyn->as.dyn.assoc_type_count; i++) {
-    if (sv_equal(trait->assoc_types[i].name, name)) {
-      return dyn->as.dyn.assoc_types[i];
+// ── reading a trait through its supertrait closure ───────────────────────────
+//
+// Four questions used to be answered by walking a trait's own `methods` and
+// `assoc_types`; with supertraits each walks the closure instead, and these are
+// the accessors that flatten it. The order — supers first, in closure order,
+// each trait's items in declaration order — is fixed here and *is* the `dyn`
+// vtable layout, so build and dispatch cannot disagree.
+//
+// There is no diamond problem to solve, which is why a flat numbering is
+// enough: a trait object always carries the table of the trait it was written
+// as, and every dispatch on it indexes that same trait's closure. Two tables
+// never have to agree, because the language has no `dyn A` → `dyn B` coercion.
+
+int trait_flat_method_count(const TraitDef *trait) {
+  int n = 0;
+  for (int i = 0; i < trait->flat_count; i++) {
+    n += trait->flat[i].def->method_count;
+  }
+  return n;
+}
+
+TraitMethodDef *trait_flat_method(const TraitDef *trait, int index,
+                                  Type **owner_ref) {
+  for (int i = 0; i < trait->flat_count; i++) {
+    TraitDef *owner = trait->flat[i].def;
+    if (index < owner->method_count) {
+      if (owner_ref != NULL) {
+        *owner_ref = trait->flat[i].ref;
+      }
+      return &owner->methods[index];
     }
+    index -= owner->method_count;
   }
   return NULL;
+}
+
+int trait_flat_method_index(const TraitDef *trait, StringView name) {
+  int base = 0;
+  for (int i = 0; i < trait->flat_count; i++) {
+    TraitDef *owner = trait->flat[i].def;
+    for (int j = 0; j < owner->method_count; j++) {
+      if (sv_equal(owner->methods[j].name, name)) {
+        return base + j;
+      }
+    }
+    base += owner->method_count;
+  }
+  return -1;
+}
+
+int trait_flat_assoc_count(const TraitDef *trait) {
+  int n = 0;
+  for (int i = 0; i < trait->flat_count; i++) {
+    n += trait->flat[i].def->assoc_type_count;
+  }
+  return n;
+}
+
+StringView trait_flat_assoc_name(const TraitDef *trait, int index) {
+  for (int i = 0; i < trait->flat_count; i++) {
+    TraitDef *owner = trait->flat[i].def;
+    if (index < owner->assoc_type_count) {
+      return owner->assoc_types[index].name;
+    }
+    index -= owner->assoc_type_count;
+  }
+  return (StringView){0};
+}
+
+int trait_flat_assoc_index(const TraitDef *trait, StringView name) {
+  int base = 0;
+  for (int i = 0; i < trait->flat_count; i++) {
+    TraitDef *owner = trait->flat[i].def;
+    for (int j = 0; j < owner->assoc_type_count; j++) {
+      if (sv_equal(owner->assoc_types[j].name, name)) {
+        return base + j;
+      }
+    }
+    base += owner->assoc_type_count;
+  }
+  return -1;
+}
+
+Type *ty_dyn_assoc(const Type *dyn, StringView name) {
+  // the table is laid out over the trait's *supertrait closure* (TYNODE_ASSOC),
+  // so a super's associated type is reachable through the sub's trait object.
+  int slot = trait_flat_assoc_index(dyn_trait_def(dyn), name);
+  if (slot < 0 || slot >= dyn->as.dyn.assoc_type_count) {
+    return NULL;
+  }
+  return dyn->as.dyn.assoc_types[slot];
 }
 
 // bool types_equal(const Type *a, const Type *b) { return a == b; }
@@ -1663,6 +1746,11 @@ void dump_decl(const Decl *d, int indent) {
       fprintf(stdout, "TypeParam: " SV_FMT "\n",
               SV_ARG(d->as.trait_decl.type_params[i].name));
       dump_bound(&d->as.trait_decl.type_params[i].inline_bound, indent + 2);
+    }
+    if (d->as.trait_decl.supers.ref_count > 0) {
+      ind(indent + 1);
+      fprintf(stdout, "Supers:\n");
+      dump_bound(&d->as.trait_decl.supers, indent + 2);
     }
     for (int i = 0; i < d->as.trait_decl.item_count; i++) {
       ind(indent + 2);

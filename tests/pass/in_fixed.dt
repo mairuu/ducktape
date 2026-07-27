@@ -8,6 +8,7 @@ use std::array;
 use std::string;               # the module, bound as a qualifier
 use std::fmt::Display;
 use std::convert::{From, Into};
+use std::iter::DoubleEnded;   # `Iterator` is preluded; a supertrait of it is not
 
 enum Result<T, E> {
     Ok(T),
@@ -276,19 +277,34 @@ pub fun process_data<T>(data: T) -> Result<Int, String> {
 # until `None`. The cursor is a private field that advances in place (milestones
 # 43/44); `Iterator`, `Option`, and the loop's unwrap are all lang items the
 # program never spells — and all preluded, so none is imported.
-pub struct Countdown { n: Int }
+pub struct Countdown { n: Int, stop: Int }
 
 impl Countdown {
-    fun from(n: Int) -> Countdown { Countdown { n: n } }
+    fun from(n: Int) -> Countdown { Countdown { n: n, stop: 0 } }
 }
 
 impl Iterator for Countdown {
     type Item = Int;
     fun next(self) -> Option<Int> {
-        if self.n <= 0 { return Option::None; }
+        if self.n <= self.stop { return Option::None; }
         var cur = self.n;
         self.n -= 1;
         return Option::Some(cur);
+    }
+}
+
+# a **supertrait** (milestone 58): `DoubleEnded: Iterator` says every
+# implementing type already implements `Iterator`, which is what lets
+# `next_back` return an `Option<Self.Item>` at all — `Item` belongs to the
+# super, and only a supertrait makes it `Self`'s as well. The obligation runs
+# the other way too: this impl is legal only because the `impl Iterator for
+# Countdown` above exists. Unlike `Iterator` it is not a lang item, so it is
+# imported by name.
+impl DoubleEnded for Countdown {
+    fun next_back(self) -> Option<Int> {
+        if self.n <= self.stop { return Option::None; }
+        self.stop += 1;
+        return Option::Some(self.stop);
     }
 }
 
@@ -385,4 +401,10 @@ fun main() {
     # it satisfies — and the only kind of predicate that lets the two sequences
     # be yielded from one `next`
     var joined = Countdown::from(2).chain(Countdown::from(3)).collect();
+    # `rev` (milestone 58) is a method on the *supertrait* `DoubleEnded`, and
+    # `map` a method on `Iterator` — one receiver reaches both, because a bound
+    # offers its whole supertrait closure. `Map` forwards `DoubleEnded`, so the
+    # pipeline stays reversible across it
+    var backwards = Countdown::from(4).rev().collect();
+    var mapped_back = Countdown::from(3).map(|k| => k * 10).rev().collect();
 }

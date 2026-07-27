@@ -325,6 +325,8 @@ static bool impl_applies(ImplDef *impl, Type *self_type, Type *trait_ref,
 static TraitDef *impl_trait_def(ImplDef *impl);
 static Type *impl_index_trait_ref(ImplIndex *idx, Type *type, TraitDef *def,
                                   bool *ambiguous, Allocator *al);
+static TraitDef *trait_flat_assoc_owner(const TraitDef *trait, StringView name);
+static bool trait_ref_entails(Type *bound_ref, Type *want, Allocator *al);
 
 static void infer_note_explicit_bound(InferCtx *ctx, Type *param, Type *arg,
                                       Span span) {
@@ -1001,11 +1003,11 @@ static TraitDef *generic_assoc_owner(const Type *g, StringView name) {
     if (bound->kind != TY_TRAIT) {
       continue;
     }
-    TraitDef *def = bound->as.trait.def;
-    for (int j = 0; j < def->assoc_type_count; j++) {
-      if (sv_equal(def->assoc_types[j].name, name)) {
-        return def;
-      }
+    // through the bound's supertrait closure: `T: DoubleEnded` declares
+    // `Iterator`'s `Item` as much as its own.
+    TraitDef *owner = trait_flat_assoc_owner(bound->as.trait.def, name);
+    if (owner != NULL) {
+      return owner;
     }
   }
   return NULL;
@@ -2067,11 +2069,9 @@ static void resolve_assoc_bindings(ResolveCtx *rctx, const TraitRef *ref,
                  "constrain a type parameter's own associated type");
       continue;
     }
-    bool declared = false;
-    for (int i = 0; i < trait->assoc_type_count && !declared; i++) {
-      declared = sv_equal(trait->assoc_types[i].name, binding->name);
-    }
-    if (!declared) {
+    // a supertrait's associated type is bindable through the sub, since it is
+    // as much a part of what the bound says about the parameter.
+    if (trait_flat_assoc_owner(trait, binding->name) == NULL) {
       diag_error(rctx->diags, binding->span,
                  "trait '" SV_FMT "' has no associated type '" SV_FMT "'",
                  SV_ARG(trait->name), SV_ARG(binding->name));
@@ -2732,12 +2732,14 @@ static void resolve_self_assoc_bounds(ResolveCtx *rctx, TraitDef *trait_def,
     }
 
     if (pred->lhs.segment_count == 1) {
-      // `where Self: Ord` is a supertrait — a trait requiring another — and
-      // ducktape has none: a bound is a promise the *caller* discharges, and
-      // there is no caller of a trait declaration.
+      // `where Self: Ord` is a supertrait, and a supertrait is a property of
+      // the *trait*, not of one method: every impl owes it, and every bound on
+      // the trait may lean on it. So it has its own spelling, and this one
+      // stays an error rather than becoming a second way to say it.
       diag_error(rctx->diags, pred->lhs.span,
-                 "a bound on 'Self' itself is not supported: a trait cannot "
-                 "require another trait");
+                 "a bound on 'Self' belongs on the trait, not on a method — "
+                 "write 'trait " SV_FMT ": <Trait>'",
+                 SV_ARG(trait_def->name));
       continue;
     }
     if (pred->lhs.segment_count > 2) {
@@ -2748,13 +2750,10 @@ static void resolve_self_assoc_bounds(ResolveCtx *rctx, TraitDef *trait_def,
     }
 
     // unlike a type parameter, `Self` has exactly one trait offering it
-    // associated types: the one being declared.
+    // associated types: the one being declared — read through its supertrait
+    // closure, since a super's associated types are equally `Self`'s.
     StringView aname = pred->lhs.segments[1];
-    bool declared = false;
-    for (int j = 0; j < trait_def->assoc_type_count && !declared; j++) {
-      declared = sv_equal(trait_def->assoc_types[j].name, aname);
-    }
-    if (!declared) {
+    if (trait_flat_assoc_owner(trait_def, aname) == NULL) {
       diag_error(rctx->diags, pred->lhs.span,
                  "trait '" SV_FMT "' has no associated type '" SV_FMT "'",
                  SV_ARG(trait_def->name), SV_ARG(aname));
@@ -2814,10 +2813,228 @@ static void declare_trait_decl(ResolveCtx *rctx, Decl *decl) {
                             trait_def->type_param_count, rctx->al);
   trait_def->self_type = trait_ty;
 
+  // Count the items and record the associated-type *names* here rather than in
+  // the body pass: a name is a straight copy off the AST, and having every
+  // trait's list complete before any supertrait is resolved is what makes
+  // `Self.Item` reach a super declared later in the file (see
+  // resolve_trait_supers).
+  for (int i = 0; i < trait_decl->item_count; i++) {
+    if (trait_decl->items[i].kind == TRAIT_ITEM_METHOD) {
+      trait_def->method_count++;
+    } else {
+      trait_def->assoc_type_count++;
+    }
+  }
+  trait_def->methods =
+      al_alloc_zero(rctx->al, sizeof(TraitMethodDef) * trait_def->method_count);
+  trait_def->assoc_types = al_alloc_zero(
+      rctx->al, sizeof(AssocTypeDef) * trait_def->assoc_type_count);
+  for (int i = 0, assoc_idx = 0; i < trait_decl->item_count; i++) {
+    if (trait_decl->items[i].kind != TRAIT_ITEM_ASSOC_TYPE) {
+      continue;
+    }
+    // the concrete type is supplied per-impl, so it stays NULL.
+    trait_def->assoc_types[assoc_idx].name = trait_decl->items[i].name;
+    trait_def->assoc_types[assoc_idx].type = NULL;
+    assoc_idx++;
+  }
+
+  // the closure a trait with no supers has, which is also the answer any
+  // reader gets before the supertrait pass runs — so `flat` is never absent.
+  trait_def->flat = al_alloc_for(rctx->al, TraitFlat);
+  trait_def->flat[0] = (TraitFlat){.def = trait_def, .ref = trait_ty};
+  trait_def->flat_count = 1;
+
   TypeEntry *te = NULL;
   tscope_define(rctx->tyres.tscope, trait_def->name, trait_ty, rctx->diags,
                 decl->span, &te);
   te->as.trait_def = trait_def;
+}
+
+// ── supertraits ──────────────────────────────────────────────────────────────
+
+// `trait DoubleEnded: Iterator` is a bound on `Self`, so it resolves through
+// exactly the machinery a type parameter's bound does. It gets a sub-pass of
+// its own, between declaring the names and resolving the bodies, for the same
+// reason the declare pass exists at all: a signature may project through a
+// super (`Self.Item` where `Item` is the super's), so every trait's supers have
+// to be known before any signature is resolved — otherwise a super declared
+// later in the file would be invisible to the sub that names it.
+//
+// An associated-type *binding* is refused here (NULL assoc list): it would be a
+// promise about `Self`, and `Self` is not a parameter this declaration binds.
+static void resolve_trait_supers(ResolveCtx *rctx, Decl *decl) {
+  assert(decl->kind == DECL_TRAIT && "expected trait decl");
+  DeclTrait *trait_decl = &decl->as.trait_decl;
+  TraitDef *trait_def = trait_decl->def;
+
+  if (trait_decl->supers.ref_count == 0) {
+    return;
+  }
+
+  // the trait's own parameters are in scope: `trait Pair<T>: Into<T>`.
+  rctx->tyres.tscope = tscope_push(rctx->tyres.tscope, rctx->al);
+  redeclare_type_params(rctx, trait_decl->type_params,
+                        trait_decl->type_param_count, trait_def->type_params);
+
+  Type *supers[MAX_BOUNDS];
+  int count = 0;
+  resolve_bound_refs(rctx, &trait_decl->supers, supers, &count,
+                     /*assoc=*/NULL, /*assoc_count=*/NULL);
+
+  rctx->tyres.tscope = tscope_pop(rctx->tyres.tscope);
+
+  if (count == 0) {
+    return;
+  }
+  trait_def->supers = al_alloc(rctx->al, sizeof(Type *) * (size_t)count);
+  memcpy(trait_def->supers, supers, sizeof(Type *) * (size_t)count);
+  trait_def->super_count = count;
+}
+
+// Build the supertrait closure: every super's closure, restated in this trait's
+// terms, then this trait itself. Deduped by definition, first occurrence
+// winning, so a diamond contributes one entry and the order is deterministic —
+// which is what a `dyn` vtable layout needs.
+//
+// Recursive and memoised on `flat_built`, which doubles as the "already on the
+// stack above us" mark so a cycle terminates instead of recursing forever;
+// `trait_super_cycle` is what reports it.
+//
+// `overflowed` (nullable) reports the MAX_BOUNDS cap being hit, which the
+// caller turns into a diagnostic: a silently truncated closure would be a
+// method the checker can name and the vtable has no slot for.
+static void trait_build_closure(TraitDef *trait, bool *overflowed,
+                                Allocator *al) {
+  if (trait->flat_built) {
+    return; // done, or in progress on the stack above us
+  }
+  // claim it before recursing, so a cycle finds a built-looking trait and
+  // stops (with the self-only closure the declare pass installed) rather than
+  // descending into us again.
+  trait->flat_built = true;
+
+  TraitFlat scratch[MAX_BOUNDS];
+  int n = 0;
+
+  for (int i = 0; i < trait->super_count; i++) {
+    Type *super_ref = trait->supers[i];
+    TraitDef *super = super_ref->as.trait.def;
+    trait_build_closure(super, overflowed, al);
+
+    // the super's closure is written in the *super's* parameters; the reference
+    // this trait named it by is what restates it in ours.
+    Subst s = trait_ref_subst(super_ref, al);
+    for (int j = 0; j < super->flat_count; j++) {
+      TraitDef *entry_def = super->flat[j].def;
+      bool seen = entry_def == trait;
+      for (int k = 0; k < n && !seen; k++) {
+        seen = scratch[k].def == entry_def;
+      }
+      if (seen) {
+        continue;
+      }
+      if (n >= MAX_BOUNDS) {
+        if (overflowed != NULL) {
+          *overflowed = true;
+        }
+        continue;
+      }
+      Type *ref = super->flat[j].ref;
+      if (s.count > 0) {
+        ref = subst_apply_(&s, NULL, ref, /*total=*/false, al);
+      }
+      scratch[n++] = (TraitFlat){.def = entry_def, .ref = ref};
+    }
+  }
+
+  if (n < MAX_BOUNDS) {
+    scratch[n++] = (TraitFlat){.def = trait, .ref = trait->self_type};
+  } else if (overflowed != NULL) {
+    *overflowed = true;
+  }
+  trait->flat = al_alloc(al, sizeof(TraitFlat) * (size_t)n);
+  memcpy(trait->flat, scratch, sizeof(TraitFlat) * (size_t)n);
+  trait->flat_count = n;
+}
+
+// Does `trait` reach `target` through its supers? Asked with trait == target,
+// once per declaration, after every trait in the module has its `supers`
+// resolved.
+//
+// A visited set rather than a depth cap, because the graph may already contain
+// a cycle that does not pass through `target` (`A: B`, `B: C`, `C: B`, asked
+// about A): the walk has to terminate on it without calling A a cycle it is not
+// part of. B and C are each asked in turn and each finds it.
+#define SUPER_VISIT_MAX 64
+static bool trait_super_cycle(TraitDef *trait, TraitDef *target,
+                              TraitDef **seen, int *seen_count) {
+  for (int i = 0; i < trait->super_count; i++) {
+    TraitDef *super = trait->supers[i]->as.trait.def;
+    if (super == target) {
+      return true;
+    }
+    bool visited = false;
+    for (int j = 0; j < *seen_count && !visited; j++) {
+      visited = seen[j] == super;
+    }
+    if (visited || *seen_count >= SUPER_VISIT_MAX) {
+      continue;
+    }
+    seen[(*seen_count)++] = super;
+    if (trait_super_cycle(super, target, seen, seen_count)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// ── reading a trait through its closure ──────────────────────────────────────
+//
+// Four questions used to be answered by walking a trait's own `methods` and
+// `assoc_types`; with supertraits each walks the closure instead, and these are
+// the accessors that flatten it. The order — supers first, in closure order,
+// each trait's items in declaration order — is fixed here and *is* the `dyn`
+// vtable layout, so build and dispatch cannot disagree.
+//
+// There is no diamond problem to solve, which is the reason a flat numbering is
+// enough: a trait object always carries the table of the trait it was written
+// as, and every dispatch on it indexes that same trait's closure. Two tables
+// never have to agree, because the language has no `dyn A` → `dyn B` coercion.
+
+// Does a bound naming `bound_ref` promise `want` — the same trait, or one of
+// its supers? The closure is written in the bounding trait's own parameters, so
+// the reference that named it is what restates each entry in the caller's.
+static bool trait_ref_entails(Type *bound_ref, Type *want, Allocator *al) {
+  if (bound_ref->kind != TY_TRAIT || want->kind != TY_TRAIT) {
+    return false;
+  }
+  TraitDef *def = bound_ref->as.trait.def;
+  Subst s = trait_ref_subst(bound_ref, al);
+  for (int i = 0; i < def->flat_count; i++) {
+    Type *ref = def->flat[i].ref;
+    if (s.count > 0) {
+      ref = subst_apply_(&s, NULL, ref, /*total=*/false, al);
+    }
+    if (types_equal(ref, want)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// The associated type `name` a trait *or one of its supers* declares, or NULL.
+static TraitDef *trait_flat_assoc_owner(const TraitDef *trait,
+                                        StringView name) {
+  for (int i = 0; i < trait->flat_count; i++) {
+    TraitDef *owner = trait->flat[i].def;
+    for (int j = 0; j < owner->assoc_type_count; j++) {
+      if (sv_equal(owner->assoc_types[j].name, name)) {
+        return owner;
+      }
+    }
+  }
+  return NULL;
 }
 
 static void resolve_trait_decl(ResolveCtx *rctx, Decl *decl) {
@@ -2833,35 +3050,12 @@ static void resolve_trait_decl(ResolveCtx *rctx, Decl *decl) {
   redeclare_type_params(rctx, trait_decl->type_params,
                         trait_decl->type_param_count, trait_def->type_params);
 
-  // count items by kind and allocate the def tables.
-  for (int i = 0; i < trait_decl->item_count; i++) {
-    if (trait_decl->items[i].kind == TRAIT_ITEM_METHOD) {
-      trait_def->method_count++;
-    } else {
-      trait_def->assoc_type_count++;
-    }
-  }
-  trait_def->methods =
-      al_alloc_zero(rctx->al, sizeof(TraitMethodDef) * trait_def->method_count);
-  trait_def->assoc_types = al_alloc_zero(
-      rctx->al, sizeof(AssocTypeDef) * trait_def->assoc_type_count);
-
-  // `Self` is the abstract trait type; `Self.Assoc` projections stay abstract
-  // until an impl binds them (see TYNODE_ASSOC).
+  // The item tables and the associated-type names were filled in by the
+  // declare pass; `Self` is the abstract trait type, and a `Self.Assoc`
+  // projection — this trait's or a super's — stays abstract until an impl binds
+  // it (see TYNODE_ASSOC).
   tscope_define(rctx->tyres.tscope, sv_from_cstr("Self"), trait_ty, rctx->diags,
                 decl->span, NULL);
-
-  // record associated-type names first so method signatures can project
-  // `Self.Assoc`. The concrete type is supplied per-impl, so it stays NULL.
-  for (int i = 0, assoc_idx = 0; i < trait_decl->item_count; i++) {
-    TraitItemNode *item = &trait_decl->items[i];
-    if (item->kind != TRAIT_ITEM_ASSOC_TYPE) {
-      continue;
-    }
-    trait_def->assoc_types[assoc_idx].name = item->name;
-    trait_def->assoc_types[assoc_idx].type = NULL;
-    assoc_idx++;
-  }
 
   // resolve method signatures (bodies of default methods are not checked yet).
   for (int i = 0, method_idx = 0; i < trait_decl->item_count; i++) {
@@ -2955,9 +3149,10 @@ bool tc_resolve_module(TypeChecker *tc, Module *m) {
   ResolveCtx rctx;
   rctx_init(&rctx, tc, m, tc->diags, tc->al);
 
-  // Two passes so a definition may reference any top-level type regardless of
+  // Three passes so a definition may reference any top-level type regardless of
   // source order. The declare pass binds every struct/enum/trait *name* to a
-  // head type; the resolve pass then fills in fields, variants, method
+  // head type; the supertrait pass resolves each trait's `: A + B` list and
+  // builds its closure; the resolve pass then fills in fields, variants, method
   // signatures and impls, each of which can now name a type declared later —
   // including a mutual reference (a trait whose method returns an adapter
   // struct whose own bound is that trait). Only a type-parameter *bound* is
@@ -2977,6 +3172,42 @@ bool tc_resolve_module(TypeChecker *tc, Module *m) {
       break;
     default:
       break;
+    }
+  }
+
+  // A supertrait is a bound on `Self`, and a signature may project through one
+  // (`Self.Item` where the super declares `Item`), so the whole module's supers
+  // are resolved before any signature is. The closure is built in a second
+  // sweep because a super declared *later* in the file has no `supers` list of
+  // its own until the first one is finished.
+  for (int i = 0; i < m->ast->decl_count; i++) {
+    Decl *decl = m->ast->decls[i];
+    rctx.tyres.tscope = &m->tscope;
+    if (decl->kind == DECL_TRAIT) {
+      resolve_trait_supers(&rctx, decl);
+    }
+  }
+  for (int i = 0; i < m->ast->decl_count; i++) {
+    Decl *decl = m->ast->decls[i];
+    if (decl->kind != DECL_TRAIT) {
+      continue;
+    }
+    TraitDef *trait = decl->as.trait_decl.def;
+    TraitDef *seen[SUPER_VISIT_MAX];
+    int seen_count = 0;
+    if (trait_super_cycle(trait, trait, seen, &seen_count)) {
+      diag_error(tc->diags, decl->span,
+                 "trait '" SV_FMT "' is a supertrait of itself",
+                 SV_ARG(trait->name));
+      trait->super_count = 0; // so the closure below is built on real data
+    }
+    bool overflowed = false;
+    trait_build_closure(trait, &overflowed, tc->al);
+    if (overflowed) {
+      diag_error(tc->diags, decl->span,
+                 "trait '" SV_FMT
+                 "' has too many supertraits (max %d, counting theirs)",
+                 SV_ARG(trait->name), MAX_BOUNDS - 1);
     }
   }
 
@@ -5023,12 +5254,24 @@ static Type *resolve_bound_method_call(CheckCtx *ctx, Expr *expr, Type *self_ty,
 
   for (int i = 0; i < bound_count; i++) {
     TraitDef *def = bounds[i]->as.trait.def;
-    for (int j = 0; j < def->method_count; j++) {
-      if (sv_equal(def->methods[j].name, name)) {
-        return check_trait_method_call(ctx, expr, bounds[i], &def->methods[j],
-                                       self_ty,
-                                       /*impl=*/NULL, subst_empty());
+    // through the closure, so a `T: DoubleEnded` receiver may call `next`: a
+    // supertrait's methods are as much a part of what the bound promises as
+    // its own. `owner_ref` is the trait the method is *declared* on, which is
+    // what the signature has to be projected from — restated in the bounding
+    // trait's terms by the closure, and in the caller's by the bound.
+    int n = trait_flat_method_count(def);
+    for (int j = 0; j < n; j++) {
+      Type *owner_ref = NULL;
+      TraitMethodDef *m = trait_flat_method(def, j, &owner_ref);
+      if (!sv_equal(m->name, name)) {
+        continue;
       }
+      Subst s = trait_ref_subst(bounds[i], ctx->al);
+      if (s.count > 0) {
+        owner_ref = subst_apply_(&s, NULL, owner_ref, /*total=*/false, ctx->al);
+      }
+      return check_trait_method_call(ctx, expr, owner_ref, m, self_ty,
+                                     /*impl=*/NULL, subst_empty());
     }
   }
   return NULL;
@@ -7049,11 +7292,25 @@ static Type *trait_project(Type *t, TraitDef *trait, Type *self_to,
       if (impl == NULL) {
         // no impl to read the binding from (a call through a bound): the
         // projection stays abstract, just rebased onto the new self.
-        return ty_assoc(self_to, t->as.assoc.assoc_name, trait, al);
+        return ty_assoc(self_to, t->as.assoc.assoc_name, t->as.assoc.trait, al);
       }
       for (int i = 0; i < impl->assoc_type_count; i++) {
         if (sv_equal(impl->assoc_types[i].name, t->as.assoc.assoc_name)) {
           return impl->assoc_types[i].type;
+        }
+      }
+      // A *supertrait's* associated type is bound by the impl of the trait that
+      // declares it, not by this one: `impl DoubleEnded for Rev<I>` says
+      // nothing about `Item`, because `impl Iterator for Rev<I>` already did.
+      // So the binding is looked up on the self type instead — through the
+      // impl's own module, which conformance already required to see that other
+      // impl.
+      if (t->as.assoc.trait != trait && impl->module != NULL) {
+        Type *bound =
+            impl_index_assoc_type(&impl->module->visible_impls, impl->self_type,
+                                  t->as.assoc.assoc_name, al);
+        if (bound != NULL) {
+          return bound;
         }
       }
     }
@@ -7132,6 +7389,31 @@ static void tc_check_impl_conformance(TypeChecker *tc, Decl *decl,
   // S`), so a required signature is read in the impl's terms before it is
   // compared — the same substitution a call through a bound applies.
   Subst trait_subst = trait_ref_subst(impl_def->trait_type, tc->al);
+
+  // A supertrait is an obligation on the impl, and it is the *only* thing
+  // keeping the assumption a `T: Sub` bound makes sound (impl_index_implements
+  // reads `Iterator` straight off a `T: DoubleEnded` without looking for an
+  // impl). Checked against the impl's own module: an impl it cannot see is one
+  // its bodies could not have used either.
+  ImplIndex *visible = &impl_def->module->visible_impls;
+  for (int i = 0; i < trait->super_count; i++) {
+    Type *super_ref = trait->supers[i];
+    if (trait_subst.count > 0) {
+      super_ref =
+          subst_apply_(&trait_subst, NULL, super_ref, /*total=*/false, tc->al);
+    }
+    if (impl_index_implements(visible, impl_def->self_type, super_ref,
+                              tc->al)) {
+      continue;
+    }
+    char self_buf[64], super_buf[64];
+    type_sprintf(impl_def->self_type, self_buf, sizeof(self_buf));
+    type_name_sprintf(super_ref, super_buf, sizeof(super_buf));
+    diag_error(tc->diags, decl->span,
+               "'%s' does not implement '%s', which trait '" SV_FMT
+               "' requires of every implementing type",
+               self_buf, super_buf, SV_ARG(trait->name));
+  }
 
   for (int i = 0; i < trait->assoc_type_count; i++) {
     StringView name = trait->assoc_types[i].name;
@@ -7553,9 +7835,13 @@ static bool type_mentions_self(const Type *t, const TraitDef *trait) {
     // but a projection is not the erased type, it is a *function of* it, and
     // a function of an erased thing can be pinned by writing down its result:
     // `dyn Iterator<Item = Int>`. So the projection is only a problem if its
-    // base is a `Self` the trait object did *not* pin.
-    if (t->as.assoc.trait == trait && t->as.assoc.base->kind == TY_TRAIT &&
-        t->as.assoc.base->as.trait.def == trait) {
+    // base is a `Self` the trait object did *not* pin. Which projections it
+    // pins is literally the table `dyn` writes out, so that is the question
+    // asked — over the supertrait closure, since `Self.Item` inside
+    // `trait DoubleEnded: Iterator` is pinned by the super's `Item`.
+    if (t->as.assoc.base->kind == TY_TRAIT &&
+        t->as.assoc.base->as.trait.def == trait &&
+        trait_flat_assoc_index(trait, t->as.assoc.assoc_name) >= 0) {
       return false;
     }
     return type_mentions_self(t->as.assoc.base, trait);
@@ -7663,20 +7949,26 @@ static const char *trait_method_undispatchable(const TraitMethodDef *m,
 // leans on every one of these), and only naming it as a type asks for more.
 static bool trait_check_object_safe(TypeResolver *r, TraitDef *trait,
                                     Span span) {
-  for (int i = 0; i < trait->method_count; i++) {
-    TraitMethodDef *m = &trait->methods[i];
-    const char *why = trait_method_undispatchable(m, trait);
+  // over the closure: `dyn DoubleEnded` carries `Iterator`'s methods too, so
+  // it is the supertrait's signatures that have to be dispatchable as well.
+  int n = trait_flat_method_count(trait);
+  for (int i = 0; i < n; i++) {
+    Type *owner_ref = NULL;
+    TraitMethodDef *m = trait_flat_method(trait, i, &owner_ref);
+    const char *why = trait_method_undispatchable(m, owner_ref->as.trait.def);
 
     // a *provided* method that can't be dispatched is simply excluded from the
     // vtable (codegen skips its slot, a call through the `dyn` is rejected) —
     // the trait stays object-safe. Only a *required* one is fatal: there would
     // be no body to reach, and no default to fall back on.
     if (why != NULL && !m->has_default) {
+      TraitDef *owner = owner_ref->as.trait.def;
       diag_error(r->diags, span,
                  "trait '" SV_FMT "' is not object-safe: method '" SV_FMT
-                 "' cannot be called through 'dyn " SV_FMT "' because %s",
-                 SV_ARG(trait->name), SV_ARG(m->name), SV_ARG(trait->name),
-                 why);
+                 "::" SV_FMT "' cannot be called through 'dyn " SV_FMT
+                 "' because %s",
+                 SV_ARG(trait->name), SV_ARG(owner->name), SV_ARG(m->name),
+                 SV_ARG(trait->name), why);
       return false;
     }
   }
@@ -7844,24 +8136,21 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
       break;
     }
 
-    // The bindings are stored one per associated type the trait declares, in
-    // declaration order, so the table is total and its ordering canonical —
-    // which is what lets interning keep deciding identity by pointer. Filling
-    // it is therefore also the completeness check: a hole is a missing
-    // binding, and a name that matches no hole is a wrong one.
+    // The bindings are stored one per associated type in the trait's
+    // *closure*, in its order, so the table is total and its ordering
+    // canonical — which is what lets interning keep deciding identity by
+    // pointer. Filling it is therefore also the completeness check: a hole is
+    // a missing binding, and a name that matches no hole is a wrong one.
+    // `dyn DoubleEnded<Item = Int>` binds a name the supertrait declares, and
+    // it has to: the sub's own signatures project through it.
+    int assoc_count = trait_flat_assoc_count(trait);
     TypeScratch assoc_types; // ts_init zeroes, so every slot starts unbound
-    ts_init(&assoc_types, trait->assoc_type_count, r->al);
+    ts_init(&assoc_types, assoc_count, r->al);
 
     bool bad_binding = false;
     for (int b = 0; b < dyn->binding_count; b++) {
       AssocBindingNode *binding = &dyn->bindings[b];
-      int slot = -1;
-      for (int i = 0; i < trait->assoc_type_count; i++) {
-        if (sv_equal(trait->assoc_types[i].name, binding->name)) {
-          slot = i;
-          break;
-        }
-      }
+      int slot = trait_flat_assoc_index(trait, binding->name);
       if (slot < 0) {
         diag_error(r->diags, binding->span,
                    "trait '" SV_FMT "' has no associated type '" SV_FMT "'",
@@ -7884,17 +8173,18 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
       assoc_types.ptr[slot] = bound;
     }
 
-    for (int i = 0; i < trait->assoc_type_count && !bad_binding; i++) {
+    for (int i = 0; i < assoc_count && !bad_binding; i++) {
       if (assoc_types.ptr[i] == NULL) {
         // a method mentioning it would have been rejected as unsafe without
         // this, and a method not mentioning it still leaves the type
         // incomplete — two `dyn Iterator`s that agree on nothing are not one
         // type, so the binding is required either way.
+        StringView missing = trait_flat_assoc_name(trait, i);
         diag_error(r->diags, node->span,
                    "'dyn " SV_FMT "' must say what its associated type '" SV_FMT
                    "' is — write 'dyn " SV_FMT "<" SV_FMT " = ...>'",
-                   SV_ARG(trait->name), SV_ARG(trait->assoc_types[i].name),
-                   SV_ARG(trait->name), SV_ARG(trait->assoc_types[i].name));
+                   SV_ARG(trait->name), SV_ARG(missing), SV_ARG(trait->name),
+                   SV_ARG(missing));
         bad_binding = true;
       }
     }
@@ -7904,7 +8194,7 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
       break;
     }
 
-    result = ty_dyn(trait_ref, assoc_types.ptr, trait->assoc_type_count, r->al);
+    result = ty_dyn(trait_ref, assoc_types.ptr, assoc_count, r->al);
     break;
   }
   case TYNODE_TUPLE: {
@@ -7947,16 +8237,7 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
     // `Self.Assoc` below) — instantiation substitutes T, and the concrete
     // binding is read off the impl then.
     if (base->kind == TY_GENERIC) {
-      TraitDef *owner = NULL;
-      for (int i = 0; i < base->as.generic.bound_count && !owner; i++) {
-        TraitDef *trait_def = base->as.generic.bounds[i]->as.trait.def;
-        for (int j = 0; j < trait_def->assoc_type_count; j++) {
-          if (sv_equal(trait_def->assoc_types[j].name, assoc->assoc_name)) {
-            owner = trait_def;
-            break;
-          }
-        }
-      }
+      TraitDef *owner = generic_assoc_owner(base, assoc->assoc_name);
       if (owner == NULL) {
         char buf[64];
         type_sprintf(base, buf, sizeof(buf));
@@ -7975,14 +8256,13 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
     // abstract self type, so the projection stays abstract (a TY_ASSOC) until
     // an impl binds it. Only names the trait actually declares are valid.
     if (base->kind == TY_TRAIT) {
-      TraitDef *trait_def = base->as.trait.def;
-      for (int i = 0; i < trait_def->assoc_type_count; i++) {
-        if (sv_equal(trait_def->assoc_types[i].name, assoc->assoc_name)) {
-          result = ty_assoc(base, assoc->assoc_name, trait_def, r->al);
-          break;
-        }
-      }
-      if (result != NULL) {
+      // through the closure, so `Self.Item` inside `trait DoubleEnded:
+      // Iterator` names the super's associated type. The projection records
+      // the trait that *declares* it, which is what an impl is looked up by.
+      TraitDef *owner =
+          trait_flat_assoc_owner(base->as.trait.def, assoc->assoc_name);
+      if (owner != NULL) {
+        result = ty_assoc(base, assoc->assoc_name, owner, r->al);
         break;
       }
       char buf[64];
@@ -8153,15 +8433,7 @@ static Type *impl_index_assoc_type(ImplIndex *idx, Type *self_type,
     // instantiated at a trait object: subst_apply and infer_apply both project
     // through here, so `where I.Item: Ord` and the loop variable's type are
     // answered by the same edit.
-    TraitDef *trait = dyn_trait_def(self_type);
-    for (int i = 0;
-         i < trait->assoc_type_count && i < self_type->as.dyn.assoc_type_count;
-         i++) {
-      if (sv_equal(trait->assoc_types[i].name, name)) {
-        return self_type->as.dyn.assoc_types[i];
-      }
-    }
-    return NULL;
+    return ty_dyn_assoc(self_type, name);
   }
 
   for (int i = 0; i < idx->count; i++) {
@@ -8809,8 +9081,13 @@ bool impl_index_implements(ImplIndex *idx, Type *type, Type *trait_ref,
     // because the bound is re-checked against the concrete type wherever the
     // outer function is instantiated. Trait references are interned, so the
     // comparison covers the type arguments too.
+    //
+    // "Declared to" reaches through supertraits: `T: DoubleEnded` promises
+    // `Iterator` as well, because every impl of the sub was made to provide one
+    // (tc_check_impl_conformance). The obligation there is what makes the
+    // assumption here sound.
     for (int i = 0; i < type->as.generic.bound_count; i++) {
-      if (types_equal(type->as.generic.bounds[i], trait_ref)) {
+      if (trait_ref_entails(type->as.generic.bounds[i], trait_ref, al)) {
         return true;
       }
     }
@@ -8831,7 +9108,12 @@ bool impl_index_implements(ImplIndex *idx, Type *type, Type *trait_ref,
     // method is dispatchable by the time `dyn Trait` was writable at all,
     // and a provided one is a generic function over `Self` that codegen
     // monomorphises at `Self = dyn Trait` — see compile_method_call.
-    return types_equal(type->as.dyn.trait, trait_ref);
+    //
+    // It names its supers too, and that costs nothing extra: the vtable is laid
+    // out over the same closure, so a super's method already has a slot in the
+    // table this value carries. `dyn DoubleEnded` is an `Iterator` in every
+    // sense a `for` loop or an `<I: Iterator>` function can ask about.
+    return trait_ref_entails(type->as.dyn.trait, trait_ref, al);
   }
   if (type->kind == TY_ASSOC && type->as.assoc.base->kind == TY_GENERIC) {
     // `T.Item` is abstract for the same reason `T` is, and answers the same
@@ -8845,7 +9127,7 @@ bool impl_index_implements(ImplIndex *idx, Type *type, Type *trait_ref,
         continue;
       }
       for (int j = 0; j < g->assoc_bounds[i].bound_count; j++) {
-        if (types_equal(g->assoc_bounds[i].bounds[j], trait_ref)) {
+        if (trait_ref_entails(g->assoc_bounds[i].bounds[j], trait_ref, al)) {
           return true;
         }
       }

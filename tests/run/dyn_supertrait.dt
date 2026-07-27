@@ -1,0 +1,91 @@
+# A trait object of a *subtrait* (milestone 58): `dyn DoubleEnded` carries the
+# supertrait's methods too.
+#
+# The vtable is laid out over the trait's supertrait closure — `Iterator`'s
+# slots first, then `DoubleEnded`'s — so `d.next()` dispatches through the same
+# table `d.next_back()` does, and the associated-type binding written as
+# `<Item = Int>` names `Iterator`'s `Item` through the sub.
+#
+# There is no diamond problem to solve here, which is why one flat numbering is
+# enough: a trait object always carries the table of the trait it was *written*
+# as, and every dispatch on it indexes that same trait's closure. Two tables
+# never have to agree, because the language has no `dyn A` -> `dyn B` coercion.
+use std::iter::{Iterator, DoubleEnded};
+use std::option::Option;
+use std::io::print;
+
+struct Span { lo: Int, hi: Int }
+struct Steps { at: Int, by: Int, left: Int }
+
+impl Iterator for Span {
+    type Item = Int;
+    fun next(self) -> Option<Int> {
+        if self.lo >= self.hi { return Option::None; }
+        var v = self.lo;
+        self.lo += 1;
+        return Option::Some(v);
+    }
+}
+impl DoubleEnded for Span {
+    fun next_back(self) -> Option<Int> {
+        if self.lo >= self.hi { return Option::None; }
+        self.hi -= 1;
+        return Option::Some(self.hi);
+    }
+}
+
+impl Iterator for Steps {
+    type Item = Int;
+    fun next(self) -> Option<Int> {
+        if self.left <= 0 { return Option::None; }
+        self.left -= 1;
+        var v = self.at;
+        self.at += self.by;
+        return Option::Some(v);
+    }
+}
+impl DoubleEnded for Steps {
+    fun next_back(self) -> Option<Int> {
+        if self.left <= 0 { return Option::None; }
+        self.left -= 1;
+        return Option::Some(self.at + self.by * self.left);
+    }
+}
+
+# a `dyn DoubleEnded` satisfies an `Iterator` bound: the trait object *is* the
+# trait it names, and since milestone 58 that includes what the trait was
+# declared to require. The concrete type is gone, so this one function serves
+# both sources.
+fun drain<I: Iterator>(it: I) -> [I.Item] {
+    var out: [I.Item] = [];
+    for x in it {
+        out.push(x);
+    }
+    return out;
+}
+
+fun main() {
+    var a: dyn DoubleEnded<Item = Int> = Span { lo: 0, hi: 4 };
+    var b: dyn DoubleEnded<Item = Int> = Steps { at: 5, by: 10, left: 3 };
+
+    # a supertrait's method, dispatched through the sub's vtable
+    print(a.next());
+#> Some(0)
+    # and the sub's own, from a slot further down the same table
+    print(a.next_back());
+#> Some(3)
+    print(a.collect());
+#> [1, 2]
+
+    # one array, two concrete types, both reversible
+    var ends: [dyn DoubleEnded<Item = Int>] = [b, Span { lo: 100, hi: 103 }];
+    for it in ends {
+        print(it.next_back());
+    }
+#> Some(25)
+#> Some(102)
+
+    # handing the trait object to a function that only asked for `Iterator`
+    print(drain(b));
+#> [5, 15]
+}

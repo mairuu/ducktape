@@ -1137,14 +1137,10 @@ static void compile_for_iter(Cg *cg, Expr *expr) {
     Type *self = cg_subst(cg, mc->bound_self);
     if (self->kind == TY_DYN) {
       // a `dyn Iterator`: the receiver carries the vtable, so the slot is all
-      // codegen picks — `next`'s position in the trait's method list.
-      TraitDef *trait = dyn_trait_def(self);
-      for (int i = 0; i < trait->method_count; i++) {
-        if (sv_equal(trait->methods[i].name, mc->method_name)) {
-          dyn_index = i;
-          break;
-        }
-      }
+      // codegen picks — `next`'s position in the trait's method list, read
+      // over the supertrait closure so a `dyn DoubleEnded` finds the `next`
+      // its super declares (the same numbering cg_vtable_for built with).
+      dyn_index = trait_flat_method_index(dyn_trait_def(self), mc->method_name);
     } else {
       Type *trait_ref = cg_subst(cg, mc->bound_trait);
       next = cg_bound_target(cg, self, trait_ref, mc->method_name, &impl_subst,
@@ -1366,9 +1362,13 @@ static int cg_vtable_for(Cg *cg, Type *trait_ref, Type *self, Span span) {
   // memoising an instance before its body is compiled.
   int index = exe->vtable_count++;
   VTable *vt = al_alloc_zero_for(cg->al, VTable);
-  vt->method_count = trait->method_count;
-  vt->methods =
-      al_alloc_zero(cg->al, sizeof(FunDef *) * (size_t)trait->method_count);
+  // laid out over the trait's *supertrait closure*, so `dyn DoubleEnded`
+  // carries `Iterator::next` in a slot of its own. compile_method_call indexes
+  // the same numbering, and always for the trait the value was written as, so
+  // the two cannot drift apart — see trait_flat_method_index.
+  int method_count = trait_flat_method_count(trait);
+  vt->method_count = method_count;
+  vt->methods = al_alloc_zero(cg->al, sizeof(FunDef *) * (size_t)method_count);
   exe->vtables[index] = vt;
 
   if (mono->vtable_count == mono->vtable_cap) {
@@ -1381,24 +1381,33 @@ static int cg_vtable_for(Cg *cg, Type *trait_ref, Type *self, Span span) {
   mono->vtables[mono->vtable_count++] =
       (DynVTable){.trait = trait_ref, .self_type = self, .index = index};
 
-  for (int i = 0; i < trait->method_count; i++) {
+  // `Self` rides along harmlessly: a supertrait reference names only the
+  // sub's own type parameters, never its receiver.
+  Subst trait_args = cg_trait_ref_subst(cg, trait_ref, self);
+  for (int i = 0; i < method_count; i++) {
+    Type *owner_ref = NULL;
+    TraitMethodDef *m = trait_flat_method(trait, i, &owner_ref);
     // a provided method the trait excluded from dispatch (object safety
     // partitioned per method — a combinator like `map`) gets no slot: the
     // checker already forbids reaching it through the `dyn`, so the NULL is
     // never read. Building one would mean instantiating a body whose own type
     // parameters the coercion site cannot supply.
-    if (trait->methods[i].undispatchable) {
+    if (m->undispatchable) {
       continue;
     }
-    FunDef *target =
-        cg_dyn_slot_target(cg, trait_ref, self, trait->methods[i].name, span);
+    // a super's slot is filled from the *super's* impl, so `owner_ref` is what
+    // the lookup is keyed by. The closure states every entry — including the
+    // trait's own — in the trait's declared parameters, so the reference the
+    // `dyn` was written with is what turns `Into<T>` back into `Into<Celsius>`.
+    owner_ref = subst_apply(&trait_args, owner_ref, cg->al);
+    FunDef *target = cg_dyn_slot_target(cg, owner_ref, self, m->name, span);
     if (target == NULL) {
       char buf[64];
       type_sprintf(self, buf, sizeof(buf));
       diag_error(cg->diags, span,
                  "cannot build a trait object: '%s' has no body for '" SV_FMT
                  "::" SV_FMT "'",
-                 buf, SV_ARG(trait->name), SV_ARG(trait->methods[i].name));
+                 buf, SV_ARG(owner_ref->as.trait.def->name), SV_ARG(m->name));
       cg->ok = false;
       return -1;
     }
@@ -1497,18 +1506,17 @@ static void compile_method_call(Cg *cg, Expr *expr) {
     // The receiver carries the table, so the slot is all codegen picks: the
     // position the trait fixes for this method name.
     if (self->kind == TY_DYN) {
+      // over the closure, and over the closure of the trait the *value* names —
+      // which is the same list cg_vtable_for laid the table out with, so the
+      // index means the same slot on both sides even when the call arrived
+      // through a supertrait's bound.
       TraitDef *trait = dyn_trait_def(self);
-      int index = -1;
-      for (int i = 0; i < trait->method_count; i++) {
-        if (sv_equal(trait->methods[i].name, mc->method_name)) {
-          index = i;
-          break;
-        }
-      }
+      int index = trait_flat_method_index(trait, mc->method_name);
       if (index < 0) {
         cg_error(cg, expr->span, "this method call");
         return;
       }
+      TraitMethodDef *dyn_method = trait_flat_method(trait, index, NULL);
 
       // A provided method object safety left out of the vtable has no slot to
       // dispatch through — but it does not need one. It is a generic function
@@ -1522,8 +1530,8 @@ static void compile_method_call(Cg *cg, Expr *expr) {
       // override the concrete impl may have written for the same name, which
       // no vtable-less path can see. Rust makes the same trade for the same
       // reason (`dyn Iterator`'s `map` is `Iterator::map`).
-      if (trait->methods[index].undispatchable) {
-        fun = trait->methods[index].default_impl;
+      if (dyn_method->undispatchable) {
+        fun = dyn_method->default_impl;
         if (fun == NULL) {
           // unreachable: a *required* undispatchable method makes the trait
           // non-object-safe, so no `dyn Trait` exists to have got here.

@@ -604,9 +604,12 @@ made at compile time — so it is **carried by the value**. A `dyn Shape` is
 the pair `(value, the table of slots monomorphisation would have picked)`.
 That is the whole feature; nothing else about the representation changes.
 
-A `VTable` (`include/object.h`) is one `FunDef *` per method the trait
-declares, in declaration order, already resolved and monomorphised for one
-concrete self type. Filling a slot is the same two-way choice
+A `VTable` (`include/object.h`) is one `FunDef *` per method in the trait's
+**supertrait closure** — the supers' methods first, then its own, each trait's
+in declaration order — already resolved and monomorphised for one concrete self
+type. A trait with no supers is the degenerate case of that, its own methods and
+nothing else, which is why the layout needed no special case when supertraits
+arrived. Filling a slot is the same two-way choice
 `compile_method_call` makes for a bound receiver — the impl's own method, or
 the trait's default body instantiated at `Self` = that type
 (`cg_dyn_slot_target`) — just made ahead of time for every method at once.
@@ -617,7 +620,9 @@ pairs a program needs is a property of its coercion sites. `Mono.vtables`
 memoises the compile-time key so two coercions of one type to one trait share
 a table; the slot is reserved *before* the table is filled, since compiling a
 method body can reach the same pair again (`mono_request` does the same). One
-slot per trait method, indexed by position — but a method the trait **excluded
+slot per method in the closure, indexed by position (`trait_flat_method_index`,
+the same call every dispatch site makes — and always against the trait the
+*value* was written as, so build and dispatch cannot disagree) — but a method the trait **excluded
 from dispatch** (an undispatchable *provided* method: `Iterator::map`, or
 `Iterator::max`, whose `where Self.Item: Ord` asks about the very type the
 coercion erased) gets no target: `cg_vtable_for` skips it, leaving the slot

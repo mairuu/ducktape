@@ -1,0 +1,33 @@
+#! expect: no method named 'rev' found for type
+# `rev` lives on `DoubleEnded`, so an adapter that does not forward the
+# supertrait does not have it. `Take` is one: its far end is `n` elements in
+# from a length nobody holds, so there is no `impl DoubleEnded for Take<I>` —
+# and the pipeline stops being reversible at exactly the step that stopped
+# knowing where the end was.
+use std::iter::{Iterator, DoubleEnded};
+use std::option::Option;
+use std::io::print;
+
+struct Span { lo: Int, hi: Int }
+
+impl Iterator for Span {
+    type Item = Int;
+    fun next(self) -> Option<Int> {
+        if self.lo >= self.hi { return Option::None; }
+        var v = self.lo;
+        self.lo += 1;
+        return Option::Some(v);
+    }
+}
+
+impl DoubleEnded for Span {
+    fun next_back(self) -> Option<Int> {
+        if self.lo >= self.hi { return Option::None; }
+        self.hi -= 1;
+        return Option::Some(self.hi);
+    }
+}
+
+fun main() {
+    print(Span { lo: 0, hi: 9 }.take(3).rev().collect());
+}

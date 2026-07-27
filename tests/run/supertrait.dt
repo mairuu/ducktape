@@ -1,0 +1,98 @@
+# Supertraits (milestone 58): `trait A: B` — every `Self` implementing `A` also
+# implements `B`.
+#
+# A supertrait is not a new kind of thing, it is an *edge*. Four questions the
+# checker already asked of an abstract type — what does it implement, what
+# methods may it name, what associated types does it have, and what can a vtable
+# carry — each used to be answered by scanning one trait's own lists. A
+# supertrait makes each of those scans transitive, over the closure the trait
+# declaration fixes. That is the whole feature; nothing else about a trait,
+# an impl or a call changed.
+#
+# Read as an obligation it says `impl A for X` requires `impl B for X`
+# (supertrait_missing_impl.dt); read as an assumption it says a `T: A` bound
+# hands you all of `B`. The first is what makes the second sound.
+use std::io::print;
+use std::fmt::Display;
+
+trait Shape {
+    type Unit;
+    fun area(self) -> Self.Unit;
+}
+
+trait Named {
+    fun name(self) -> String;
+}
+
+# two supers at once, and a default body leaning on both: inside a trait, `Self`
+# is bounded by the trait being declared, so it offers the closure too.
+trait Described: Shape + Named {
+    fun describe(self) -> String where Self.Unit: Display {
+        return "{self.name()} of {self.area()}";
+    }
+}
+
+# transitive: `Tagged`'s closure is Shape, Named, Described, Tagged.
+trait Tagged: Described {
+    # a `where` on the signature is an obligation each call site discharges, so
+    # calling a method that carries one means carrying it too
+    fun tag(self) -> String where Self.Unit: Display {
+        return "[{self.describe()}]";
+    }
+}
+
+struct Sq { side: Int }
+struct Dot;
+
+impl Shape for Sq {
+    type Unit = Int;
+    fun area(self) -> Int { return self.side * self.side; }
+}
+impl Named for Sq {
+    fun name(self) -> String { return "square"; }
+}
+impl Described for Sq {}
+impl Tagged for Sq {}
+
+impl Shape for Dot {
+    type Unit = Int;
+    fun area(self) -> Int { return 0; }
+}
+impl Named for Dot {
+    fun name(self) -> String { return "dot"; }
+}
+impl Described for Dot {
+    # an impl may override a provided method; the super's are inherited as usual
+    fun describe(self) -> String { return "just a dot"; }
+}
+
+# one bound, three traits' worth of methods — and `Self.Unit` reached through
+# two levels of super
+fun report<T: Tagged>(v: T) where T.Unit: Display {
+    print(v.tag());
+    print(v.name());
+    print(v.area());
+}
+
+# a bound on the sub satisfies a parameter bounded by the super: the entailment
+# read in the other direction
+fun shout<T: Named>(v: T) -> String {
+    return "{v.name()}!";
+}
+
+fun relay<T: Described>(v: T) -> String {
+    return shout(v);
+}
+
+fun main() {
+    report(Sq { side: 3 });
+#> [square of 9]
+#> square
+#> 9
+    print(relay(Sq { side: 2 }));
+#> square!
+    print(relay(Dot));
+#> dot!
+    print(Dot.describe());
+#> just a dot
+}

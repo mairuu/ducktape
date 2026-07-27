@@ -71,13 +71,19 @@ Three passes over each module, mirroring compiler phases:
    table, so a global has nowhere to live.
 2. **resolve** — `tc_link_imports` first (see "Modules"), then
    `tc_resolve_module`: resolve signatures and types into interned `Type`s.
-   This is itself **two sub-passes** so declaration order does *not* matter: a
+   This is itself **three sub-passes** so declaration order does *not* matter: a
    **declare** pass (`declare_struct_decl`/`declare_enum_decl`/
-   `declare_trait_decl`) binds every top-level type *name* to a head type,
+   `declare_trait_decl`) binds every top-level type *name* to a head type (and,
+   for a trait, records its associated-type *names* — a straight copy off the
+   AST); a **supertrait** pass (`resolve_trait_supers`, then
+   `trait_build_closure`) resolves each trait's `: A + B` list and flattens it;
    then a **body** pass fills fields, variants, method signatures, impls and
    functions — each free to name a type declared later, including a mutual
    reference (a trait method returning an adapter struct whose own bound is
-   that trait). A definition's type parameters are resolved once, in the
+   that trait). The supertrait pass sits between the other two because a
+   signature may project through a super (`Self.Item` where `Item` is the
+   super's), so every trait's supers have to be known before any signature is
+   resolved — see "Supertraits". A definition's type parameters are resolved once, in the
    declare pass; the body pass re-enters them by name (`redeclare_type_params`)
    rather than re-resolving their bounds, so a bad bound is diagnosed once.
    The one thing still order-sensitive is a type-parameter *bound* itself,
@@ -870,6 +876,62 @@ entirely, so `infer_open_generics` records the (param, argument) pair in
 order first (`T: A + B` and `T: B + A` are one type) — the intern hash is
 order-sensitive, so sorting must happen *before* the probe.
 
+### Supertraits
+
+`trait DoubleEnded: Iterator` is a bound on `Self`, so it resolves through
+exactly the machinery a type parameter's bound does: `resolve_trait_supers`
+hands the `TraitBound` to `resolve_bound_refs` and stores the resolved
+references on `TraitDef.supers`. An associated-type *binding* is refused there
+(a NULL `assoc` list) — it would be a promise about `Self`, which this
+declaration does not bind.
+
+**A supertrait is not a new kind of thing; it is an edge.** Four questions the
+checker already asked of an abstract type each used to be answered by scanning
+one trait's own lists, and each now scans the closure instead:
+
+| question | reader | was | is |
+| --- | --- | --- | --- |
+| what does it implement? | `impl_index_implements` | `types_equal(bound, want)` | `trait_ref_entails` |
+| what methods may it name? | `resolve_bound_method_call` | `def->methods` | `trait_flat_method` |
+| what associated types has it? | `generic_assoc_owner`, `TYNODE_ASSOC`, `resolve_self_assoc_bounds`, `resolve_assoc_bindings` | `def->assoc_types` | `trait_flat_assoc_owner` |
+| what can a vtable carry? | `trait_check_object_safe`, `cg_vtable_for` | `def->methods` | `trait_flat_method` |
+
+`TraitDef.flat` is that closure: one `TraitFlat { def, ref }` per trait in it,
+supers first in declaration order, depth-first, deduped by definition, this
+trait last. Each entry's `ref` is stated in *this* trait's type parameters
+(`trait Twice<T>: Src<T>` records `Src<T>` with `Twice`'s `T`), so a reader
+restates it through `trait_ref_subst` of whatever reference it holds — the same
+substitution a call through a bound has always applied to signatures, one level
+out. A trait with no supers has exactly one entry, itself, which is what lets
+each reader *drop* its special case rather than gain one.
+
+Building it needs every trait's `supers` already resolved, and resolving those
+needs every trait's *name* bound — so the two live in separate sweeps of the
+supertrait sub-pass, and the associated-type names moved into the declare pass
+(a straight copy off the AST) so `Self.Item` can reach a super declared later in
+the file. `trait_build_closure` is recursive and memoised on `flat_built`, which
+doubles as the "already on the stack" mark; `trait_super_cycle` is what
+*reports* a cycle, since a walk that merely terminated would answer the four
+questions above with whichever half it reached first.
+
+The obligation half is `tc_check_impl_conformance`: each direct super,
+substituted through the impl head's trait reference, must be satisfied by the
+impl's self type in the impl's *own module*'s visible set. That check is the
+only thing making the assumption half sound — `impl_index_implements` reads a
+super off a `TY_GENERIC`'s declared bounds without looking for an impl at all.
+
+Two details are consequences rather than choices:
+
+- **`trait_project` has to look past the impl it was given.** A supertrait's
+  associated type is bound by the impl of the trait that *declares* it, so
+  `impl DoubleEnded for Rev<I>` says nothing about `Item`. When the impl does
+  not carry the name, the binding is looked up on its self type through
+  `impl_index_assoc_type`, against the impl's own module.
+- **`type_mentions_self` asks the table, not the trait.** `Self.Item` is not a
+  `Self` *mention* precisely because a `dyn` pins it; with supertraits the
+  pinning table is the flattened one, so the test is
+  `trait_flat_assoc_index(trait, name) >= 0`.
+
 ### Generic traits
 
 A trait's type parameters are ordinary generic parameters of every signature it
@@ -1198,11 +1260,15 @@ bypassed — nothing vtable-less can see it, so `dyn Iterator`'s `map` is always
 buys.** `Self` cannot be recovered once a value is coerced — that is what the
 coercion erased — but a projection is not the erased type, it is a *function*
 of it, and a function of an erased thing can be pinned by writing down its
-result. So a `TY_DYN` carries one type per associated type the trait declares,
-in declaration order: the same table an `ImplDef` carries, written at the use
-site instead. Total plus canonically ordered is what lets interning keep
-deciding identity by pointer, and filling it *is* the completeness check — a
-hole is a missing binding, a name matching no hole is a wrong one. The
+result. So a `TY_DYN` carries one type per associated type in the trait's
+**supertrait closure**, in that closure's order: the same table an `ImplDef`
+carries, written at the use site instead. Total plus canonically ordered is what
+lets interning keep deciding identity by pointer, and filling it *is* the
+completeness check — a hole is a missing binding, a name matching no hole is a
+wrong one. Over the closure rather than the trait's own list because a sub's
+signatures project through a super (`dyn DoubleEnded<Item = Int>` binds
+`Iterator`'s `Item`); `ty_dyn_assoc` and `impl_index_assoc_type` read it back
+through `trait_flat_assoc_index`, so the layout has one definition. The
 bindings are ordinary types, so `subst_apply`, `infer_apply`,
 `type_mentions_self`, `trait_project` and codegen's `type_is_concrete` all
 walk them the way they walk a struct's type arguments.
@@ -1221,6 +1287,17 @@ receiver as offering exactly the one trait it names, and hands it to
 `resolve_bound_method_call` like any other abstract receiver. Object safety
 is what guarantees the projected signature stays callable once `Self` is
 gone. Only *codegen* tells the two apart, by the vtable.
+
+**A `dyn Sub` carries its supers, and needs no new rule to.** The vtable is
+laid out over the closure (`trait_flat_method_count` slots, supers' first), and
+`impl_index_implements` lets a `TY_DYN` witness anything the closure names — so
+`d.next()` on a `dyn DoubleEnded` dispatches through the same table
+`d.next_back()` does, and the value satisfies an `Iterator` bound. There is no
+diamond problem to solve, which is why one flat numbering is enough: a trait
+object always carries the table of the trait it was *written* as, and every
+dispatch on it indexes that same trait's closure (`trait_flat_method_index` in
+`compile_method_call` and `compile_for_iter`). Two tables never have to agree,
+because the language has no `dyn A` → `dyn B` coercion.
 
 **Coercion** is the one genuinely new concept, and the language's only
 subtyping. Identity is pointer equality and `infer_unify` only decomposes

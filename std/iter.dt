@@ -233,6 +233,64 @@ pub trait Iterator {
     }
 }
 
+# ── Driving a sequence from both ends ────────────────────────────────────────
+
+# A sequence that can also be walked backwards. `next_back` yields from the far
+# end and advances *that* end inward, so the two cursors meet in the middle and
+# a source can be driven from either side, or both.
+#
+# It is a **supertrait** of `Iterator` (milestone 58), and that is the whole
+# reason the trait can exist at all: `next_back` returns `Option<Self.Item>`, and
+# `Item` is `Iterator`'s associated type. Written as an independent trait it
+# would have to declare an `Item` of its own, and nothing would make the two
+# agree — a type could bind them to different types and both impls would check.
+# `: Iterator` says the promise `Iterator` makes is already made, so `Self.Item`
+# here *is* that one.
+#
+# The other half of what a supertrait buys shows up at `Rev` below: `impl<I:
+# DoubleEnded> Iterator for Rev<I>` calls `self.inner.next()` — a method `I` was
+# never directly bounded to have. It has it because `DoubleEnded` promised it.
+#
+# Not a lang item, and not preluded: nothing the compiler desugars names it, so
+# it is imported like any ordinary trait.
+pub trait DoubleEnded: Iterator {
+    # The last element not yet yielded, or `None` once the two ends have met.
+    fun next_back(self) -> Option<Self.Item>;
+
+    # Yield the same elements in the opposite order. Lazy like every other
+    # adapter — `rev` swaps which end each `next()` reads, it does not collect.
+    #
+    # Excluded from a `dyn DoubleEnded` vtable, for `filter`'s reason: it
+    # returns a `Rev<Self>`, so `Self` appears outside the receiver. A trait
+    # object may still be *reversed* by a `<I: DoubleEnded>` function, since the
+    # body is monomorphised at `Self = dyn DoubleEnded` like any other instance.
+    fun rev(self) -> Rev<Self> {
+        return Rev { inner: self };
+    }
+}
+
+# `Rev` reads the source from the far end: its `next` is the source's
+# `next_back` and its `next_back` is the source's `next`, which is the whole
+# implementation. Reversing a `Rev` gives back the original order, at the cost
+# of one wrapper.
+pub struct Rev<I: DoubleEnded> {
+    inner: I,
+}
+
+impl<I: DoubleEnded> Iterator for Rev<I> {
+    type Item = I.Item;
+
+    fun next(self) -> Option<I.Item> {
+        return self.inner.next_back();
+    }
+}
+
+impl<I: DoubleEnded> DoubleEnded for Rev<I> {
+    fun next_back(self) -> Option<I.Item> {
+        return self.inner.next();
+    }
+}
+
 # ── Adapters ─────────────────────────────────────────────────────────────────
 #
 # An adapter is an ordinary struct with an `impl Iterator`. The source iterator
@@ -262,6 +320,28 @@ impl<I: Iterator, B> Iterator for Map<I, B> {
     }
 }
 
+# Mapping does not care which end an element came from, so `Map` is reversible
+# exactly when its source is — a *second* impl, on a stricter bound than the
+# `Iterator` one above. Two impls of two traits for one type is not a coherence
+# problem; what it costs is that the stricter one is selected only where the
+# bound holds, which is precisely the condition being stated.
+#
+# Adapters that are deliberately *not* double-ended, each for a reason of its
+# own: `Take` and `Skip` would have to know how far the far end is from a length
+# nobody holds; `Enumerate`'s index counts from the front, so a back element
+# cannot be numbered without one either; `Zip` pairs by position, so the back of
+# the pair sequence is undefined unless both sources agree on a length; and
+# `Chain` driven from both ends needs its two halves to agree on where they met,
+# which two independent `done` flags cannot say.
+impl<I: DoubleEnded, B> DoubleEnded for Map<I, B> {
+    fun next_back(self) -> Option<B> {
+        match self.inner.next_back() {
+            Option::Some(x) => { return Option::Some((self.f)(x)); },
+            Option::None => { return Option::None; },
+        }
+    }
+}
+
 # `Filter` yields only the elements for which `pred` is true. Its `next` drives
 # the source until one passes, so a single `next()` may pull several — the loop
 # is where laziness earns its keep.
@@ -284,6 +364,22 @@ impl<I: Iterator> Iterator for Filter<I> {
         }
         # `while true` never falls through, but the checker reads the loop as
         # able to end, so a trailing `None` makes every path return.
+        return Option::None;
+    }
+}
+
+# Filtering is end-agnostic in the same way mapping is: the predicate asks about
+# an element, not about where it sat.
+impl<I: DoubleEnded> DoubleEnded for Filter<I> {
+    fun next_back(self) -> Option<I.Item> {
+        while true {
+            match self.inner.next_back() {
+                Option::Some(x) => {
+                    if (self.pred)(x) { return Option::Some(x); }
+                },
+                Option::None => { return Option::None; },
+            }
+        }
         return Option::None;
     }
 }

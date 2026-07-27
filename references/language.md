@@ -224,8 +224,9 @@ ending in `return` has type `!` (never), which unifies with anything.
   partition. It is still callable on a trait object, since the body is
   compiled at `Self = dyn Trait` instead of dispatched, and the clause is
   discharged there against the binding the object states. A bound on `Self`
-  *itself* (`where Self: Ord`) is rejected: that is a supertrait, which
-  ducktape does not have.
+  *itself* (`where Self: Ord`) is rejected *here*: that is a supertrait, and a
+  supertrait is a property of the whole trait rather than of one method, so it
+  has one spelling — `trait A: B`, below.
 
   A `where` may otherwise appear on a `fun` — free or in an impl block — and
   on an `impl` itself, where every method inside may rely on it.
@@ -263,6 +264,55 @@ ending in `return` has type `!` (never), which unifies with anything.
   checked once inference settles is `Into<Int>` and not the literal `Into<T>`
   (`tests/fail/trait_bound_arg_forwarded.dt`). Left to right: a bound cannot
   name a parameter declared after it.
+
+### Supertraits
+
+A trait may require another:
+
+```
+trait DoubleEnded: Iterator {
+    fun next_back(self) -> Option<Self.Item>;
+}
+```
+
+The list after `:` is spelled exactly like a type parameter's bound, because
+that is what it is — a bound on `Self`, which has no `<..>` list to sit in.
+Several are joined with `+` (`trait Described: Shape + Named`), and they
+compose transitively (`trait Tagged: Described` reaches `Shape` too).
+
+It says one thing, which has two readings, and both hold:
+
+- **As an obligation.** `impl DoubleEnded for Span` is legal only where
+  `impl Iterator for Span` is visible; otherwise the impl is rejected naming
+  the missing one (`tests/fail/supertrait_missing_impl.dt`).
+- **As an assumption.** A `T: DoubleEnded` bound offers everything `Iterator`
+  declares — its methods (`it.next()`, `it.collect()`), its associated types
+  (`T.Item`), and its own supers in turn — and `T` may be handed to anything
+  asking for `T: Iterator`. The obligation is what makes this sound: the
+  assumption is answered off the declaration, without searching for an impl.
+
+The point of the feature is that `Self.Item` above means `Iterator`'s `Item`.
+Written as an independent trait, `DoubleEnded` would have to declare an `Item`
+of its own and nothing would make the two agree — a type could bind them to
+different types and both impls would check.
+
+Inside the trait, `Self` is bounded by the trait being declared, so a default
+body reaches the supers the same way (`self.next()` inside a `DoubleEnded`
+default is an ordinary call through a bound).
+
+A trait may not be its own supertrait, directly or through a chain
+(`tests/fail/supertrait_cycle.dt`).
+
+`dyn Sub` works, and carries the supers: its vtable is laid out over the
+closure, so `d.next()` on a `dyn DoubleEnded<Item = Int>` dispatches through
+the same table `d.next_back()` does, and the `<Item = ..>` binding names a
+supertrait's associated type through the sub. Object safety is decided over the
+closure too — a *required* method a vtable cannot carry is fatal wherever it
+was declared. And a `dyn Sub` satisfies a `Super` bound, so it may be handed to
+a `<I: Iterator>` function or driven by a `for` loop
+(`tests/run/dyn_supertrait.dt`).
+
+See `tests/run/supertrait.dt`, `tests/run/supertrait_generic.dt`.
 
 ### Generic traits
 
@@ -606,10 +656,56 @@ associated types, not a trait they both satisfy —
 which `J: Iterator<Item = Self.Item>` is exactly. Like `map` it carries a type
 parameter of its own, so it is excluded from a `dyn Iterator` vtable.
 
+#### `DoubleEnded` and `rev`
+
+Reversing needs an iterator that knows where its *other* end is, and that is a
+second trait:
+
+```
+use std::iter::{Iterator, DoubleEnded};
+
+pub trait DoubleEnded: Iterator {
+    fun next_back(self) -> Option<Self.Item>;
+    fun rev(self) -> Rev<Self> { .. }
+}
+```
+
+`next_back` yields from the far end and advances that end inward, so the two
+cursors meet in the middle and one source can be driven from either side, or
+both:
+
+```
+var all  = Span::of(0, 5).collect();               # [0, 1, 2, 3, 4]
+var back = Span::of(0, 5).rev().collect();         # [4, 3, 2, 1, 0]
+var mix  = Span::of(0, 4);
+mix.next();                                        # Some(0)
+mix.next_back();                                   # Some(3)
+```
+
+It is the standard library's first **supertrait**, and the reason it has to be
+one is `Self.Item`: `Item` belongs to `Iterator`, so only `: Iterator` makes it
+`Self`'s here as well. The same edge is what lets `Rev`'s two impls
+(`impl<I: DoubleEnded> Iterator for Rev<I>` and the `DoubleEnded` one beside it)
+call both `self.inner.next()` and `self.inner.next_back()` when `I` was bounded
+only by the sub. Unlike `Iterator` it is not a lang item, so it is imported by
+name.
+
+`Map` and `Filter` forward it — a transform does not care which end an element
+came from — so a pipeline stays reversible across them. The others do not, each
+for a reason of its own: `take`/`skip` would have to know how far the far end is
+from a length nobody holds, `enumerate`'s index counts from the front, `zip`
+pairs by position, and a `chain` driven from both ends needs its two halves to
+agree on where they met. Calling `rev` after one of those is "no method named
+'rev'" (`tests/fail/iter_rev_not_double_ended.dt`).
+
+`rev` is excluded from a `dyn DoubleEnded` vtable for `filter`'s reason (it
+returns a `Rev<Self>`), which does not stop a trait object being reversed by a
+`<I: DoubleEnded>` function — the body is monomorphised at
+`Self = dyn DoubleEnded` like any other instance.
+
 What is left in this direction is breadth with no design question behind it —
 `any`, `all`, `find`, `position`, `count`, `for_each`, `take_while`,
-`skip_while` — plus `rev`, which does have one: reversing needs an iterator
-that can be driven from both ends.
+`skip_while`.
 
 ## Modules
 
@@ -1687,7 +1783,8 @@ overflow: a value past what an `Int` holds wraps.
 | disambiguating a qualified selection whose *argument is itself unresolved* (`Steps::from(None)`) | the argument (for `from`) or the receiver (for a trait-qualified `into`) must type on its own to choose the impl, so a value that would need the impl chosen first cannot be disambiguated |
 | a bound naming a *later* type parameter (`fun f<U: Into<T>, T>`) | "unknown type: T" — bounds resolve left to right |
 | an equality binding between two *projections* (`J: Iterator<Item = I.Item2>` where both sides are abstract) | works, and is compared exactly — but only because a projection over a parameter is interned like any type; there is no unification, so nothing *solves* one side from the other |
-| a supertrait (`trait A: B`, or `where Self: B` on a method) | rejected: a bound is a promise a caller discharges, and a trait declaration has no caller |
+| `where Self: B` on a trait *method* | rejected — a supertrait is a property of the trait, so `trait A: B` is the one spelling for it |
+| an impl of a supertrait *inferred* from the sub's | none: `impl DoubleEnded for X` requires an `impl Iterator for X` written out. The obligation is checked, never discharged for you |
 | a heterogeneous operator (`V2 * Float`, `Matrix * Vec`) | the `std::ops` traits are homogeneous (`other: Self`, no `Output`): an operator would have to select an impl by its *right* operand, which only the written `Meters::from(x)` / `Into::<U>::into(x)` forms can do. A mixed pair is an argument mismatch on the rewritten call |
 | custom `==` (an `Eq` trait) | equality stays structural and import-less for every type; only ordering and arithmetic are traits |
 | an impl overriding a defaulted method restating its `where` | conformance compares signatures, which carry no bounds, so an override may quietly add or drop one; the trait's own clause is still discharged at every call through the trait |

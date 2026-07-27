@@ -1,0 +1,96 @@
+# `rev` and `DoubleEnded` (milestone 58) — the first supertrait in std.
+#
+# `trait DoubleEnded: Iterator` is what lets `next_back` return an
+# `Option<Self.Item>` at all: `Item` belongs to `Iterator`, and only a supertrait
+# makes it `Self`'s as well. Written as an independent trait it would need an
+# `Item` of its own, and nothing would make the two agree.
+#
+# The second half a supertrait buys shows up in `Rev`'s impls: `impl<I:
+# DoubleEnded> Iterator for Rev<I>` calls `self.inner.next_back()` *and*
+# `self.inner.next()`, and `I` was only ever bounded by `DoubleEnded`.
+use std::iter::{Iterator, DoubleEnded, Rev};
+use std::option::Option;
+use std::io::print;
+
+# a cursor with two ends: `lo` walks up, `hi` walks down, and the sequence is
+# spent when they meet. Yields lo, lo+1, ... hi-1 from the front.
+struct Span { lo: Int, hi: Int }
+
+impl Span {
+    fun of(lo: Int, hi: Int) -> Span { Span { lo: lo, hi: hi } }
+}
+
+impl Iterator for Span {
+    type Item = Int;
+    fun next(self) -> Option<Int> {
+        if self.lo >= self.hi { return Option::None; }
+        var v = self.lo;
+        self.lo += 1;
+        return Option::Some(v);
+    }
+}
+
+impl DoubleEnded for Span {
+    fun next_back(self) -> Option<Int> {
+        if self.lo >= self.hi { return Option::None; }
+        self.hi -= 1;
+        return Option::Some(self.hi);
+    }
+}
+
+# a bound on the sub reaches the super's methods: `rev` comes from
+# `DoubleEnded`, `collect` and `map` from `Iterator`, and nothing here names
+# `Iterator` as a bound of its own.
+fun backwards<I: DoubleEnded>(it: I) -> [I.Item] {
+    return it.rev().collect();
+}
+
+# both ends of one sequence, meeting in the middle
+fun pincer<I: DoubleEnded>(it: I) -> [I.Item] {
+    var out: [I.Item] = [];
+    while true {
+        match it.next() {
+            Option::Some(x) => { out.push(x); },
+            Option::None => { return out; },
+        }
+        match it.next_back() {
+            Option::Some(x) => { out.push(x); },
+            Option::None => { return out; },
+        }
+    }
+    return out;
+}
+
+fun main() {
+    print(Span::of(0, 5).collect());
+#> [0, 1, 2, 3, 4]
+    print(Span::of(0, 5).rev().collect());
+#> [4, 3, 2, 1, 0]
+
+    # reversing a `Rev` gives the original order back
+    print(Span::of(0, 4).rev().rev().collect());
+#> [0, 1, 2, 3]
+
+    print(backwards(Span::of(10, 14)));
+#> [13, 12, 11, 10]
+
+    print(pincer(Span::of(0, 6)));
+#> [0, 5, 1, 4, 2, 3]
+
+    # `Map` and `Filter` forward `DoubleEnded`, so a pipeline stays reversible;
+    # `take` does not, which is what iter_rev_not_double_ended.dt pins.
+    print(Span::of(0, 5).map(|x| => x * 2).rev().collect());
+#> [8, 6, 4, 2, 0]
+    print(Span::of(0, 8).filter(|x| => x % 3 == 0).rev().collect());
+#> [6, 3, 0]
+    print(Span::of(0, 6).map(|x| => x + 1).filter(|x| => x % 2 == 0).rev().collect());
+#> [6, 4, 2]
+
+    # a `Rev` is an ordinary iterator, so `for` drives it
+    var total = 0;
+    for x in Span::of(1, 5).rev() {
+        total = total * 10 + x;
+    }
+    print(total);
+#> 4321
+}

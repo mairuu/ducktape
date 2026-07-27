@@ -1,0 +1,19 @@
+#! expect: does not implement 'Named', which trait 'Greeter' requires of every implementing type
+# A supertrait is an *obligation* on the impl, and it is the only thing that
+# makes the matching assumption sound: `impl_index_implements` reads `Named`
+# straight off a `T: Greeter` bound without looking for an impl at all, so if an
+# `impl Greeter` could exist without an `impl Named`, that bound would be a lie
+# the checker had already believed.
+trait Named {
+    fun label(self) -> String;
+}
+
+trait Greeter: Named {
+    fun greet(self) -> String;
+}
+
+struct Cat;
+
+impl Greeter for Cat {
+    fun greet(self) -> String { return "meow"; }
+}

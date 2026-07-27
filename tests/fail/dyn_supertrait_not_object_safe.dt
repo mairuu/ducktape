@@ -1,0 +1,26 @@
+#! expect: is not object-safe: method 'Cloneish::dup'
+# Object safety is decided over the supertrait *closure*, because the vtable is
+# laid out over it: a `dyn Wrapped` carries `Cloneish`'s methods too, so a
+# required one the table cannot hold is as fatal as one the sub declared itself.
+# The diagnostic names the trait that declares the method, not the one written
+# after `dyn`, since that is where the fix goes.
+trait Cloneish {
+    fun dup(self) -> Self;
+}
+
+trait Wrapped: Cloneish {
+    fun tag(self) -> Int;
+}
+
+struct Box2 { n: Int }
+
+impl Cloneish for Box2 {
+    fun dup(self) -> Box2 { return Box2 { n: self.n }; }
+}
+impl Wrapped for Box2 {
+    fun tag(self) -> Int { return self.n; }
+}
+
+fun main() {
+    var w: dyn Wrapped = Box2 { n: 1 };
+}

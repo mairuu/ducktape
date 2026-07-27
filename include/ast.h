@@ -26,6 +26,7 @@ typedef struct StructDef StructDef;
 typedef struct EnumDef EnumDef;
 typedef struct VariantDef VariantDef;
 typedef struct TraitDef TraitDef;
+typedef struct TraitMethodDef TraitMethodDef;
 typedef struct ImplDef ImplDef;
 typedef struct FunDef FunDef;
 typedef struct Subst Subst;
@@ -224,6 +225,22 @@ static inline TraitDef *dyn_trait_def(const Type *t) {
 // type. Total by construction, so a NULL means the name is wrong.
 Type *ty_dyn_assoc(const Type *dyn, StringView name);
 
+// ── reading a trait through its supertrait closure ───────────────────────────
+//
+// A trait's methods and associated types flattened over `TraitDef.flat`:
+// supers first, in closure order, each trait's items in declaration order.
+// This numbering *is* the `dyn` vtable and associated-type table layout, so
+// building one and dispatching through it cannot disagree.
+int trait_flat_method_count(const TraitDef *trait);
+// `*owner_ref` (optional) receives the trait reference declaring the method,
+// restated in `trait`'s own type parameters.
+TraitMethodDef *trait_flat_method(const TraitDef *trait, int index,
+                                  Type **owner_ref);
+int trait_flat_method_index(const TraitDef *trait, StringView name);
+int trait_flat_assoc_count(const TraitDef *trait);
+StringView trait_flat_assoc_name(const TraitDef *trait, int index);
+int trait_flat_assoc_index(const TraitDef *trait, StringView name);
+
 static inline bool types_equal(const Type *a, const Type *b) { return a == b; }
 // does `t` mention a type parameter, an unsolved unknown or an unresolved
 // projection anywhere inside it? A trait reference answers about its type
@@ -335,7 +352,7 @@ struct EnumDef {
   int slot; // OP_ENUM operand; SLOT_NONE until something constructs a variant
 };
 
-typedef struct {
+struct TraitMethodDef {
   StringView name;
   Type *method_type; // TY_FUNCTION with Self still unresolved
   Type **type_params;
@@ -367,12 +384,20 @@ typedef struct {
   // conformance and call sites check against; only the *body* needs a `Self`
   // a substitution can bind, so it is compiled once per concrete receiver.
   FunDef *default_impl;
-} TraitMethodDef;
+};
 
 typedef struct {
   StringView name;
   Type *type;
 } AssocTypeDef;
+
+// One trait in another's *supertrait closure* — the trait itself, plus the
+// reference naming it, restated in the terms of the trait whose closure this
+// is (`trait Pair<T>: Into<T>` puts `Into<T>` here with the sub's own `T`).
+typedef struct {
+  TraitDef *def;
+  Type *ref; // TY_TRAIT
+} TraitFlat;
 
 struct TraitDef {
   Module *module;
@@ -384,6 +409,26 @@ struct TraitDef {
 
   Type **type_params;
   int type_param_count;
+
+  // `trait DoubleEnded: Iterator` — the *direct* supers, as written. The
+  // obligation an `impl` of this trait discharges (see
+  // tc_check_impl_conformance); what a *bound* on it offers is `flat`.
+  Type **supers;
+  int super_count;
+
+  // The transitive closure of `supers`, deduped, supers-first and this trait
+  // last. It is the answer to every question a supertrait changes — which
+  // traits a `T: This` bound implies, which methods and associated types that
+  // receiver may name, and the order a `dyn This` vtable is laid out in — so
+  // those four readers share one list rather than four walks. A trait with no
+  // supers has exactly one entry (itself), which is what lets each reader drop
+  // its special case rather than gain one. The declare pass installs that
+  // one-entry answer so the list is never absent; trait_build_closure replaces
+  // it once the supers are resolved, and `flat_built` is its memo (a cycle
+  // reaches a trait already on the stack, and must stop rather than recurse).
+  TraitFlat *flat;
+  int flat_count;
+  bool flat_built;
 
   TraitMethodDef *methods;
   int method_count;
@@ -1244,6 +1289,7 @@ typedef struct {
   StringView name;
   TypeParamNode *type_params;
   int type_param_count;
+  TraitBound supers; // `trait A: B + C` — ref_count 0 when none was written
   WhereClause *where_clause;
   TraitItemNode *items;
   int item_count;
