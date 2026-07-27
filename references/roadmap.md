@@ -3313,6 +3313,67 @@
   index from both ends, which is exactly the case the array was always right
   for, and now it is requested rather than assumed.
 
+- **A sorted `[T]` (milestone 62)** — `std::sort`: `sort_by`, `sort`,
+  `is_sorted`, `lower_bound`, `binary_search`. Design: `language.md`
+  `std::sort`.
+
+  The shape "breadth" takes when a piece needs **nothing** from the language:
+  no native, no opcode, no compiler change, one new `.dt` file. Everything it
+  uses was already there — a bounded inherent impl block, a closure in a
+  parameter, index assignment, `Ord` — so the milestone is entirely its
+  decisions, and each one is a promise to a caller rather than a technique.
+
+  - **`sort_by` is the primitive, `sort` the convenience**, milestone 59's
+    `max` fork settled the same way: the closure form takes the order as an
+    argument, the `Ord` form takes it from the element. The bound sits on a
+    separate `impl<T: Ord> [T]` block rather than on each method, because it is
+    a property of *which arrays these apply to* — and the diagnostic that comes
+    out says so ("an impl exists, but it requires 'P: Ord'"), which is a better
+    answer than "no such method" (`tests/fail/sort_needs_ord.dt`).
+  - **Stability is the promise that picks the algorithm.** A bottom-up merge
+    sort keeps it unconditionally; an in-place quicksort would trade it away
+    and take quadratic time on the already-sorted input a program is most
+    likely to hand it. The cost is one array of scratch space, which in a
+    language where `collect` already copies is a price with a spelling. What
+    stability *buys* is sorting by one key and then another, and
+    `tests/run/sort.dt` observes that rather than asserting it.
+  - **Sorting is in place**, because `[T]` is a reference and the caller is
+    holding the array being rearranged. No `sorted()` copy ships, and that is
+    milestone 60 paying out somewhere unrelated: `xs.iter().collect()` is the
+    copy, so a second method would only be a name for two calls.
+  - **The merge cannot ask which array it ended on.** `src`/`dst` are names for
+    arrays and the passes swap them, but `==` on two arrays is *structural*
+    (milestone 5c-i), so two arrays holding the same elements are equal and
+    identity has no spelling in the language at all. The parity of the pass
+    count is that missing question, answered by counting instead of asking.
+  - **`lower_bound` is the primitive of the two searches**, not the private
+    half of `binary_search`: an insertion point exists whether or not the
+    element does, so the search is one comparison past it while the reverse
+    needs rewriting. It is also what an ordered map would be built on, which is
+    the next item and the reason this one is `pub`.
+  - **"Found" means `cmp` answers 0, not `==`** — and where the two disagree
+    (a struct ordered on one field, a case-insensitive comparator) it is the
+    order's answer a search can honour, since the order is what put the
+    elements where they are. That is a small argument *for* the deferred `Eq`
+    staying deferred: the notion of equality a search needs was already written
+    down as `Ord`.
+  - **Placement, and what made it possible.** A module of its own rather than
+    more of `std::array`, `std::text`'s split one type over: `std::array` is
+    what an array cannot say about itself, while an order is a policy on top.
+    The edge `sort → cmp` closes no loop only because milestone 36's
+    `std::cmp` reaches an array's length through a private `@intrinsic` instead
+    of importing `std::array` — a decision made for impl-visibility reasons
+    that turns out to be what lets this module exist.
+
+  Two things it found rather than decided. `tests/run/sort_oracle.dt` is the
+  first test in the suite that checks an *algorithm* rather than an API: an
+  expected-output test cannot reach the lengths where a merge sort's tail run
+  and copy-back parity go wrong, so it sorts every length up to 40 and compares
+  against an insertion sort written out beside it. And the reason `std::sort`
+  is opt-in rather than preluded is a wart it surfaced — a visible std method
+  on `[T]` silently wins over a program's own method of that name, with no
+  diagnostic (below).
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -3341,7 +3402,14 @@ by appetite rather than by necessity.
    each turn already said. **A `String`'s characters as a walk** is the next of
    these, milestone 61, and it answered the same question the other way for the
    same kind of reason: a String is immutable, so its iterator snapshots. What
-   is left of this item is ordinary breadth: a sorted `[T]`, a map or set type.)
+   is left of this item is ordinary breadth. **A sorted `[T]`** is milestone 62,
+   and it needed nothing from the language at all — one `.dt` file whose whole
+   content is decisions. What remains is **a map or set type**, which is where
+   this item stops being breadth: a hash map is the concrete consumer item 2
+   says `Eq` is waiting for, while an *ordered* map keyed by `T: Ord` sidesteps
+   hashing entirely and is one `lower_bound` away from what milestone 62 built.
+   That fork is the design question, and it is the first one on this list that
+   is not already answered.)
 
 (**The first iterator combinators** — `map`/`filter`/`collect` — are now
 milestone 47, along with driving a bounded generic or a `dyn Iterator` through
@@ -3466,6 +3534,17 @@ via `Module.decl_base`) and is not part of the main line.
   help — it is the `Rhs` parameter that cannot be inferred where the trait is
   named. A mixed pair is reported as an argument mismatch on the rewritten call,
   which describes the desugaring rather than the mistake
+- **two inherent impls giving one type the same method name collide silently**,
+  and the visible one wins: a program writing `impl<T> [T] { fun first(..) }`
+  gets `std::array`'s `first` at the call site instead, with no diagnostic and
+  no way to reach its own. Every `[T]` and `String` method std ships is
+  therefore a name a program cannot use, and the reach is wider than it looks —
+  the prelude's `std::iter → std::array` and `std::string` edges make those
+  modules' impls visible to every program whether it imported them or not. A
+  *trait* impl collision is caught by coherence; this is only the inherent case.
+  Found while placing milestone 62, which is why `std::sort` is opt-in rather
+  than preluded. The fix is a diagnostic where the second impl is written, not a
+  resolution rule — silently preferring either one is the bug
 - `std::ops` ships `impl Add for Int` (and the other eleven primitive impls), so
   a program can no longer write its own — the `Display`/`Ord`-for-primitives
   cost, one module over, and unavoidable for the same reason: without them a

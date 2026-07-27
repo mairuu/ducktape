@@ -1,0 +1,205 @@
+# std::sort — putting an array in order, and using one that is.
+#
+# A module of its own rather than more of `std::array`, the split `std::text`
+# makes from `std::string`: `std::array` is what an array cannot say about
+# itself (`push` and `pop` are natives, everything else there is ducktape on
+# them), while sorting is a *policy* — which order, how stable, at what cost —
+# written entirely on top. Nothing here is a native and nothing here is new
+# language; the milestone is the decisions.
+#
+# The import that makes it possible was drawn by someone else: `std::cmp` needs
+# an array's length for `impl Ord for [T]` and reaches it through a **private
+# `@intrinsic`** rather than through `std::array` (milestone 36), so the edge
+# `cmp → array` was never drawn and `array → cmp` is free to exist. That is
+# what this module is, plus a comparator.
+#
+# It is not preluded, so `xs.sort()` needs `use std::sort;` — unlike `push` and
+# `len`, which every program has through the prelude's `std::iter → std::array`
+# chain whether it asked or not. The difference is deliberate, and the reason is
+# sharper than convenience: a std method on `[T]` that a program can see
+# **silently wins** over the program's own method of that name — two inherent
+# impls collide with no diagnostic at all (roadmap: known warts). `sort` is a
+# name a program might plausibly want for itself, so making it opt-in is what
+# keeps it available to one that never asked for this module.
+
+use std::array;
+use std::cmp::{Ord, min};
+use std::option::Option;
+
+impl<T> [T] {
+    # Put `self` in the order `cmp` describes: `cmp(a, b)` is negative when `a`
+    # belongs before `b`, as `Ord::cmp` answers.
+    #
+    # **In place**, because a `[T]` is a reference and the caller is holding the
+    # array this rearranges — and because sorting a *copy* already has a
+    # spelling that does not need a second method: `var ys = xs.iter().collect();
+    # ys.sort();` copies through the walk milestone 60 added.
+    #
+    # **Stable**: elements `cmp` calls equal come out in the order they went in,
+    # which is what lets a program sort by one key and then by another and mean
+    # it. Stability is a promise rather than an accident, and it is the promise
+    # that picks the algorithm — a bottom-up merge sort keeps it unconditionally,
+    # where an in-place quicksort would trade it away (and a bad pivot for
+    # quadratic time on the already-sorted input a program is most likely to
+    # hand it). The price is one array's worth of scratch space, and in a
+    # language where `collect` already copies, that is a price with a spelling.
+    fun sort_by(self, cmp: fun(T, T) -> Int) {
+        var n = self.len();
+        if n < 2 {
+            return;
+        }
+
+        # the scratch half of the merge. `push` is the only way to make an array
+        # of a given length, and filling it from `self` is that same loop, so
+        # the copy is free of charge rather than an extra pass.
+        var buf: [T] = [];
+        for x in self {
+            buf.push(x);
+        }
+
+        # Merging reads one array and writes the other, so each pass swaps which
+        # is which rather than copying back. `src` and `dst` are *names* for
+        # arrays, not copies — that is what a reference type buys here — but it
+        # also means the loop cannot ask afterwards which array it ended on:
+        # `==` on two arrays is structural (milestone 5c-i), so two arrays
+        # holding the same elements are equal and identity has no spelling. The
+        # parity of the pass count is that missing question, answered by
+        # counting.
+        var src = self;
+        var dst = buf;
+        var flipped = false;
+
+        var width = 1;
+        while width < n {
+            var lo = 0;
+            while lo < n {
+                var mid = min(lo + width, n);
+                var hi = min(lo + width + width, n);
+                merge(src, dst, lo, mid, hi, cmp);
+                lo = hi;
+            }
+            var swap = src;
+            src = dst;
+            dst = swap;
+            flipped = not flipped;
+            width = width + width;
+        }
+
+        # an odd number of passes left the result in `buf`, and the caller is
+        # holding `self`
+        if flipped {
+            var i = 0;
+            while i < n {
+                self[i] = buf[i];
+                i = i + 1;
+            }
+        }
+    }
+}
+
+# `src[lo..mid)` and `src[mid..hi)` are each in order; write the two of them
+# merged into `dst[lo..hi)`. Private, and a free function rather than a method
+# because its receiver would have to be one of *two* arrays.
+#
+# The tie is what makes the sort stable: the left run wins whenever the right
+# element does not compare strictly less, so equal elements keep the order the
+# runs found them in. Reading `src[j]` when the right run is spent would be out
+# of bounds, and it is `or`'s short-circuit that stops it — the exhaustion test
+# has to come first.
+fun merge<T>(src: [T], dst: [T], lo: Int, mid: Int, hi: Int,
+             cmp: fun(T, T) -> Int) {
+    var i = lo;
+    var j = mid;
+    var k = lo;
+    while k < hi {
+        if i < mid and (j >= hi or cmp(src[j], src[i]) >= 0) {
+            dst[k] = src[i];
+            i = i + 1;
+        } else {
+            dst[k] = src[j];
+            j = j + 1;
+        }
+        k = k + 1;
+    }
+}
+
+# The `Ord` half. These are the same operations with the comparator left out,
+# and leaving it out is what a bound is for — the fork milestone 59's `max`
+# settled the same way: the closure form is the general one, the trait form the
+# one a program reaches for.
+#
+# A separate `impl` block rather than a `where` on each method, because the
+# bound is a property of *which arrays these apply to*: `[P]` for a `P` with no
+# order has no `sort`, and the diagnostic says so by naming the obligation
+# ("an impl exists, but it requires 'P: Ord'").
+impl<T: Ord> [T] {
+    # Put `self` in ascending order, by `T`'s own `cmp`. Stable, like the
+    # comparator form it is written on.
+    fun sort(self) {
+        self.sort_by(|a, b| => a.cmp(b));
+    }
+
+    # Whether `self` is already in ascending order. Cheap enough to assert with
+    # (`std::assert`), and it is also the precondition the two searches below
+    # need spelled out somewhere they can be checked against.
+    fun is_sorted(self) -> Bool {
+        var i = 1;
+        while i < self.len() {
+            if self[i - 1].cmp(self[i]) > 0 {
+                return false;
+            }
+            i = i + 1;
+        }
+        return true;
+    }
+
+    # The first index whose element is not before `target`, or `len()` if every
+    # element is — the position `target` would be **inserted** at to keep the
+    # order, and the first of them if several compare equal.
+    #
+    # This is the primitive of the two searches, not the convenience: an
+    # insertion point exists whether or not the element does, so `binary_search`
+    # is one comparison away from it, while going the other direction needs the
+    # search rewritten. It is also what an ordered map would be built on, which
+    # is the reason it is `pub` rather than the private half of `binary_search`.
+    #
+    # `self` must be sorted. On an array that is not, the answer is unspecified
+    # — but it is only an answer, never an out-of-bounds read: the window only
+    # ever shrinks.
+    fun lower_bound(self, target: T) -> Int {
+        var lo = 0;
+        var hi = self.len();
+        while lo < hi {
+            # `lo + (hi - lo) / 2` rather than `(lo + hi) / 2`: the sum of two
+            # indices can overflow an Int where the difference cannot. That is
+            # borrowed caution rather than a live bug here — an array long
+            # enough to overflow would have exhausted memory first — but the
+            # spelling costs nothing.
+            var mid = lo + (hi - lo) / 2;
+            if self[mid].cmp(target) < 0 {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        return lo;
+    }
+
+    # Where `target` sits in the sorted `self`, or `None` if it is not there.
+    #
+    # **Found means `cmp` answers 0, not `==`.** The two can disagree — a type
+    # ordered on one field of several, or a comparator that ignores case — and
+    # when they do it is the order's answer that this search can honour: it is
+    # the order that put the elements where they are, and an element `cmp` calls
+    # equal to `target` is the one at the position `target` would occupy. That
+    # `==` remains a structural primitive with no trait behind it (roadmap: the
+    # deferred `Eq`) costs this nothing, because the notion of equality a search
+    # needs was already written down as `Ord`.
+    fun binary_search(self, target: T) -> Option<Int> {
+        var at = self.lower_bound(target);
+        if at < self.len() and self[at].cmp(target) == 0 {
+            return Option::Some(at);
+        }
+        return Option::None;
+    }
+}

@@ -1,0 +1,134 @@
+# `std::sort` — an array put in order, and one used because it is.
+#
+# The two halves are the fork milestone 59's `max` settled: `sort_by` takes the
+# order as a closure, `sort` takes it from `T`'s own `Ord`. Both are stable, and
+# stability is the one property here a test can *observe* rather than take on
+# trust — the records below are what observes it.
+#> [0, 1, 3, 5, 5, 9]
+#> [1, 2]
+#> [3, 1, 2]
+#> [1, 2, 3]
+#> [Apple, apple, fig, pear]
+#> [B, Z, a, q]
+#> []
+#> [7]
+#> [1, 2, 3, 4, 5]
+#> [1, 2, 3, 4, 5]
+#> [2, 2, 2, 2]
+#> [4, 3, 2, 1]
+#> [Rec { key: 1, tag: b }, Rec { key: 1, tag: d }, Rec { key: 2, tag: a }, Rec { key: 2, tag: c }]
+#> [Rec { key: 1, tag: x }, Rec { key: 1, tag: y }, Rec { key: 2, tag: x }, Rec { key: 2, tag: y }]
+#> true
+#> false
+#> Some(1)
+#> Some(0)
+#> Some(3)
+#> None
+#> 1
+#> 3
+#> 0
+#> 4
+#> None
+#> 0
+use std::io::print;
+use std::sort;
+use std::array;
+
+struct Rec { key: Int, tag: String }
+
+fun main() {
+    # enough elements for three merge passes, so the odd-parity copy-back runs
+    var xs = [5, 3, 9, 1, 5, 0];
+    xs.sort();
+    print(xs);
+
+    # in place: a second name for the array sees the same rearrangement, which
+    # is what makes a copy the caller's decision rather than the method's
+    var ys = [2, 1];
+    var alias = ys;
+    ys.sort();
+    print(alias);
+
+    # and the copy has a spelling already — the walk collects a new array, so
+    # sorting it leaves the original alone
+    var zs = [3, 1, 2];
+    var copy = zs.iter().collect();
+    copy.sort();
+    print(zs);
+    print(copy);
+
+    # any `Ord` orders its own arrays: byte order for String, code points for
+    # Char, so 'Apple' sorts before 'fig' and 'Z' before 'a'
+    var names = ["pear", "Apple", "fig", "apple"];
+    names.sort();
+    print(names);
+    var cs = ['q', 'Z', 'a', 'B'];
+    cs.sort();
+    print(cs);
+
+    # the edges are the same code with nothing to do: an empty array, one
+    # element, already ordered, exactly reversed, and all-equal
+    var e: [Int] = [];
+    e.sort();
+    print(e);
+    var one = [7];
+    one.sort();
+    print(one);
+    var up = [1, 2, 3, 4, 5];
+    up.sort();
+    print(up);
+    var down = [5, 4, 3, 2, 1];
+    down.sort();
+    print(down);
+    var same = [2, 2, 2, 2];
+    same.sort();
+    print(same);
+
+    # sort_by describes any order the caller can compare with — here, backwards
+    var ds = [1, 4, 2, 3];
+    ds.sort_by(|a, b| => b.cmp(a));
+    print(ds);
+
+    # **stability, observed**: four records over two keys. A stable sort keeps
+    # `b` before `d` and `a` before `c`, because that is the order they were in;
+    # an unstable one is free to swap either pair.
+    var recs = [
+        Rec { key: 2, tag: "a" },
+        Rec { key: 1, tag: "b" },
+        Rec { key: 2, tag: "c" },
+        Rec { key: 1, tag: "d" },
+    ];
+    recs.sort_by(|a, b| => a.key - b.key);
+    print(recs);
+
+    # sorting by one key and then another is what stability is *for*: the second
+    # sort keeps the first's order within each of its own groups
+    var pairs = [
+        Rec { key: 2, tag: "y" },
+        Rec { key: 1, tag: "y" },
+        Rec { key: 2, tag: "x" },
+        Rec { key: 1, tag: "x" },
+    ];
+    pairs.sort_by(|a, b| => a.tag.cmp(b.tag));
+    pairs.sort_by(|a, b| => a.key - b.key);
+    print(pairs);
+
+    # searching a sorted array. `lower_bound` is the insertion point, so it
+    # answers for an absent element too, and points at the *first* of several
+    # that compare equal
+    var v = [10, 20, 20, 30];
+    print(v.is_sorted());
+    print([2, 1].is_sorted());
+    print(v.binary_search(20));
+    print(v.binary_search(10));
+    print(v.binary_search(30));
+    print(v.binary_search(25));
+    print(v.lower_bound(20));
+    print(v.lower_bound(25));
+    print(v.lower_bound(5));
+    print(v.lower_bound(99));
+
+    # an empty array answers both, without a case of its own
+    print(e.binary_search(1));
+    print(e.lower_bound(1));
+}

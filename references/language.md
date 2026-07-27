@@ -1605,6 +1605,11 @@ impl<T> [T]  self.len() -> Int                      # @intrinsic (OP_LEN)
              self.clear()
              (std::array also: private free `pop_last<T>(xs)`, the raw @native)
              self.iter() -> ArrayIter<T>            # lives in std::iter
+             self.sort_by(cmp: fun(T, T) -> Int)    # lives in std::sort
+             self.sort()                            # std::sort, needs T: Ord
+             self.is_sorted() -> Bool               # std::sort, needs T: Ord
+             self.lower_bound(target: T) -> Int     # std::sort, needs T: Ord
+             self.binary_search(target: T) -> Option<Int>   # std::sort, T: Ord
 
 impl Range   self.iter() -> RangeIter               # lives in std::iter
              (std::iter also: private free `range_start`/`range_stop`,
@@ -1888,6 +1893,62 @@ separator each produces an empty piece. `parse_int` accepts an optional leading
 or a stray character is `None`, not a partial parse — and does **not** detect
 overflow: a value past what an `Int` holds wraps.
 
+### `std::sort`
+
+Ordering an array, and using one that is ordered. Methods on `[T]` (a second
+inherent impl, the way `std::text`'s are on `String`), so `use std::sort;` is
+all it takes:
+
+```
+use std::sort;
+
+var xs = [5, 3, 9, 1];
+xs.sort();                          # [1, 3, 5, 9] — in place, needs T: Ord
+xs.sort_by(|a, b| => b.cmp(a));     # [9, 5, 3, 1] — any order, no bound
+xs.is_sorted();                     # false (this one is descending now)
+
+var v = [10, 20, 20, 30];
+v.binary_search(20);                # Some(1) — the first of the equals
+v.binary_search(25);                # None
+v.lower_bound(25);                  # 3 — where 25 would be inserted
+```
+
+- **`sort_by` is the primitive and `sort` the convenience**, the fork
+  `std::iter`'s `max` settled the same way: the closure form takes the order as
+  an argument, the `Ord` form takes it from the element. `sort` and the searches
+  live in an `impl<T: Ord> [T]` block, so an array of an unordered element does
+  not *have* them and the diagnostic names the obligation
+  (`tests/fail/sort_needs_ord.dt`).
+- **Sorting is in place**, because a `[T]` is a reference and the caller holds
+  the array being rearranged. A sorted *copy* needs no second method: it is
+  `var ys = xs.iter().collect(); ys.sort();`.
+- **The sort is stable**, and that promise picks the algorithm: a bottom-up
+  merge sort keeps it unconditionally, where an in-place quicksort would trade
+  stability away and take quadratic time on already-sorted input. The price is
+  one array of scratch space. Stability is what lets a program sort by one key
+  and then another and mean it (`tests/run/sort.dt` observes both).
+- **`lower_bound` is the primitive of the two searches** — an insertion point
+  exists whether or not the element does, and `binary_search` is one comparison
+  past it. Both require `self` to be sorted; on an array that is not, the answer
+  is unspecified but never an out-of-bounds read.
+- **"Found" means `cmp` answers 0, not `==`.** The two can disagree — a struct
+  ordered on one of its fields, a case-insensitive comparator — and it is the
+  order's answer a search can honour, since the order is what put the elements
+  where they are. This is also why the absence of an `Eq` trait costs the module
+  nothing: the notion of equality a search needs was already written as `Ord`.
+
+Nothing in `std::sort` is a native and nothing in it needed a language change;
+it is a module of its own rather than more of `std::array` for `std::text`'s
+reason applied one type over — `std::array` is what an array cannot say about
+itself, while an order is a policy written on top. What makes the module
+possible is a decision `std::cmp` made earlier: it reaches an array's length
+through a private `@intrinsic` instead of importing `std::array`, so `sort →
+cmp` closes no loop. Unlike `push` and `len` — which every program has through
+the prelude's `std::iter → std::array` chain — `sort` is opt-in, and the reason
+is that a visible std method on `[T]` **silently wins** over a program's own
+method of the same name (see "Not yet implemented"). Opt-in is what leaves the
+name to a program that never asked for this module.
+
 ## Not yet implemented
 
 | Gap | Behavior today |
@@ -1918,6 +1979,7 @@ overflow: a value past what an `Int` holds wraps.
 | glob imports (`use a::*`) | not parsed; name each item, or bind the module (`use a;`) and qualify |
 | re-exporting a module qualifier (`pub use a;`) | a qualifier is not an item; `pub use` re-exports named items only |
 | `pub` on methods and struct fields | rejected: `pub fun` in an impl is "expected impl item", `pub x` on a field is "expected field name". `pub` is only ignored on the `impl` keyword itself; visibility exists only on top-level items, at module granularity |
+| a diagnostic when two *inherent* impls give one type the same method name | there is none: the std one silently wins and the program's is unreachable, so `impl<T> [T] { fun first(..) }` in a program is quietly ignored (`first` reaches every program through the prelude's `std::iter → std::array` chain). A trait impl collision *is* caught — this is only the inherent case, and it is why an opt-in std module leaves a name alone |
 | overlap rules finer than "same trait, matching self types" | there is no orphan rule and no specialization: an impl may be written for any type, and two overlapping ones are simply refused wherever both are visible |
 | visibility below module granularity (`pub(crate)` &c.) | `pub` is the only modifier |
 | two spellings of one file (symlinks, unusual paths) | dedup is lexical, so the file would load twice and collide |
