@@ -603,6 +603,12 @@ right into an accumulator — the eager sibling of `map`), `max()` / `min()`
 `product()` (combine every element, or `None` if there are none), and
 `chain(other)` (this sequence, then `other`'s).
 
+And the short-circuiting consumers: `any(pred)` / `all(pred)` (does any element
+pass, does every one), `find(pred)` (the first element that passes) /
+`position(pred)` (its index), `count()` (how many are left), and `for_each(f)`
+(run `f` on each, for its effect). Alongside them two more lazy adapters,
+`take_while(pred)` and `skip_while(pred)`.
+
 ```
 var sum   = Counter::to(5).fold(0, |acc, x| => acc + x);          # 10
 var first = Counter::to(100).map(|x| => x * x).take(4).collect(); # [0, 1, 4, 9]
@@ -613,7 +619,31 @@ var flat  = Counter::to(4).flat_map(|n| => Counter::to(n)).collect();
 var peak  = Counter::to(9).filter(|k| => k % 3 == 0).max();       # Some(6)
 var both  = Counter::to(3).chain(Counter::to(2)).collect();       # [0,1,2,0,1]
 var tot   = Counter::to(5).sum();                                 # Some(10)
+var seen  = Counter::to(5).any(|x| => x == 3);                    # true
+var hit   = Counter::to(9).find(|x| => x % 7 == 0);               # Some(0)
+var n     = Counter::to(9).filter(|x| => x % 3 == 0).count();     # 3
+var head  = Counter::to(9).take_while(|x| => x < 3).collect();    # [0, 1, 2]
+var tail  = Counter::to(6).skip_while(|x| => x < 3).collect();    # [3, 4, 5]
+Counter::to(3).for_each(|x| => print(x));                         # 0 1 2
 ```
+
+**Where each consumer stops is part of what it means**, not an optimisation:
+`any` stops at the first element that passes, `all` at the first that fails,
+`find`/`position` at the first match. The cursor is left there, so the same
+source may be driven on afterwards, and a sequence too long to drain is still
+usable when the answer comes early. `count` is the exception — the answer is
+only known once the sequence has ended, so it drains.
+
+`take_while` is spent at the first failure and stays spent, which is the whole
+difference from `filter`: over `0,1,2,3,0,1` the first yields `[0,1,2]` and the
+second `[0,1,2,0,1]`. Its mirror `skip_while` *yields* the element that ended
+the skipping rather than dropping it.
+
+`for_each`'s closure returns `Unit`, and there is no discard coercion — a
+shorthand closure *is* its expression, so `|x| => f(x)` fits only when `f`
+returns nothing. `|x| { f(x); }` is the way round it, the trailing `;` doing
+the dropping by the ordinary block rule
+(`tests/fail/iter_for_each_returns.dt`).
 
 `flat_map` is the one that needed the language rather than the library to move.
 Its adapter's element type is `J.Item` — the element of an iterator named only
@@ -702,10 +732,6 @@ agree on where they met. Calling `rev` after one of those is "no method named
 returns a `Rev<Self>`), which does not stop a trait object being reversed by a
 `<I: DoubleEnded>` function — the body is monomorphised at
 `Self = dyn DoubleEnded` like any other instance.
-
-What is left in this direction is breadth with no design question behind it —
-`any`, `all`, `find`, `position`, `count`, `for_each`, `take_while`,
-`skip_while`.
 
 ## Modules
 

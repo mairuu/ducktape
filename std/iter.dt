@@ -109,6 +109,24 @@ pub trait Iterator {
         return Skip { inner: self, remaining: n };
     }
 
+    # Yield elements while `pred` holds, then stop for good. Where `filter`
+    # asks the question of every element, this one asks until the first `false`
+    # and then never again — so the adapter carries a `done` flag rather than
+    # re-testing a source it has already given up on. The element that failed is
+    # pulled and dropped: there is no way to put one back.
+    fun take_while(self, pred: fun(Self.Item) -> Bool) -> TakeWhile<Self> {
+        return TakeWhile { inner: self, pred: pred, done: false };
+    }
+
+    # Drop elements while `pred` holds, then yield everything after — the mirror
+    # of `take_while`, and the mirror of `skip` in the way `take_while` mirrors
+    # `take`. The subtlety is at the seam: the first element that *fails* the
+    # predicate is the first one yielded, not the one dropped to notice the
+    # skipping is over.
+    fun skip_while(self, pred: fun(Self.Item) -> Bool) -> SkipWhile<Self> {
+        return SkipWhile { inner: self, pred: pred, skipping: true };
+    }
+
     # Pair each element with its position: `(0, a), (1, b), ...`. The element
     # type is a tuple, so the adapter's `Item` is `(Int, Self.Item)`.
     fun enumerate(self) -> Enumerate<Self> {
@@ -135,6 +153,113 @@ pub trait Iterator {
             }
         }
         return acc;
+    }
+
+    # ── Short-circuiting consumers ──────────────────────────────────────────
+    #
+    # Each drains the source, but only as far as it has to: `any` stops at the
+    # first element that passes, `all` at the first that fails, `find` and
+    # `position` at the first match. That is not an optimisation but part of
+    # what they mean — the source's cursor is left *where the answer was found*,
+    # so a caller may keep driving it, and a source that would not terminate is
+    # still usable if the answer comes early enough.
+    #
+    # All six sit in a `dyn Iterator` vtable, and the reason is worth stating
+    # because it draws the partition object safety has been making since
+    # milestone 48 along a line the library already had: **an adapter returns a
+    # `Self`-shaped type and a consumer does not**. `take_while` returns
+    # `TakeWhile<Self>`, so `Self` escapes the receiver and there is nothing to
+    # dispatch; `any` returns a `Bool` and `find` an `Option<Self.Item>`, a
+    # projection the trait object pins. What excludes a *consumer* is a type
+    # parameter of its own (`fold`) or a bound on the element (`max`), and none
+    # of these has either.
+
+    # Is `pred` true of any element? `false` for an empty sequence.
+    fun any(self, pred: fun(Self.Item) -> Bool) -> Bool {
+        while true {
+            match self.next() {
+                Option::Some(x) => { if pred(x) { return true; } },
+                Option::None => { return false; },
+            }
+        }
+        return false;
+    }
+
+    # Is `pred` true of every element? `true` for an empty sequence — there is
+    # no element it fails on, which is the only answer that keeps `all` and
+    # `any` mirrors of each other.
+    fun all(self, pred: fun(Self.Item) -> Bool) -> Bool {
+        while true {
+            match self.next() {
+                Option::Some(x) => { if not pred(x) { return false; } },
+                Option::None => { return true; },
+            }
+        }
+        return true;
+    }
+
+    # The first element `pred` accepts, or `None`. The element itself — its
+    # *index* is `position`, and the two are separate rather than one returning
+    # a pair because a caller almost always wants one and would have to unpack
+    # the other.
+    fun find(self, pred: fun(Self.Item) -> Bool) -> Option<Self.Item> {
+        while true {
+            match self.next() {
+                Option::Some(x) => { if pred(x) { return Option::Some(x); } },
+                Option::None => { return Option::None; },
+            }
+        }
+        return Option::None;
+    }
+
+    # The index of the first element `pred` accepts, counted from where the
+    # cursor is *now* rather than from the sequence's start — the iterator does
+    # not know how far it has already come, and nothing can ask it.
+    fun position(self, pred: fun(Self.Item) -> Bool) -> Option<Int> {
+        var i = 0;
+        while true {
+            match self.next() {
+                Option::Some(x) => {
+                    if pred(x) { return Option::Some(i); }
+                    i += 1;
+                },
+                Option::None => { return Option::None; },
+            }
+        }
+        return Option::None;
+    }
+
+    # How many elements are left. The one consumer here that cannot short-
+    # circuit: the answer is only known once the sequence has ended, so this
+    # drains it and an endless source never comes back.
+    fun count(self) -> Int {
+        var n = 0;
+        while true {
+            match self.next() {
+                Option::Some(x) => { n += 1; },
+                Option::None => { return n; },
+            }
+        }
+        return n;
+    }
+
+    # Run `f` on every element, for its effect. The same walk `for x in it`
+    # does, spelled as a method so it can end a pipeline
+    # (`it.filter(p).for_each(f)`) without the chain having to be broken open
+    # into a loop.
+    #
+    # The closure returns `Unit`, and there is no discard coercion: a shorthand
+    # closure *is* its expression, so `|x| => f(x)` only fits when `f` returns
+    # nothing. `|x| { f(x); }` is the way round it, and the trailing `;` doing
+    # the dropping is the ordinary block rule rather than anything this method
+    # asked for.
+    fun for_each(self, f: fun(Self.Item) -> Unit) {
+        while true {
+            match self.next() {
+                Option::Some(x) => { f(x); },
+                Option::None => { return; },
+            }
+        }
     }
 
     # The largest element, or `None` for an empty sequence. `min` is the mirror.
@@ -452,6 +577,70 @@ impl<I: Iterator> Iterator for Skip<I> {
                 # zeroing the countdown keeps a later `next()` from re-driving it
                 Option::None => {
                     self.remaining = 0;
+                    return Option::None;
+                },
+            }
+        }
+        return self.inner.next();
+    }
+}
+
+# `TakeWhile` yields while the predicate holds and is spent the moment it does
+# not. `done` is what makes that permanent: without it, a source whose elements
+# go true, false, true would resume after the gap, which is `filter`'s meaning
+# rather than this one's. The failing element is gone — pulling it is how the
+# adapter found out, and there is nowhere to put it back.
+pub struct TakeWhile<I: Iterator> {
+    inner: I,
+    pred: fun(I.Item) -> Bool,
+    done: Bool,
+}
+
+impl<I: Iterator> Iterator for TakeWhile<I> {
+    type Item = I.Item;
+
+    fun next(self) -> Option<I.Item> {
+        if self.done { return Option::None; }
+        match self.inner.next() {
+            Option::Some(x) => {
+                if (self.pred)(x) { return Option::Some(x); }
+                self.done = true;
+                return Option::None;
+            },
+            Option::None => {
+                self.done = true;
+                return Option::None;
+            },
+        }
+    }
+}
+
+# `SkipWhile` drops elements while the predicate holds, then passes everything
+# through. The seam is the interesting part: the element that *ends* the
+# skipping is the first one yielded, so the loop returns it rather than
+# discarding it and asking again — an off-by-one that would silently eat one
+# element of every sequence this is used on. `skipping` then stays false for
+# good, so a later element the predicate would have accepted is still yielded.
+pub struct SkipWhile<I: Iterator> {
+    inner: I,
+    pred: fun(I.Item) -> Bool,
+    skipping: Bool,
+}
+
+impl<I: Iterator> Iterator for SkipWhile<I> {
+    type Item = I.Item;
+
+    fun next(self) -> Option<I.Item> {
+        while self.skipping {
+            match self.inner.next() {
+                Option::Some(x) => {
+                    if not (self.pred)(x) {
+                        self.skipping = false;
+                        return Option::Some(x);
+                    }
+                },
+                Option::None => {
+                    self.skipping = false;
                     return Option::None;
                 },
             }

@@ -3156,6 +3156,48 @@
   asserts it is rejected because a supertrait belongs on the trait rather than
   on one method — one spelling, not two.
 
+- **Iterator breadth (milestone 59)** — `any`, `all`, `find`, `position`,
+  `count`, `for_each`, `take_while`, `skip_while`. Design: `language.md`
+  `std::iter` → "Combinators".
+
+  **Zero compiler change**, the second such milestone after 57, and the one the
+  roadmap had been describing for four milestones as "breadth with no design
+  question behind it". That turned out to be true, which is itself the result
+  worth recording: 47–58 spent the design budget, and what is left of the
+  iterator direction is `.dt` written against `next()`.
+
+  What the milestone had to *decide* rather than implement is where each thing
+  stops, and there are three:
+  - **Short-circuiting is part of the meaning, not an optimisation.** `any`
+    stops at the first element that passes, `all` at the first that fails,
+    `find`/`position` at the first match — and the cursor is left there, so the
+    same source may be driven on afterwards. `tests/run/iter_breadth.dt` pins
+    that by *observing* it: the source prints what it has been pulled for, so
+    stopping early is an output diff rather than a claim — the shape milestone
+    57 used for `assert_else`'s laziness. `count` is the exception and says so:
+    the answer is only known once the sequence ends.
+  - **`take_while` is spent at the first failure and stays spent**, which is
+    the whole difference from `filter` (`0,1,2,3,0,1` gives `[0,1,2]` rather
+    than `[0,1,2,0,1]`). That needs a `done` flag, and the element that failed
+    is gone — pulling it is how the adapter found out, and there is nowhere to
+    put it back. Its mirror `skip_while` has the matching seam from the other
+    side: the element that *ends* the skipping is the first one yielded, and
+    dropping it would silently eat one element of every sequence.
+  - **`for_each` takes a `fun(Self.Item) -> Unit` and there is no discard
+    coercion.** A shorthand closure *is* its expression, so `|x| => f(x)` fits
+    only where `f` returns nothing; `|x| { f(x); }` is the way round it, the
+    trailing `;` doing the dropping by the ordinary block rule rather than by
+    anything bought for this method (`tests/fail/iter_for_each_returns.dt`).
+
+  The one thing the milestone *found* rather than decided: **the object-safety
+  partition falls along a line the library already had.** All six consumers sit
+  in the `dyn Iterator` vtable and both new adapters are excluded, and the
+  reason generalises — an adapter returns a `Self`-shaped type and a consumer
+  does not, so what excludes a consumer is instead a type parameter of its own
+  (`fold`) or a bound on the element (`max`). Milestone 48 wrote the
+  per-method rule without that split in mind; it is what the rule turns out to
+  mean once `std::iter` is wide enough to show it.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -3175,6 +3217,18 @@ by appetite rather than by necessity.
    each piece is one registry entry plus a decision about the type it needs.
    Every piece with a design question behind it is now done — the last open one,
    padding, is milestone 34 (below).
+
+   The one piece the iterator work has left pointing at itself: **std ships no
+   iterator *source*.** `for x in xs` special-cases an array and a range in the
+   desugaring, so neither is an `Iterator` and neither reaches a combinator —
+   every iterator a program can drive today is one it wrote itself. An
+   `xs.iter()` (and a range's) would put the whole of milestones 47–59 within
+   reach of the two sequence types programs actually have, which is a larger
+   payoff than any further combinator. It has a design question behind it too:
+   an array iterator holds a borrow in every language that has one, and
+   ducktape has no borrows, so what it holds is the array itself and
+   `for x in xs` re-reading the length each turn is already the wart that
+   describes what happens if it is mutated underneath.
 
 (**The first iterator combinators** — `map`/`filter`/`collect` — are now
 milestone 47, along with driving a bounded generic or a `dyn Iterator` through
@@ -3232,9 +3286,12 @@ is writable and the reduce is an ordinary combinator.)
 (**`rev` was the last combinator with a design question**, and it is milestone
 58: reversing needs an iterator that can be driven from both ends, which needs a
 trait that requires `Iterator` — so the answer was **supertraits**, a language
-feature rather than another adapter struct. What is left in the combinator
-direction is breadth with no design question behind it: `any`, `all`, `find`,
-`position`, `count`, `for_each`, `take_while`, `skip_while`.)
+feature rather than another adapter struct. The breadth that was left after it —
+`any`, `all`, `find`, `position`, `count`, `for_each`, `take_while`,
+`skip_while` — is milestone 59, and it needed no compiler change at all. **The
+iterator direction is now closed**: what would extend it further is a *source*
+in std rather than another combinator, since every iterator a program can drive
+today is one it wrote itself.)
 
 (**`std::assert`** is milestone 57, and is the shape "breadth" takes when a
 piece needs no registry entry at all: five functions over `std::panic`, zero

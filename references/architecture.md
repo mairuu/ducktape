@@ -1237,6 +1237,13 @@ trait may carry generic convenience methods and stay object-safe: `Iterator`'s
 names — stays in the vtable, which is exactly what lets the combinators be
 methods without taking `dyn Iterator` away.
 
+As `std::iter` filled out, that partition turned out to fall along a line the
+library already had: **an adapter returns a `Self`-shaped type and a consumer
+does not**, so every adapter is excluded and a consumer is dispatchable unless
+it has a type parameter of its own (`fold`) or a bound on the element (`max`).
+The rule was never written for that split; it is what the dispatchability test
+happens to mean once applied to the two shapes.
+
 **The partition governs the vtable, not what a program may call** (milestone
 56). An excluded method used to be rejected at the call, because the vtable was
 the only way in. It is not: a provided method is a generic function over `Self`

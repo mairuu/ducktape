@@ -407,4 +407,16 @@ fun main() {
     # pipeline stays reversible across it
     var backwards = Countdown::from(4).rev().collect();
     var mapped_back = Countdown::from(3).map(|k| => k * 10).rev().collect();
+    # the short-circuiting consumers and the two `*_while` adapters
+    # (milestone 59) — breadth over `next()`, no language feature behind them.
+    # Each stops where its answer is, so the cursor is left mid-sequence and
+    # the same source can be driven on
+    var seen = Countdown::from(5).any(|k| => k == 3);
+    var every = Countdown::from(5).all(|k| => k > 0);
+    var hit = Countdown::from(5).find(|k| => k % 2 == 0);
+    var at = Countdown::from(5).position(|k| => k % 2 == 0);
+    var how_many = Countdown::from(5).filter(|k| => k % 2 == 1).count();
+    Countdown::from(2).for_each(|k| => print(k));
+    var while_big = Countdown::from(6).take_while(|k| => k > 3).collect();
+    var after_big = Countdown::from(6).skip_while(|k| => k > 3).collect();
 }

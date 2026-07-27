@@ -1,0 +1,25 @@
+#! expect: expected '()' but got 'Int'
+# `for_each` takes a `fun(Self.Item) -> Unit`, and there is no discard
+# coercion: a shorthand closure *is* its expression, so `|x| => x * 2` has type
+# `fun(Int) -> Int` and does not fit. The escape hatch is the block form, where
+# a trailing `;` is what drops the value — `|x| { x * 2; }` — which is the same
+# rule every other block in the language follows rather than a special case
+# bought for this method.
+use std::iter::Iterator;
+use std::option::Option;
+
+struct Span { lo: Int, hi: Int }
+
+impl Iterator for Span {
+    type Item = Int;
+    fun next(self) -> Option<Int> {
+        if self.lo >= self.hi { return Option::None; }
+        var v = self.lo;
+        self.lo += 1;
+        return Option::Some(v);
+    }
+}
+
+fun main() {
+    Span { lo: 0, hi: 3 }.for_each(|x| => x * 2);
+}
