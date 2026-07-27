@@ -736,3 +736,139 @@ impl<I: Iterator, J: Iterator> Iterator for Zip<I, J> {
         }
     }
 }
+
+# ── Sources ──────────────────────────────────────────────────────────────────
+#
+# Every adapter above wraps an iterator, and until milestone 60 the only way to
+# get the first one was to write it: `for x in xs` and `for i in 0..n` are
+# desugarings over an array and a range *directly*, so neither of the two
+# sequence types a program actually has was an `Iterator`, and neither could
+# reach a combinator. `xs.iter()` and `(0..n).iter()` are the seeds that close
+# that — the whole of milestones 47–59 now applies to both.
+#
+# They live in this module rather than in `std::array`, and that is the import
+# graph's doing rather than a preference: `collect` needs `push`, so `iter`
+# imports `array`, and the dependency cannot also run the other way.
+
+# A walk over an array's elements, in order. `xs.iter()` builds one.
+#
+# **It holds the array, not a borrow.** ducktape has no borrows to hold, so the
+# question mutation raises has to be answered rather than prevented — and the
+# answer is the one `for x in xs` already gives: nothing is snapshotted. What
+# the iterator carries is how far in it has come *from each end*, so both
+# `next` and `next_back` re-read `len()` and the two cursors are compared
+# against the array as it is now. Growth is seen (an element pushed ahead of
+# the front cursor will be yielded); shrinking ends the walk early instead of
+# indexing off the end. The one thing that cannot happen is an out-of-bounds
+# read, which is what the `taken_back` count buys over a stored end index.
+pub struct ArrayIter<T> {
+    xs: [T],
+    front: Int,      # elements already yielded off the front
+    taken_back: Int, # elements already yielded off the back
+}
+
+impl<T> Iterator for ArrayIter<T> {
+    type Item = T;
+
+    fun next(self) -> Option<T> {
+        if self.front >= self.xs.len() - self.taken_back {
+            return Option::None;
+        }
+        var v = self.xs[self.front];
+        self.front += 1;
+        return Option::Some(v);
+    }
+}
+
+# An array knows how long it is, so its iterator can be driven from the back —
+# `xs.iter().rev()` is a backwards walk with no intermediate array. `stop` is
+# recomputed each call for the reason above: it is the live end, not a
+# remembered one, and the emptiness test is what keeps `stop - 1` in bounds.
+impl<T> DoubleEnded for ArrayIter<T> {
+    fun next_back(self) -> Option<T> {
+        var stop = self.xs.len() - self.taken_back;
+        if self.front >= stop {
+            return Option::None;
+        }
+        self.taken_back += 1;
+        return Option::Some(self.xs[stop - 1]);
+    }
+}
+
+impl<T> [T] {
+    # Walk this array's elements as an `Iterator`, so the combinators apply:
+    # `xs.iter().map(f).collect()`. The array itself is not copied — the
+    # iterator holds it, with the consequences described on `ArrayIter`.
+    fun iter(self) -> ArrayIter<T> {
+        return ArrayIter { xs: self, front: 0, taken_back: 0 };
+    }
+}
+
+# A range's two bounds, so the walk `for i in a..b` performs can be written
+# here rather than only built into the loop. Both are `@intrinsic`s — the tier
+# that gives an opcode a name, so a call costs the opcode and no frame, at the
+# price that it can be called but never passed as a value.
+#
+# `range_start` is `OP_RANGE_START`, which the `for` desugaring already emitted
+# and nothing could name; that is milestone 40's `array_len` move exactly.
+# `range_stop` is the one new opcode, and it exists because the desugaring's
+# other half asks the wrong question: `OP_RANGE_TEST` answers "is `i` still
+# inside", which walks forwards and says nothing about where to *start* from
+# the back. Answering with the first Int past the end is what folds `..` and
+# `..=` into one bound.
+#
+# Free functions, and deliberately not methods on `Range`: an impl method has
+# no visibility control, so a `Range::stop()` would be public API on every
+# range in every program, and the exclusive-bound normalisation these two do is
+# this module's business. `iter` below is the only thing a range gains.
+@intrinsic("range_start")
+fun range_start(r: Range) -> Int;
+
+@intrinsic("range_stop")
+fun range_stop(r: Range) -> Int;
+
+# A walk over the Ints of a range. `(0..n).iter()` builds one.
+#
+# Unlike `ArrayIter` this holds no `Range` at all — a range is two numbers and
+# a flag, and `range_stop` folds the flag away by answering with the first Int
+# *past* the end. `0..3` and `0..=2` are the same three elements, so an
+# iterator that had to remember which spelling it came from would be carrying a
+# distinction its own sequence does not have.
+pub struct RangeIter {
+    cur: Int,
+    stop: Int, # exclusive
+}
+
+impl Iterator for RangeIter {
+    type Item = Int;
+
+    fun next(self) -> Option<Int> {
+        if self.cur >= self.stop {
+            return Option::None;
+        }
+        var v = self.cur;
+        self.cur += 1;
+        return Option::Some(v);
+    }
+}
+
+# Both bounds are numbers the iterator holds, so counting down from the far end
+# costs exactly what counting up does: `(0..n).iter().rev()` is `n-1 … 0`.
+impl DoubleEnded for RangeIter {
+    fun next_back(self) -> Option<Int> {
+        if self.cur >= self.stop {
+            return Option::None;
+        }
+        self.stop -= 1;
+        return Option::Some(self.stop);
+    }
+}
+
+impl Range {
+    # Walk this range's Ints as an `Iterator`. A range is a value, so unlike an
+    # array there is nothing underneath for anyone else to change: the sequence
+    # is fixed the moment the range is written.
+    fun iter(self) -> RangeIter {
+        return RangeIter { cur: range_start(self), stop: range_stop(self) };
+    }
+}

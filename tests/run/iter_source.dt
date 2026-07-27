@@ -1,0 +1,86 @@
+# Iterator sources (milestone 60): `xs.iter()` and `(a..b).iter()`.
+#
+# Every combinator milestone 47-59 added wraps an iterator, and until now the
+# only way to get the first one was to write it — `for x in xs` and
+# `for i in 0..n` desugar over an array and a range *directly*, so neither of
+# the two sequence types a program actually has was an `Iterator`. These two
+# seeds put the whole pipeline within reach of both.
+#
+# `Iterator` is preluded, so nothing here imports it; `DoubleEnded` is not,
+# which is why `rev` needs a `use`.
+use std::iter::DoubleEnded;
+use std::io::print;
+
+# `Range` is a nameable type now — a builtin in the sense `String` and
+# `StringBuf` are: the compiler knows the type, every operation on one lives in
+# std. That is what lets a range be a parameter rather than only a loop header.
+fun evens_in(r: Range) -> [Int] {
+    return r.iter().filter(|v| => v % 2 == 0).collect();
+}
+
+fun main() {
+    var xs = [3, 1, 4, 1, 5];
+
+    # an array reaches the combinators through `iter()`
+    print("{xs.iter().map(|v| => v * 10).collect()}");
+#> [30, 10, 40, 10, 50]
+    print("{xs.iter().max()}");
+#> Some(5)
+    print("{xs.iter().sum()}");
+#> Some(14)
+    print("{xs.iter().position(|v| => v == 4)}");
+#> Some(2)
+
+    # an array knows its length, so its iterator is double-ended
+    print("{xs.iter().rev().collect()}");
+#> [5, 1, 4, 1, 3]
+    print("{xs.iter().rev().take(2).collect()}");
+#> [5, 1]
+
+    # ...and both ends may be driven at once, meeting in the middle
+    var it = xs.iter();
+    print("{it.next()} {it.next_back()} {it.next()} {it.next_back()}");
+#> Some(3) Some(5) Some(1) Some(1)
+    print("{it.collect()}");
+#> [4]
+
+    # a range is the other source. `..` and `..=` differ only in spelling: the
+    # iterator holds one exclusive bound, so the two produce one sequence.
+    print("{(0..4).iter().collect()}");
+#> [0, 1, 2, 3]
+    print("{(0..=3).iter().collect()}");
+#> [0, 1, 2, 3]
+    print("{(0..0).iter().collect()}");
+#> []
+    print("{(5..2).iter().count()}");
+#> 0
+
+    print("{evens_in(0..10)}");
+#> [0, 2, 4, 6, 8]
+    print("{(1..=5).iter().product()}");
+#> Some(120)
+    print("{(0..5).iter().rev().collect()}");
+#> [4, 3, 2, 1, 0]
+
+    # a range is a value, so a variable holding one seeds as many walks as
+    # asked: the sequence was fixed when the range was written
+    var span = 0..3;
+    print("{span.iter().count()} {span.iter().count()}");
+#> 3 3
+
+    # the two sources compose with each other and with `for`
+    for pair in xs.iter().zip((0..3).iter()) {
+        print("{pair.0}@{pair.1}");
+    }
+#> 3@0
+#> 1@1
+#> 4@2
+
+    print("{(0..3).iter().flat_map(|n| => [n, n].iter()).collect()}");
+#> [0, 0, 1, 1, 2, 2]
+
+    # a source is an ordinary value: it can be a `dyn Iterator` like any other
+    var d: dyn Iterator<Item = Int> = (0..4).iter();
+    print("{d.collect()}");
+#> [0, 1, 2, 3]
+}

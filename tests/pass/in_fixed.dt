@@ -419,4 +419,20 @@ fun main() {
     Countdown::from(2).for_each(|k| => print(k));
     var while_big = Countdown::from(6).take_while(|k| => k > 3).collect();
     var after_big = Countdown::from(6).skip_while(|k| => k > 3).collect();
+    # iterator *sources* (milestone 60): every pipeline above starts from a
+    # `Countdown` this file had to write, because an array and a range reach
+    # `for` by a desugaring rather than by the trait. `iter()` is the seed that
+    # puts all of the above within reach of the two sequence types a program
+    # already has — and `Range` is a nameable type now, the way `String` is
+    var numbers = [1, 2, 3, 4];
+    var doubled = numbers.iter().map(|k| => k * 2).collect();
+    var counted = (0..10).iter().filter(|k| => k % 3 == 0).count();
+    var last_two = numbers.iter().rev().take(2).collect();
+    var descending = (1..=4).iter().rev().collect();
+    var spanned = span_len(2..7);
+}
+
+# a range as a parameter rather than only a loop header
+fun span_len(r: Range) -> Int {
+    return r.iter().count();
 }

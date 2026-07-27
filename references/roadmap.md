@@ -3198,6 +3198,66 @@
   per-method rule without that split in mind; it is what the rule turns out to
   mean once `std::iter` is wide enough to show it.
 
+- **Iterator sources (milestone 60)** — `xs.iter()` and `(0..n).iter()`.
+  Design: `language.md` `std::iter` → "Sources".
+
+  The direction milestones 47–59 had been building toward without being able to
+  reach: every combinator wraps an iterator, and the two sequence types a
+  program actually has were not ones. `for x in xs` and `for i in 0..n` are
+  desugarings *over* an array and a range, so neither implemented `Iterator`
+  and neither could reach a combinator — every iterator a program could drive
+  was one it had written itself. Two seeds close that, and the whole of 47–59
+  applies to both.
+
+  Both are ordinary `.dt` in `std::iter`: `ArrayIter<T>` and `RangeIter`, each
+  with an `Iterator` and a `DoubleEnded` impl, plus `impl<T> [T] { fun iter }`
+  and `impl Range { fun iter }`. The compiler side is ~15 lines.
+
+  - **`Range` becomes a nameable type**, joining `String`/`StringBuf`/`Char` as
+    a builtin the compiler knows while every operation on one lives in std:
+    `t_range` on the `TypeChecker`, a line in `type_named_builtin`. That is the
+    entire language feature, and what it buys is a *self type to write* — an
+    `impl Range` — plus a range as a parameter (`fun span(r: Range)`). The
+    price is the one every builtin name carries: a program's own `struct Range`
+    is now unreachable by name.
+  - **The intrinsic tier pays out a second time.** `OP_RANGE_START` already
+    existed for the `for` desugaring; `range_start` is milestone 40's
+    `array_len` move exactly — an opcode that was emitted but could not be
+    *named*. The one new opcode is `OP_RANGE_STOP`, and its shape is the
+    observation the milestone turns on: **`a..b` and `a..=b` are two spellings
+    of one sequence**, so it answers with the first Int *past* the end and the
+    inclusive flag is folded away. `RangeIter` therefore holds two Ints and no
+    `Range` — an iterator that remembered which spelling it came from would be
+    carrying a distinction its own sequence does not have. Both intrinsics are
+    private free functions rather than methods, for `pop_last`'s reason: an
+    impl method has no visibility control, so a `Range::stop()` would be public
+    API on every range in every program.
+  - **What an array iterator holds** is the question the roadmap recorded as
+    this milestone's design fork. In a language with borrows `xs.iter()` holds
+    one and the borrow checker answers "what if the array changes underneath";
+    ducktape has none, so the question has to be *answered* instead — and the
+    answer already existed, since `for x in xs` re-reads the length each turn.
+    `ArrayIter` snapshots nothing: it carries how far in it has come from
+    **each end**, never a remembered end index, so both directions re-read
+    `len()`. Growth ahead of the front cursor is yielded, shrinking ends the
+    walk early, and no interleaving of the two can read off the end — the
+    property the "taken from the back" count buys over the obvious stored
+    bound. `tests/run/iter_source_shared.dt` *observes* all three rather than
+    claiming them, the shape milestones 57 and 59 used.
+  - **Both sources live in `std::iter`, not in `std::array`**, and that is the
+    import graph rather than a preference: `collect` needs `push`, so `iter`
+    depends on `array` and the dependency cannot also run the other way. A
+    module cycle is a compile error, so the placement was decided before it was
+    chosen.
+  - **`for x in xs` keeps its desugaring.** Routing it through `iter()` would
+    make the loop depend on a std impl and cost a frame per element for a shape
+    the codegen already has; the two paths agree on semantics, which is the
+    point of matching the re-read.
+
+  `DoubleEnded` on both is what makes the milestone worth more than its size:
+  `xs.iter().rev()` and `(0..n).iter().rev()` are the reverse walks milestone 58
+  built the trait for and had only a hand-written `Countdown` to spend it on.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -3218,17 +3278,14 @@ by appetite rather than by necessity.
    Every piece with a design question behind it is now done — the last open one,
    padding, is milestone 34 (below).
 
-   The one piece the iterator work has left pointing at itself: **std ships no
-   iterator *source*.** `for x in xs` special-cases an array and a range in the
-   desugaring, so neither is an `Iterator` and neither reaches a combinator —
-   every iterator a program can drive today is one it wrote itself. An
-   `xs.iter()` (and a range's) would put the whole of milestones 47–59 within
-   reach of the two sequence types programs actually have, which is a larger
-   payoff than any further combinator. It has a design question behind it too:
-   an array iterator holds a borrow in every language that has one, and
-   ducktape has no borrows, so what it holds is the array itself and
-   `for x in xs` re-reading the length each turn is already the wart that
-   describes what happens if it is mutated underneath.
+   (**An iterator source** was the one piece the iterator work had left
+   pointing at itself, and is now milestone 60: `xs.iter()` and
+   `(0..n).iter()`. The design question it recorded — what an array iterator
+   holds, when the language has no borrow to hold — was answered "the array,
+   and nothing snapshotted", which is what `for x in xs` re-reading the length
+   each turn already said. What is left of this item is ordinary breadth: a
+   `String`'s characters as an iterator rather than an array, a sorted
+   `[T]`, a map or set type.)
 
 (**The first iterator combinators** — `map`/`filter`/`collect` — are now
 milestone 47, along with driving a bounded generic or a `dyn Iterator` through

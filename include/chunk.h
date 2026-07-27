@@ -53,9 +53,15 @@ typedef enum {
   OP_CAST_INT,   // Float -> Int (truncating); Int is a no-op
   OP_CAST_FLOAT, // Int -> Float; Float is a no-op
 
-  OP_RANGE,       // u8 inclusive — pops end, start; pushes range
+  OP_RANGE,       // u8 inclusive — pops end, start; pushes start..end
   OP_RANGE_START, // pops range; pushes start
   OP_RANGE_TEST,  // pops i, range; pushes i < end (or <= when inclusive)
+  OP_RANGE_STOP,  // pops range; pushes the first Int past the end — `end`, or
+                  // `end + 1` when inclusive. This is where `a..b` and `a..=b`
+                  // stop being two things: a half-open bound describes both,
+                  // so anything holding one (`std::iter`'s RangeIter) needs no
+                  // flag of its own. Saturates at INT64_MAX, so `..=` that far
+                  // loses its last element rather than overflowing.
 
   OP_JUMP,          // u16 forward offset
   OP_JUMP_IF_FALSE, // u16 forward offset (does not pop the condition)

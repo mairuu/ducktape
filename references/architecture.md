@@ -791,6 +791,16 @@ path and reports that a buffer has no impl. That is the same arrangement
 not another lang item in the sense `Display` is (see "Interpolation and
 `Display`"): the compiler knows the type, never a std item.
 
+`Range` joined that list in milestone 60, and it is the cheapest entry yet: the
+type had existed since ranges did, so the whole change is `t_range` on the
+`TypeChecker` and a line in `type_named_builtin`. Everything it buys follows
+from being *nameable* rather than from anything new — a range can be a
+parameter (`fun span(r: Range)`), and `impl Range { .. }` has a self type to
+write, which is what let `std::iter` hang `iter()` off one. Note the ordering
+consequence a builtin name carries: `type_named_builtin` is consulted before
+the type scope, so a program's own `struct Range` is declared but never
+reachable by name — the same thing `struct String` has always done.
+
 Inference is union-find over `TY_UNKNOWN` nodes: `infer_fresh` mints
 unknowns, `infer_unify` solves (emitting "type mismatch" diags itself),
 `infer_find`/`infer_apply` chase and deep-substitute solutions,

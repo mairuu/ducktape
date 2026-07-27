@@ -404,6 +404,15 @@ bool vm_run(Executable *exe, Heap *heap, FunDef *entry) {
                                               : i.as.i < r.as.range.end));
       break;
     }
+    case OP_RANGE_STOP: {
+      Value r = pop(&vm);
+      int64_t end = r.as.range.end;
+      if (r.as.range.inclusive && end != INT64_MAX) {
+        end++;
+      }
+      push(&vm, val_int(end));
+      break;
+    }
 
     case OP_JUMP: {
       uint16_t dist = READ_U16();

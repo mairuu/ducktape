@@ -1,0 +1,9 @@
+#! expect: no method named 'map' found for type '[Int]'
+# An array is still not an `Iterator` (milestone 60). `xs.iter()` is a seed the
+# combinators grow from, not a coercion the compiler inserts — the array itself
+# has only `std::array`'s methods, and `for x in xs` reaches it by a desugaring
+# rather than by the trait.
+fun main() {
+    var xs = [1, 2, 3];
+    var ys = xs.map(|v| => v * 2);
+}

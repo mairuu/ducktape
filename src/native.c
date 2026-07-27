@@ -378,6 +378,8 @@ typedef struct {
 
 static const IntrinsicEntry intrinsics[] = {
     {"array_len", OP_LEN},
+    {"range_start", OP_RANGE_START},
+    {"range_stop", OP_RANGE_STOP},
 };
 
 #define COUNT_OF(a) ((int)(sizeof(a) / sizeof((a)[0])))

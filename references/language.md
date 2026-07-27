@@ -52,6 +52,7 @@ case for it) — declare variables inside functions only.
 | `Int` `Float` `Bool` `String` | primitives |
 | `Char` | one Unicode scalar value — see "`std::char`" |
 | `StringBuf` | a growable text buffer — see "`std::strbuf`" |
+| `Range` | what `a..b` / `a..=b` evaluate to — see "`std::iter`" |
 | `()` | unit |
 | `Never` | code that does not come back — see "`std::panic`" |
 | `(A, B)` | tuple |
@@ -110,7 +111,9 @@ ending in `return` has type `!` (never), which unifies with anything.
 - `if cond { .. } else { .. }` is an expression; without `else` it is `()`.
 - `while cond { .. }` and `for x in iter { .. }` evaluate to `()`; `iter` may be
   an array, a range, or any type that implements `Iterator` (see below).
-- Ranges: `a..b`, `a..=b` — Int-only, first-class values (`var r = 0..10;`).
+- Ranges: `a..b`, `a..=b` — Int-only, first-class values (`var r = 0..10;`) of
+  type `Range`, which is nameable (`fun span(r: Range)`) and carries one
+  method, `r.iter()`.
 - Casts: `x as T` — only `Int`↔`Float` and identity casts.
 - String interpolation: `"x = {x}"` — a primitive segment (Int/Float/Bool/
   String) renders itself; anything else must implement `std::fmt::Display`. A
@@ -527,7 +530,9 @@ are fully checked.
 ### Iterators
 
 `for x in it` over a value that is neither an array nor a range requires the
-type to implement `Iterator` (`std::iter`, preluded):
+type to implement `Iterator` (`std::iter`, preluded). An array and a range
+reach the trait through `xs.iter()` / `(0..n).iter()` — see "Sources" at the
+end of this section:
 
 ```
 @lang("iterator")
@@ -732,6 +737,51 @@ agree on where they met. Calling `rev` after one of those is "no method named
 returns a `Rev<Self>`), which does not stop a trait object being reversed by a
 `<I: DoubleEnded>` function — the body is monomorphised at
 `Self = dyn DoubleEnded` like any other instance.
+
+#### Sources: `xs.iter()` and `(a..b).iter()`
+
+Everything above wraps an iterator, and an array and a range are *not* ones:
+`for x in xs` and `for i in 0..n` reach them by a desugaring, not through the
+trait. `std::iter` ships the two seeds that connect them:
+
+```
+xs.iter()        # -> ArrayIter<T>, Item = T
+(0..n).iter()    # -> RangeIter,    Item = Int
+```
+
+Both are `Iterator` *and* `DoubleEnded`, so the whole vocabulary applies:
+
+```
+var doubled = [1, 2, 3].iter().map(|v| => v * 2).collect();   # [2, 4, 6]
+var evens   = (0..10).iter().filter(|v| => v % 2 == 0).count();  # 5
+var down    = (0..5).iter().rev().collect();     # [4, 3, 2, 1, 0]
+var tail    = [1, 2, 3].iter().rev().take(2).collect();       # [3, 2]
+```
+
+The call is required: an array or a range still has no `map` of its own
+(`tests/fail/iter_array_needs_iter.dt`,
+`tests/fail/iter_range_needs_iter.dt`), and `for x in xs` keeps its desugaring
+rather than routing through `iter()`.
+
+**An `ArrayIter` holds the array, not a copy and not a borrow** — ducktape has
+none to hold — so a change underneath is visible, which is the rule
+`for x in xs` already followed by re-reading the length each turn. What the
+iterator carries is how far in it has come from *each end*, never a remembered
+end index, so:
+
+- an element pushed ahead of the front cursor is still yielded;
+- popping ends the walk early rather than reading off the end;
+- no interleaving of the two can produce an out-of-bounds read.
+
+A `Range` is a value, so a `RangeIter` shares nothing and cannot be disturbed;
+`var r = 0..3;` seeds as many identical walks as it is asked for. It holds one
+**exclusive** bound rather than the range, which is where `a..b` and `a..=b`
+stop being two things — `(0..4).iter()` and `(0..=3).iter()` are the same
+sequence, and an iterator remembering which spelling it came from would be
+carrying a distinction the sequence does not have.
+
+Both live in `std::iter` rather than in `std::array`, because `collect` needs
+`push`: the import runs `iter → array`, and it cannot also run the other way.
 
 ## Modules
 
@@ -1471,9 +1521,19 @@ primitive modules spell their operations as methods (`s.len()`, `xs.push(v)`,
 `Char::from_code(n)`). What stays a free function is the exceptions the design
 forces — a *builder* whose receiver is a collection not the primitive
 (`std::string`'s `join`/`concat`/`from_chars`), a lang item the compiler
-desugars into (`pad_*`, `float`), a private raw native (`array` `pop_last`), and
-the one length `std::cmp` needs but cannot reach as a method without closing a
-dependency cycle.
+desugars into (`pad_*`, `float`), a private raw native or intrinsic (`array`'s
+`pop_last`, `iter`'s `range_start`/`range_stop` — an impl method has no
+visibility control, so anything that must stay private stays a free function),
+and the one length `std::cmp` needs but cannot reach as a method without closing
+a dependency cycle.
+
+The intrinsic tier is what makes an existing opcode *nameable*. `OP_LEN`,
+`OP_RANGE_START` and `OP_RANGE_STOP` were all emitted by a `for` desugaring
+before they were declared anywhere; giving each a declaration surface is what
+let `xs.len()` and then `std::iter`'s two sources be written in ducktape. The
+constraint on which opcodes can be exposed this way is mechanical: no operand
+bytes, popping exactly the declared parameters and pushing exactly the declared
+return.
 
 Nothing restricts natives to `std/` — a user module may declare one too. The
 registry is closed, so the only names available are the ones the binary already
@@ -1527,6 +1587,11 @@ impl<T> [T]  self.len() -> Int                      # @intrinsic (OP_LEN)
              self.is_empty() -> Bool
              self.clear()
              (std::array also: private free `pop_last<T>(xs)`, the raw @native)
+             self.iter() -> ArrayIter<T>            # lives in std::iter
+
+impl Range   self.iter() -> RangeIter               # lives in std::iter
+             (std::iter also: private free `range_start`/`range_stop`,
+              the two @intrinsics that read a range's bounds)
 
 impl String  self.len() -> Int                      # @native, in bytes
              self.slice(from: Int, to: Int) -> String         # @native
@@ -1811,6 +1876,8 @@ overflow: a value past what an `Int` holds wraps.
 | an equality binding between two *projections* (`J: Iterator<Item = I.Item2>` where both sides are abstract) | works, and is compared exactly — but only because a projection over a parameter is interned like any type; there is no unification, so nothing *solves* one side from the other |
 | `where Self: B` on a trait *method* | rejected — a supertrait is a property of the trait, so `trait A: B` is the one spelling for it |
 | an impl of a supertrait *inferred* from the sub's | none: `impl DoubleEnded for X` requires an `impl Iterator for X` written out. The obligation is checked, never discharged for you |
+| an array or a range that *is* an `Iterator` | neither implements the trait; `xs.iter()` / `(0..n).iter()` are the seeds, and `for x in xs` keeps its own desugaring rather than routing through them |
+| an array iterator detached from the array it walks | `xs.iter()` holds the array and snapshots nothing, so a `push`/`pop` mid-walk is visible (never out of bounds — see "Sources"). `xs.iter().collect()` is the copy |
 | a heterogeneous operator (`V2 * Float`, `Matrix * Vec`) | the `std::ops` traits are homogeneous (`other: Self`, no `Output`): an operator would have to select an impl by its *right* operand, which only the written `Meters::from(x)` / `Into::<U>::into(x)` forms can do. A mixed pair is an argument mismatch on the rewritten call |
 | custom `==` (an `Eq` trait) | equality stays structural and import-less for every type; only ordering and arithmetic are traits |
 | an impl overriding a defaulted method restating its `where` | conformance compares signatures, which carry no bounds, so an override may quietly add or drop one; the trait's own clause is still discharged at every call through the trait |
@@ -1824,6 +1891,7 @@ overflow: a value past what an `Int` holds wraps.
 | top-level `var` (globals) | parses, then a registration diagnostic: move it into a function |
 | tuple-struct struct-patterns `Pair { a, b }` | write the constructor spelling `Pair(a, b)` — "matching tuple struct with struct pattern syntax is not allowed" |
 | variable shadowing diagnostics | a `var` may silently shadow an earlier one in the same scope (top-level *item* names do collide — that is an error) |
+| declaring a type whose name is a builtin (`struct Range`, `struct String`) | accepted, but a builtin name is resolved before the type scope is consulted, so every mention of it means the builtin and the declaration is unreachable |
 | overlapping method names across impls of one type | bare paths pick the first registered impl (inherent impls do not conflict; only trait impls are checked for overlap) |
 | capturing a `for` loop variable in a closure | runs, but the closure sees the loop variable's *final* value (one shared cell), not a per-iteration copy — `runtime.md` "Closures & upvalues" |
 | infinitely deep generic instantiation | `fun grow<T>(v: T) { grow([v]) }` type-checks but names a new instantiation at every level; codegen stops at 32 and reports it (`runtime.md` "Monomorphisation") |

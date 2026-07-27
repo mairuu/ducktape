@@ -89,7 +89,7 @@ Operands are u8 unless noted.
 | `OP_ADD/SUB/MUL/DIV/MOD` | int×int stays int; any float widens (matches checker); div/mod by zero int → runtime error; float mod = `fmod` |
 | `OP_NEG` `OP_NOT` `OP_EQ/NEQ/LT/LTEQ/GT/GTEQ` | comparisons widen like arithmetic |
 | `OP_CAST_INT` `OP_CAST_FLOAT` | dynamic: no-op if already the target kind |
-| `OP_RANGE incl` `OP_RANGE_START` `OP_RANGE_TEST` | build range from end/start; TEST pops i+range, pushes `i < end` (or `<=`) |
+| `OP_RANGE incl` `OP_RANGE_START` `OP_RANGE_TEST` `OP_RANGE_STOP` | build range from end/start; TEST pops i+range, pushes `i < end` (or `<=`); STOP pops range, pushes the first Int past the end (`end`, or `end + 1` when inclusive — saturating at `INT64_MAX`), which is what folds the two spellings into one bound for `std::iter`'s `RangeIter` |
 | `OP_JUMP u16` `OP_JUMP_IF_FALSE u16` `OP_LOOP u16` | JUMP_IF_FALSE does *not* pop the condition |
 | `OP_CALL argc` | callee value sits beneath the args |
 | `OP_RETURN` | pops result, tears down the frame (incl. callee slot), pushes result for the caller |
@@ -295,7 +295,11 @@ its bytes.
   loop variable at the top of each iteration, and increments `idx` at the
   continue target. `break`/`continue` emit `OP_POPN` down to the loop's
   recorded local base (continue keeps the hidden iter locals, break does
-  not) before jumping; forward continue targets the increment.
+  not) before jumping; forward continue targets the increment. Both shapes
+  survive milestone 60's `xs.iter()` / `(0..n).iter()`: a source is a library
+  value that compiles as `compile_for_iter`, and the two desugarings stay the
+  direct path they were — which is why `for x in xs` still re-reads `OP_LEN`
+  each turn, the behaviour `ArrayIter` then matched deliberately.
 - `for x in <iterator>` (`compile_for_iter`, the fall-through when the iterable
   is neither array nor range) materializes two locals — hidden `iter` (the
   receiver) and the loop variable (starts unit) — and each turn calls
@@ -1011,7 +1015,12 @@ the monomorphisation observation paying out once more.
 so an alias works) and emits the opcode inline with no callee value and no
 frame. Anything that would need a value — naming it, passing it — reaches
 `cg_call_target` and is a diagnostic. This is what finally exposes `OP_LEN`,
-until now reachable only from the `for` desugaring.
+until now reachable only from the `for` desugaring — and, in milestone 60,
+`OP_RANGE_START`/`OP_RANGE_STOP` the same way, which is what let `std::iter`'s
+`RangeIter` be written in ducktape instead of built in. The tier's constraint
+is what decides which opcodes can go in the table: no operand bytes, popping
+exactly the declared parameters and pushing exactly the declared return, since
+the opcode is emitted bare with nothing to encode an operand into.
 
 **A method may be native too.** `resolve_impl_decl` runs the same
 `tc_bind_native` on an impl method's `FunDef` that `tc_register_fun` runs on a

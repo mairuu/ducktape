@@ -1359,6 +1359,7 @@ void tc_init(TypeChecker *tc, DiagBag *diags, Allocator *al) {
   tc->t_char = ty_char();
   tc->t_string = ty_string();
   tc->t_strbuf = ty_strbuf();
+  tc->t_range = ty_range();
   tc->t_unit = ty_unit();
   tc->t_never = ty_never();
   tc->t_poison = ty_poison();
@@ -7978,9 +7979,13 @@ static bool trait_check_object_safe(TypeResolver *r, TraitDef *trait,
 // The types the compiler knows by name rather than by declaration. NULL for
 // anything else, which sends the name to the type scope.
 //
-// `StringBuf` and `Char` are builtins in exactly the sense the others are: the
-// compiler knows the *type*, while every operation on one lives in std. That is
-// not a lang item in the sense `Display` is — no std *item* is named here.
+// `StringBuf`, `Char` and `Range` are builtins in exactly the sense the others
+// are: the compiler knows the *type*, while every operation on one lives in
+// std. That is not a lang item in the sense `Display` is — no std *item* is
+// named here. `Range` had existed as a type since ranges did; naming it is what
+// gives an `impl Range` a self type to write, which is how `std::iter` hangs
+// `iter()` off one — and what lets a range be a parameter rather than only a
+// loop header.
 //
 // `Never` is the type of code that does not come back. It already existed as
 // what `return`/`break` give an expression; naming it is what lets a signature
@@ -8006,6 +8011,9 @@ static Type *type_named_builtin(TypeChecker *tc, StringView name) {
   }
   if (sv_equal_cstr(name, "StringBuf")) {
     return tc->t_strbuf;
+  }
+  if (sv_equal_cstr(name, "Range")) {
+    return tc->t_range;
   }
   if (sv_equal_cstr(name, "Unit")) {
     return tc->t_unit;

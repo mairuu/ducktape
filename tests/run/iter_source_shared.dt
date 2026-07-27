@@ -1,0 +1,74 @@
+# What an array iterator *holds* (milestone 60).
+#
+# In a language with borrows, `xs.iter()` holds one, and the borrow checker is
+# what answers "what if the array changes underneath". ducktape has no borrows,
+# so the question cannot be prevented and has to be answered instead — and the
+# answer is the one `for x in xs` has always given: nothing is snapshotted.
+# `ArrayIter` carries how far in it has come from each end, so every pull
+# re-reads `len()`.
+#
+# This file *observes* that rather than asserting it, so the three consequences
+# are an output diff: growth ahead of the cursor is yielded, shrinking ends the
+# walk early, and no sequence of the two can read off the end.
+use std::iter::DoubleEnded;
+use std::array;
+use std::io::print;
+
+fun main() {
+    # an element pushed after the walk began is still reached
+    var xs = [1, 2];
+    var it = xs.iter();
+    print("{it.next()}");
+#> Some(1)
+    xs.push(3);
+    print("{it.collect()}");
+#> [2, 3]
+
+    # ...and popping ends the walk where the array now ends, rather than
+    # indexing off it
+    var ys = [1, 2, 3, 4];
+    var jt = ys.iter();
+    print("{jt.next()}");
+#> Some(1)
+    ys.pop();
+    ys.pop();
+    ys.pop();
+    print("{jt.next()}");
+#> None
+
+    # the back cursor counts elements taken, not a remembered end index, so a
+    # push moves what "the last element" means
+    var zs = [1, 2];
+    var kt = zs.iter();
+    print("{kt.next_back()}");
+#> Some(2)
+    zs.push(9);
+    print("{kt.next_back()}");
+#> Some(2)
+    print("{kt.collect()}");
+#> [1]
+
+    # emptying the array mid-walk leaves both directions with nothing to say
+    var ws = [1, 2, 3];
+    var lt = ws.iter();
+    print("{lt.next()}");
+#> Some(1)
+    ws.clear();
+    print("{lt.next()} {lt.next_back()}");
+#> None None
+
+    # two iterators over one array are independent cursors over shared elements
+    var vs = [1, 2, 3];
+    var a = vs.iter();
+    var b = vs.iter();
+    print("{a.next()} {b.next()} {a.next()}");
+#> Some(1) Some(1) Some(2)
+
+    # a range holds numbers rather than an object, so there is nothing to share
+    # and nothing to change: the sequence is fixed at the `..`
+    var n = 3;
+    var r = 0..n;
+    n = 99;
+    print("{r.iter().collect()}");
+#> [0, 1, 2]
+}
