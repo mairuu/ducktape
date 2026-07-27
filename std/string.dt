@@ -11,7 +11,9 @@
 # a real one (roadmap: `std::result`).
 #
 # The operations *on* a String are **methods** (milestone 40): `s.len()`,
-# `s.slice(from, to)`, `s.chars()`, `s.compare(other)`, `s.repeat(n)`. The
+# `s.slice(from, to)`, `s.compare(other)`, `s.repeat(n)` — and `s.chars()`,
+# which is a method on String like the rest but lives in `std::iter`, for the
+# reason spelled out where it used to be. The
 # collection→String *builders* below (`join`, `concat`, `from_chars`) stay free
 # functions, because their receiver is an array, not a String; and the three
 # `pad_*` functions stay free because they are lang items the `{v:>8}` format
@@ -49,18 +51,17 @@ impl String {
     @native("string_cmp")
     fun compare(self, other: String) -> Int;
 
-    # The characters `self` is made of, in order. This is the one crossing
-    # between the two views of text the language has — bytes here, scalar values
-    # in `std::char` — and it is a *conversion* on purpose: there is no
-    # `char_at(i)`, because `i` would be a byte offset and a byte offset is not a
-    # character position. Offering that spelling would make confusing the two the
-    # default.
+    # `s.chars()` — the crossing between the two views of text the language has,
+    # bytes here and scalar values in `std::char` — is **not** in this module: it
+    # is a walk (`std::iter`'s `CharIter`), and `std::string` cannot import
+    # `std::iter` because `std::cmp` imports *this*, so the edge would close a
+    # cycle. See `char_width` below, which is what that costs.
     #
-    # A runtime error if `self` is not valid UTF-8, which a program can reach:
-    # `slice` cuts at byte offsets, so it can halve a multi-byte sequence. A
-    # String is a byte string; only a Char promises to be a character.
-    @native("string_chars")
-    fun chars(self) -> [Char];
+    # What it did not become is an *index*: there is
+    # no `s.char_at(i)`, because `i` would be a byte offset and a byte offset is
+    # not a character position. Offering that spelling would make confusing the
+    # two the default — `CharIter` holds byte offsets and keeps them private for
+    # exactly that reason.
 
     # `n` copies of `self`. Nothing here allocates a String per copy — the bytes
     # go straight into the buffer — which is the difference a buffer makes that
@@ -132,16 +133,19 @@ pub fun from_chars(cs: [Char]) -> String {
 # string already at least `width` wide is returned unchanged — because narrowing
 # is `slice`'s job and it cuts in bytes, a different question.
 
-# how many characters `s` is, walking its scalar values. Private: the three
+# how many characters `s` is, counting its scalar values. Private: the three
 # pad functions each need it, and factoring it keeps the byte/character choice
 # in one place rather than three.
-fun char_width(s: String) -> Int {
-    var n = 0;
-    for _ in s.chars() {
-        n = n + 1;
-    }
-    return n;
-}
+#
+# A native, and the one place the `chars` walk being in `std::iter` costs
+# something: the pads are lang items, so they live here where the format spec's
+# desugaring can find them, and here cannot reach `CharIter`. What it needs is
+# not the characters but *how many*, so what it keeps is a counter — one
+# validating pass that allocates nothing, where the old `[Char]` conversion
+# built a whole array to take its length. A runtime error if `s` is not valid
+# UTF-8, which is why padding still refuses a string `slice` cut in half.
+@native("string_char_count")
+fun char_width(s: String) -> Int;
 
 # `s` at the left of a `width`-wide field, `fill` on the right (left-aligned).
 @lang("pad_end")

@@ -35,7 +35,7 @@ fun main() {
     print(s.slice(1, 4));
     print(s.repeat(2));
     print("abc".compare("abd"));
-    print(s.chars().len());
+    print(s.chars().count());
 
     # [T]: @intrinsic len, @native push, ducktape pop/first/is_empty
     var xs = [1, 2, 3];

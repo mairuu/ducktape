@@ -34,12 +34,20 @@
 # their receiver's type rather than by a module qualifier. The `use` lines make
 # the primitives' impls — `String`, `[T]`, `StringBuf`, `Char` — visible for
 # method resolution; none names an item.
+#
+# The crossing is a *walk* as of milestone 61, so `std::iter` joins them and the
+# two functions that cross say `.chars().collect()`. They collect rather than
+# stream because both want the characters by index from either end — `trim`
+# scans in from both, `parse_int` looks at the first before the rest — and the
+# array a walk builds on request is exactly what that needs. What changed for
+# them is only where it comes from.
 
 use std::string;
 use std::strbuf;
 use std::array;
 use std::option::Option;
 use std::char;
+use std::iter;
 
 impl String {
     # ── searching, by byte position ──────────────────────────────────────────
@@ -133,7 +141,7 @@ impl String {
     # spelling walks characters, not bytes, and rebuilds the middle through a
     # buffer rather than assuming a trimmed edge lands on a byte boundary.
     fun trim(self) -> String {
-        var cs = self.chars();
+        var cs = self.chars().collect();
         var n = cs.len();
         var lo = 0;
         while lo < n {
@@ -167,7 +175,7 @@ impl String {
     # than failing, which is the one thing this cannot promise without a widening
     # multiply the language has no way to spell.
     fun parse_int(self) -> Option<Int> {
-        var cs = self.chars();
+        var cs = self.chars().collect();
         var n = cs.len();
         if n == 0 {
             return Option::None;

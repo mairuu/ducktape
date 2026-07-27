@@ -1,0 +1,14 @@
+#! expect: string is not valid UTF-8
+# The same halved character as `chars_invalid_utf8.dt`, reached from the other
+# end. Walking backwards looks for the boundary the encoding tags rather than
+# decoding forwards, so it is a different piece of C — and it refuses the same
+# way: the scan is bounded by four bytes (the longest a sequence gets) and the
+# lead byte it lands on has to span exactly to where it started, so malformed
+# bytes cannot be walked off the front of the string.
+use std::io::print;
+use std::iter::DoubleEnded;
+
+fun main() {
+    var bad = "é".slice(0, 1);
+    print(bad.chars().next_back());
+}

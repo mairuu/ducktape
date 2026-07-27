@@ -28,7 +28,8 @@ the runtime: no allocation, no interning, no GC involvement, and `==` is a
 comparison of two `uint32_t`. It is stored decoded — a scalar value rather than
 its UTF-8 bytes — so the encoding appears only at the two edges where a Char
 meets a String: `value_print`/`stringify` on the way out (`utf8_encode`), and
-`string_chars`/`strbuf_push_char` in the native registry. Both directions go
+`string_char_at`/`string_prev_boundary`/`strbuf_push_char` in the native
+registry (`string_char_count` validates without producing a Char). Both go
 through `string_utils.h`, which validates strictly: an overlong encoding, a
 surrogate half and anything past U+10FFFF are rejected rather than round-
 tripped, so a `VAL_CHAR` that exists is always encodable and no output path
@@ -975,8 +976,8 @@ if (fun->native != NULL) {
 The **calling convention is a GC rule**: the arguments stay on the value stack
 across the call and are only popped once the result exists. The stack is the
 root set, so an allocating native (`string_slice`, `fmt_float` and
-`strbuf_push_char` intern or grow a buffer; `string_chars` allocates the array
-it returns) cannot have its own arguments swept out from under it. `OP_MAKE_DYN` already followed exactly this
+`strbuf_push_char` intern or grow a buffer) cannot have its own arguments swept
+out from under it. `OP_MAKE_DYN` already followed exactly this
 discipline for `heap_dyn`; getting it wrong reproduces the 5c-ii class of bug,
 something reachable-looking the collector cannot see. A native fails by
 setting `ctx->error`, which becomes a runtime error at the call site.
@@ -995,14 +996,27 @@ NUL-terminated, and `args` is still on the stack when the VM reads
 only sound *because* a panic never returns; a native that wanted to fail with a
 computed message and keep running would need somewhere else to put it.
 
-**`string_chars` is the one native with two passes, and the reason is that
-rule.** It counts and validates first, then allocates an array of exactly that
-size and fills it. Filling allocates nothing — a `Char` is a value — so the
-array is complete before anything can collect, and a malformed string is
-reported before a byte has been allocated. Doing it in one pass would mean
-growing the array as it went, with a partially-filled array live across each
-growth: correct only if `count` rises exactly as the milestone-23 rule says,
-and needlessly so when the length is knowable up front.
+**The character walk's natives have nothing to say about that rule, which is
+what makes them cheap.** `string_char_at` answers a `Char` and
+`string_prev_boundary` an `Int`; both are values, so nothing allocates, nothing
+can collect, and there is no rooting question at all — the walk's state lives
+in a ducktape struct (`std::iter`'s `CharIter`) rather than in C. Until
+milestone 61 the crossing was `string_chars`, a two-pass native that counted
+and validated, then allocated an array of exactly that size and filled it; the
+two passes were that rule, since growing the array as it went would have kept a
+partially-filled array live across each growth. What survives of it is
+`string_char_count` — the counting pass alone, kept because `std::string`'s
+`pad_*` lang items need a character count and cannot import `std::iter` — and
+the array it used to build is now `s.chars().collect()`, grown by the ordinary
+`array_push` under the ordinary rule.
+
+**One native reads bytes the decoder did not hand it**: `string_prev_boundary`
+scans backwards over continuation bytes (`(b & 0xC0) == 0x80`) to find where the
+character ending at an offset begins. The scan is bounded by four rather than
+open, since that is the longest a UTF-8 sequence gets, and the lead byte it
+lands on is then decoded and required to span exactly to the offset it started
+from — so malformed bytes fail here the same way they fail going forwards,
+instead of being walked off the front of the string.
 
 **A generic native is never monomorphised.** The runtime is uniform in type
 arguments, so one C body serves every `T` — `cg_call_target` returns the

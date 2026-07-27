@@ -15,10 +15,16 @@
 # `collect` builds an array, so `std::array` is imported for its `push` method.
 # `std::ops` is what makes `sum`/`product` expressible: a reduce needs to know
 # the element can be *combined*, which before milestone 55 no bound could say.
+# `std::string` and `std::char` are the sources' business rather than the
+# combinators': `CharIter` needs `len` on one and `code` on the other. Both
+# arrive transitively through `std::cmp` already — they are written out because
+# an impl this file *calls* should not be reachable only by accident.
 use std::option::Option;
 use std::array;
 use std::cmp::Ord;
 use std::ops::{Add, Mul};
+use std::string;
+use std::char;
 
 @lang("iterator")
 pub trait Iterator {
@@ -870,5 +876,109 @@ impl Range {
     # is fixed the moment the range is written.
     fun iter(self) -> RangeIter {
         return RangeIter { cur: range_start(self), stop: range_stop(self) };
+    }
+}
+
+# The third source, and the one whose sequence is not already a sequence of
+# *values*: a String is bytes, and its characters have to be decoded out of
+# them. Before milestone 61 that decoding was a native returning the whole
+# `[Char]` at once, which made the array the primitive and the walk a thing you
+# did to it afterwards. It is the other way round — `s.chars().collect()` is
+# that array, and nothing else has to be built to ask for the first character
+# or to stop after three.
+#
+# These two are the whole C surface the walk needs, and they are private free
+# functions for `range_start`'s reason: they speak in **byte offsets**, and a
+# byte offset is not a character position. Keeping them here is what lets
+# `CharIter` be the only thing that ever holds one.
+@native("string_char_at")
+fun char_at(s: String, at: Int) -> Char;
+
+@native("string_prev_boundary")
+fun prev_boundary(s: String, at: Int) -> Int;
+
+# How many bytes `c` occupies in UTF-8. Stepping *forward* needs no native at
+# all, because a scalar value determines its own encoding: this is the same
+# range test over a code point that every `std::char` classification is, with
+# the boundaries the code charts spell 0x80 / 0x800 / 0x10000. Stepping
+# backward is not derivable this way and that asymmetry is the encoding's, not
+# an oversight — going back there is no character in hand yet, so the only
+# thing that says where one begins is the tag on the bytes, which is what
+# `prev_boundary` reads.
+fun utf8_width(c: Char) -> Int {
+    var n = c.code();
+    if n < 128 {
+        return 1;
+    }
+    if n < 2048 {
+        return 2;
+    }
+    if n < 65536 {
+        return 3;
+    }
+    return 4;
+}
+
+# A walk over a String's characters, in order. `s.chars()` builds one.
+#
+# **It snapshots its end, where `ArrayIter` refuses to** — and the difference
+# is the two objects', not a preference. An array is the one heap object a
+# program can grow, so its iterator re-reads `len()` every turn and compares
+# its cursors against the array *as it is now*; a String is interned and
+# immutable, so there is nothing underneath a byte offset that could change
+# and nothing to re-read. Milestone 60 had to answer "what does an iterator
+# hold when the language has no borrow"; here the question dissolves, and it is
+# immutability that dissolves it.
+#
+# Both cursors are **byte** offsets, and that is why they are private (milestone
+# 44): a byte offset is not a character position, and walking characters without
+# a program ever naming one is the whole point of this type.
+#
+# Laziness moves *when* invalid UTF-8 is reported. The old array conversion
+# validated the entire string before yielding anything; a walk decodes one
+# character at a time, so a malformed sequence is an error at the character
+# that reaches it — and a pipeline that stops first (`s.chars().take(2)`) never
+# reaches it at all. That is the ordinary consequence of being lazy rather than
+# a weakening: nothing is claimed about bytes nobody looked at.
+pub struct CharIter {
+    s: String,
+    front: Int, # byte offset where the next character begins
+    back: Int,  # byte offset one past the last character not yet yielded
+}
+
+impl Iterator for CharIter {
+    type Item = Char;
+
+    fun next(self) -> Option<Char> {
+        if self.front >= self.back {
+            return Option::None;
+        }
+        var c = char_at(self.s, self.front);
+        self.front += utf8_width(c);
+        return Option::Some(c);
+    }
+}
+
+# UTF-8 is self-synchronising — a lead byte is distinguishable from a
+# continuation byte — so the far end of a string is reachable without walking
+# to it, and `s.chars().rev()` costs what the forward walk costs. An encoding
+# where it did not would make this impl a lie or an array.
+impl DoubleEnded for CharIter {
+    fun next_back(self) -> Option<Char> {
+        if self.front >= self.back {
+            return Option::None;
+        }
+        self.back = prev_boundary(self.s, self.back);
+        return Option::Some(char_at(self.s, self.back));
+    }
+}
+
+impl String {
+    # Walk this string's characters as an `Iterator`. The array of them is
+    # `s.chars().collect()`, which is the one call that has to change from
+    # before milestone 61 — and the change is the point: `s.chars().count()`,
+    # `s.chars().rev()` and `s.chars().take(3)` now build no array at all.
+    fun chars(self) -> CharIter {
+        return CharIter { s: self, front: 0, back: self.len() };
     }
 }

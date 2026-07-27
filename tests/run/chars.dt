@@ -107,12 +107,14 @@ fun main() {
     print(Char::from_code('é'.code()) == 'é');
 
     # the whole point: `len` counts bytes and `chars` counts characters, and
-    # for anything but ASCII those are different numbers
+    # for anything but ASCII those are different numbers. `chars` is a walk
+    # (milestone 61), so counting them is `count()` and the array of them is
+    # `collect()` — the conversion is a thing you ask the walk for.
     var s = "héllo, wörld 42";
     print(s.len());
-    print(s.chars().len());
-    print(s.chars());
-    print(from_chars(s.chars()) == s);
+    print(s.chars().count());
+    print(s.chars().collect());
+    print(from_chars(s.chars().collect()) == s);
 
     print(shout(s));
     print(quiet(shout(s)));

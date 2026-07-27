@@ -184,43 +184,91 @@ static Value n_string_cmp(NativeCtx *ctx, Value *args, int argc) {
 }
 
 // The crossing between the two views of text: a String is bytes, a Char is a
-// scalar value, and this is where one becomes the other. It is a *conversion*
-// rather than an index on purpose — there is no `char_at(s, i)`, because a
-// byte offset is not a character position and offering that spelling would
-// make confusing the two the API's default.
+// scalar value, and these are where one becomes the other. The crossing is a
+// *walk* rather than an index — `std::iter`'s `CharIter` is the only
+// caller of the two below, and it is what keeps the byte offsets they speak in
+// out of every API a program can see (they are private free functions there,
+// for `range_start`'s reason).
 //
-// Two passes: the first counts and validates, so a malformed string is
-// reported before anything is allocated, and the second fills an array whose
-// size is then already known. `heap_array` may collect, but the source string
-// is `args[0]` and still on the VM stack; nothing after it allocates at all,
-// since a Char is a value.
-static Value n_string_chars(NativeCtx *ctx, Value *args, int argc) {
+// Neither allocates, so neither has anything to say about the calling
+// convention: a Char is a value and an offset is an Int.
+
+// The character beginning at byte offset `at`. A runtime error if `at` is
+// outside the string or does not start a well-formed sequence — the second is
+// reachable from ducktape, since `slice` cuts at byte offsets and can halve a
+// multi-byte sequence. A String is a byte string; only a Char promises to be a
+// scalar value.
+static Value n_string_char_at(NativeCtx *ctx, Value *args, int argc) {
   (void)argc;
   ObjString *s = val_as_string(args[0]);
+  int64_t at = args[1].as.i;
+  if (at < 0 || at >= s->len) {
+    ctx->error = "string offset is out of bounds";
+    return val_unit();
+  }
+  uint32_t cp;
+  if (utf8_decode(s->chars + at, s->len - (int)at, &cp) == 0) {
+    ctx->error = "string is not valid UTF-8";
+    return val_unit();
+  }
+  return val_char(cp);
+}
 
-  int count = 0;
+// Where the character *ending* at byte offset `at` begins — the one step a
+// walk cannot take on its own. Going forwards, the width is recoverable from
+// the character just read (a scalar value determines its encoding), so
+// `std::iter` does that step in ducktape arithmetic; going backwards there is
+// no character in hand yet, and the only thing that says where one starts is
+// the encoding's tag on the bytes themselves. That is what a continuation byte
+// is for, and this is the whole of what reads it.
+//
+// A sequence is at most four bytes, so the scan is bounded rather than a
+// search: past that, or if the lead byte found does not span exactly to `at`,
+// the bytes are not UTF-8 and the error is the same one the forward direction
+// gives.
+static Value n_string_prev_boundary(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  ObjString *s = val_as_string(args[0]);
+  int64_t at = args[1].as.i;
+  if (at <= 0 || at > s->len) {
+    ctx->error = "string offset is out of bounds";
+    return val_unit();
+  }
+  int64_t start = at - 1;
+  while (start > 0 && at - start < 4 &&
+         ((uint8_t)s->chars[start] & 0xC0) == 0x80) {
+    start--;
+  }
+  uint32_t cp;
+  int width = utf8_decode(s->chars + start, s->len - (int)start, &cp);
+  if (width == 0 || start + width != at) {
+    ctx->error = "string is not valid UTF-8";
+    return val_unit();
+  }
+  return val_int(start);
+}
+
+// How many characters `s` is. A count and not the characters themselves,
+// which is the shape of what `std::string` still needs: `char_width` backs the
+// `pad_*` lang items, and `std::string` sits on the wrong side of the import
+// graph to reach `CharIter` (`std::cmp` imports `std::string`, so the reverse
+// edge would be a cycle). Counting is one validating pass with nothing
+// allocated — strictly less than the array the pads used to build to count it.
+static Value n_string_char_count(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  ObjString *s = val_as_string(args[0]);
+  int64_t count = 0;
   for (int i = 0; i < s->len;) {
     uint32_t cp;
     int width = utf8_decode(s->chars + i, s->len - i, &cp);
     if (width == 0) {
-      // reachable from ducktape: `slice` is indexed in bytes, so it can cut a
-      // multi-byte sequence in half. A String is a byte string; only a Char
-      // promises to be a scalar value.
       ctx->error = "string is not valid UTF-8";
       return val_unit();
     }
     i += width;
     count++;
   }
-
-  ObjArray *out = heap_array(ctx->heap, count);
-  int at = 0;
-  for (int i = 0; i < s->len;) {
-    uint32_t cp;
-    i += utf8_decode(s->chars + i, s->len - i, &cp);
-    out->items[at++] = val_char(cp);
-  }
-  return val_obj(&out->obj);
+  return val_int(count);
 }
 
 // `s[from..to)`, in bytes. Allocating, so it is the one that has to obey the
@@ -359,9 +407,11 @@ static const NativeEntry natives[] = {
     {"strbuf_push", n_strbuf_push},
     {"strbuf_push_char", n_strbuf_push_char},
     {"strbuf_push_int", n_strbuf_push_int},
-    {"string_chars", n_string_chars},
+    {"string_char_at", n_string_char_at},
+    {"string_char_count", n_string_char_count},
     {"string_cmp", n_string_cmp},
     {"string_len", n_string_len},
+    {"string_prev_boundary", n_string_prev_boundary},
     {"string_slice", n_string_slice},
 };
 

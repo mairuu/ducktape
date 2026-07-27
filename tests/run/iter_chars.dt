@@ -1,0 +1,86 @@
+# `s.chars()` is a walk, not a conversion (milestone 61): the third `std::iter`
+# source, after an array's and a range's. What it holds is two *byte* offsets
+# into an immutable string — so unlike `ArrayIter` it can snapshot its end, and
+# unlike either of the others it has to decode to move.
+#> 10
+#> 4
+#> [a, é, ☃, 😀]
+#> 😀☃éa
+#> a
+#> é
+#> ☃
+#> 😀
+#> [a, é]
+#> [😀]
+#> Some(a)
+#> Some(😀)
+#> Some(é)
+#> Some(☃)
+#> None
+#> None
+#> None
+#> None
+#> HELLOWRLD
+#> 3
+#> [(7, w), (8, ö)]
+#> 3
+#> 1
+#> 0
+use std::io::print;
+use std::iter::DoubleEnded;
+use std::string::from_chars;
+use std::char;
+
+fun main() {
+    # every UTF-8 width in one string: 1, 2, 3 and 4 bytes. Walking it forwards
+    # steps by the width the character's own value implies, and backwards by
+    # the boundary the encoding's tag marks — the widths are what tell the two
+    # apart from a byte count.
+    var s = "aé☃😀";
+    print(s.len());
+    print(s.chars().count());
+    print(s.chars().collect());
+    print(from_chars(s.chars().rev().collect()));
+
+    for c in s.chars() {
+        print(c);
+    }
+
+    # lazy like every other adapter: `take` decodes two characters and stops,
+    # `skip` decodes past three without building anything
+    print(s.chars().take(2).collect());
+    print(s.chars().skip(3).collect());
+
+    # one iterator driven from both ends until they meet
+    var it = s.chars();
+    print(it.next());
+    print(it.next_back());
+    print(it.next());
+    print(it.next_back());
+    print(it.next());
+    print(it.next_back());
+
+    # empty from either end, and an empty string is the same walk with nothing
+    # in it rather than a case of its own
+    var e = "".chars();
+    print(e.next());
+    print(e.next_back());
+
+    # the combinators are the ones every other source gets; none of this is
+    # about text. `is_alpha` is ASCII-only and says so, which is why `ö` is
+    # missing from the shout and why the reverse walk stops at three.
+    var t = "hello, wörld";
+    print(from_chars(t.chars().filter(|c| => c.is_alpha()).map(|c| => c.to_upper()).collect()));
+    print(t.chars().filter(|c| => c == 'l').count());
+    print(t.chars().enumerate().skip(7).take(2).collect());
+    print(t.chars().rev().take_while(|c| => c.is_alpha()).count());
+
+    # what laziness changes: `slice` cuts in bytes, so this one is half of a
+    # two-byte character and no walk over it can finish. A walk that stops
+    # before those bytes never looks at them, so it answers rather than fails —
+    # `tests/fail_run/chars_invalid_utf8.dt` is the same string driven to the
+    # end.
+    var bad = "é".slice(0, 1);
+    print(bad.len());
+    print(bad.chars().take(0).count());
+}

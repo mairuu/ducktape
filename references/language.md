@@ -531,8 +531,8 @@ are fully checked.
 
 `for x in it` over a value that is neither an array nor a range requires the
 type to implement `Iterator` (`std::iter`, preluded). An array and a range
-reach the trait through `xs.iter()` / `(0..n).iter()` — see "Sources" at the
-end of this section:
+reach the trait through `xs.iter()` / `(0..n).iter()`, and a `String`'s
+characters through `s.chars()` — see "Sources" at the end of this section:
 
 ```
 @lang("iterator")
@@ -738,24 +738,27 @@ returns a `Rev<Self>`), which does not stop a trait object being reversed by a
 `<I: DoubleEnded>` function — the body is monomorphised at
 `Self = dyn DoubleEnded` like any other instance.
 
-#### Sources: `xs.iter()` and `(a..b).iter()`
+#### Sources: `xs.iter()`, `(a..b).iter()` and `s.chars()`
 
 Everything above wraps an iterator, and an array and a range are *not* ones:
 `for x in xs` and `for i in 0..n` reach them by a desugaring, not through the
-trait. `std::iter` ships the two seeds that connect them:
+trait. `std::iter` ships the seeds that connect them, and the one that connects
+a `String`:
 
 ```
 xs.iter()        # -> ArrayIter<T>, Item = T
 (0..n).iter()    # -> RangeIter,    Item = Int
+s.chars()        # -> CharIter,     Item = Char
 ```
 
-Both are `Iterator` *and* `DoubleEnded`, so the whole vocabulary applies:
+All three are `Iterator` *and* `DoubleEnded`, so the whole vocabulary applies:
 
 ```
 var doubled = [1, 2, 3].iter().map(|v| => v * 2).collect();   # [2, 4, 6]
 var evens   = (0..10).iter().filter(|v| => v % 2 == 0).count();  # 5
 var down    = (0..5).iter().rev().collect();     # [4, 3, 2, 1, 0]
 var tail    = [1, 2, 3].iter().rev().take(2).collect();       # [3, 2]
+var first3  = "héllo".chars().take(3).collect();  # [h, é, l]
 ```
 
 The call is required: an array or a range still has no `map` of its own
@@ -780,8 +783,22 @@ stop being two things — `(0..4).iter()` and `(0..=3).iter()` are the same
 sequence, and an iterator remembering which spelling it came from would be
 carrying a distinction the sequence does not have.
 
-Both live in `std::iter` rather than in `std::array`, because `collect` needs
-`push`: the import runs `iter → array`, and it cannot also run the other way.
+**A `CharIter` holds the string and two byte offsets**, and it *does* snapshot
+its end — the opposite of `ArrayIter`, for a reason that is the objects' rather
+than a preference: a `String` is interned and immutable, so there is nothing
+underneath an offset that could change and nothing to re-read. It is the one
+source that has to decode to move: forwards by the width the character's own
+value implies (a scalar value determines its encoding), backwards by the
+boundary the encoding tags, which is the single native the reverse direction
+needs. `s.chars().rev()` therefore costs what the forward walk costs, rather
+than building an array to turn round.
+
+All three live in `std::iter` rather than in `std::array` / `std::string`, and
+the import graph decides it rather than taste: `collect` needs `push`, so the
+edge runs `iter → array` and cannot also run the other way; `std::cmp` imports
+`std::string`, so `std::string` cannot import `std::iter` either. The visible
+cost is that `std::string`'s `pad_*` lang items cannot reach the walk and count
+characters with a native of their own.
 
 ## Modules
 
@@ -1596,8 +1613,11 @@ impl Range   self.iter() -> RangeIter               # lives in std::iter
 impl String  self.len() -> Int                      # @native, in bytes
              self.slice(from: Int, to: Int) -> String         # @native
              self.compare(other: String) -> Int     # @native
-             self.chars() -> [Char]                 # @native
+             self.chars() -> CharIter               # lives in std::iter
              self.repeat(n: Int) -> String
+             (std::iter also: private free `char_at`/`prev_boundary`, the two
+              @natives a character walk needs; std::string keeps a private
+              free `char_width`, the @native the pad_* lang items count with)
              std::string free: join(parts: [String], sep: String) -> String
                               concat(parts: [String]) -> String
                               from_chars(cs: [Char]) -> String
@@ -1760,20 +1780,32 @@ two apart.** `s.len()` counts *bytes*, `s.slice(..)` cuts at *byte* offsets, and
 
 ```
 var s = "héllo";
-s.len();              # 6 — bytes
-s.chars().len();      # 5 — characters
-from_chars(s.chars()) == s;   # true
+s.len();                        # 6 — bytes
+s.chars().count();              # 5 — characters
+s.chars().collect();            # [h, é, l, l, o]
+from_chars(s.chars().collect()) == s;   # true
 ```
+
+**`chars` is a walk, not a conversion** (milestone 61): it answers a `CharIter`,
+the `std::iter` source described under "Sources" below, so `count`, `rev`,
+`take` and every other combinator apply and the `[Char]` is what `collect` is
+for. Nothing is decoded until something pulls.
 
 There is deliberately **no `char_at(s, i)`**. The index would be a byte offset,
 a byte offset is not a character position, and offering that spelling would
-make confusing the two the default rather than the mistake. The crossing is a
-conversion in both directions, and `from_chars` goes back through a
-`StringBuf`, which `push_char` is what makes possible.
+make confusing the two the default rather than the mistake. `CharIter` holds
+byte offsets — it has to — and keeps them private for that reason. Going back
+is `from_chars`, through a `StringBuf`, which `push_char` is what makes
+possible.
 
-`chars` is a **runtime error if the string is not valid UTF-8**, which a
+Walking is a **runtime error if the string is not valid UTF-8**, which a
 program can provoke: `slice` cuts at byte offsets, so it can halve a multi-byte
 sequence. A String is a byte string; only a `Char` promises to be a character.
+Because the walk is lazy the error belongs to the `next()` that reaches those
+bytes rather than to `chars()` itself, so a pipeline that stops earlier
+(`s.chars().take(2)`) never provokes it. The `pad_*` lang items still reject a
+halved string outright: they count characters with a native of their own, in
+one validating pass.
 
 Everything else in `std::char` is ordinary ducktape over `code`/`from_code`
 (methods on `Char`, `from_code` the associated constructor) — the one thing a
@@ -1842,7 +1874,8 @@ Within the module the two views of text stay apart, the milestone-26 way:
 - **A *character* is classified by its value**, so `trim` and `parse_int` cross
   to the `chars` view — whether something is a space or a digit is a fact about a
   character, not a byte, and an ASCII space is a single byte only by luck of the
-  encoding.
+  encoding. Both say `.chars().collect()`: they want the characters by index
+  from either end, and the array a walk builds on request is what that needs.
 
 `starts_with`/`ends_with` need neither a position nor a classification, so they
 are the pure `slice`+`==` ones. The empty pattern is read consistently
@@ -1866,8 +1899,8 @@ overflow: a value past what an `Int` holds wraps.
 | `Display` for a tuple of arity other than 2 | arity is part of a tuple's type and nothing is generic over it, so each needs its own impl; only `(A, B)` ships |
 | writing your own `Display` for a container | rejected as a conflict with the std impl, which naming the trait makes visible |
 | Unicode case mapping, folding, or normalisation | `std::char`'s classifications and `to_upper`/`to_lower` are ASCII-only; `String` comparison is raw bytes |
-| indexing a `String` by character (`s[i]`) | there is none: `s.chars()` converts, because a byte offset is not a character position |
-| a `String` that is guaranteed valid UTF-8 | it is a byte string — `slice` cuts at byte offsets, so `chars` reports a runtime error on a halved sequence |
+| indexing a `String` by character (`s[i]`) | there is none: `s.chars()` walks, because a byte offset is not a character position. `s.chars().collect()` is the array, and `s.chars().skip(i).next()` is the one character |
+| a `String` that is guaranteed valid UTF-8 | it is a byte string — `slice` cuts at byte offsets, so a walk over a halved sequence reports a runtime error when it reaches it (`chars()` itself never does: it is lazy) |
 | a *dynamic* width or precision in a format spec (`{v:>{n}}`) | the width and precision in a `{v:>8}` / `{f:.3}` spec are literals; a runtime value there has no spelling. The spec itself is sugar for `std::string::pad_*` / `std::fmt::float` (milestone 35) |
 | casting a `dyn Trait` back to its concrete type | no downcast; the coercion is one-way |
 | a trait's type arguments at a *bare* method call | the expected type breaks the tie between two impls of one generic trait, and pins an impl parameter the receiver cannot reach (`impl<T, U: From<T>> Into<U> for T`); with no expected type the first impl wins — or, where the parameter was only pinnable that way, no impl applies at all. The trait-qualified spelling (`Into::<Fahrenheit>::into(c)`) settles it explicitly without an expected type |

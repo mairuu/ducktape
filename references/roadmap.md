@@ -3258,6 +3258,61 @@
   `xs.iter().rev()` and `(0..n).iter().rev()` are the reverse walks milestone 58
   built the trait for and had only a hand-written `Countdown` to spend it on.
 
+- **A String's characters as a walk (milestone 61)** — `s.chars()` answers a
+  `CharIter` rather than a `[Char]`. Design: `language.md` `std::iter` →
+  "Sources", and `std::char` → the String/Char split.
+
+  The third source, and the first whose sequence is not already a sequence of
+  *values*: an array's elements and a range's Ints are there to be handed over,
+  while a String's characters have to be decoded out of bytes. That is what had
+  made the crossing a conversion — one native returning the whole array — and
+  it put the pieces in the wrong order: the array was the primitive and the walk
+  was a thing you did to it afterwards. It is the other way round.
+  `s.chars().collect()` is the array, `s.chars().count()` builds none, and
+  `s.chars().take(3)` decodes three characters however long the string is.
+
+  - **What it holds is milestone 60's question with the opposite answer, and the
+    difference is the objects' rather than a preference.** `ArrayIter` refuses
+    to snapshot because an array is the one heap object a program can grow, so
+    it re-reads `len()` every turn; a String is interned and immutable, so
+    `CharIter` reads it once. The question milestone 60 had to *answer* (what
+    does an iterator hold, in a language with no borrow to hold) does not arise
+    here — immutability dissolves it, which is worth recording as the reason
+    rather than as a coincidence.
+  - **Only one direction needs a native, and the asymmetry is the encoding's.**
+    A `Char` *is* a scalar value and a scalar value determines its UTF-8 width,
+    so stepping forward is a four-branch range test in ducktape — the same shape
+    every `std::char` classification has. Stepping backward cannot be derived
+    from any value in hand, because there is no character yet; the only thing
+    that says where one begins is the tag UTF-8 puts on its bytes. So
+    `string_prev_boundary` is the one genuinely new operation, a bounded scan
+    over continuation bytes, and it is what makes `s.chars().rev()` cost what
+    the forward walk costs instead of building an array to turn round.
+  - **Both natives speak in byte offsets, so both are private** — free functions
+    in `std::iter`, `range_start`'s reason exactly (an impl method has no
+    visibility control). Milestone 26's rule that there is no `char_at(s, i)`
+    survives intact: `CharIter` holds byte offsets because it must, and no
+    program can name one.
+  - **Placement was forced again, and this time it left a scar.** `std::cmp`
+    imports `std::string`, so `std::string` can never import `std::iter` — the
+    walk had to live with the other sources, and `std::string`'s `pad_*` lang
+    items cannot reach it. What they need is not the characters but *how many*,
+    so what they keep is `string_char_count`: one validating pass allocating
+    nothing, where the old conversion built an entire array to take its length.
+    The trade is visible in the registry — `string_chars` is gone, and the
+    counter is what is left of it.
+  - **Laziness moves when invalid UTF-8 is reported**, from the conversion to
+    the character that reaches it. `s.chars().take(0)` over a string `slice` cut
+    in half now answers instead of failing (`tests/run/iter_chars.dt` observes
+    it; `tests/fail_run/chars_invalid_utf8.dt` is the same string driven to the
+    end). That is what being lazy means rather than a weakened check: nothing is
+    claimed about bytes nobody looked at.
+
+  The call sites that changed say what the milestone is: `std::text`'s `trim`
+  and `parse_int` now write `.chars().collect()` — they want the characters by
+  index from both ends, which is exactly the case the array was always right
+  for, and now it is requested rather than assumed.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -3283,9 +3338,10 @@ by appetite rather than by necessity.
    `(0..n).iter()`. The design question it recorded — what an array iterator
    holds, when the language has no borrow to hold — was answered "the array,
    and nothing snapshotted", which is what `for x in xs` re-reading the length
-   each turn already said. What is left of this item is ordinary breadth: a
-   `String`'s characters as an iterator rather than an array, a sorted
-   `[T]`, a map or set type.)
+   each turn already said. **A `String`'s characters as a walk** is the next of
+   these, milestone 61, and it answered the same question the other way for the
+   same kind of reason: a String is immutable, so its iterator snapshots. What
+   is left of this item is ordinary breadth: a sorted `[T]`, a map or set type.)
 
 (**The first iterator combinators** — `map`/`filter`/`collect` — are now
 milestone 47, along with driving a bounded generic or a `dyn Iterator` through
@@ -3546,13 +3602,19 @@ via `Module.decl_base`) and is not part of the main line.
   Full Unicode case mapping is a table rather than a range test, and there is no
   way to ship a partial one that is not silently wrong for most of the world
 - a `String` is a byte string, not guaranteed valid UTF-8: `slice` cuts at byte
-  offsets, so it can halve a multi-byte sequence, and `chars` is a runtime error
-  on the result. Making the type carry the guarantee would mean validating every
-  `slice`, which is the cost the byte-indexed API exists to avoid
-- there is no way to get a `Char` out of a String without building the whole
-  `[Char]`: `chars` is the only reader, so testing the first character of a long
-  string allocates an array as long as it. A lazy or indexed form would need the
-  byte/character question answered differently than milestone 26 answered it
+  offsets, so it can halve a multi-byte sequence, and walking the result is a
+  runtime error. Making the type carry the guarantee would mean validating every
+  `slice`, which is the cost the byte-indexed API exists to avoid. Since
+  milestone 61 the walk is lazy, so the error belongs to the character that
+  reaches the bad bytes rather than to `chars()` — a pipeline that stops short
+  of them succeeds, which is the ordinary meaning of laziness and not a
+  weakening of the check
+- getting one `Char` out of a String once meant building the whole `[Char]`,
+  since the conversion was the only reader. Fixed in milestone 61: `chars` is a
+  lazy walk, so `s.chars().next()` decodes one character and
+  `s.chars().take(3)` decodes three. The byte/character question is still
+  answered milestone 26's way — the walk holds byte offsets and keeps them
+  private, so no *program* ever indexes a String by one
 - `Ord` ships for `Int`, `Float`, `Char`, `String`, `Option<T>`, `[T]` and
   `(A, B)` (the last two as of milestone 36), so an array of strings sorts and a
   tuple compares field by field without a per-program impl. As with `Display`,

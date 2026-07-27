@@ -2,9 +2,13 @@
 # Reachable from ducktape, which is why it is a runtime error rather than an
 # invariant: `slice` is indexed in bytes, so it can cut a multi-byte sequence
 # in half. A String is a byte string; only a Char promises to be a character.
+#
+# Since milestone 61 `chars` is a lazy walk, so this is the `next()` that
+# reaches the malformed bytes failing, not the call that built the iterator —
+# `collect` is what drives it that far. A pipeline stopping short of them does
+# not fail at all, which `tests/run/iter_chars.dt` observes.
 use std::io::print;
-use std::string;
 
 fun main() {
-    print("é".slice(0, 1).chars());
+    print("é".slice(0, 1).chars().collect());
 }
