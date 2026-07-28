@@ -676,6 +676,72 @@ static Expr *parse_unary(Parser *p) {
   return parse_postfix(p);
 }
 
+// After `obj.name`, a `<` has two readings and the grammar settles neither at
+// the `<` itself: it opens a method call's type arguments (`it.fold<Int>(0,f)`)
+// or it is the less-than operator (`self.at < n`). Rust forces the choice with
+// the turbofish; ducktape spells type application bare, so the parser has to
+// look.
+//
+// What tells them apart is what follows the *matching* `>`: type arguments are
+// only ever legal immediately before the `(` of the call they belong to, which
+// is a rule the code below already relied on to reject stray ones. So this
+// scans ahead for that `>` and reports whether a `(` sits after it.
+//
+// A token scan rather than a speculative parse, for two reasons: it costs no
+// backtracking of the parser's own state, and — the one that matters — it emits
+// no diagnostics for the reading it goes on to reject. Every `>` is its own
+// token (there is no shift operator for one to fuse into), so the angle depth
+// is exact. The bracket depths are tracked because a type argument may
+// legitimately contain `[Int]` or `(A, B)`; a closer arriving at depth zero
+// belongs to whatever encloses this expression and means the `<` was a
+// comparison.
+//
+// The residual ambiguity is `a.b < c > (d)`, which reads as a type application.
+// That is the same corner the turbofish exists to avoid and it needs a parse
+// this deliberate to reach, so it stays a wart rather than a reason to change
+// the syntax.
+static bool looks_like_type_args(const Parser *p) {
+  int angle = 0, paren = 0, square = 0;
+  for (int i = p->current; i < p->count; i++) {
+    switch (p->tokens[i].type) {
+    case TOKEN_LT:
+      angle++;
+      break;
+    case TOKEN_GT:
+      if (--angle == 0) {
+        return i + 1 < p->count && p->tokens[i + 1].type == TOKEN_LPAREN;
+      }
+      break;
+    case TOKEN_LPAREN:
+      paren++;
+      break;
+    case TOKEN_RPAREN:
+      if (paren-- == 0) {
+        return false;
+      }
+      break;
+    case TOKEN_LBRACKET:
+      square++;
+      break;
+    case TOKEN_RBRACKET:
+      if (square-- == 0) {
+        return false;
+      }
+      break;
+    // none of these can occur inside a type argument list, so meeting one means
+    // the expression has already run past the `<` that started this scan.
+    case TOKEN_SEMICOLON:
+    case TOKEN_LBRACE:
+    case TOKEN_RBRACE:
+    case TOKEN_EOF:
+      return false;
+    default:
+      break;
+    }
+  }
+  return false;
+}
+
 static Expr *parse_postfix(Parser *p) {
   Expr *base = parse_primary(p);
   while (true) {
@@ -708,7 +774,8 @@ static Expr *parse_postfix(Parser *p) {
         int type_arg_count = 0;
         Span start_span = current_tok_span(p);
 
-        if (match_tok(p, TOKEN_LT)) {
+        if (check_tok(p, TOKEN_LT) && looks_like_type_args(p) &&
+            match_tok(p, TOKEN_LT)) {
           bool had_error = false;
 
           if (!check_tok(p, TOKEN_GT)) {

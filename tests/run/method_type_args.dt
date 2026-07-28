@@ -1,0 +1,58 @@
+# The two readings of a `<` after `obj.name`.
+#
+# `it.pick<Int>(a, b)` applies a type argument; `self.n < xs.len()` compares.
+# Nothing at the `<` itself says which, and the language has no turbofish to
+# force the issue, so the parser looks ahead for the matching `>` and asks
+# whether a `(` follows it. Before that lookahead existed, *every* `<` after a
+# field or method access was read as opening type arguments, so `self.at < n`
+# did not parse at all — which is why the comparison cases below are the real
+# subject here and the applications are the thing they must not break.
+#> 7
+#> 9
+#> 7
+#> true
+#> false
+#> 3
+#> 2
+use std::io::print;
+use std::array;
+
+struct Holder {
+    n: Int,
+}
+
+impl Holder {
+    fun pick<T>(self, a: T, b: T) -> T {
+        if self.n < 1 {
+            return a;
+        }
+        return b;
+    }
+
+    fun width(self) -> Int {
+        return self.n;
+    }
+}
+
+fun main() {
+    var lo = Holder { n: 0 };
+    var hi = Holder { n: 3 };
+    var xs = [3, 1, 2];
+
+    # a type argument, written out and inferred
+    print("{lo.pick<Int>(7, 9)}");
+    print("{hi.pick<Int>(7, 9)}");
+    print("{lo.pick(7, 9)}");
+
+    # the comparison reading: a field, then a call, then a literal
+    print("{lo.n < xs.len()}");
+    print("{hi.n < xs.len()}");
+    print("{lo.pick<[Int]>(xs, xs).len()}");
+
+    # a `<` after a *method* call rather than a field, and one whose right side
+    # starts with an identifier — the shape that most looks like a type list
+    var n = 2;
+    if hi.width() < 4 {
+        print("{n}");
+    }
+}
