@@ -3374,6 +3374,75 @@
   on `[T]` silently wins over a program's own method of that name, with no
   diagnostic (below).
 
+- **A hash map (milestone 63)** — `std::hash` (`Hash`, `Hasher`, `hash_of`) and
+  `std::map` (`HashMap<K, V>`, `HashSet<T>`). Two natives, no opcode, no
+  compiler change. Design: `language.md` `std::hash` / `std::map`,
+  `runtime.md` "Native functions".
+
+  This was the fork the previous milestone left open — a hash map keyed by user
+  types was the concrete consumer item 2 said `Eq` was waiting for — and the
+  answer is that **it is not one**. `==` in ducktape is a structural primitive
+  with no trait behind it, so `k == key` type-checks on a `K` whose only bound
+  is `Hash`, and one opcode compares Ints, Strings, structs and tuples alike. A
+  map needs equality, takes it from the language, and spends its bound entirely
+  on hashing. `Eq` goes on waiting for a different consumer, and the argument
+  against it is now stronger than before: the structural `==` also makes the
+  `Hash`/`Eq` contract nearly unbreakable, since there is no custom equality for
+  a hash to disagree with.
+
+  - **The trait's shape is decided by a gap in the language.** ducktape has no
+    bitwise operator at all — `^` is the centre-align token in a format spec,
+    `|` opens a closure, `&` and the shifts do not exist — so a mixing function
+    is not awkward to write here, it is *unwritable*. The one an implementor
+    could write is `h * 31 + x`, which is precisely the weak one: multiply and
+    add both carry information upward, so the high bits never reach the low
+    bits `%` reads. Hence `fun hash(self, h: Hasher)` rather than
+    `fun hash(self) -> Int`: an impl says only *which parts of me matter*, the
+    combining lives in one object, and that object reaches C. `Hasher` is to
+    `Hash` what `StringBuf` is to building text, and the parallel is exact —
+    both exist because the work below them cannot be said above them.
+  - **The accumulator needed nothing new.** A `Hasher` is handed to a value
+    rather than returned from it, which works for the same reason `xs.push(v)`
+    needs no way to spell "by reference": a struct is a heap object behind a
+    handle, so a callee assigning to `self.state` assigns to the caller's.
+  - **A String's hash is a field read** — `heap_intern` computed it to find the
+    string's bucket — so the type whose hash would otherwise be a walk over its
+    bytes is the cheapest impl in std rather than the dearest.
+  - **No `impl Hash for Float`**, and the contrast with `impl Ord for Float` is
+    the point: an order is total and so had to put NaN *somewhere*, while a
+    table may decline a key. `NaN != NaN` would make such a key unfindable in a
+    table that compares with `==`, and a truncating `as Int` is the only number
+    a Float can reach here anyway.
+  - **Capacities are primes because they are allowed to be.** Every table that
+    indexes with `h & (cap - 1)` is forced to a power of two by the mask; with
+    no `&` the reduction is `%`, nothing pushes toward powers of two, and a
+    prime is `%`'s natural partner. The sign fold that goes with it is not
+    optional — `%` keeps the sign of its left operand, so `(0 - 17) % 5` is
+    `-2`, and getting it wrong is an out-of-bounds read rather than a bad
+    distribution.
+  - **A slot is an enum, not parallel arrays.** `[K]` would have to be *filled*
+    at every empty slot and a generic `K` has no default value to fill it with;
+    `Slot::Empty` holds nothing, so there is nothing to invent. It is also one
+    allocation rather than `n`, since every free slot can share the one `Empty`.
+  - **`iter()` holds the slot array rather than the map** — `CharIter`'s choice
+    rather than `ArrayIter`'s, and forced rather than chosen: a rehash moves
+    every entry, so an index into the old table means nothing in the new one.
+
+  Two things it found rather than decided, both in the test suite. The first is
+  a **parser bug it walked straight into**: `self.at < n` did not parse, because
+  a `<` after a field or method access was unconditionally read as opening type
+  arguments. Fixed ahead of the milestone in its own commit, with the
+  disambiguation reading what follows the matching `>`
+  (`tests/run/method_type_args.dt`). The second is worse and is a lesson about
+  oracles: `tests/run/map_oracle.dt` was written, passed, and was then checked
+  against two *deliberately broken* maps — and passed those too. The cause was
+  the LCG's low bits, which are degenerate at a power-of-two modulus, so
+  `seed % 4` was a two-cycle that drew `get` zero times in four thousand
+  operations and `seed % 40` only ever yielded odd keys. Reading the high bits
+  instead turned both sabotages into thousands of mismatches. `sort_oracle.dt`
+  had the same flaw and is fixed with it — **an oracle that has not been shown
+  to fail is not evidence**, which is now the standing rule for this suite.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -3404,12 +3473,14 @@ by appetite rather than by necessity.
    same kind of reason: a String is immutable, so its iterator snapshots. What
    is left of this item is ordinary breadth. **A sorted `[T]`** is milestone 62,
    and it needed nothing from the language at all — one `.dt` file whose whole
-   content is decisions. What remains is **a map or set type**, which is where
-   this item stops being breadth: a hash map is the concrete consumer item 2
-   says `Eq` is waiting for, while an *ordered* map keyed by `T: Ord` sidesteps
-   hashing entirely and is one `lower_bound` away from what milestone 62 built.
-   That fork is the design question, and it is the first one on this list that
-   is not already answered.)
+   content is decisions. **A map or set type** was the last piece with a design
+   question behind it, and it is now milestone 63: the fork was hash versus
+   ordered, and hash won on the strength of what it would settle — it was the
+   named consumer for the deferred `Eq`, and it answered that question in the
+   negative from the inside. What is left of this item is breadth with nothing
+   open in it: an ordered map over `lower_bound` is still unwritten and still
+   costs no design, and `std::hash` could grow impls for more arities the way
+   `std::cmp` and `std::fmt` want to.)
 
 (**The first iterator combinators** — `map`/`filter`/`collect` — are now
 milestone 47, along with driving a bounded generic or a `dyn Iterator` through
@@ -3482,9 +3553,17 @@ name its own argument without macros, and that `assert_eq`'s `Display` bound is
 bought by the *message* rather than the comparison — belong to item 2 as much
 as here.)
 
-2. **A custom equality trait (`Eq`), if a consumer ever needs it.** Not on the
-   main line, and deliberately deferred rather than planned — recorded here so
-   the reasoning survives. Since milestone 55 it is the *only* operator that is
+2. **A custom equality trait (`Eq`) — the named consumer has now declined it.**
+   Not on the main line, and deliberately deferred rather than planned —
+   recorded here so the reasoning survives. Milestone 63 built the hash map this
+   item had been waiting for and found it wanted `Hash` and nothing else: `==`
+   is structural, so `k == key` type-checks on a `K` bounded only by `Hash`, and
+   collision resolution is one opcode over any type whatsoever. The structural
+   `==` even makes the `Hash`/`Eq` contract nearly unbreakable, since there is
+   no custom equality for a hash to contradict. What would now reopen this is a
+   type whose equality is genuinely not structural — a case-insensitive string,
+   a value with a cached field that should not count — and nothing in std has
+   one. Since milestone 55 it is the *only* operator that is
    not a trait, which sharpens the question rather than settling it: ordering and
    arithmetic went to traits because they had no meaning for a non-primitive at
    all, while equality already has one that works for every type.
@@ -3499,15 +3578,16 @@ as here.)
    call where an opcode
    stands now, all to buy *custom* equality that would need specialisation (which
    the language does not have) to coexist with the structural default.
-   Milestone 57 supplies the nearest thing to a consumer std has, and it lands
-   on the *other* side: `assert_eq<T: Display>` compares with `OP_EQ` on any `T`
-   whatsoever and spends its only bound on rendering the two values, so what it
-   wanted from the language was a way to *print*, not a way to compare. Nothing
-   needs custom equality yet, so `Eq` waits for a concrete consumer — a hash map
-   keyed by user types, or a first type whose equality is genuinely not
-   structural. The `PartialEq`/`PartialOrd` split waits with it; its one live
-   motivation, the `Ord for Float` NaN wart, is an ordering bug fixable on its
-   own terms and does not need the trait hierarchy to address.
+   Milestone 57 supplied the nearest thing to a consumer std had then, and it
+   landed on the *other* side: `assert_eq<T: Display>` compares with `OP_EQ` on
+   any `T` whatsoever and spends its only bound on rendering the two values, so
+   what it wanted from the language was a way to *print*, not a way to compare.
+   Milestone 63's map is the second consumer to answer the same way, and it was
+   the one this item named in advance. The `PartialEq`/`PartialOrd` split waits
+   with it; its one live motivation, the `Ord for Float` NaN wart, is an
+   ordering bug fixable on its own terms and does not need the trait hierarchy
+   to address — and milestone 63 showed the other way out of it, since
+   `std::hash` simply declines to implement `Hash for Float` at all.
 
 Not on the roadmap: the **REPL** is a side feature, not a milestone — it lives
 on the `feature/repl` branch (`--repl`, incremental compilation over one module
@@ -3515,6 +3595,28 @@ via `Module.decl_base`) and is not part of the main line.
 
 ## Known warts to clean up opportunistically
 
+- **a call argument's hint will not solve a generic unit variant to the
+  enclosing function's type parameters**: inside `fun f<K, V>(..)`,
+  `slots.push(Slot::Empty)` reports "expected `Slot<K, V>` but got
+  `Slot<_, _>`" — the hint gets the variant as far as unknowns and then will not
+  bind those to `K` and `V`. An annotated local
+  (`var e: Slot<K, V> = Slot::Empty;`) drives the same inference from the other
+  side and checks. Found writing `std::map` (milestone 63), which uses the
+  workaround; it is the same family as the struct-literal field-hint gap below.
+- **`a.b < c > (d)` reads as a type application, not two comparisons.** A `<`
+  after a field or method access is ambiguous — type arguments are spelled bare,
+  with no turbofish — and milestone 63's fix disambiguates by scanning for the
+  matching `>` and asking whether a `(` follows it, since type arguments are
+  only legal immediately before their call. That one shape satisfies the test
+  without meaning it. Parenthesising the left comparison is the workaround, and
+  a turbofish spelling would be the real fix.
+- **no bitwise operators at all** (`&`, `|`, `^`, `<<`, `>>`). Two spellings are
+  taken (`|` by closures, `^` by the format spec's centre-align) and the rest
+  were never added, so anything defined in terms of bits cannot be written in
+  ducktape: milestone 63's hashing had to reach C for its mixing, and a table
+  indexes with `%` rather than a mask. Division by a power of two is the
+  stand-in for a right shift. Adding them is a scanner/parser/opcode job with no
+  design question in it, and would let `std::hash` be written in ducktape.
 - a format spec inside `{}` exists as of milestone 35 (`{v:>8}`, `{f:.3}`,
   `{f:>10.3}`), desugaring to `std::string::pad_*` / `std::fmt::float`. What has
   no spelling is a *dynamic* width or precision (`{v:>{n}}`): both are literals,

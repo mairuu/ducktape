@@ -106,6 +106,18 @@ ending in `return` has type `!` (never), which unifies with anything.
   trait: it is a free, import-less, universal primitive, and routing it through
   an `Eq` would make the commonest operation depend on an import.
 - Logic: keywords `and`, `or` (short-circuit), `not`. There is no `&&`/`||`.
+- **There are no bitwise operators at all** — no `&`, `|`, `^`, `<<` or `>>`.
+  Two of those spellings are already taken (`|` opens a closure, `^` is the
+  centre-align token in a format spec) and the rest were never added. The
+  consequence is larger than it looks: any operation defined in terms of bits
+  is not merely awkward but *unwritable* in ducktape, which is why hashing
+  reaches C for its mixing (`std::hash`) and why a table indexes with `%`
+  rather than a mask (`std::map`). Division by a power of two is the available
+  stand-in for a right shift.
+- `Int` arithmetic **wraps** silently on overflow, two's complement
+  (`4611686018427387904 * 4` is `0`). There is no checked or saturating form.
+- `%` keeps the **sign of its left operand**: `(0 - 17) % 5` is `-2`, not `3`.
+  Anything using `%` to pick an array index has to fold the sign itself.
 - Unary minus `-x`: numeric, or a type implementing `std::ops::Neg` — the same
   rewrite with the operand as receiver and no argument (`-v` is `v.neg()`).
 - `if cond { .. } else { .. }` is an expression; without `else` it is `()`.
@@ -952,11 +964,11 @@ involved.
 directory. `std::` never touches the filesystem, so a local `std.dt` is
 unreachable. Where ducktape cannot express the operation, a module declares a
 bodyless function bound to C (see "Native functions" below); `std::assert`,
-`std::cmp`, `std::convert`, `std::ops`, `std::option`, `std::result` and
-`std::text` need none, `std::io` and `std::panic` are nothing but, and
-`std::array`, `std::string`, `std::strbuf` and `std::char` are the mixed case —
-a handful of natives, and every other function written on top of them in
-ducktape.
+`std::cmp`, `std::convert`, `std::map`, `std::ops`, `std::option`, `std::result`,
+`std::sort` and `std::text` need none, `std::io` and `std::panic` are nothing
+but, and `std::array`, `std::string`, `std::strbuf`, `std::char` and
+`std::hash` are the mixed case — a handful of natives, and every other function
+written on top of them in ducktape.
 
 **There is a small prelude.** Every program implicitly imports `Option`
 (`std::option`), `Result` (`std::result`), `Ord` (`std::cmp`), `Display`
@@ -1949,6 +1961,108 @@ is that a visible std method on `[T]` **silently wins** over a program's own
 method of the same name (see "Not yet implemented"). Opt-in is what leaves the
 name to a program that never asked for this module.
 
+### `std::hash`
+
+Turning a value into an Int a table can index with.
+
+```
+use std::hash::{Hash, Hasher, hash_of};
+
+hash_of(7);                 # an Int, spanning the whole range — negatives too
+hash_of("alpha");
+hash_of((1, "a"));
+hash_of([[1], [2]]);
+
+impl Hash for Point {
+    fun hash(self, h: Hasher) {
+        self.x.hash(h);
+        self.y.hash(h);
+    }
+}
+```
+
+`Hash` ships for `Int`, `String`, `Bool`, `Char`, `[T: Hash]` and
+`(A: Hash, B: Hash)`. `Hasher` offers `new`, `write_int`, `write_string`,
+`write_bool`, `write_char` and `finish`; `hash_of(v)` is the whole of a hash in
+one call, and is what a caller that is not itself an impl wants.
+
+- **`hash` writes into a `Hasher` rather than returning an Int**, and that is
+  forced by the language rather than borrowed from Rust. With no bitwise
+  operator (see "Expressions") a mixing function cannot be written in ducktape
+  at all; the one an implementor *could* write is `h * 31 + x`, which is the
+  weak one. Writing into an accumulator moves the mixing into a single object
+  that reaches C for it, so an impl only ever says *which parts of me matter*.
+  `Hasher` is to `Hash` what `StringBuf` is to building text.
+- **A `Hasher` is passed, not returned.** A struct is a heap object behind a
+  handle, so a callee assigning to `self.state` assigns to the caller's hasher —
+  the same reason `xs.push(v)` needs no way to spell "by reference".
+- **The contract is one-sided and nearly unbreakable**: values that are `==`
+  must write the same bytes. Since `==` is structural and cannot be overridden,
+  any impl reading only the value's own contents satisfies it by construction.
+- **A `String`'s hash is a field read** — the heap hashed the bytes when it
+  interned them — so the type whose hash would otherwise be a walk is the
+  cheapest one here.
+- **`impl Hash for [T]` writes the length first.** Without it, `[[1], [2]]` and
+  `[[1, 2]]` would write the same sequence and hash alike.
+- **There is deliberately no `impl Hash for Float`**: `NaN != NaN`, so such a key
+  could never be found again in a table that resolves collisions with `==`, and
+  the only Int a Float can reach is a truncating `as`. `Ord for Float` had to
+  place NaN *somewhere* because an order is total; a table may simply decline
+  the key.
+- Two natives, `hash_mix` and `hash_string` — exactly the two steps ducktape
+  cannot take. Not preluded.
+
+### `std::map`
+
+A hash map and the set written on it.
+
+```
+use std::map::{HashMap, HashSet};
+
+var m: HashMap<String, Int> = HashMap::new();
+m.insert("one", 1);            # None — nothing was displaced
+m.insert("one", 11);           # Some(1) — the value it replaced
+m.get("one");                  # Some(11)
+m.contains_key("two");         # false
+m.remove("one");               # Some(11); again -> None
+m.len(); m.is_empty(); m.clear();
+
+var ks = m.keys();  ks.sort();    # [K], in no particular order until sorted
+var vs = m.values();
+for pair in m.iter() { ... }      # (K, V), an ordinary Iterator
+
+var s: HashSet<Int> = HashSet::new();
+s.insert(4);                   # true — newly added
+s.insert(4);                   # false — already there
+s.contains(4); s.remove(4); s.to_array();
+```
+
+`K` needs `Hash` and nothing else.
+
+- **A map needs no `Eq`.** Collision resolution compares keys with `==`, which
+  is a structural primitive with no trait behind it, so `k == key` type-checks
+  on a `K` bounded only by `Hash`. The consumer the roadmap was holding `Eq`
+  back for turns out not to want it.
+- **Open addressing with linear probing**, the shape the VM's own intern table
+  already has. A removed slot becomes a **tombstone** rather than empty,
+  because a probe that stopped there would miss keys that had walked past it.
+- **Capacities are primes.** With no `&`, the mask trick that forces
+  power-of-two capacities elsewhere is unavailable, so the reduction is `%` and
+  a prime is its natural partner. Growth is at 3/4 load, measured including
+  tombstones so an insert/remove workload cleans rather than merely grows.
+- **Iteration order is unspecified** — slot order, which is hash order, and it
+  changes when the table rehashes. Sort if you need an order; a test that prints
+  a map without sorting is testing the hash function.
+- **`iter()` holds the slot array, not the map**, so an insert that rehashes
+  mid-walk leaves the walk on the old array rather than corrupting it. That is
+  `CharIter`'s choice rather than `ArrayIter`'s, and it is forced: a rehash
+  moves every entry, so an index into the old table means nothing in the new.
+- **`HashSet<T>` is a `HashMap<T, Bool>`** whose values are never read — one
+  wasted Bool per entry, traded against a second copy of the algorithm, since
+  nothing can be generic over "a payload or none".
+- No natives and no language change; `std::hash` is the only thing it needed.
+  Not preluded.
+
 ## Not yet implemented
 
 | Gap | Behavior today |
@@ -1973,7 +2087,14 @@ name to a program that never asked for this module.
 | an array or a range that *is* an `Iterator` | neither implements the trait; `xs.iter()` / `(0..n).iter()` are the seeds, and `for x in xs` keeps its own desugaring rather than routing through them |
 | an array iterator detached from the array it walks | `xs.iter()` holds the array and snapshots nothing, so a `push`/`pop` mid-walk is visible (never out of bounds — see "Sources"). `xs.iter().collect()` is the copy |
 | a heterogeneous operator (`V2 * Float`, `Matrix * Vec`) | the `std::ops` traits are homogeneous (`other: Self`, no `Output`): an operator would have to select an impl by its *right* operand, which only the written `Meters::from(x)` / `Into::<U>::into(x)` forms can do. A mixed pair is an argument mismatch on the rewritten call |
-| custom `==` (an `Eq` trait) | equality stays structural and import-less for every type; only ordering and arithmetic are traits |
+| custom `==` (an `Eq` trait) | equality stays structural and import-less for every type; only ordering and arithmetic are traits. `std::map` was the consumer this was waiting on and did not need it: a hash map resolves collisions with the structural `==` on a `K` bounded only by `Hash` |
+| bitwise operators (`&`, `\|`, `^`, `<<`, `>>`) | there are none, so anything defined in terms of bits cannot be written in ducktape — `std::hash` reaches C for its mixing, and `std::map` indexes with `%` rather than a mask. Divide by a power of two for a right shift |
+| checked or saturating integer arithmetic | `Int` wraps silently, two's complement; `%` keeps the sign of its left operand, so `(0 - 17) % 5` is `-2` |
+| hashing a `Float`, and so a `Float` map key | no `impl Hash for Float`: `NaN != NaN` makes such a key unfindable in a table that compares with `==`, and the only Int a Float reaches is a truncating `as`. Wrap one in a struct and say what equality means |
+| an `entry`-style API on a map (`or_insert`, in-place update) | `get` then `insert`, which probes twice. Nothing can hold a slot open between the two |
+| `Display` for a `HashMap` / `HashSet` | none ships; iteration order is unspecified, so a rendering would have to sort and the key would need `Ord` on top of `Hash`. `m.keys()` and `m.values()` are the arrays |
+| a generic unit variant solved by a *call argument's* hint (`slots.push(Slot::Empty)`) | "expected `Slot<K, V>` but got `Slot<_, _>`" — the hint solves the variant's own parameters as far as unknowns but will not then bind them to the enclosing function's type parameters. An annotated local (`var e: Slot<K, V> = Slot::Empty;`) drives it from the other side and does check |
+| `a.b < c > (d)` read as a comparison | it is read as a type application. A `<` after a field or method access is disambiguated by looking ahead for the matching `>` and asking whether a `(` follows, since type arguments are only legal immediately before their call; this is the one shape that satisfies that test without meaning it. Parenthesise the left comparison |
 | an impl overriding a defaulted method restating its `where` | conformance compares signatures, which carry no bounds, so an override may quietly add or drop one; the trait's own clause is still discharged at every call through the trait |
 | `mod` declarations | no such keyword; `use` is what pulls a file in |
 | glob imports (`use a::*`) | not parsed; name each item, or bind the module (`use a;`) and qualify |

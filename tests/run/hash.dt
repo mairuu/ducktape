@@ -1,0 +1,100 @@
+# `std::hash`, tested as properties rather than as numbers.
+#
+# Writing the expected hashes down would pin the mixing function, which is an
+# implementation detail the module is free to change; what a caller may rely on
+# is the *contract*. So every line below is a property: equal values hash equal,
+# a `Hasher` accumulates rather than replaces, and a value's shape is part of
+# what it writes.
+#
+# "Different values hash differently" is not a contract — collisions are legal
+# and a map handles them — but the cases here are ones a broken mixer would
+# collapse, so they are checked as a smoke test of quality rather than of
+# correctness.
+#> equal hashes equal: true true true true
+#> hasher accumulates: true
+#> finish is not destructive: true
+#> order matters: true
+#> shape matters: true
+#> length is written: true
+#> distinct primitives: true
+#> composite: true true
+#> custom key: true true
+use std::io::print;
+use std::hash::{Hash, Hasher, hash_of};
+use std::array;
+
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+impl Hash for Point {
+    fun hash(self, h: Hasher) {
+        self.x.hash(h);
+        self.y.hash(h);
+    }
+}
+
+fun main() {
+    var a = "alpha";
+    var same = "alpha";
+    var b = "beta";
+
+    # ── the contract ──────────────────────────────────────────────────────────
+    #
+    # Equal values hash equal. This is the whole of what `Hash` promises, and in
+    # a language whose `==` is structural it is the only thing a map needs.
+    print("equal hashes equal: {hash_of(7) == hash_of(7)} {hash_of(a) == hash_of(same)} {hash_of(true) == hash_of(true)} {hash_of([1, 2]) == hash_of([1, 2])}");
+
+    # ── the accumulator ───────────────────────────────────────────────────────
+    #
+    # A second write must change the state; a `Hasher` that replaced rather than
+    # folded would make every multi-field key hash as its last field alone.
+    var h = Hasher::new();
+    h.write_int(1);
+    var after_one = h.finish();
+    h.write_int(2);
+    print("hasher accumulates: {after_one != h.finish()}");
+
+    # `finish` reads the state, it does not consume it
+    var twice = Hasher::new();
+    twice.write_int(5);
+    print("finish is not destructive: {twice.finish() == twice.finish()}");
+
+    # order is part of what was written
+    var ab = Hasher::new();
+    ab.write_int(1);
+    ab.write_int(2);
+    var ba = Hasher::new();
+    ba.write_int(2);
+    ba.write_int(1);
+    print("order matters: {ab.finish() != ba.finish()}");
+
+    # ── shape ─────────────────────────────────────────────────────────────────
+    #
+    # The reason `impl Hash for [T]` writes the length before the elements: with
+    # only the elements, a nested array would write the same sequence as the
+    # flat one it flattens to, and `[[1], [2]]` would hash as `[1, 2]` does.
+    print("shape matters: {hash_of([[1], [2]]) != hash_of([[1, 2]])}");
+    print("length is written: {hash_of([1, 2]) != hash_of([1, 2, 0]) and hash_of([0]) != hash_of([0, 0])}");
+
+    # a low-entropy run is exactly where a weak mixer collapses, so the
+    # neighbouring small integers are the ones worth looking at
+    print("distinct primitives: {hash_of(0) != hash_of(1) and hash_of(1) != hash_of(2) and hash_of(2) != hash_of(3)}");
+
+    # ── composites ────────────────────────────────────────────────────────────
+    var t1 = (1, a);
+    var t2 = (1, same);
+    var t3 = (1, b);
+    print("composite: {hash_of(t1) == hash_of(t2)} {hash_of(t1) != hash_of(t3)}");
+
+    # ── a user type ───────────────────────────────────────────────────────────
+    #
+    # An impl says which parts of the value matter and nothing about combining
+    # them. Two structurally equal Points are different objects and must still
+    # hash alike, since `==` calls them equal.
+    var p = Point { x: 1, y: 2 };
+    var q = Point { x: 1, y: 2 };
+    var r = Point { x: 2, y: 1 };
+    print("custom key: {hash_of(p) == hash_of(q)} {hash_of(p) != hash_of(r)}");
+}

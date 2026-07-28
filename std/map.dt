@@ -1,0 +1,444 @@
+# std::map — a `HashMap<K, V>` and the `HashSet<T>` written on it.
+#
+# Open addressing with linear probing: one array of slots, and a key that finds
+# its slot occupied walks forward until it finds a free one. The alternative —
+# a bucket array of chains — needs an allocation per entry and a `[[(K, V)]]`
+# whose inner arrays are mostly length one, so it costs more memory to store
+# less locality. This is also the shape the VM's own string table already has
+# (`heap->strings`, open-addressed and tombstoned), which makes this module the
+# ducktape rewrite of a map the runtime was already keeping.
+#
+# **What this milestone set out to answer is what it does *not* need.** The
+# roadmap held `Eq` back until a consumer asked for it, and a hash map keyed by
+# user types was named as that consumer. It turns out not to be one: `==` in
+# ducktape is a structural primitive with no trait behind it, so `k == key`
+# below type-checks on a `K` whose only bound is `Hash`, and it compares Ints,
+# Strings, structs and tuples alike with one opcode. A map needs equality, gets
+# it from the language, and spends its bound entirely on *hashing*. So the trait
+# a table wants is `Hash`, and `Eq` goes on waiting for a different consumer.
+#
+# It also makes the `Hash`/`Eq` contract — the thing that is easy to break in a
+# language with a custom equality — nearly unbreakable here. Equal values must
+# hash equal; equality is structural and cannot be overridden; so any `hash` that
+# reads only the value's own contents is correct by construction.
+
+use std::option::Option;
+use std::hash::{Hash, Hasher, hash_of};
+use std::array;
+use std::iter::Iterator;
+
+# The three states a slot can be in. `Tomb` is the price of open addressing: a
+# removal cannot simply empty a slot, because a probe that stopped there would
+# fail to find keys that had walked *past* it on the way in. So a removed slot
+# stays a wall to probes and becomes free again only at the next rehash.
+#
+# An enum, rather than the parallel `[K]` + `[V]` + `[Int]` a C implementation
+# would reach for, because the array of keys is the problem: `[K]` has to be
+# *filled* with something at every empty slot, and a generic `K` has no default
+# value to fill it with. A payload variant sidesteps the question — `Empty` holds
+# nothing, so there is nothing to invent.
+#
+# Private: which slot a key landed in is not something a caller can act on.
+enum Slot<K, V> {
+    Empty,
+    Tomb,
+    Full(K, V),
+}
+
+fun empty_slots<K, V>(n: Int) -> [Slot<K, V>] {
+    var slots: [Slot<K, V>] = [];
+    # The annotation is not decoration: `slots.push(Slot::Empty)` does not
+    # check, because the argument hint solves the variant only as far as
+    # `Slot<_, _>` and will not then bind those unknowns to this function's own
+    # `K` and `V`. An annotated local drives the same inference from the other
+    # side and does check — the workaround is one line, but the gap is real and
+    # is recorded in language.md.
+    #
+    # Hoisting it out of the loop is a consequence rather than the point, and a
+    # welcome one: `Empty` carries no payload, so every free slot can be the
+    # same instance, and a fresh table of any size costs one allocation for its
+    # marker rather than `n` of them.
+    var empty: Slot<K, V> = Slot::Empty;
+    var i = 0;
+    while i < n {
+        slots.push(empty);
+        i += 1;
+    }
+    return slots;
+}
+
+# The smallest prime at least `n`, and never below 7 — a table small enough to
+# grow on its second insert is not worth the arithmetic.
+#
+# **Capacities are primes here because they are allowed to be.** Every table that
+# indexes with `h & (cap - 1)` is forced to a power of two by the mask; ducktape
+# has no `&` at all, so the reduction is `%` and nothing pushes toward powers of
+# two. A prime is `%`'s natural partner, and it is the cheapest insurance there
+# is against a hash with structure in its low bits — which `std::hash` should
+# never hand out, but a table that survives a bad hash is better than one that
+# merely deserves a good one.
+fun next_prime(n: Int) -> Int {
+    var c = n;
+    if c < 7 {
+        c = 7;
+    }
+    if c % 2 == 0 {
+        c += 1;
+    }
+    while not is_prime(c) {
+        c += 2;
+    }
+    return c;
+}
+
+fun is_prime(n: Int) -> Bool {
+    if n < 2 {
+        return false;
+    }
+    if n % 2 == 0 {
+        return n == 2;
+    }
+    var d = 3;
+    while d * d <= n {
+        if n % d == 0 {
+            return false;
+        }
+        d += 2;
+    }
+    return true;
+}
+
+# `live` is the number of entries a caller can see; `used` counts those *and*
+# the tombstones, because it is occupancy of the probe sequence rather than
+# population that decides when probing gets slow. Keeping both is what lets a
+# table that has had everything removed from it shrink at the next rehash
+# instead of growing forever.
+pub struct HashMap<K: Hash, V> {
+    slots: [Slot<K, V>],
+    live: Int,
+    used: Int,
+}
+
+impl<K: Hash, V> HashMap<K, V> {
+    fun new() -> HashMap<K, V> {
+        var slots: [Slot<K, V>] = empty_slots(7);
+        return HashMap { slots: slots, live: 0, used: 0 };
+    }
+
+    # How many entries the map holds. Tombstones are not entries.
+    fun len(self) -> Int {
+        return self.live;
+    }
+
+    fun is_empty(self) -> Bool {
+        return self.live == 0;
+    }
+
+    # Where `key`'s probe sequence begins.
+    #
+    # The fold of the sign is the whole reason this is a function rather than one
+    # expression written three times: `%` in ducktape keeps the sign of its left
+    # operand, so `(0 - 17) % 5` is `-2` and a hash — which spans all of `Int`,
+    # negatives included — cannot index an array directly. Getting this wrong is
+    # an out-of-bounds read rather than a bad distribution, so it lives in one
+    # place and every probe starts here.
+    fun start(self, key: K) -> Int {
+        var i = hash_of(key) % self.slots.len();
+        if i < 0 {
+            i += self.slots.len();
+        }
+        return i;
+    }
+
+    # Make sure one more entry fits, rehashing if it would not.
+    #
+    # The load factor is 3/4 and it is measured against `used`, so tombstones
+    # count toward triggering a rehash even though they are not entries — that is
+    # what stops a workload of insert-then-remove from filling the table with
+    # walls nothing ever clears. The *target* size is computed from `live`, so
+    # such a workload rehashes at the same capacity rather than doubling: the
+    # cleanup and the growth are the same operation, told apart by which counter
+    # they read.
+    fun reserve_one(self) {
+        if (self.used + 1) * 4 <= self.slots.len() * 3 {
+            return;
+        }
+        self.rehash(next_prime(self.live * 2 + 1));
+    }
+
+    # Rebuild into a table of `cap` slots, dropping every tombstone on the way.
+    #
+    # Re-inserting through `insert` cannot recurse into another rehash: `cap` is
+    # at least `2 * live + 1`, which keeps every one of the `live` inserts under
+    # the 3/4 load, and the minimum capacity of 7 covers the empty case.
+    fun rehash(self, cap: Int) {
+        var old = self.slots;
+        var fresh: [Slot<K, V>] = empty_slots(cap);
+        self.slots = fresh;
+        self.live = 0;
+        self.used = 0;
+        var i = 0;
+        while i < old.len() {
+            match old[i] {
+                Slot::Full(k, v) => {
+                    self.insert(k, v);
+                },
+                _ => {},
+            }
+            i += 1;
+        }
+    }
+
+    # Associate `value` with `key`, answering the value that was there before.
+    #
+    # Insertion prefers the *first tombstone* seen over the empty slot that ended
+    # the probe, which is what keeps a table from lengthening its own probe
+    # sequences: reusing a wall shortens the walk for every later lookup of this
+    # key. It has to keep walking to the empty slot first, though — stopping at
+    # the tombstone would risk inserting a duplicate of a key sitting further
+    # along.
+    fun insert(self, key: K, value: V) -> Option<V> {
+        self.reserve_one();
+        var i = self.start(key);
+        var tomb = 0 - 1;
+        while true {
+            match self.slots[i] {
+                Slot::Empty => {
+                    if tomb < 0 {
+                        self.slots[i] = Slot::Full(key, value);
+                        self.used += 1;
+                    } else {
+                        # the tombstone was already counted in `used`
+                        self.slots[tomb] = Slot::Full(key, value);
+                    }
+                    self.live += 1;
+                    return Option::None;
+                },
+                Slot::Tomb => {
+                    if tomb < 0 {
+                        tomb = i;
+                    }
+                },
+                Slot::Full(k, v) => {
+                    if k == key {
+                        self.slots[i] = Slot::Full(key, value);
+                        return Option::Some(v);
+                    }
+                },
+            }
+            i += 1;
+            if i == self.slots.len() {
+                i = 0;
+            }
+        }
+        # The probe always meets an `Empty`, because `reserve_one` has just
+        # guaranteed a free slot — so this is unreachable, and only written
+        # because the checker reads `while true` as a loop like any other.
+        return Option::None;
+    }
+
+    # The value filed under `key`, or `None`.
+    #
+    # The walk stops at the first `Empty` and steps over every `Tomb`, which is
+    # exactly the asymmetry that makes removal need tombstones at all.
+    fun get(self, key: K) -> Option<V> {
+        var i = self.start(key);
+        var steps = 0;
+        while steps < self.slots.len() {
+            match self.slots[i] {
+                Slot::Empty => {
+                    return Option::None;
+                },
+                Slot::Tomb => {},
+                Slot::Full(k, v) => {
+                    if k == key {
+                        return Option::Some(v);
+                    }
+                },
+            }
+            i += 1;
+            if i == self.slots.len() {
+                i = 0;
+            }
+            steps += 1;
+        }
+        return Option::None;
+    }
+
+    fun contains_key(self, key: K) -> Bool {
+        match self.get(key) {
+            Option::Some(v) => {
+                return true;
+            },
+            Option::None => {
+                return false;
+            },
+        }
+    }
+
+    # Take `key` out, answering the value it held.
+    #
+    # The slot becomes a `Tomb` rather than `Empty`: some other key may have
+    # walked past this position on its way in, and emptying the slot would hide
+    # it from every future probe.
+    fun remove(self, key: K) -> Option<V> {
+        var i = self.start(key);
+        var steps = 0;
+        while steps < self.slots.len() {
+            match self.slots[i] {
+                Slot::Empty => {
+                    return Option::None;
+                },
+                Slot::Tomb => {},
+                Slot::Full(k, v) => {
+                    if k == key {
+                        self.slots[i] = Slot::Tomb;
+                        self.live -= 1;
+                        return Option::Some(v);
+                    }
+                },
+            }
+            i += 1;
+            if i == self.slots.len() {
+                i = 0;
+            }
+            steps += 1;
+        }
+        return Option::None;
+    }
+
+    # Drop every entry. The map is the same object afterwards, so anything else
+    # holding it sees the emptying too — and the slot array is replaced rather
+    # than walked, so the tombstones go with the entries.
+    fun clear(self) {
+        var fresh: [Slot<K, V>] = empty_slots(7);
+        self.slots = fresh;
+        self.live = 0;
+        self.used = 0;
+    }
+
+    # Walk the entries as `(key, value)` pairs, so the `std::iter` combinators
+    # apply: `m.iter().map(f)`, `m.iter().count()`.
+    #
+    # **The order is unspecified** — it is slot order, which is hash order, and
+    # it changes when the table rehashes. A program that needs an order has to
+    # impose one (`std::sort` over `collect()`), and a test that prints a map has
+    # to do the same or it is testing the hash function.
+    #
+    # The iterator holds the *current* slot array, not the map, so an insert that
+    # rehashes during a walk leaves the walk on the old array rather than
+    # corrupting it. That is the same choice `CharIter` makes and the opposite of
+    # `ArrayIter`'s, and it is forced here rather than chosen: a rehash moves
+    # every entry, so an index into the old table means nothing in the new one.
+    fun iter(self) -> MapIter<K, V> {
+        return MapIter { slots: self.slots, at: 0 };
+    }
+
+    # The keys, in the same unspecified order.
+    fun keys(self) -> [K] {
+        var out: [K] = [];
+        var it = self.iter();
+        for pair in it {
+            out.push(pair.0);
+        }
+        return out;
+    }
+
+    fun values(self) -> [V] {
+        var out: [V] = [];
+        var it = self.iter();
+        for pair in it {
+            out.push(pair.1);
+        }
+        return out;
+    }
+}
+
+pub struct MapIter<K: Hash, V> {
+    slots: [Slot<K, V>],
+    at: Int,
+}
+
+impl<K: Hash, V> Iterator for MapIter<K, V> {
+    type Item = (K, V);
+
+    fun next(self) -> Option<(K, V)> {
+        while self.at < self.slots.len() {
+            var slot = self.slots[self.at];
+            self.at += 1;
+            match slot {
+                Slot::Full(k, v) => {
+                    return Option::Some((k, v));
+                },
+                _ => {},
+            }
+        }
+        return Option::None;
+    }
+}
+
+# ── the set ───────────────────────────────────────────────────────────────────
+
+# A `HashSet<T>` is a `HashMap<T, Bool>` whose values are never read, and that
+# is a deliberate trade: it wastes one `Bool` per entry to avoid a second
+# open-addressing implementation that would differ from the first only in what a
+# slot carries. The language has no way to be generic over "a payload or none",
+# so the choice is a wasted field or a duplicated algorithm, and the field is far
+# cheaper to keep correct.
+pub struct HashSet<T: Hash> {
+    map: HashMap<T, Bool>,
+}
+
+impl<T: Hash> HashSet<T> {
+    fun new() -> HashSet<T> {
+        var map: HashMap<T, Bool> = HashMap::new();
+        return HashSet { map: map };
+    }
+
+    # Add `value`, answering whether it was *newly* added — `false` means it was
+    # already there. That is the answer a set can give and a map cannot, since
+    # the map's `insert` hands back the displaced value instead.
+    fun insert(self, value: T) -> Bool {
+        match self.map.insert(value, true) {
+            Option::Some(v) => {
+                return false;
+            },
+            Option::None => {
+                return true;
+            },
+        }
+    }
+
+    fun contains(self, value: T) -> Bool {
+        return self.map.contains_key(value);
+    }
+
+    # Take `value` out, answering whether it was there.
+    fun remove(self, value: T) -> Bool {
+        match self.map.remove(value) {
+            Option::Some(v) => {
+                return true;
+            },
+            Option::None => {
+                return false;
+            },
+        }
+    }
+
+    fun len(self) -> Int {
+        return self.map.len();
+    }
+
+    fun is_empty(self) -> Bool {
+        return self.map.is_empty();
+    }
+
+    fun clear(self) {
+        self.map.clear();
+    }
+
+    # The members, in the map's unspecified order.
+    fun to_array(self) -> [T] {
+        return self.map.keys();
+    }
+}

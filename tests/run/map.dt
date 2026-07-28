@@ -1,0 +1,132 @@
+# `std::map`'s API, pinned.
+#
+# What this file pins is what each call *answers*. What it deliberately does not
+# pin is iteration order — that is slot order, which is hash order, and printing
+# it would be testing the hash function rather than the map. So everything that
+# walks the map sorts first, which is also the answer to "how do I print one".
+#
+# The last block is the point of the milestone: `Point` is a user type used as a
+# key, and it implements `Hash` and nothing else. Collision resolution compares
+# keys with `==`, which in ducktape is a structural primitive with no trait
+# behind it, so a map needs no `Eq` from its key and never asks for one.
+#> empty: 0 true
+#> len: 3
+#> get: Some(2) None
+#> insert over: Some(2) then Some(22)
+#> contains: true false
+#> remove: Some(1), again None, len 2
+#> keys: [three, two]
+#> values: [3, 22]
+#> cleared: 0 true, get None
+#> grown: 300 Some(22500) Some(89401)
+#> tombstoned: 150 Some(22801) None
+#> reinserted: 151 Some(0)
+#> set: true false 1 true
+#> set remove: true false 0
+#> set members: [1, 2, 3]
+#> point: Some(9) None
+#> point moved: Some(9)
+use std::io::print;
+use std::map::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
+use std::sort;
+use std::array;
+
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+# The whole of what a key has to supply: which parts of me matter. The combining
+# is `Hasher`'s business, and equality is the language's.
+impl Hash for Point {
+    fun hash(self, h: Hasher) {
+        self.x.hash(h);
+        self.y.hash(h);
+    }
+}
+
+fun main() {
+    var one = "one";
+    var two = "two";
+    var three = "three";
+    var missing = "nope";
+
+    var m: HashMap<String, Int> = HashMap::new();
+    print("empty: {m.len()} {m.is_empty()}");
+
+    m.insert(one, 1);
+    m.insert(two, 2);
+    m.insert(three, 3);
+    print("len: {m.len()}");
+    print("get: {m.get(two)} {m.get(missing)}");
+
+    # insert answers the value it displaced, so a caller can tell a replacement
+    # from a fresh entry without looking first
+    print("insert over: {m.insert(two, 22)} then {m.get(two)}");
+    print("contains: {m.contains_key(one)} {m.contains_key(missing)}");
+    print("remove: {m.remove(one)}, again {m.remove(one)}, len {m.len()}");
+
+    var ks = m.keys();
+    ks.sort();
+    print("keys: {ks}");
+    var vs = m.values();
+    vs.sort();
+    print("values: {vs}");
+
+    m.clear();
+    print("cleared: {m.len()} {m.is_empty()}, get {m.get(two)}");
+
+    # ── growth ────────────────────────────────────────────────────────────────
+    #
+    # 300 entries into a table that starts with 7 slots, so this walks the whole
+    # rehash path several times over. Every key must still be findable
+    # afterwards, which is the property a rehash is easiest to break.
+    var big: HashMap<Int, Int> = HashMap::new();
+    var i = 0;
+    while i < 300 {
+        big.insert(i, i * i);
+        i += 1;
+    }
+    print("grown: {big.len()} {big.get(150)} {big.get(299)}");
+
+    # ── tombstones ────────────────────────────────────────────────────────────
+    #
+    # Removing every even key leaves 150 walls behind. The odd keys have to
+    # survive them: a probe that treated a removed slot as empty would stop
+    # short of any key that had walked past it on the way in.
+    i = 0;
+    while i < 300 {
+        if i % 2 == 0 {
+            big.remove(i);
+        }
+        i += 1;
+    }
+    print("tombstoned: {big.len()} {big.get(151)} {big.get(150)}");
+
+    # and a tombstone must be reusable, not merely survivable
+    big.insert(0, 0);
+    print("reinserted: {big.len()} {big.get(0)}");
+
+    # ── the set ───────────────────────────────────────────────────────────────
+    var s: HashSet<Int> = HashSet::new();
+    print("set: {s.insert(4)} {s.insert(4)} {s.len()} {s.contains(4)}");
+    print("set remove: {s.remove(4)} {s.remove(4)} {s.len()}");
+    s.insert(3);
+    s.insert(1);
+    s.insert(2);
+    s.insert(1);
+    var members = s.to_array();
+    members.sort();
+    print("set members: {members}");
+
+    # ── a user type as a key ──────────────────────────────────────────────────
+    var pm: HashMap<Point, Int> = HashMap::new();
+    pm.insert(Point { x: 1, y: 2 }, 9);
+    print("point: {pm.get(Point { x: 1, y: 2 })} {pm.get(Point { x: 2, y: 1 })}");
+
+    # a key equal by structure is the same key even though it is a different
+    # object — which is what makes `==` rather than identity the right question
+    var p = Point { x: 1, y: 2 };
+    print("point moved: {pm.get(p)}");
+}

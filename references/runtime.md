@@ -1061,6 +1061,26 @@ than a wrong call later, which is why the image needs no separate registry
 hash. An `@intrinsic` never appears in an image at all — its opcode is already
 in the emitted code.
 
+**`hash_mix` / `hash_string`** (milestone 63) are the tier's clearest case, in
+that what puts them here is not cost but *expressibility*. The language has no
+bitwise operator at all — no `^`, no `&`, no shift — so a mixing function is not
+slow to write in ducktape, it cannot be written. `hash_mix` folds one Int into a
+running state: a splitmix64 finalisation of the incoming value first, so that
+the low-entropy keys a program actually uses (0, 1, 2) still spread across all
+64 bits, then FNV-1a's prime to carry the accumulation and a last shift-xor to
+move the high bits down where `%` will read them. Every multiply relies on
+wrapping, done in `uint64_t` so it is defined rather than merely what the
+hardware does; the `Int` the language hands back wraps to match.
+
+`hash_string` allocates nothing and computes nothing: it returns
+`ObjString.hash`, which `heap_intern` already filled in to find the string's
+bucket. So the one type whose hash would otherwise be a walk over its bytes is
+the one type that costs a field read — and because interning makes two equal
+Strings one pointer, the value is consistent with `==` for exactly the reason
+the intern table already depends on. Both take Ints and Strings and return an
+Int, so neither touches the heap or the collector, and `std::map`'s whole
+open-addressed table is ordinary ducktape written on top of them.
+
 Porting `print` to this deleted `OP_PRINT`, `cg_names_builtin_print`,
 `tc_register_builtins`, the "using a builtin as a value" diagnostic, and the
 `std::io` no-op in `mod_collect_imports`/`tc_link_imports`. `print` is now

@@ -169,6 +169,12 @@ postfix        = primary postfixOp* ;
 postfixOp      = "(" ( expr ( "," expr )* )? ")"        (* call *)
                | "." IDENT ( "<" type ( "," type )* ">" )?
                  ( "(" ( expr ( "," expr )* )? ")" )?   (* method / field *)
+                 (* the type-argument list is ambiguous with `comparison`:
+                    `a.b < c` could open one. Type arguments are only legal
+                    immediately before their call, so the parser scans ahead
+                    for the matching ">" and takes this branch only if a "("
+                    follows it; otherwise the "<" is the operator. The one
+                    shape that fools it is `a.b < c > (d)`. *)
                | "." INT                                (* tuple access *)
                | "[" expr "]"                           (* index *)
                | "as" type                              (* cast *)

@@ -127,6 +127,64 @@ static Value n_fmt_float(NativeCtx *ctx, Value *args, int argc) {
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
+// std::hash
+// ───────────────────────────────────────────────────────────────────────────────
+
+// These two are the whole of what hashing cannot say about itself in ducktape,
+// and the reason is unusually sharp: **the language has no bitwise operator at
+// all.** No `^`, no `&`, no shift — `^` is taken by the centre-align token in a
+// format spec, `|` by closure syntax. Every mixing function worth the name is
+// built out of exactly those, so a hash is not "slow to write in ducktape", it
+// is *unwritable*. What a program could still express is `h * 31 + x`, the
+// multiply-add mixer — and that is precisely the weak one, whose high bits
+// never reach the low bits the table indexes with.
+//
+// So the tier split here is not an optimisation. It is the same argument
+// `std::strbuf` makes about interning: put the un-expressible part behind one
+// object, and let the .dt own everything above it. `Hasher` is that object, and
+// because the mixing lives in one place rather than in every `impl Hash`, it is
+// also the only place that has to be got right.
+
+// Fold `value` into `state`, one round. `value` is finalised through a
+// splitmix64 step first so that a low-entropy Int (0, 1, 2 — the commonest keys
+// there are) still lands spread across all 64 bits, then FNV-1a's prime carries
+// the accumulation and a last shift-xor moves the high bits down. That last
+// step is what `%` needs: an unfinalised FNV state has its best entropy at the
+// top, and the reduction to a slot index reads the bottom.
+//
+// Wrapping is intentional and every multiply here relies on it — unsigned in C
+// so it is defined rather than merely what the hardware does; the Int the
+// language hands back wraps the same way (`2^62 * 4 == 0`).
+static Value n_hash_mix(NativeCtx *ctx, Value *args, int argc) {
+  (void)ctx;
+  (void)argc;
+  uint64_t h = (uint64_t)args[0].as.i;
+  uint64_t v = (uint64_t)args[1].as.i;
+  v *= 0xff51afd7ed558ccdULL;
+  v ^= v >> 33;
+  h ^= v;
+  h *= 0x100000001b3ULL; // FNV-1a's 64-bit prime
+  h ^= h >> 29;
+  return val_int((int64_t)h);
+}
+
+// A String's hash is a *field read*: the heap hashed these bytes already when
+// it interned them, and kept the result to find the string's bucket with. So
+// the one type whose hash would otherwise be a walk over its bytes is the one
+// type that costs nothing — and `impl Hash for String` is the cheapest impl in
+// std rather than the dearest.
+//
+// It is a `uint32_t` widened into an Int, so it is always non-negative here;
+// the sign only appears once `hash_mix` has folded it. The value is FNV-1a over
+// the bytes, so equal Strings hash equal because they are the same pointer, and
+// unequal ones by the same argument the intern table already relies on.
+static Value n_hash_string(NativeCtx *ctx, Value *args, int argc) {
+  (void)ctx;
+  (void)argc;
+  return val_int((int64_t)val_as_string(args[0])->hash);
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
 // std::panic
 // ───────────────────────────────────────────────────────────────────────────────
 
@@ -398,6 +456,8 @@ static const NativeEntry natives[] = {
     {"char_code", n_char_code},
     {"char_from_code", n_char_from_code},
     {"fmt_float", n_fmt_float},
+    {"hash_mix", n_hash_mix},
+    {"hash_string", n_hash_string},
     {"io_print", n_io_print},
     {"panic_abort", n_panic_abort},
     {"strbuf_build", n_strbuf_build},

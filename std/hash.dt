@@ -1,0 +1,213 @@
+# std::hash — turning a value into an Int a table can index with.
+#
+# The trait here is shaped differently from every other trait in std, and the
+# reason is a gap in the language rather than a preference. **ducktape has no
+# bitwise operator at all**: `^` is the centre-align token in a format spec,
+# `|` opens a closure, and `&` and the shifts do not exist. Every mixing
+# function worth using is built out of exactly those, so a hash function is not
+# merely awkward to write in ducktape — it is unwritable. The one mixer the
+# language *can* express is `h * 31 + x`, and that is the weak one: multiply and
+# add both carry information upward, so the high bits never reach the low bits
+# that `%` reads to pick a slot.
+#
+# That is what decides the trait's shape. A `fun hash(self) -> Int` would make
+# every implementor supply a mixer, which means every implementor writing the
+# bad one. So `Hash` **writes into a `Hasher`** instead, and an impl only says
+# *which parts of me matter*, never how they are combined. The combining lives
+# in one object, that object reaches C for the two steps ducktape cannot take,
+# and being one place is also what makes it the only place that has to be right.
+#
+# `Hasher` is to `Hash` exactly what `StringBuf` is to building text: the object
+# that exists because the work below it cannot be said up here.
+#
+# Deliberately not preluded — a program that never keys a map never needs the
+# name. `std::map` imports it, so `use std::map;` is enough to get the impls
+# below by the usual transitive visibility.
+
+# `std::char` for `c.code()`, which is the whole of `impl Hash for Char`. It is
+# an impl-poor module — one inherent `impl Char` and nothing else — so the
+# transitive impl visibility this hands every dependent costs about as little as
+# an import can. `std::string` is deliberately *not* imported: a String's hash
+# comes from the native below, which needs no method on the type.
+use std::char;
+
+# `len` for `impl<T: Hash> Hash for [T]`, spelled as an intrinsic rather than
+# reached through `std::array` — the same move `std::cmp` makes and for the same
+# reason. An intrinsic is a spelling for an opcode, not a definition owned by a
+# module, so naming `OP_LEN` a second time depends on nothing and cannot close a
+# cycle in the import graph.
+@intrinsic("array_len")
+fun len<T>(xs: [T]) -> Int;
+
+# ── the two steps ducktape cannot take ────────────────────────────────────────
+
+# Fold `value` into `state`. XOR and the shifts inside are the entire reason
+# this is C rather than the four lines it looks like.
+@native("hash_mix")
+fun mix(state: Int, value: Int) -> Int;
+
+# A String's hash, which the heap computed when it interned the bytes and kept
+# in order to find the string's bucket. So this is a **field read**, and the one
+# type whose hash would otherwise be a walk over its bytes is the one type here
+# that costs nothing.
+@native("hash_string")
+fun string_hash(s: String) -> Int;
+
+# ── the accumulator ───────────────────────────────────────────────────────────
+
+# The running state of one hash. A `Hasher` is handed *to* a value rather than
+# returned from it, which works for the same reason `xs.push(v)` needs no way to
+# spell "by reference": a struct is a heap object behind a handle, so a callee
+# assigning to `self.state` is assigning to the caller's `Hasher`. Milestone 43
+# made the field mutable; nothing else was needed.
+pub struct Hasher {
+    state: Int,
+}
+
+impl Hasher {
+    # A fresh hasher. The seed is 0, so the hash of *nothing written* is 0 —
+    # unremarkable, and not worth a magic constant to avoid: FNV's real offset
+    # basis is 14695981039346656037, which is past `Int`'s maximum and has no
+    # spelling here anyway (no hex literals, and the decimal does not fit). The
+    # mixing does not need a seed to avalanche, because `mix` finalises each
+    # incoming value before folding it.
+    fun new() -> Hasher {
+        return Hasher { state: 0 };
+    }
+
+    # Fold one Int in. Every other `write_*` is written in terms of this one, so
+    # `mix` is called from exactly one place per value kind.
+    fun write_int(self, n: Int) {
+        self.state = mix(self.state, n);
+    }
+
+    fun write_string(self, s: String) {
+        self.state = mix(self.state, string_hash(s));
+    }
+
+    fun write_bool(self, b: Bool) {
+        if b {
+            self.write_int(1);
+        } else {
+            self.write_int(0);
+        }
+    }
+
+    fun write_char(self, c: Char) {
+        self.write_int(c.code());
+    }
+
+    # The accumulated hash. Non-destructive — a `Hasher` may be written to again
+    # afterwards, and the next `finish` answers for everything written so far.
+    #
+    # The result spans the whole of `Int`, **negative values included**, which is
+    # a caller's problem and not a bug: `%` in ducktape keeps the sign of its
+    # left operand (`(0 - 17) % 5` is `-2`), so a slot index needs the sign
+    # folded away rather than assumed absent. `std::map` does that in one place.
+    fun finish(self) -> Int {
+        return self.state;
+    }
+}
+
+# ── the trait ─────────────────────────────────────────────────────────────────
+
+pub trait Hash {
+    # Write whatever of `self` distinguishes it into `h`.
+    #
+    # The contract is one-sided, and unusually easy to keep: **values that are
+    # `==` must write the same bytes.** In a language where `==` is a structural
+    # primitive rather than a trait, there is no custom equality that could
+    # disagree with a hash, so any impl reading only the value's own contents
+    # satisfies this automatically. The way to break it is to write something
+    # that is not part of the value — a counter, a clock — and there is no
+    # reason to.
+    #
+    # Object-safe as it happens: `Hasher` is a concrete type and `Self` appears
+    # only as the receiver, so `dyn Hash` is legal. Nothing needs it.
+    fun hash(self, h: Hasher);
+}
+
+impl Hash for Int {
+    # An Int *is* its own bit pattern; `mix` does the spreading, so there is
+    # nothing for this impl to add. That is the shape every impl below has —
+    # naming the parts, never combining them.
+    fun hash(self, h: Hasher) {
+        h.write_int(self);
+    }
+}
+
+impl Hash for String {
+    fun hash(self, h: Hasher) {
+        h.write_string(self);
+    }
+}
+
+impl Hash for Bool {
+    fun hash(self, h: Hasher) {
+        h.write_bool(self);
+    }
+}
+
+impl Hash for Char {
+    fun hash(self, h: Hasher) {
+        h.write_char(self);
+    }
+}
+
+# **There is deliberately no `impl Hash for Float.`** Two reasons, and the first
+# is fatal on its own: `NaN != NaN`, so a NaN key could never be found again in
+# any table that resolves collisions with `==` — it would not match itself. The
+# second is that hashing a Float honestly means reading its bits, and the only
+# Int a Float can reach here is `f as Int`, which truncates: every value in
+# `[1.0, 2.0)` would hash alike. That is *permitted* (equal values still hash
+# equal, so the contract holds) but it makes a Float-keyed table a linear scan.
+#
+# This is the same NaN wart `impl Ord for Float` had to rule on, and it is
+# answered the other way round for a good reason: an order has to put NaN
+# *somewhere*, so `Ord` picked a place. A table does not have to accept every
+# key, so `Hash` declines instead. A program that really wants Float keys can
+# say what it means by wrapping one in a struct of its own.
+
+# ── the containers ────────────────────────────────────────────────────────────
+#
+# Beside the trait, where `std::cmp` and `std::fmt` also keep the impls for `[T]`
+# and `(A, B)`: an array and a tuple have no module of their own, and the trait's
+# module is the nearest thing to one.
+
+impl<T: Hash> Hash for [T] {
+    fun hash(self, h: Hasher) {
+        # The length goes in **first**, and it is not decoration. Writing only
+        # the elements would make `[[1], [2]]` and `[[1, 2]]` write the identical
+        # sequence `1, 2` into the same hasher, and the same for any other
+        # regrouping — a nested structure would hash as though it were flat.
+        # Writing the length at each level is what makes the shape part of the
+        # hash, so the two disagree the way `==` already does.
+        var n = len(self);
+        h.write_int(n);
+        var i = 0;
+        while i < n {
+            self[i].hash(h);
+            i += 1;
+        }
+    }
+}
+
+# Arity is per-impl: a tuple's length is part of its type and nothing here can be
+# generic over it, so a 3-tuple needs its own impl — the limit `std::cmp` and
+# `std::fmt` both record. A tuple's own arity is fixed, so unlike an array it has
+# no length to write.
+impl<A: Hash, B: Hash> Hash for (A, B) {
+    fun hash(self, h: Hasher) {
+        self.0.hash(h);
+        self.1.hash(h);
+    }
+}
+
+# The whole of `Hash` in one call, for a caller that wants a number rather than
+# to feed an accumulator — which is every caller that is not itself an impl.
+# `std::map` indexes with this and nothing else.
+pub fun hash_of<T: Hash>(value: T) -> Int {
+    var h = Hasher::new();
+    value.hash(h);
+    return h.finish();
+}

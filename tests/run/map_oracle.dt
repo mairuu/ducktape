@@ -1,0 +1,183 @@
+# The map checked against an oracle rather than against a written-down answer.
+#
+# `map.dt` next door pins the API — what each call answers on a table whose
+# history is short enough to reason about. What it cannot pin is the *state
+# machine*: an open-addressed table's bugs live in the interaction between
+# probing, tombstones and rehashing, and those only show up after a few thousand
+# operations have interleaved insert and remove on colliding keys. A probe that
+# stops at a tombstone, an insert that reuses one it should have walked past, a
+# rehash that drops the entry it was moving — none of them is reachable by a
+# test that writes its answers down in advance.
+#
+# So this runs a pseudo-random workload against a linear-scan association list
+# written out below: obviously correct, independent of everything `std::map`
+# does, and answering the same three questions. Every answer is compared, and
+# the count of disagreements is the whole output.
+#
+# The key range is deliberately narrow (0..40) against thousands of operations,
+# so keys repeat, collide, die and come back — which is the point. A wide range
+# would mostly test that distinct things stay distinct.
+#> operations: 4000
+#> mismatches: 0
+#> final agrees: true
+use std::io::print;
+use std::map::HashMap;
+use std::array;
+
+# a deterministic stream, so a failure is reproducible rather than a story
+fun lcg(seed: Int) -> Int {
+    return (seed * 1103515245 + 12345) % 2147483648;
+}
+
+# **Read the high bits, never the low ones.** An LCG with a power-of-two modulus
+# has famously degenerate low bits — bit 0 alternates every step, bit 1 has
+# period 4 — so `seed % 4` is not a choice in 4, it is a two-cycle, and
+# `seed % 40` only ever yields odd numbers. Written the naive way this test drew
+# `get` zero times out of four thousand and touched half the key range, which is
+# to say it was not testing the map at all; a deliberately broken `remove` still
+# passed it. Dividing first throws the bad bits away, and division is how a
+# language with no shift operator spells that.
+fun pick(seed: Int, n: Int) -> Int {
+    var v = (seed / 2048) % n;
+    if v < 0 {
+        v += n;
+    }
+    return v;
+}
+
+# ── the oracle ────────────────────────────────────────────────────────────────
+#
+# Parallel arrays and a linear scan. `present` is what makes removal honest
+# without needing to compact: an entry goes absent and stays where it is, so a
+# key that is removed and re-inserted may occupy two slots, of which at most one
+# is ever present. The scan only ever considers present entries, so that costs
+# memory and nothing else.
+
+fun o_find(keys: [Int], present: [Bool], k: Int) -> Int {
+    var i = 0;
+    while i < keys.len() {
+        if present[i] and keys[i] == k {
+            return i;
+        }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+fun o_len(present: [Bool]) -> Int {
+    var n = 0;
+    var i = 0;
+    while i < present.len() {
+        if present[i] {
+            n += 1;
+        }
+        i += 1;
+    }
+    return n;
+}
+
+# `Option<Int>` flattened to an Int, so the two sides can be compared with one
+# `==`. -1 never occurs as a value in this workload, every value being a square.
+fun flatten(o: Option<Int>) -> Int {
+    match o {
+        Option::Some(v) => {
+            return v;
+        },
+        Option::None => {
+            return 0 - 1;
+        },
+    }
+}
+
+fun main() {
+    var m: HashMap<Int, Int> = HashMap::new();
+    var keys: [Int] = [];
+    var vals: [Int] = [];
+    var present: [Bool] = [];
+
+    var seed = 20260728;
+    var ops = 4000;
+    var mismatches = 0;
+
+    var step = 0;
+    while step < ops {
+        seed = lcg(seed);
+        var k = pick(seed, 40);
+        seed = lcg(seed);
+        var choice = pick(seed, 4);
+
+        if choice == 0 {
+            # remove: both sides answer what was there
+            var got = flatten(m.remove(k));
+            var at = o_find(keys, present, k);
+            var want = 0 - 1;
+            if at >= 0 {
+                want = vals[at];
+                present[at] = false;
+            }
+            if got != want {
+                mismatches += 1;
+            }
+        } else if choice == 1 {
+            # get: no state change on either side
+            var got = flatten(m.get(k));
+            var at = o_find(keys, present, k);
+            var want = 0 - 1;
+            if at >= 0 {
+                want = vals[at];
+            }
+            if got != want {
+                mismatches += 1;
+            }
+        } else {
+            # insert, twice as likely as either other op so the table grows:
+            # both sides answer the value they displaced
+            var v = k * k + step;
+            var got = flatten(m.insert(k, v));
+            var at = o_find(keys, present, k);
+            var want = 0 - 1;
+            if at >= 0 {
+                want = vals[at];
+                vals[at] = v;
+            } else {
+                keys.push(k);
+                vals.push(v);
+                present.push(true);
+            }
+            if got != want {
+                mismatches += 1;
+            }
+        }
+
+        # the population, every single round — a rehash that loses or duplicates
+        # an entry shows up here one operation after it happens
+        if m.len() != o_len(present) {
+            mismatches += 1;
+        }
+        step += 1;
+    }
+
+    print("operations: {ops}");
+    print("mismatches: {mismatches}");
+
+    # and a final sweep over the whole key range, including the keys that are
+    # absent: `get` has to answer `None` for those rather than merely not
+    # answering wrongly for the ones that are present
+    var agrees = true;
+    var k = 0;
+    while k < 40 {
+        var at = o_find(keys, present, k);
+        var want = 0 - 1;
+        if at >= 0 {
+            want = vals[at];
+        }
+        if flatten(m.get(k)) != want {
+            agrees = false;
+        }
+        if m.contains_key(k) != (at >= 0) {
+            agrees = false;
+        }
+        k += 1;
+    }
+    print("final agrees: {agrees}");
+}

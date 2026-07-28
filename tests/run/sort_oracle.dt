@@ -20,6 +20,21 @@ fun lcg(seed: Int) -> Int {
     return (seed * 1103515245 + 12345) % 2147483648;
 }
 
+# **Read the high bits, never the low ones.** An LCG with a power-of-two modulus
+# has degenerate low bits — bit 0 alternates every step, bit 1 has period 4 — so
+# a bare `seed % 20` draws from a far smaller and more regular set than "a
+# pseudo-random array with duplicates" suggests. Dividing first throws those
+# bits away; division is how a language with no shift operator spells it. The
+# same trap made `map_oracle.dt` next door blind to a deliberately broken
+# `remove`, which is what prompted fixing it here too.
+fun pick(seed: Int, n: Int) -> Int {
+    var v = (seed / 2048) % n;
+    if v < 0 {
+        v += n;
+    }
+    return v;
+}
+
 fun insertion(xs: [Int]) {
     var i = 1;
     while i < xs.len() {
@@ -45,7 +60,7 @@ fun main() {
             seed = lcg(seed);
             # a small range on purpose: duplicates are where stability and the
             # merge's tie-breaking are decided
-            xs.push(seed % 20);
+            xs.push(pick(seed, 20));
             i = i + 1;
         }
         var oracle = xs.iter().collect();

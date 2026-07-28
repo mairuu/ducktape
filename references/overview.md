@@ -21,7 +21,7 @@ names a file, that file is the source of truth. Historical design notes live in
 | `tests/fail/` | programs that must fail; first line `#! expect: <substring>` asserts on stderr |
 | `tests/run/` | programs executed with `--run`; `#> line` comments assert on stdout |
 | `tests/fail_run/` | like `tests/fail`, but invoked with `--run` — for programs that type-check yet the VM rejects |
-| `std/` | the standard library, written in ducktape; embedded into the binary at build time. The bodies that cannot be (`print`, array/string/char primitives) are bodyless declarations bound to `src/native.c` |
+| `std/` | the standard library, written in ducktape; embedded into the binary at build time. The bodies that cannot be (`print`, array/string/char primitives, hash mixing) are bodyless declarations bound to `src/native.c` |
 | `scripts/run_tests.sh` | the test runner (invoked by `make test`) |
 | `scripts/embed_std.sh` | mirrors `std/*.dt` into `build/std_data.h` for `src/std_src.c` |
 | `editors/vscode/` | a VS Code extension: TextMate grammar + language config for `.dt` (highlighting only, no language server) |
