@@ -1949,8 +1949,19 @@ v.lower_bound(25);                  # 3 — where 25 would be inserted
   where they are. This is also why the absence of an `Eq` trait costs the module
   nothing: the notion of equality a search needs was already written as `Ord`.
 
-Nothing in `std::sort` is a native and nothing in it needed a language change;
-it is a module of its own rather than more of `std::array` for `std::text`'s
+`sort_by` is a **native**, and the only one that runs the program's own code:
+its comparator is a value the caller wrote, so each comparison is a call back
+out of C into ducktape (`runtime.md` → "Calling ducktape from a native"). The
+visible consequences are two. A comparator that fails — a panic, a bad index —
+fails the sort, reported where it happened. And a comparator that *resizes* the
+array being sorted is refused: the native orders a snapshot and writes it back
+in one go, so finding the length changed it declines rather than scatter an old
+sequence over a new array, leaving the array exactly as the comparator made it
+(`tests/fail_run/sort_resize.dt`). Reading that array, or sorting another one,
+is fine.
+
+The `Ord` half above it needed no language change at all; `std::sort` is a
+module of its own rather than more of `std::array` for `std::text`'s
 reason applied one type over — `std::array` is what an array cannot say about
 itself, while an order is a policy written on top. What makes the module
 possible is a decision `std::cmp` made earlier: it reaches an array's length

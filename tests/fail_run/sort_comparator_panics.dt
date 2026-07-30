@@ -1,0 +1,17 @@
+#! expect: cannot order these
+# A comparator is ordinary ducktape, so it can fail like any other call — and
+# when it does, the failure is *its* own: reported where it happened, with the
+# frames that were live, and the native that asked the question adds nothing.
+#
+# That is what `ctx->unwinding` is for on the C side: the sort returns
+# immediately, having dropped its scratch roots, and the VM unwinds without
+# describing the same failure a second time from the outside.
+use std::io::print;
+use std::sort;
+use std::panic::panic;
+
+fun main() {
+    var xs = [3, 1, 2];
+    xs.sort_by(|a, b| => panic("cannot order these"));
+    print(xs);
+}

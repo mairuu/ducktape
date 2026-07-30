@@ -1,0 +1,21 @@
+#! expect: the array changed length while it was being sorted
+# `sort_by` is a native that calls the program's comparator, so the comparator
+# can reach the array being sorted — and a `push` is the one thing it can do
+# that the sort cannot absorb: it holds a snapshot of a sequence that has just
+# stopped existing.
+#
+# Refused rather than half-honoured. The write-back happens once, at the end,
+# and finding the length changed it does not happen at all — so the array is
+# left exactly as the comparator made it, never a mixture of the two.
+use std::io::print;
+use std::sort;
+use std::array;
+
+fun main() {
+    var xs = [3, 1, 2, 4];
+    xs.sort_by(|a, b| => {
+        xs.push(a);
+        return a - b;
+    });
+    print(xs);
+}

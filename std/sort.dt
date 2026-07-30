@@ -43,84 +43,24 @@ impl<T> [T] {
     # quadratic time on the already-sorted input a program is most likely to
     # hand it). The price is one array's worth of scratch space, and in a
     # language where `collect` already copies, that is a price with a spelling.
-    fun sort_by(self, cmp: fun(T, T) -> Int) {
-        var n = self.len();
-        if n < 2 {
-            return;
-        }
-
-        # the scratch half of the merge. `push` is the only way to make an array
-        # of a given length, and filling it from `self` is that same loop, so
-        # the copy is free of charge rather than an extra pass.
-        var buf: [T] = [];
-        for x in self {
-            buf.push(x);
-        }
-
-        # Merging reads one array and writes the other, so each pass swaps which
-        # is which rather than copying back. `src` and `dst` are *names* for
-        # arrays, not copies — that is what a reference type buys here — but it
-        # also means the loop cannot ask afterwards which array it ended on:
-        # `==` on two arrays is structural (milestone 5c-i), so two arrays
-        # holding the same elements are equal and identity has no spelling. The
-        # parity of the pass count is that missing question, answered by
-        # counting.
-        var src = self;
-        var dst = buf;
-        var flipped = false;
-
-        var width = 1;
-        while width < n {
-            var lo = 0;
-            while lo < n {
-                var mid = min(lo + width, n);
-                var hi = min(lo + width + width, n);
-                merge(src, dst, lo, mid, hi, cmp);
-                lo = hi;
-            }
-            var swap = src;
-            src = dst;
-            dst = swap;
-            flipped = not flipped;
-            width = width + width;
-        }
-
-        # an odd number of passes left the result in `buf`, and the caller is
-        # holding `self`
-        if flipped {
-            var i = 0;
-            while i < n {
-                self[i] = buf[i];
-                i = i + 1;
-            }
-        }
-    }
-}
-
-# `src[lo..mid)` and `src[mid..hi)` are each in order; write the two of them
-# merged into `dst[lo..hi)`. Private, and a free function rather than a method
-# because its receiver would have to be one of *two* arrays.
-#
-# The tie is what makes the sort stable: the left run wins whenever the right
-# element does not compare strictly less, so equal elements keep the order the
-# runs found them in. Reading `src[j]` when the right run is spent would be out
-# of bounds, and it is `or`'s short-circuit that stops it — the exhaustion test
-# has to come first.
-fun merge<T>(src: [T], dst: [T], lo: Int, mid: Int, hi: Int,
-             cmp: fun(T, T) -> Int) {
-    var i = lo;
-    var j = mid;
-    var k = lo;
-    while k < hi {
-        if i < mid and (j >= hi or cmp(src[j], src[i]) >= 0) {
-            dst[k] = src[i];
-            i = i + 1;
-        } else {
-            dst[k] = src[j];
-            j = j + 1;
-        }
-        k = k + 1;
-    }
+    #
+    # **A native, and the first one that calls back into ducktape.** The merge
+    # is the same merge, moved to C — but `cmp` is a value this module's caller
+    # wrote, so the runtime has to run ducktape *inside* a native to ask it
+    # anything (`native_call`, see `runtime.md`). What the move buys is a
+    # comparison that costs a call instead of a call plus an interpreted merge
+    # step; what it costs is the invariant that a native never runs user code,
+    # and with it two rules the C now has to keep: a collection can happen at
+    # any comparison, and the comparator can reach the array being sorted.
+    #
+    # The second is the one with a visible answer. The native sorts a
+    # **snapshot** — scratch the program cannot reach — and writes it back only
+    # at the end, so a comparator that pushes to the array cannot make the sort
+    # read a slot that moved. If it changed the array's *length*, the write-back
+    # is refused with a runtime error rather than scattering an old sequence
+    # over a new array, and the array is left exactly as it was.
+    @native("sort_by")
+    fun sort_by(self, cmp: fun(T, T) -> Int);
 }
 
 # The `Ord` half. These are the same operations with the comparator left out,

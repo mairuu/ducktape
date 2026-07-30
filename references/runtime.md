@@ -982,6 +982,57 @@ discipline for `heap_dyn`; getting it wrong reproduces the 5c-ii class of bug,
 something reachable-looking the collector cannot see. A native fails by
 setting `ctx->error`, which becomes a runtime error at the call site.
 
+### Calling ducktape from a native
+
+A native that takes a *function value* — a comparator, a predicate — cannot
+answer out of C alone: the decision belongs to the program. `native_call` is
+that direction of the boundary, and `std::sort`'s `sort_by` is its first
+caller.
+
+```
+bool native_call(NativeCtx *ctx, Value callee, const Value *args, int argc,
+                 Value *out);
+void native_root(NativeCtx *ctx, Value v);   // keep alive across a call
+void native_unroot(NativeCtx *ctx, int count);
+```
+
+**The interpreter became re-entrant, which is the whole of the mechanism.** The
+bytecode loop is now `run(Vm *vm, int stop_depth)`, and `OP_RETURN` ends it when
+`frame_count` falls back to `stop_depth` rather than to zero — so a caller in C
+can push a frame and drive exactly that call to its return, leaving the outer
+`run` suspended in C with its frames untouched beneath. `vm_run` is `run(&vm, 0)`
+and is the loop it always was. The call itself is built exactly as `OP_CALL`
+builds one (callee, arguments above it, a frame over them, result left where the
+arguments were), which is why a comparator may equally be a closure or a plain
+`VAL_FUN` passed by name.
+
+Three consequences, and they are the reason this is a boundary rather than a
+convenience:
+
+- **A collection can now happen inside a native.** The callee is ordinary
+  ducktape and allocates. Anything the native holds must therefore be a root:
+  its arguments already are, and `native_root` puts anything else on the stack
+  above them (a push, since the stack *is* the root set). Every root must be
+  dropped before returning — `OP_CALL` asserts the stack came back level,
+  because a native that returned askew would corrupt the frame beneath it
+  instead of failing.
+- **Any pointer *into* a heap object may be stale after a call.** The callee can
+  push to the very array the native is walking, and `heap_array_reserve`
+  reallocates `items`. `sort_by`'s answer is to work on scratch the program
+  cannot reach, and to touch the caller's array only before the first comparison
+  and after the last.
+- **A failing callback is already reported.** `run` printed the error with the
+  frames that were live when it happened, so `native_call` sets
+  `ctx->unwinding` and the VM unwinds without describing the same failure a
+  second time from the outside. A native seeing `false` must return promptly,
+  having first dropped its roots.
+
+`tests/run/sort_callback.dt` exercises all of it — an allocating comparator, a
+named function rather than a closure, a comparator that sorts (the interpreter
+re-entered twice over) — and under `--gc-stress` it is the rooting test:
+deleting the `native_root` calls turns it into a heap corruption abort rather
+than a wrong answer.
+
 **Panic is that failure path, named.** `std::panic`'s `panic_abort` sets
 `ctx->error` and nothing else, so a ducktape-level panic and a failing native
 are the same event — `runtime_error` prints the message and the frames beneath

@@ -71,6 +71,146 @@ static Value n_array_pop(NativeCtx *ctx, Value *args, int argc) {
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
+// std::sort
+// ───────────────────────────────────────────────────────────────────────────────
+
+// The one native that runs *ducktape of its own*. Every other function in this
+// file answers out of C alone; a sort cannot, because the order it sorts by is
+// a value the program wrote — so each comparison is a call back across the
+// boundary (`native_call`, see `native.h`). That makes this the native where
+// the calling convention's quiet assumption stops holding: user code allocates,
+// so a collection can happen *inside* this function, between any two elements.
+//
+// Two consequences shape everything below.
+//
+//   - **A C local is not a root.** The scratch the merge needs is two rooted
+//     ObjArrays rather than a `Value[]` from the allocator: values living only
+//     in C memory are invisible to the collector, and the first comparison that
+//     triggered one would sweep half the array being sorted.
+//   - **The array is sorted through a snapshot.** The comparator can reach the
+//     very array it is ordering — `xs.sort_by(|a, b| { xs.push(a); ... })` is a
+//     program a program may write — and a `push` reallocates `items` under any
+//     pointer C is holding. The scratch arrays cannot be reached from ducktape
+//     at all, so the merge walks those, and `arr` is touched only before the
+//     first comparison and after the last.
+//
+// The algorithm is milestone 62's, unchanged and for its reasons: bottom-up,
+// stable, one array of scratch (two here, since neither may be the caller's).
+
+static int min_int(int a, int b) { return a < b ? a : b; }
+
+// One comparison, in the program's own terms. `-1`/`0`/`1` rather than whatever
+// the closure answered, so the merge below reads a *decision* — the same
+// normalisation `string_cmp` does for the same reason.
+//
+// False means the comparator failed (a panic, a bad index, a failing call of
+// its own). It has already reported itself, so there is nothing to add: the
+// caller unwinds.
+static bool sort_compare(NativeCtx *ctx, Value cmp, Value a, Value b,
+                         int *order) {
+  Value cmp_args[2] = {a, b};
+  Value result;
+  if (!native_call(ctx, cmp, cmp_args, 2, &result)) {
+    return false;
+  }
+  *order = result.as.i < 0 ? -1 : (result.as.i > 0 ? 1 : 0);
+  return true;
+}
+
+// `src[lo..mid)` and `src[mid..hi)` are each in order; write them merged into
+// `dst[lo..hi)`. The left run wins ties, and that is the whole of what makes
+// the sort stable — equal elements leave in the order the runs found them.
+//
+// Both pointers are into scratch no program can reach, which is what lets them
+// be held across the comparison at all.
+static bool sort_merge(NativeCtx *ctx, Value cmp, const Value *src, Value *dst,
+                       int lo, int mid, int hi) {
+  int i = lo, j = mid, k = lo;
+  while (k < hi) {
+    bool take_left;
+    if (i >= mid) {
+      take_left = false;
+    } else if (j >= hi) {
+      take_left = true;
+    } else {
+      int order;
+      if (!sort_compare(ctx, cmp, src[i], src[j], &order)) {
+        return false;
+      }
+      take_left = order <= 0;
+    }
+    dst[k++] = take_left ? src[i++] : src[j++];
+  }
+  return true;
+}
+
+static Value n_sort_by(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  ObjArray *arr = val_as_array(args[0]);
+  // a Value, not an ObjClosure: a comparator may be a closure literal *or* a
+  // plain function passed by name, and `native_call` resolves both exactly as
+  // OP_CALL does.
+  Value cmp = args[1];
+
+  int len = arr->count;
+  if (len < 2) {
+    return val_unit();
+  }
+
+  // `heap_array` fills with unit, so both are safe to trace from the moment
+  // they exist; rooting each before allocating the next is what keeps the
+  // second allocation from collecting the first.
+  ObjArray *a = heap_array(ctx->heap, len);
+  native_root(ctx, val_obj(&a->obj));
+  ObjArray *b = heap_array(ctx->heap, len);
+  native_root(ctx, val_obj(&b->obj));
+  for (int i = 0; i < len; i++) {
+    a->items[i] = arr->items[i];
+  }
+
+  Value *src = a->items;
+  Value *dst = b->items;
+  bool ok = true;
+
+  for (int width = 1; width < len; width *= 2) {
+    for (int lo = 0; lo < len;) {
+      int mid = min_int(lo + width, len);
+      int hi = min_int(lo + 2 * width, len);
+      if (!sort_merge(ctx, cmp, src, dst, lo, mid, hi)) {
+        ok = false;
+        break;
+      }
+      lo = hi;
+    }
+    if (!ok) {
+      break;
+    }
+    Value *swap = src;
+    src = dst;
+    dst = swap;
+  }
+
+  if (ok) {
+    // The write-back, with no comparison in between — so `arr->items` is read
+    // after the last thing that could have moved it. A comparator that changed
+    // the array's *length* is refused rather than half-honoured: the sort holds
+    // a snapshot of a sequence that no longer exists, and scattering it over
+    // the array that replaced it would be worse than saying so. The array is
+    // left exactly as it was.
+    if (arr->count != len) {
+      ctx->error = "the array changed length while it was being sorted";
+    } else {
+      for (int i = 0; i < len; i++) {
+        arr->items[i] = src[i];
+      }
+    }
+  }
+
+  native_unroot(ctx, 2);
+  return val_unit();
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
 // std::char
 // ───────────────────────────────────────────────────────────────────────────────
 
@@ -460,6 +600,7 @@ static const NativeEntry natives[] = {
     {"hash_string", n_hash_string},
     {"io_print", n_io_print},
     {"panic_abort", n_panic_abort},
+    {"sort_by", n_sort_by},
     {"strbuf_build", n_strbuf_build},
     {"strbuf_clear", n_strbuf_clear},
     {"strbuf_len", n_strbuf_len},

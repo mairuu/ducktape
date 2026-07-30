@@ -3443,6 +3443,70 @@
   had the same flaw and is fixed with it — **an oracle that has not been shown
   to fail is not evidence**, which is now the standing rule for this suite.
 
+- **The runtime calls back into ducktape (milestone 64)** — `native_call`, and
+  `sort_by` moved into C. Design: `runtime.md` → "Calling ducktape from a
+  native".
+
+  Every native until now answered out of C alone, and one kind of native
+  cannot: a sort's *order* is a value the program wrote. Milestone 62 put the
+  whole merge in ducktape for exactly that reason — the comparator was only
+  callable from there. This is the boundary opened in the other direction, and
+  what it costs is an invariant rather than any code: **a native may now run
+  user code**, which is a much larger statement than the function that needed
+  it.
+
+  - **The mechanism is one parameter.** The bytecode loop became
+    `run(Vm *, int stop_depth)`, and `OP_RETURN` ends it when `frame_count`
+    falls back to `stop_depth` rather than to zero. That is the whole of
+    re-entrancy: C pushes a frame, drives that one call to its return, and the
+    outer `run` is still suspended underneath with its frames untouched.
+    `vm_run` is `run(&vm, 0)` and is the loop it always was. The call is built
+    exactly as `OP_CALL` builds one, which is why a comparator may be a closure
+    *or* a plain function passed by name — the callee is a `Value`, resolved the
+    one way.
+  - **A re-entrant interpreter is a re-entrant collector**, and that is the
+    consequence with teeth. The old calling convention ("arguments stay on the
+    stack, so they are rooted") quietly assumed a native allocates only for
+    itself; now the *callee* allocates, so a collection can land between any two
+    elements. Anything a native holds must be a root — `native_root` is a push,
+    since the stack is the root set — and the negative check is the evidence:
+    delete those pushes and `tests/run/sort_callback.dt` under `--gc-stress`
+    stops being a wrong answer and becomes a heap-corruption abort.
+  - **A pointer into a heap object cannot be held across a callback.** The
+    comparator can reach the array it is ordering, and a `push` reallocates
+    `items` underneath C. So the sort works on scratch the program cannot reach
+    and touches the caller's array only before the first comparison and after
+    the last — which turns the mutation question into one visible decision:
+    resizing the array mid-sort is *refused* (`tests/fail_run/sort_resize.dt`),
+    because the snapshot describes a sequence that no longer exists and half-
+    applying it would be worse than saying so. Reading it, or sorting another
+    array, is fine.
+  - **A failing callback reports itself.** `ctx->unwinding` says the error was
+    already printed with the frames that were live, so the VM adds nothing —
+    the alternative describes one failure twice, from outside. `OP_CALL` also
+    asserts the stack came back level, because a native that returns askew
+    corrupts the frame beneath it rather than failing.
+
+  What it proves is bigger than what it buys: milestone 62's tests — stability
+  observed, and the oracle over every length to 40 — pass against the C
+  unchanged, so the two implementations agree on the promise rather than only on
+  the examples.
+
+  **Measured, it is ~3×, and the interesting half of that is what is left.**
+  Both implementations in one `-O2` binary, images pre-compiled, best-of-5, with
+  an array-building baseline subtracted: 2.9× at n=2 000, 3.3–3.8× at n=10 000,
+  2.7× at n=50 000, all with a cheap `|a, b| => a - b`. `xs.sort()` gets only
+  2.2×, because the `Ord` path's comparator is two interpreted calls (the
+  closure, then `cmp`) and moving the merge to C does not touch either. A
+  temporary probe doing the comparison in C instead of calling back finished the
+  same work in 2ms against the native's 13ms — so **85% of what the native still
+  spends is the callback**, and the merge loop was never the expense. The
+  general rule that falls out, and the one to apply to the next candidate:
+  moving work to C pays in proportion to the interpreted *iterations* it deletes
+  minus the callbacks it must still make, which is why a container whose
+  per-operation work is a user-written trait method is a much worse candidate
+  than a sort.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
