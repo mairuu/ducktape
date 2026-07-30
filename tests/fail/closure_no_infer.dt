@@ -1,4 +1,4 @@
 #! expect: cannot infer type
 fun main() {
-    var f = |x| => x;
+    var f = |x| x;
 }

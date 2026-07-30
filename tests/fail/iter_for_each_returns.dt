@@ -1,6 +1,6 @@
 #! expect: expected '()' but got 'Int'
 # `for_each` takes a `fun(Self.Item) -> Unit`, and there is no discard
-# coercion: a shorthand closure *is* its expression, so `|x| => x * 2` has type
+# coercion: a shorthand closure *is* its expression, so `|x| x * 2` has type
 # `fun(Int) -> Int` and does not fit. The escape hatch is the block form, where
 # a trailing `;` is what drops the value — `|x| { x * 2; }` — which is the same
 # rule every other block in the language follows rather than a special case
@@ -21,5 +21,5 @@ impl Iterator for Span {
 }
 
 fun main() {
-    Span { lo: 0, hi: 3 }.for_each(|x| => x * 2);
+    Span { lo: 0, hi: 3 }.for_each(|x| x * 2);
 }

@@ -12,6 +12,6 @@ use std::panic::panic;
 
 fun main() {
     var xs = [3, 1, 2];
-    xs.sort_by(|a, b| => panic("cannot order these"));
+    xs.sort_by(|a, b| panic("cannot order these"));
     print(xs);
 }

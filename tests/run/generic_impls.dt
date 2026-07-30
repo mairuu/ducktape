@@ -82,11 +82,11 @@ fun main() {
   var a = Box::<Int>::new(3);
   print(a.get());
 
-  var b = a.map(|x| => "n={x}");
+  var b = a.map(|x| "n={x}");
   print(b.get());
 
   var c = Box::<Bool>::new(true);
-  print(c.map(|x| => "ok").get());
+  print(c.map(|x| "ok").get());
 
   print(describe(7));
   print(describe(false));

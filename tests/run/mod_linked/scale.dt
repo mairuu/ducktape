@@ -5,7 +5,7 @@ use shapes::rect::Rect;
 
 pub fun doubler() -> fun(Int) -> Int {
   var factor = 2;
-  return |n| => n * factor;
+  return |n| n * factor;
 }
 
 pub fun grow(r: Rect) -> Rect {

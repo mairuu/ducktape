@@ -15,20 +15,20 @@ use std::io::print;
 # `StringBuf` are: the compiler knows the type, every operation on one lives in
 # std. That is what lets a range be a parameter rather than only a loop header.
 fun evens_in(r: Range) -> [Int] {
-    return r.iter().filter(|v| => v % 2 == 0).collect();
+    return r.iter().filter(|v| v % 2 == 0).collect();
 }
 
 fun main() {
     var xs = [3, 1, 4, 1, 5];
 
     # an array reaches the combinators through `iter()`
-    print("{xs.iter().map(|v| => v * 10).collect()}");
+    print("{xs.iter().map(|v| v * 10).collect()}");
 #> [30, 10, 40, 10, 50]
     print("{xs.iter().max()}");
 #> Some(5)
     print("{xs.iter().sum()}");
 #> Some(14)
-    print("{xs.iter().position(|v| => v == 4)}");
+    print("{xs.iter().position(|v| v == 4)}");
 #> Some(2)
 
     # an array knows its length, so its iterator is double-ended
@@ -76,7 +76,7 @@ fun main() {
 #> 1@1
 #> 4@2
 
-    print("{(0..3).iter().flat_map(|n| => [n, n].iter()).collect()}");
+    print("{(0..3).iter().flat_map(|n| [n, n].iter()).collect()}");
 #> [0, 0, 1, 1, 2, 2]
 
     # a source is an ordinary value: it can be a `dyn Iterator` like any other

@@ -30,7 +30,7 @@ fun main() {
     # the comparator allocates on every call — a String per comparison — so the
     # heap grows while the sort holds its scratch
     var xs = [5, 3, 8, 1, 2];
-    xs.sort_by(|a, b| => "{a}:{b}".len() * 0 + (a - b));
+    xs.sort_by(|a, b| "{a}:{b}".len() * 0 + (a - b));
     print(xs);
 
     # allocating *and* keeping what it built: the rows are compared by a key
@@ -40,7 +40,7 @@ fun main() {
         Row { tag: "a", n: 1 },
         Row { tag: "b", n: 2 },
     ];
-    rows.sort_by(|a, b| => "{a.tag}{a.n}".compare("{b.tag}{b.n}"));
+    rows.sort_by(|a, b| "{a.tag}{a.n}".compare("{b.tag}{b.n}"));
     var labels: [String] = [];
     for r in rows {
         labels.push("{r.tag}{r.n}");
@@ -58,13 +58,13 @@ fun main() {
     for g in groups {
         g.sort();
     }
-    groups.sort_by(|a, b| => a.len() - b.len());
+    groups.sort_by(|a, b| a.len() - b.len());
     print(groups);
 
     # reading the array being sorted from inside its own comparator is fine —
     # only changing its length is refused (tests/fail_run/sort_resize.dt)
     var live = [1, 2, 3, 4, 5];
-    live.sort_by(|a, b| => (b - a) + live.len() * 0);
+    live.sort_by(|a, b| (b - a) + live.len() * 0);
     print(live);
 
     # enough elements for several passes with an allocating comparator, so a
@@ -73,6 +73,6 @@ fun main() {
     for i in 0..20 {
         many.push((i * 7) % 20);
     }
-    many.sort_by(|a, b| => from_chars(['x']).len() * 0 + (a - b));
+    many.sort_by(|a, b| from_chars(['x']).len() * 0 + (a - b));
     print(many);
 }

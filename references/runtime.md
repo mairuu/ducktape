@@ -686,7 +686,7 @@ what else is logically live" trick `return` statements already use.
 
 ### Closures & upvalues
 
-A closure expression (`|x| => body`) is compiled the crafting-interpreters
+A closure expression (`|x| body`) is compiled the crafting-interpreters
 way: its body goes into its own `Chunk` via a *child* `Cg` whose `parent`
 points at the enclosing function's `Cg`, and the enclosing chunk emits
 `OP_CLOSURE` to build the runtime `ObjClosure` from the captured cells.

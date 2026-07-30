@@ -4,7 +4,7 @@
 # obligation rather than only the missing name, which is the difference between
 # "no such method" and "you have not said how these compare".
 #
-# The comparator form is what such a program wants: `ps.sort_by(|a, b| => ...)`
+# The comparator form is what such a program wants: `ps.sort_by(|a, b| ...)`
 # needs no `Ord` at all.
 use std::sort;
 

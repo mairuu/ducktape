@@ -73,7 +73,7 @@ fun main() {
 
     # through adapters, so the receiver is `Map<Filter<Counter>, Int>` and the
     # projection collapses two hops before the bound is asked about it
-    print(Counter::to(9).filter(|x| => x % 3 == 0).map(|x| => x * 2).max());
+    print(Counter::to(9).filter(|x| x % 3 == 0).map(|x| x * 2).max());
 #> Some(12)
 
     # an impl-provided `Ord`, so the answer comes from the impl index rather

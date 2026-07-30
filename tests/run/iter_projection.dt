@@ -98,21 +98,21 @@ fun main() {
 
     # the base is itself an adapter, so the projection is over a projection:
     # `Filter<Counter>.Item` is `Counter.Item` is `Int`, collapsed in one pass
-    print(first(Counter::to(6).filter(|x| => x % 2 == 1)));
+    print(first(Counter::to(6).filter(|x| x % 2 == 1)));
 #> 1
 
     # and through an adapter that renames the element type
-    print(echo(Counter::to(3).map(|x| => x * 10)));
+    print(echo(Counter::to(3).map(|x| x * 10)));
 #> [0, 10, 20]
 
     # nesting the two: a generic call over a mapped, filtered source
-    print(ident(first(Counter::to(9).filter(|x| => x > 4).map(|x| => x * 2))));
+    print(ident(first(Counter::to(9).filter(|x| x > 4).map(|x| x * 2))));
 #> 10
 
     # `J.Item` — a projection over a bound parameter, drained through `collect`
     var fm = FlatMap {
         inner: Counter::to(4),
-        f: |n| => Counter { n: 0, max: n },
+        f: |n| Counter { n: 0, max: n },
         cur: Option::None,
     };
     print(fm.collect());
@@ -122,7 +122,7 @@ fun main() {
     var total = 0;
     var fm2 = FlatMap {
         inner: Counter::to(4),
-        f: |n| => Counter { n: 0, max: n },
+        f: |n| Counter { n: 0, max: n },
         cur: Option::None,
     };
     for x in fm2 {

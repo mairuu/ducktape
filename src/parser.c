@@ -1342,7 +1342,7 @@ static bool parse_closure_param_list(Parser *p, ClosureParam *out, int *count,
   return !had_error;
 }
 
-// closure: | params | ( -> type )? ( => expr | { block } )
+// closure: | params | ( -> type )? ( expr | { block } )
 static Expr *parse_closure(Parser *p) {
   Token start = *previous_tok(p);
   bool had_error = false;
@@ -1374,12 +1374,8 @@ static Expr *parse_closure(Parser *p) {
   Expr *body = NULL;
   if (check_tok(p, TOKEN_LBRACE)) {
     body = parse_block(p);
-  } else if (consume_tok(p, TOKEN_FAT_ARROW,
-                         "expected '=>' or '{' before closure body")) {
-    body = parse_expr(p);
   } else {
-    had_error = true;
-    body = ast_expr(EXPR_POISON, current_tok_span(p), p->al);
+    body = parse_expr(p);
   }
 
   assert(body && "function body should not be NULL");

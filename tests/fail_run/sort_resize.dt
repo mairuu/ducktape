@@ -13,7 +13,7 @@ use std::array;
 
 fun main() {
     var xs = [3, 1, 2, 4];
-    xs.sort_by(|a, b| => {
+    xs.sort_by(|a, b| {
         xs.push(a);
         return a - b;
     });

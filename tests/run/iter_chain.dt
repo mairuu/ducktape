@@ -51,8 +51,8 @@ fun main() {
 #> [0, 1, 0, 0]
 
     # adapters on either side, so neither element type is written anywhere
-    print(Counter::to(4).filter(|k| => k % 2 == 0)
-          .chain(Counter::to(2).map(|k| => k + 10)).collect());
+    print(Counter::to(4).filter(|k| k % 2 == 0)
+          .chain(Counter::to(2).map(|k| k + 10)).collect());
 #> [0, 2, 10, 11]
 
     # and adapters *after*, since a `Chain` is an ordinary iterator

@@ -65,7 +65,7 @@ fun main() {
 
   var nums = [3, 5, 8];
   print(first(nums));
-  print(map_ints([1, 2, 3], |x| => x * 2));
+  print(map_ints([1, 2, 3], |x| x * 2));
   print(count(["a", "b", "c"]) + count(nums) + count([true]) * 4);
 
   print(fact(5, "unused"));

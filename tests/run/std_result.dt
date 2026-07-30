@@ -56,14 +56,14 @@ fun main() {
     print(ok.unwrap_or(0));
     print(bad.unwrap_or(0));
     # unlike Option's, the fallback is handed the error
-    print(bad.unwrap_or_else(|e| => e.len()));
+    print(bad.unwrap_or_else(|e| e.len()));
 
-    print(ok.map(|x| => x / 2));
-    print(bad.map(|x| => x / 2));
-    print(bad.map_err(|e| => "bad: {e}"));
+    print(ok.map(|x| x / 2));
+    print(bad.map(|x| x / 2));
+    print(bad.map_err(|e| "bad: {e}"));
 
-    print(ok.and_then(|x| => divide(x, 6)));
-    print(bad.and_then(|x| => divide(x, 6)));
+    print(ok.and_then(|x| divide(x, 6)));
+    print(bad.and_then(|x| divide(x, 6)));
 
     print(ratio_of_sum(80, 3, 2).unwrap());
     print(ratio_of_sum(1, 1, 0).unwrap_or(7));

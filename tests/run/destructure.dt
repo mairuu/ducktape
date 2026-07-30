@@ -60,7 +60,7 @@ fun main() {
   # ... and capturable, which means the hidden subject local must not
   # disturb upvalue slots
   var (base, mult) = (100, 3);
-  var scale = |v: Int| => (v + base) * mult;
+  var scale = |v: Int| (v + base) * mult;
   print(scale(1));
 
   # an annotation applies to the whole initializer

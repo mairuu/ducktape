@@ -3733,11 +3733,14 @@ via `Module.decl_base`) and is not part of the main line.
 - a refutable `var` binding whose column type inference never pinned down is
   accepted (the tri-state answer reports nothing) and traps at runtime via
   `OP_MATCH_FAIL` instead of at compile time
-- `pub` is parsed and ignored on the `impl` keyword itself, but *rejected* on
-  the items where visibility would have to be a thing: `pub fun` inside an
-  `impl` block is "expected impl item", and `pub x` on a struct field is
-  "expected field name". Method and field visibility do not exist, so std impls
-  and structs simply omit it
+- `pub` is parsed and ignored on the `impl` keyword itself, and *rejected* on a
+  method: `pub fun` inside an `impl` block is "expected impl item". **Method**
+  visibility does not exist — a method is as visible as its impl — which is why
+  the operations std wants to keep to itself (`std::array`'s raw `pop_last`,
+  `std::iter`'s `char_at` / `prev_boundary`, `std::string`'s `char_width`) are
+  private *free functions* rather than methods. **Field** visibility does exist
+  and this entry used to deny it: a field takes `pub` and is private to its
+  module without one
 - a definition nothing reaches is never compiled, so a construct the VM
   refuses inside one goes unreported — the diagnostic arrives only if
   something calls it (`tests/run/unreachable_body.dt`). The checker is

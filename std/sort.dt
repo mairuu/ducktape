@@ -76,7 +76,7 @@ impl<T: Ord> [T] {
     # Put `self` in ascending order, by `T`'s own `cmp`. Stable, like the
     # comparator form it is written on.
     fun sort(self) {
-        self.sort_by(|a, b| => a.cmp(b));
+        self.sort_by(|a, b| a.cmp(b));
     }
 
     # Whether `self` is already in ascending order. Cheap enough to assert with

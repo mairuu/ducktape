@@ -4,13 +4,13 @@ fun apply(f: fun(Int) -> Int, x: Int) -> Int {
 }
 
 fun main() {
-    var add = |x: Int, y: Int| => x + y;
+    var add = |x: Int, y: Int| x + y;
     var three = add(1, 2);
 
-    var hinted: fun(Int, Int) -> Int = |x, y| => x + y;
+    var hinted: fun(Int, Int) -> Int = |x, y| x + y;
     var four = (hinted)(2, 2);
 
-    var doubled = apply(|x| => x * 2, 21);
+    var doubled = apply(|x| x * 2, 21);
 
     var blocky = |n: Int| -> Int {
         var m = n + 1;
@@ -19,9 +19,9 @@ fun main() {
     var b = (blocky)(3);
 
     var base = 10;
-    var offset = |x: Int| => x + base;
+    var offset = |x: Int| x + base;
     var eleven = (offset)(1);
 
-    var thunk = || => 5;
+    var thunk = || 5;
     var five = (thunk)();
 }

@@ -39,7 +39,7 @@ fun main() {
     # The closure does not run: nothing between here and the next `print` may
     # emit "built once". `assert_with` below is the contrast — its argument is
     # an ordinary expression, so it is built whether or not it is needed.
-    assert_else(true, || => noisy());
+    assert_else(true, || noisy());
     print("checked");
     assert_with(true, noisy());
     print("checked");

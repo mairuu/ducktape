@@ -132,9 +132,9 @@ ending in `return` has type `!` (never), which unifies with anything.
   `:` format spec (`"{v:>8}"`, `"{f:.3}"`) is sugar for the `std::string::pad_*`
   and `std::fmt::float` calls — see `std::fmt`.
 - Calls: `f(a, b)`; functions are first-class (`var g = f; g(1)`).
-- Closures use pipes: `|x, y| => x + y`, `|n: Int| -> Int { return n * 2; }`.
+- Closures use pipes: `|x, y| x + y`, `|n: Int| -> Int { return n * 2; }`.
   Unannotated params infer from a function-typed hint
-  (`var f: fun(Int) -> Int = |x| => x + 1;`) or from use; a closure whose
+  (`var f: fun(Int) -> Int = |x| x + 1;`) or from use; a closure whose
   types can't be pinned down is an error. `break` cannot escape a closure.
 - A unit struct is a value under its bare name: `struct Marker;` then
   `var m = Marker;`, no `{}` suffix. The name is looked up in the value scope
@@ -605,10 +605,10 @@ it drains into an array.
 
 ```
 # square each element, keep those > 3, drain into an array
-var xs = Counter::to(6).map(|x| => x * x).filter(|v| => v > 3).collect();
+var xs = Counter::to(6).map(|x| x * x).filter(|v| v > 3).collect();
 #   xs == [4, 9, 16, 25]
 
-for y in Counter::to(3).map(|x| => x + 100) { print(y); }    # 100 101 102
+for y in Counter::to(3).map(|x| x + 100) { print(y); }    # 100 101 102
 ```
 
 Alongside them: `take(n)` (at most the first `n`), `skip(n)` (all but the first
@@ -627,21 +627,21 @@ pass, does every one), `find(pred)` (the first element that passes) /
 `take_while(pred)` and `skip_while(pred)`.
 
 ```
-var sum   = Counter::to(5).fold(0, |acc, x| => acc + x);          # 10
-var first = Counter::to(100).map(|x| => x * x).take(4).collect(); # [0, 1, 4, 9]
-var pairs = Counter::to(3).zip(Counter::to(2)).collect();         # [(0,0),(1,1)]
-var rest  = Counter::to(5).skip(2).collect();                     # [2, 3, 4]
-var flat  = Counter::to(4).flat_map(|n| => Counter::to(n)).collect();
+var sum   = Counter::to(5).fold(0, |acc, x| acc + x);          # 10
+var first = Counter::to(100).map(|x| x * x).take(4).collect(); # [0, 1, 4, 9]
+var pairs = Counter::to(3).zip(Counter::to(2)).collect();      # [(0,0),(1,1)]
+var rest  = Counter::to(5).skip(2).collect();                  # [2, 3, 4]
+var flat  = Counter::to(4).flat_map(|n| Counter::to(n)).collect();
 #   flat == [0, 0, 1, 0, 1, 2]
-var peak  = Counter::to(9).filter(|k| => k % 3 == 0).max();       # Some(6)
-var both  = Counter::to(3).chain(Counter::to(2)).collect();       # [0,1,2,0,1]
-var tot   = Counter::to(5).sum();                                 # Some(10)
-var seen  = Counter::to(5).any(|x| => x == 3);                    # true
-var hit   = Counter::to(9).find(|x| => x % 7 == 0);               # Some(0)
-var n     = Counter::to(9).filter(|x| => x % 3 == 0).count();     # 3
-var head  = Counter::to(9).take_while(|x| => x < 3).collect();    # [0, 1, 2]
-var tail  = Counter::to(6).skip_while(|x| => x < 3).collect();    # [3, 4, 5]
-Counter::to(3).for_each(|x| => print(x));                         # 0 1 2
+var peak  = Counter::to(9).filter(|k| k % 3 == 0).max();       # Some(6)
+var both  = Counter::to(3).chain(Counter::to(2)).collect();    # [0,1,2,0,1]
+var tot   = Counter::to(5).sum();                              # Some(10)
+var seen  = Counter::to(5).any(|x| x == 3);                    # true
+var hit   = Counter::to(9).find(|x| x % 7 == 0);               # Some(0)
+var n     = Counter::to(9).filter(|x| x % 3 == 0).count();     # 3
+var head  = Counter::to(9).take_while(|x| x < 3).collect();    # [0, 1, 2]
+var tail  = Counter::to(6).skip_while(|x| x < 3).collect();    # [3, 4, 5]
+Counter::to(3).for_each(|x| print(x));                         # 0 1 2
 ```
 
 **Where each consumer stops is part of what it means**, not an optimisation:
@@ -657,7 +657,7 @@ second `[0,1,2,0,1]`. Its mirror `skip_while` *yields* the element that ended
 the skipping rather than dropping it.
 
 `for_each`'s closure returns `Unit`, and there is no discard coercion — a
-shorthand closure *is* its expression, so `|x| => f(x)` fits only when `f`
+shorthand closure *is* its expression, so `|x| f(x)` fits only when `f`
 returns nothing. `|x| { f(x); }` is the way round it, the trailing `;` doing
 the dropping by the ordinary block rule
 (`tests/fail/iter_for_each_returns.dt`).
@@ -672,7 +672,7 @@ Making them methods rather than free functions took the per-method object
 safety above: `map` (a type parameter of its own) and `filter` (a `Self`-shaped
 return) are excluded from a `dyn Iterator` vtable, while `collect` stays
 dispatchable, so the trait keeps them *and* stays usable as `dyn`. The closures
-are typed by the source's element: `map`'s `|x| => ...` sees `x` at the
+are typed by the source's element: `map`'s `|x| ...` sees `x` at the
 iterator's `Item` type — including through a *pass-through* adapter, where that
 element is a projection over a projection (`Filter<Counter>.Item` is
 `Counter.Item` is `Int`), which the checker now collapses so a chain like
@@ -766,11 +766,11 @@ s.chars()        # -> CharIter,     Item = Char
 All three are `Iterator` *and* `DoubleEnded`, so the whole vocabulary applies:
 
 ```
-var doubled = [1, 2, 3].iter().map(|v| => v * 2).collect();   # [2, 4, 6]
-var evens   = (0..10).iter().filter(|v| => v % 2 == 0).count();  # 5
-var down    = (0..5).iter().rev().collect();     # [4, 3, 2, 1, 0]
-var tail    = [1, 2, 3].iter().rev().take(2).collect();       # [3, 2]
-var first3  = "héllo".chars().take(3).collect();  # [h, é, l]
+var doubled = [1, 2, 3].iter().map(|v| v * 2).collect();     # [2, 4, 6]
+var evens   = (0..10).iter().filter(|v| v % 2 == 0).count(); # 5
+var down    = (0..5).iter().rev().collect();                 # [4, 3, 2, 1, 0]
+var tail    = [1, 2, 3].iter().rev().take(2).collect();      # [3, 2]
+var first3  = "héllo".chars().take(3).collect();             # [h, é, l]
 ```
 
 The call is required: an array or a range still has no `map` of its own
@@ -1916,7 +1916,7 @@ use std::sort;
 
 var xs = [5, 3, 9, 1];
 xs.sort();                          # [1, 3, 5, 9] — in place, needs T: Ord
-xs.sort_by(|a, b| => b.cmp(a));     # [9, 5, 3, 1] — any order, no bound
+xs.sort_by(|a, b| b.cmp(a));     # [9, 5, 3, 1] — any order, no bound
 xs.is_sorted();                     # false (this one is descending now)
 
 var v = [10, 20, 20, 30];
@@ -2110,7 +2110,7 @@ s.contains(4); s.remove(4); s.to_array();
 | `mod` declarations | no such keyword; `use` is what pulls a file in |
 | glob imports (`use a::*`) | not parsed; name each item, or bind the module (`use a;`) and qualify |
 | re-exporting a module qualifier (`pub use a;`) | a qualifier is not an item; `pub use` re-exports named items only |
-| `pub` on methods and struct fields | rejected: `pub fun` in an impl is "expected impl item", `pub x` on a field is "expected field name". `pub` is only ignored on the `impl` keyword itself; visibility exists only on top-level items, at module granularity |
+| `pub` on a method | rejected — `pub fun` in an impl is "expected impl item", and `pub` is only ignored on the `impl` keyword itself. A method is as visible as the impl it sits in, which is why `std::array`'s raw `pop_last` and `std::iter`'s `char_at` are private *free functions* rather than methods. Struct **fields** do take `pub`: they are private to their module by default, and the diagnostic naming one says so |
 | a diagnostic when two *inherent* impls give one type the same method name | there is none: the std one silently wins and the program's is unreachable, so `impl<T> [T] { fun first(..) }` in a program is quietly ignored (`first` reaches every program through the prelude's `std::iter → std::array` chain). A trait impl collision *is* caught — this is only the inherent case, and it is why an opt-in std module leaves a name alone |
 | overlap rules finer than "same trait, matching self types" | there is no orphan rule and no specialization: an impl may be written for any type, and two overlapping ones are simply refused wherever both are visible |
 | visibility below module granularity (`pub(crate)` &c.) | `pub` is the only modifier |

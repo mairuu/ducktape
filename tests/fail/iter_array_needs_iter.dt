@@ -5,5 +5,5 @@
 # rather than by the trait.
 fun main() {
     var xs = [1, 2, 3];
-    var ys = xs.map(|v| => v * 2);
+    var ys = xs.map(|v| v * 2);
 }

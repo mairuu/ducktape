@@ -23,14 +23,14 @@ trait Show {
     # the default body is a generic function whose first type parameter is
     # `Self`, so this closure is instantiated per receiver type
     fun via_closure(self) -> Int {
-        var f: fun() -> Int = || => self.show();
+        var f: fun() -> Int = || self.show();
         return f();
     }
 
     # a closure inside a closure: both copies have to follow
     fun via_nested(self) -> Int {
-        var outer: fun() -> Int = || => {
-            var inner: fun() -> Int = || => self.show();
+        var outer: fun() -> Int = || {
+            var inner: fun() -> Int = || self.show();
             return inner();
         };
         return outer();
@@ -61,14 +61,14 @@ impl Show for B {
 # the same shape without a trait: a closure in a plain generic function, whose
 # call target is only known once T is concrete
 fun doubled<T: Show>(v: T) -> Int {
-    var f: fun() -> Int = || => v.show() + v.show();
+    var f: fun() -> Int = || v.show() + v.show();
     return f();
 }
 
 # a closure over a value of the type parameter, returned from the generic body
 # that made it — so the instance's chunk outlives the frame that built it
 fun getter<T>(v: T) -> fun() -> T {
-    return || => v;
+    return || v;
 }
 
 fun main() {

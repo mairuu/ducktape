@@ -57,7 +57,7 @@ trait Show {
 
     # `Self` in argument and return position, and captured by a closure
     fun bigger(self, other: Self) -> Self {
-        var pick: fun() -> Bool = || => self.show() >= other.show();
+        var pick: fun() -> Bool = || self.show() >= other.show();
         if pick() {
             return self;
         }

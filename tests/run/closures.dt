@@ -20,13 +20,13 @@
 use std::io::print;
 
 fun make_adder(n: Int) -> fun(Int) -> Int {
-    return |x: Int| => x + n;
+    return |x: Int| x + n;
 }
 
 # captures and mutates a local; each call to make_counter yields its own cell
 fun make_counter() -> fun() -> Int {
     var count = 0;
-    return || => {
+    return || {
         count += 1;
         count
     };
@@ -34,7 +34,7 @@ fun make_counter() -> fun() -> Int {
 
 # three-level upvalue chain: the innermost closure reads `a` two frames out
 fun make_adder3(a: Int) -> fun(Int) -> fun(Int) -> Int {
-    return |b: Int| => |c: Int| => a + b + c;
+    return |b: Int| |c: Int| a + b + c;
 }
 
 struct Counter(Int)
@@ -46,7 +46,7 @@ impl Counter {
 
     # `self` is a local of this frame like any other, so a closure captures it
     fun plus(self, n: Int) -> Int {
-        var f = |m: Int| => self.get() + m;
+        var f = |m: Int| self.get() + m;
         return f(n);
     }
 }
@@ -65,7 +65,7 @@ fun main() {
     print(d());              # a fresh, independent cell
 
     var base = 1000;
-    var f = |y: Int| => y + base;
+    var f = |y: Int| y + base;
     print(f(7));
 
     var chain = make_adder3(100);
@@ -75,17 +75,17 @@ fun main() {
 
     # a capture inside a block that escapes via an outer binding: the upvalue
     # is closed when the block exits, yet the closure keeps working
-    var h: fun() -> Int = || => 0;
+    var h: fun() -> Int = || 0;
     if true {
         var secret = 42;
-        h = || => secret;
+        h = || secret;
     }
     print(h());              # 42
 
     # two closures sharing one mutable cell
     var total = 0;
-    var inc = || => { total += 10; total };
-    var get = || => total;
+    var inc = || { total += 10; total };
+    var get = || total;
     print(inc());            # 10
     print(inc());            # 20
     print(get());            # 20

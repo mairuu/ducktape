@@ -47,7 +47,7 @@ fun main() {
     var fs = [str_len, str_len];
     print(fs[1]("in an array"));
 #> 11
-    var doubled: fun(String) -> Int = |s| => str_len(s) * 2;
+    var doubled: fun(String) -> Int = |s| str_len(s) * 2;
     print(doubled("captured"));
 #> 16
 

@@ -255,7 +255,7 @@ pub trait Iterator {
     # into a loop.
     #
     # The closure returns `Unit`, and there is no discard coercion: a shorthand
-    # closure *is* its expression, so `|x| => f(x)` only fits when `f` returns
+    # closure *is* its expression, so `|x| f(x)` only fits when `f` returns
     # nothing. `|x| { f(x); }` is the way round it, and the trailing `;` doing
     # the dropping is the ordinary block rule rather than anything this method
     # asked for.

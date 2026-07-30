@@ -134,8 +134,8 @@ fun main() {
 #> 6
 
     # the projection survives an adapter: `Filter<Counter>.Item` is `Int` too
-    print(largest(Counter::to(10).filter(|x| => x % 3 == 0)).unwrap());
+    print(largest(Counter::to(10).filter(|x| x % 3 == 0)).unwrap());
 #> 9
-    print(largest(Counter::to(4).map(|x| => x * 2)).unwrap());
+    print(largest(Counter::to(4).map(|x| x * 2)).unwrap());
 #> 6
 }

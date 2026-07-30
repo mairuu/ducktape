@@ -31,12 +31,12 @@ impl Iterator for Counter {
 }
 
 fun doubled<I: Iterator<Item = Int>>(it: I) -> [Int] {
-    return it.map(|x| => x * 2).collect();
+    return it.map(|x| x * 2).collect();
 }
 
 fun main() {
     var d: dyn Iterator<Item = Int> = Counter { n: 0, max: 3 };
-    print(d.map(|x| => x * 2).collect());
+    print(d.map(|x| x * 2).collect());
 
     var e: dyn Iterator<Item = Int> = Counter { n: 0, max: 3 };
     print(doubled(e));

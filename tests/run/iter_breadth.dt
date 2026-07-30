@@ -44,30 +44,30 @@ impl Iterator for Noisy {
 
 fun main() {
     # ── the predicates ──────────────────────────────────────────────────────
-    print(Span::of(0, 5).any(|x| => x > 3));
+    print(Span::of(0, 5).any(|x| x > 3));
 #> true
-    print(Span::of(0, 5).any(|x| => x > 9));
+    print(Span::of(0, 5).any(|x| x > 9));
 #> false
-    print(Span::of(0, 5).all(|x| => x < 5));
+    print(Span::of(0, 5).all(|x| x < 5));
 #> true
-    print(Span::of(0, 5).all(|x| => x < 3));
+    print(Span::of(0, 5).all(|x| x < 3));
 #> false
 
     # an empty sequence: `any` has nothing that passes, `all` nothing that
     # fails — the only pair of answers that keeps them mirrors
-    print(Span::of(0, 0).any(|x| => true));
+    print(Span::of(0, 0).any(|x| true));
 #> false
-    print(Span::of(0, 0).all(|x| => false));
+    print(Span::of(0, 0).all(|x| false));
 #> true
 
     # ── the searches ────────────────────────────────────────────────────────
-    print(Span::of(10, 20).find(|x| => x % 7 == 0));
+    print(Span::of(10, 20).find(|x| x % 7 == 0));
 #> Some(14)
-    print(Span::of(10, 20).find(|x| => x > 99));
+    print(Span::of(10, 20).find(|x| x > 99));
 #> None
-    print(Span::of(10, 20).position(|x| => x % 7 == 0));
+    print(Span::of(10, 20).position(|x| x % 7 == 0));
 #> Some(4)
-    print(Span::of(10, 20).position(|x| => x > 99));
+    print(Span::of(10, 20).position(|x| x > 99));
 #> None
 
     print(Span::of(0, 6).count());
@@ -75,7 +75,7 @@ fun main() {
     print(Span::of(0, 0).count());
 #> 0
 
-    Span::of(1, 4).for_each(|x| => print(x * 100));
+    Span::of(1, 4).for_each(|x| print(x * 100));
 #> 100
 #> 200
 #> 300
@@ -85,7 +85,7 @@ fun main() {
     # `any` pulls until something passes and no further; the cursor is left
     # right there, so the same source answers again from where it stopped.
     var src = Noisy { n: 0, max: 6 };
-    print(src.any(|x| => x == 2));
+    print(src.any(|x| x == 2));
 #> pulled 0
 #> pulled 1
 #> pulled 2
@@ -96,7 +96,7 @@ fun main() {
 
     # `all` stops at the first failure, in the same way
     var src2 = Noisy { n: 0, max: 6 };
-    print(src2.all(|x| => x < 1));
+    print(src2.all(|x| x < 1));
 #> pulled 0
 #> pulled 1
 #> false
@@ -106,32 +106,32 @@ fun main() {
     # `take_while` is spent at the first failure and stays spent — a later
     # element the predicate would accept is *not* yielded, which is the whole
     # difference from `filter`
-    print(Span::of(0, 8).take_while(|x| => x < 3).collect());
+    print(Span::of(0, 8).take_while(|x| x < 3).collect());
 #> [0, 1, 2]
-    print(Span::of(0, 8).map(|x| => x % 4).take_while(|x| => x < 3).collect());
+    print(Span::of(0, 8).map(|x| x % 4).take_while(|x| x < 3).collect());
 #> [0, 1, 2]
-    print(Span::of(0, 8).filter(|x| => x % 4 < 3).collect());
+    print(Span::of(0, 8).filter(|x| x % 4 < 3).collect());
 #> [0, 1, 2, 4, 5, 6]
 
     # `skip_while` yields the element that ended the skipping — dropping it
     # would silently eat one element of every sequence
-    print(Span::of(0, 6).skip_while(|x| => x < 3).collect());
+    print(Span::of(0, 6).skip_while(|x| x < 3).collect());
 #> [3, 4, 5]
-    print(Span::of(0, 6).skip_while(|x| => true).collect());
+    print(Span::of(0, 6).skip_while(|x| true).collect());
 #> []
-    print(Span::of(0, 6).skip_while(|x| => false).collect());
+    print(Span::of(0, 6).skip_while(|x| false).collect());
 #> [0, 1, 2, 3, 4, 5]
 
     # and once it has stopped skipping it stays stopped
-    print(Span::of(0, 8).map(|x| => x % 4).skip_while(|x| => x < 2).collect());
+    print(Span::of(0, 8).map(|x| x % 4).skip_while(|x| x < 2).collect());
 #> [2, 3, 0, 1, 2, 3]
 
     # ── lazily, in a pipeline ───────────────────────────────────────────────
-    print(Span::of(0, 100).take_while(|x| => x * x < 50).count());
+    print(Span::of(0, 100).take_while(|x| x * x < 50).count());
 #> 8
-    print(Span::of(0, 20).skip_while(|x| => x < 5).take_while(|x| => x < 9).collect());
+    print(Span::of(0, 20).skip_while(|x| x < 5).take_while(|x| x < 9).collect());
 #> [5, 6, 7, 8]
-    Span::of(0, 10).filter(|x| => x % 2 == 0).for_each(|x| => print(x));
+    Span::of(0, 10).filter(|x| x % 2 == 0).for_each(|x| print(x));
 #> 0
 #> 2
 #> 4
@@ -145,14 +145,14 @@ fun main() {
     # element. `find`'s `Option<Self.Item>` is a projection the object pins,
     # exactly as `collect`'s `[Self.Item]` is.
     var d: dyn Iterator<Item = Int> = Span::of(0, 6);
-    print(d.any(|x| => x == 2));
+    print(d.any(|x| x == 2));
 #> true
     # the cursor was left at 3, so the same object answers from there
     print(d.count());
 #> 3
 
     var e: dyn Iterator<Item = Int> = Span::of(0, 6);
-    print(e.position(|x| => x > 3));
+    print(e.position(|x| x > 3));
 #> Some(4)
 
     # `take_while` and `skip_while` are *excluded* from that vtable — they
@@ -160,9 +160,9 @@ fun main() {
     # provided method is a generic function over `Self` that monomorphises at
     # `Self = dyn Iterator` instead of dispatching (milestone 56)
     var f: dyn Iterator<Item = Int> = Span::of(0, 8);
-    print(f.take_while(|x| => x < 3).collect());
+    print(f.take_while(|x| x < 3).collect());
 #> [0, 1, 2]
     var g: dyn Iterator<Item = Int> = Span::of(0, 6);
-    print(g.skip_while(|x| => x < 3).collect());
+    print(g.skip_while(|x| x < 3).collect());
 #> [3, 4, 5]
 }

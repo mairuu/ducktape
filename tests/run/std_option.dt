@@ -41,19 +41,19 @@ fun main() {
     print(takes(Option::None));
     # ... and from the annotation
     var none: Option<Int> = Option::None;
-    print(none.unwrap_or_else(|| => 9));
+    print(none.unwrap_or_else(|| 9));
 
-    print(some.map(|x| => x * 2).unwrap_or(0));
-    print(some.map(|x| => "v={x}").unwrap_or("none"));
-    print(none.map(|x| => "v={x}").unwrap_or("none"));
+    print(some.map(|x| x * 2).unwrap_or(0));
+    print(some.map(|x| "v={x}").unwrap_or("none"));
+    print(none.map(|x| "v={x}").unwrap_or("none"));
 
     print(halve(8));
     print(halve(7));
-    print(some.and_then(|x| => halve(x * 10)).otherwise(Option::Some(0)));
+    print(some.and_then(|x| halve(x * 10)).otherwise(Option::Some(0)));
     print(none.otherwise(Option::Some(1)));
 
-    print(some.filter(|x| => x > 2).is_some());
-    print(some.filter(|x| => x > 3).is_some());
+    print(some.filter(|x| x > 2).is_some());
+    print(some.filter(|x| x > 3).is_some());
 
     # Option is ordered where its contents are: None sorts first.
     print(min(some, none).cmp(some));

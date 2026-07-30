@@ -86,7 +86,7 @@ fun main() {
 
     # sort_by describes any order the caller can compare with — here, backwards
     var ds = [1, 4, 2, 3];
-    ds.sort_by(|a, b| => b.cmp(a));
+    ds.sort_by(|a, b| b.cmp(a));
     print(ds);
 
     # **stability, observed**: four records over two keys. A stable sort keeps
@@ -98,7 +98,7 @@ fun main() {
         Rec { key: 2, tag: "c" },
         Rec { key: 1, tag: "d" },
     ];
-    recs.sort_by(|a, b| => a.key - b.key);
+    recs.sort_by(|a, b| a.key - b.key);
     print(recs);
 
     # sorting by one key and then another is what stability is *for*: the second
@@ -109,8 +109,8 @@ fun main() {
         Rec { key: 2, tag: "x" },
         Rec { key: 1, tag: "x" },
     ];
-    pairs.sort_by(|a, b| => a.tag.cmp(b.tag));
-    pairs.sort_by(|a, b| => a.key - b.key);
+    pairs.sort_by(|a, b| a.tag.cmp(b.tag));
+    pairs.sort_by(|a, b| a.key - b.key);
     print(pairs);
 
     # searching a sorted array. `lower_bound` is the insertion point, so it

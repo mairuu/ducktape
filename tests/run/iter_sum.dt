@@ -40,13 +40,13 @@ fun main() {
 
     # a pipeline reduces at the end, and the adapter's element type is what the
     # bound is discharged against
-    print("{upto(4).map(|x| => x * 10).sum()}");
+    print("{upto(4).map(|x| x * 10).sum()}");
 #> Some(100)
-    print("{upto(6).filter(|x| => x % 2 == 0).sum()}");
+    print("{upto(6).filter(|x| x % 2 == 0).sum()}");
 #> Some(12)
 
     # `impl Add for String` is why this is not a numeric-only combinator
-    var words = upto(3).map(|x| => "n{x}");
+    var words = upto(3).map(|x| "n{x}");
     print("{words.sum()}");
 #> Some(n1n2n3)
 

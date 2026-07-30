@@ -191,7 +191,9 @@ primary        = INT | FLOAT | CHAR | STRING | interpString
                | exprPath structInit? ;
 
 closure        = "|" ( closureParam ( "," closureParam )* )? "|"
-                 ( "->" type )? ( "=>" expr | block ) ;
+                 ( "->" type )? ( block | expr ) ;
+                 (* `block` is tried first, so a body starting with "{" is a
+                    block and never a struct initializer *)
 closureParam   = IDENT ( ":" type )? ;
 
 exprPath       = pathSegE ( "::" pathSegE )* ;

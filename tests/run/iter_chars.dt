@@ -70,10 +70,10 @@ fun main() {
     # about text. `is_alpha` is ASCII-only and says so, which is why `ö` is
     # missing from the shout and why the reverse walk stops at three.
     var t = "hello, wörld";
-    print(from_chars(t.chars().filter(|c| => c.is_alpha()).map(|c| => c.to_upper()).collect()));
-    print(t.chars().filter(|c| => c == 'l').count());
+    print(from_chars(t.chars().filter(|c| c.is_alpha()).map(|c| c.to_upper()).collect()));
+    print(t.chars().filter(|c| c == 'l').count());
     print(t.chars().enumerate().skip(7).take(2).collect());
-    print(t.chars().rev().take_while(|c| => c.is_alpha()).count());
+    print(t.chars().rev().take_while(|c| c.is_alpha()).count());
 
     # what laziness changes: `slice` cuts in bytes, so this one is half of a
     # two-byte character and no walk over it can finish. A walk that stops

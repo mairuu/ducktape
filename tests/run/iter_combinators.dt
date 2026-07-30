@@ -39,20 +39,20 @@ fun count<I: Iterator>(it: I) -> Int {
 
 fun main() {
     # map + collect
-    print(Counter::to(5).map(|x| => x * 10).collect());
+    print(Counter::to(5).map(|x| x * 10).collect());
 #> [0, 10, 20, 30, 40]
 
     # filter + collect
-    print(Counter::to(8).filter(|v| => v % 2 == 0).collect());
+    print(Counter::to(8).filter(|v| v % 2 == 0).collect());
 #> [0, 2, 4, 6]
 
     # a full pipeline reads left to right: square, keep > 3, drain — nothing
     # intermediate allocates
-    print(Counter::to(6).map(|x| => x * x).filter(|v| => v > 3).collect());
+    print(Counter::to(6).map(|x| x * x).filter(|v| v > 3).collect());
 #> [4, 9, 16, 25]
 
     # a lazy adapter is itself an iterator, so `for` drives it directly
-    for y in Counter::to(3).map(|x| => x + 100) {
+    for y in Counter::to(3).map(|x| x + 100) {
         print(y);
     }
 #> 100
@@ -60,7 +60,7 @@ fun main() {
 #> 102
 
     # break/continue work through a filtered adapter
-    for w in Counter::to(20).filter(|v| => v % 3 == 0) {
+    for w in Counter::to(20).filter(|v| v % 3 == 0) {
         if w == 0 { continue; }
         if w > 9 { break; }
         print(w);

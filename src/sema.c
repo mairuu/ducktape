@@ -4059,7 +4059,7 @@ static Type *resolve_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   bool had_error = false;
   for (int i = 0; i < call->arg_count; i++) {
     // Fold in what earlier arguments already solved before using this parameter
-    // as the hint: for `map(it, |x| => ...)` on `fun(I, fun(I.Item) -> B)`, the
+    // as the hint: for `map(it, |x| ...)` on `fun(I, fun(I.Item) -> B)`, the
     // first argument binds `I`, so the second's hint collapses `I.Item` to the
     // concrete element type and the closure body checks against it. Without
     // this the projection stays abstract and the closure cannot be checked.

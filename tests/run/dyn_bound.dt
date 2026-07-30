@@ -59,13 +59,13 @@ fun main() {
     # own `I: Iterator` bound is satisfied by the same rule, so the recursion
     # closes rather than bottoming out at the coercion.
     var c: dyn Iterator<Item = Int> = Counter { n: 0, max: 3 };
-    print(c.map(|x| => x * 2).collect());
+    print(c.map(|x| x * 2).collect());
 
     var d: dyn Iterator<Item = Int> = Counter { n: 0, max: 5 };
-    print(d.filter(|x| => x > 2).sum().unwrap());
+    print(d.filter(|x| x > 2).sum().unwrap());
 
     var e: dyn Iterator<Item = Int> = Counter { n: 1, max: 4 };
-    print(e.fold(100, |acc, x| => acc + x));
+    print(e.fold(100, |acc, x| acc + x));
 
     # the trait object also flows on *into* another bounded generic, one level
     # further from the coercion site.

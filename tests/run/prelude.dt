@@ -33,7 +33,7 @@ fun main() {
     print("{3.14159:.2}");       # a precision spec, no `use std::fmt`
 
     var o = Option::Some(5);     # Option in scope, its methods too
-    print(o.map(|n| => n * 2).unwrap_or(0));
+    print(o.map(|n| n * 2).unwrap_or(0));
 
     var r: Result<Int, String> = Result::Err("nope");
     print(r.is_ok());

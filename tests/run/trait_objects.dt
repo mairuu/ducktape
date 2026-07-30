@@ -97,7 +97,7 @@ fun main() {
     print(a);
 
     # a closure capturing a trait object still dispatches dynamically
-    var f: fun() -> Int = || => a.area() / 3;
+    var f: fun() -> Int = || a.area() / 3;
     print(f());
 
     # a trait object passed on as a trait object — no re-wrapping

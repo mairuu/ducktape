@@ -33,7 +33,9 @@ Notables:
   `var/return/break/continue/if/for/match/while` through `parse_stmt`, but a
   parsed `if`/`match` statement immediately before `}` is unwrapped into the
   block's tail (that's what makes `{ if c { 1 } else { 2 } }` an `Int` block).
-- `parse_closure` — `|params| ( -> type )? ( => expr | { block } )`.
+- `parse_closure` — `|params| ( -> type )? ( { block } | expr )`. The body has
+  no introducer token: a `{` is read as the block form and anything else starts
+  an expression, so the two are told apart by lookahead rather than by a `=>`.
 - `parse_type` — `()`, tuples, `fun(..) -> R`, `[T]`, `dyn Trait`, `Self`,
   named paths, and `.Assoc` postfix chains.
 - `parse_path(mode)` — expression paths require turbofish (`::<T>`) for type
@@ -829,7 +831,7 @@ Call arguments are checked **left to right, each hinted by what the earlier ones
 already solved.** `resolve_call_expr` runs the parameter type through
 `infer_apply` before handing it to the argument as a hint, rather than using the
 raw `param_types[i]`. This matters when one argument's type mentions another's:
-`map(it, |x| => ...)` on `fun(I, fun(I.Item) -> B)` binds `I` from the first
+`map(it, |x| ...)` on `fun(I, fun(I.Item) -> B)` binds `I` from the first
 argument, so the second's hint collapses the projection `I.Item` to the concrete
 element type — and the closure body can be checked at all, since an abstract
 `I.Item` is neither numeric nor comparable. Without the progressive apply the

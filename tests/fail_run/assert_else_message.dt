@@ -6,5 +6,5 @@ use std::assert::assert_else;
 fun main() {
     var used = 10;
     var cap = 8;
-    assert_else(used <= cap, || => "no room: {used} of {cap} used");
+    assert_else(used <= cap, || "no room: {used} of {cap} used");
 }

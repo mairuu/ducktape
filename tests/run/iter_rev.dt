@@ -79,11 +79,11 @@ fun main() {
 
     # `Map` and `Filter` forward `DoubleEnded`, so a pipeline stays reversible;
     # `take` does not, which is what iter_rev_not_double_ended.dt pins.
-    print(Span::of(0, 5).map(|x| => x * 2).rev().collect());
+    print(Span::of(0, 5).map(|x| x * 2).rev().collect());
 #> [8, 6, 4, 2, 0]
-    print(Span::of(0, 8).filter(|x| => x % 3 == 0).rev().collect());
+    print(Span::of(0, 8).filter(|x| x % 3 == 0).rev().collect());
 #> [6, 3, 0]
-    print(Span::of(0, 6).map(|x| => x + 1).filter(|x| => x % 2 == 0).rev().collect());
+    print(Span::of(0, 6).map(|x| x + 1).filter(|x| x % 2 == 0).rev().collect());
 #> [6, 4, 2]
 
     # a `Rev` is an ordinary iterator, so `for` drives it
