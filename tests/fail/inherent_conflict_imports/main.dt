@@ -1,0 +1,8 @@
+#! expect: two definitions of method 'area' for type 'P' visible at once
+# Neither wide nor tall can see the other's impl, so each is fine on its own —
+# an inherent method on an imported type is legal, unlike Rust's orphan rule.
+# The collision exists only here, and is reported at the import that creates it.
+use wide::from_wide;
+use tall::from_tall;
+
+fun main() {}

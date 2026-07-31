@@ -80,6 +80,18 @@ void impl_index_add(ImplIndex *idx, ImplDef *impl);
 // `impl` blocks is ordinary.
 bool impl_defs_conflict(ImplDef *a, ImplDef *b, Allocator *al);
 
+// Do `a` and `b` give one receiver the same *inherent* method name? Splitting
+// a type's methods across impl blocks is ordinary, so the granularity here is
+// the name rather than the impl head: two blocks may share a type, but not a
+// name. On a hit *out_name is the first name they both spend.
+//
+// "Inherent" means reached by the receiver alone — an impl heading no trait,
+// and also the extra methods a trait impl is allowed to carry. A method the
+// trait *declares* is excluded: a bound or a trait-qualified path names which
+// one was meant, which is why two traits may both declare `next`.
+bool impl_defs_share_method(ImplDef *a, ImplDef *b, StringView *out_name,
+                            Allocator *al);
+
 // find a method named `name` applicable to `self_type`, trying every
 // registered impl. on a match, *out_match is filled with the impl and the
 // substitution mapping the impl's type params to the concrete type args

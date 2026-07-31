@@ -382,7 +382,9 @@ That makes a *bare* method call the one place the receiver alone cannot
 decide: `c.into()` has two bodies to choose from. The expected type breaks the
 tie (`var f: Fahrenheit = c.into()`), and a call through a bound never needs
 it, since the bound names the reference. With neither, the first matching impl
-wins — the same rule overlapping method names have always had.
+wins. That fallback survives only because the name is one the *trait* declares:
+an **inherent** name may be declared once per type, so nothing else can reach
+this state (see "Impl blocks" below).
 
 See `tests/run/generic_trait.dt`.
 - Generic code runs: each generic function, method and impl is compiled once
@@ -948,7 +950,9 @@ std::array;` reaches `std::option` (that is what `pop` returns), and so
 impl those modules ship is visible too, and since milestone 40 that includes
 inherent methods on the primitives (`impl<T> [T]`, `impl String`, `impl Char`,
 `impl StringBuf`). Importing `std::array` therefore also means you cannot add
-your own inherent `[T]` method of a name it already spends (`len`, `push`, …).
+your own inherent `[T]` method of a name it already spends (`len`, `push`, …) —
+since milestone 68 that is an error where the impl is written, rather than the
+silent loss it used to be.
 
 That chain is why the direction of a std module's own imports is a design
 decision rather than bookkeeping: what an import costs its dependents is the
@@ -969,8 +973,32 @@ error: conflicting implementations of trait 'Ord' for type 'Int'
 
 Two modules that cannot see each other may each implement the same trait for
 the same type; the conflict is reported at whatever `use` first makes both
-visible. Inherent (`impl Point`) blocks never conflict — splitting a type's
-methods across several is ordinary.
+visible.
+
+**Inherent methods have the same rule at a finer grain: the name rather than
+the impl head.** Splitting a type's methods across several `impl Point` blocks
+is ordinary — `String`'s live in three std modules — but one type spends an
+inherent name once:
+
+```
+error: conflicting definitions of method 'first' for type '[T]'
+> note: the other one is in module '<std>/array.dt'
+```
+
+Two definitions in one block report separately ("method 'get' is defined twice
+in this impl block"), and the cross-module pair reports at the `use`, like the
+trait case. Overlap is asked with bounds ignored and from both sides, so a
+bound (`impl<T: Ord> W<T>` against `impl<T> W<T>`) and a narrower head
+(`impl [Int]` against `impl<T> [T]`) are both refused — the language has no
+specialization, so neither is a way to win a name from a wider impl.
+
+*Inherent* means reached by the receiver alone, which includes the extra
+methods a trait impl may carry beyond what its trait asked for. A name the
+trait itself declares is exempt: a bound or a trait-qualified path says which
+body was meant, so two traits may both declare `go` for one type, and an
+inherent `cmp` may sit beside `impl Ord`'s. The diagnostic exists because the
+alternative is not shadowing but unreachability — selection is
+first-registered-wins, and nothing a call site can write names the loser.
 
 A cycle in the import graph is an error, reported with the chain of modules
 involved.
@@ -1879,9 +1907,12 @@ use std::text;
 ```
 
 Two inherent impls for one type coexist: `std::string`'s `impl String` and this
-one declare disjoint method names, and neither is a trait impl, so coherence has
-no say — method resolution finds each name in whichever visible impl declares
-it. The module boundary the cycle below forces is invisible at the call site.
+one declare **disjoint method names**, which since milestone 68 is what
+coherence asks of them — the granularity is the name, not the impl head, so
+splitting a type's methods across blocks is ordinary and spending one name
+twice is an error. Method resolution finds each name in whichever visible impl
+declares it, and the module boundary the cycle below forces is invisible at the
+call site.
 
 **It is a module of its own, not more of `std::string`, and the reason is a
 dependency cycle rather than taste.** `std::cmp` imports `std::string` for
@@ -2114,7 +2145,7 @@ s.contains(4); s.remove(4); s.to_array();
 
 | Gap | Behavior today |
 |---|---|
-| extra (non-trait) methods in a trait impl | tolerated as inherent methods (Rust rejects them) |
+| extra (non-trait) methods in a trait impl | tolerated as inherent methods (Rust rejects them) — and treated as inherent by coherence too, so an extra collides with an inherent method of the same name for that type |
 | `dyn Trait` for a non-object-safe trait | rejected where `dyn` is written, naming the method and the reason |
 | coercing the abstract `Self` of a default body to `dyn Trait` | not offered — `self` inside a default body cannot be handed over as a trait object |
 | recovering from a panic (`catch`, unwinding) | a panic reports at the call site and stops; there is no `catch` |
@@ -2149,15 +2180,14 @@ s.contains(4); s.remove(4); s.to_array();
 | glob imports (`use a::*`) | not parsed; name each item, or bind the module (`use a;`) and qualify |
 | re-exporting a module qualifier (`pub use a;`) | a qualifier is not an item; `pub use` re-exports named items only |
 | `pub` on a method | rejected — `pub fun` in an impl is "expected impl item", and `pub` is only ignored on the `impl` keyword itself. A method is as visible as the impl it sits in, which is why `std::array`'s raw `pop_last` and `std::iter`'s `char_at` are private *free functions* rather than methods. Struct **fields** do take `pub`: they are private to their module by default, and the diagnostic naming one says so |
-| a diagnostic when two *inherent* impls give one type the same method name | there is none: the std one silently wins and the program's is unreachable, so `impl<T> [T] { fun first(..) }` in a program is quietly ignored (`first` reaches every program through the prelude's `std::iter → std::array` chain). A trait impl collision *is* caught — this is only the inherent case, and it is why an opt-in std module leaves a name alone |
-| overlap rules finer than "same trait, matching self types" | there is no orphan rule and no specialization: an impl may be written for any type, and two overlapping ones are simply refused wherever both are visible |
+| overlap rules finer than "matching self types" | there is no orphan rule and no specialization: an impl may be written for any type, and two overlapping ones are simply refused wherever both are visible — a bound (`impl<T: Ord> W<T>` against `impl<T> W<T>`) or a narrower head (`impl [Int]` against `impl<T> [T]`) is not a way to win a name |
 | visibility below module granularity (`pub(crate)` &c.) | `pub` is the only modifier |
 | two spellings of one file (symlinks, unusual paths) | dedup is lexical, so the file would load twice and collide |
 | top-level `var` (globals) | parses, then a registration diagnostic: move it into a function |
 | tuple-struct struct-patterns `Pair { a, b }` | write the constructor spelling `Pair(a, b)` — "matching tuple struct with struct pattern syntax is not allowed" |
 | variable shadowing diagnostics | a `var` may silently shadow an earlier one in the same scope (top-level *item* names do collide — that is an error) |
 | declaring a type whose name is a builtin (`struct Range`, `struct String`) | accepted, but a builtin name is resolved before the type scope is consulted, so every mention of it means the builtin and the declaration is unreachable |
-| overlapping method names across impls of one type | bare paths pick the first registered impl (inherent impls do not conflict; only trait impls are checked for overlap) |
+| overlapping method names across impls of one type | rejected since milestone 68: one type spends an inherent name once, whether the two definitions sit in two impl blocks or in one. A name the impl's *trait* declares is exempt — a bound or a trait-qualified path names which body was meant, so two traits may both declare `next` for one type. Where several impls legitimately declare a name (a generic trait like `Into<Int>` / `Into<String>`), a bare path still picks the first registered impl |
 | capturing a `for` loop variable in a closure | runs, but the closure sees the loop variable's *final* value (one shared cell), not a per-iteration copy — `runtime.md` "Closures & upvalues" |
 | infinitely deep generic instantiation | `fun grow<T>(v: T) { grow([v]) }` type-checks but names a new instantiation at every level; codegen stops at 32 and reports it (`runtime.md` "Monomorphisation") |
 | more than 65536 functions, counting one per instantiation | each instantiation takes a global slot, so a heavily generic program can outgrow the two-byte operand space (`runtime.md` "Bytecode") |

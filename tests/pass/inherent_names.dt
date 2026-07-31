@@ -1,0 +1,80 @@
+# Milestone 68: what inherent coherence must *not* reject. The rule is one
+# inherent name per type, and each block below is a way for a name to repeat
+# without two bodies ever competing for one receiver.
+use std::cmp::Ord;
+
+struct P {
+  x: Int,
+}
+
+# Splitting a type's methods across blocks: ordinary, and how std ships String.
+impl P {
+  fun width(self) -> Int {
+    return self.x;
+  }
+}
+
+impl P {
+  fun height(self) -> Int {
+    return self.x + 1;
+  }
+}
+
+# Two traits may both declare `go` for one type: a bound or a trait-qualified
+# path says which body was meant, so neither is unreachable.
+trait Rolls {
+  fun go(self) -> Int;
+}
+
+trait Flies {
+  fun go(self) -> Int;
+}
+
+impl Rolls for P {
+  fun go(self) -> Int {
+    return 1;
+  }
+}
+
+impl Flies for P {
+  fun go(self) -> Int {
+    return 2;
+  }
+}
+
+# An inherent name may coincide with a trait-declared one for the same reason —
+# `a < b` gates on Ord before it rewrites, so this `cmp` cannot silently qualify.
+struct Q {
+  v: Int,
+}
+
+impl Q {
+  fun cmp(self, n: Int) -> Int {
+    return self.v - n;
+  }
+}
+
+impl Ord for Q {
+  fun cmp(self, other: Q) -> Int {
+    return self.v - other.v;
+  }
+}
+
+# Disjoint heads: no receiver is accepted by both, so the name repeats freely.
+struct W<T> {
+  v: T,
+}
+
+impl W<Int> {
+  fun tag(self) -> Int {
+    return 1;
+  }
+}
+
+impl W<String> {
+  fun tag(self) -> Int {
+    return 2;
+  }
+}
+
+fun main() {}

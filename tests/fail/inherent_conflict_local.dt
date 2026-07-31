@@ -1,0 +1,22 @@
+#! expect: conflicting definitions of method 'get' for type 'P'
+# Splitting a type's methods across two impl blocks is ordinary — std does it for
+# String in three modules. Spending one *name* twice is not: selection is
+# first-registered-wins, so the second body is dead code with no diagnostic.
+
+struct P {
+  x: Int,
+}
+
+impl P {
+  fun get(self) -> Int {
+    return 1;
+  }
+}
+
+impl P {
+  fun get(self) -> Int {
+    return 2;
+  }
+}
+
+fun main() {}

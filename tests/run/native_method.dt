@@ -5,20 +5,26 @@
 # signature changes. This file writes the attributes directly against the
 # compiler's native/intrinsic registry rather than through std, which is left to
 # spell its operations as it already does.
+#
+# The names below are deliberately ones std does not spend. Milestone 68 found
+# this file calling `len` and `slice` from `std::string`/`std::array` rather
+# than its own: the declarations were byte-identical, so the tautology printed
+# the right answers for years. An inherent name is one per type, and these are
+# the file's own.
 
 use std::io::print;
 
 # A native method: its body is the C function `string_len`, reached by name.
 impl String {
-    @native("string_len") fun len(self) -> Int;
-    @native("string_slice") fun slice(self, from: Int, to: Int) -> String;
+    @native("string_len") fun byte_count(self) -> Int;
+    @native("string_slice") fun sub(self, from: Int, to: Int) -> String;
 }
 
-# An intrinsic method: `self.len()` lowers to the OP_LEN opcode inline, with no
-# global slot and no call frame — the same tier the `for` desugaring uses, now
-# nameable on a receiver. Works over the generic `impl<T> [T]` too.
+# An intrinsic method: `self.elem_count()` lowers to the OP_LEN opcode inline,
+# with no global slot and no call frame — the same tier the `for` desugaring
+# uses, now nameable on a receiver. Works over the generic `impl<T> [T]` too.
 impl<T> [T] {
-    @intrinsic("array_len") fun len(self) -> Int;
+    @intrinsic("array_len") fun elem_count(self) -> Int;
 }
 
 # A native method satisfying a trait: it takes an ordinary vtable slot, so a
@@ -38,11 +44,11 @@ fun total(items: [dyn Measure]) -> Int {
 
 fun main() {
     var s = "hello";
-    print(s.len());
-    print(s.slice(1, 3));
+    print(s.byte_count());
+    print(s.sub(1, 3));
 
     var xs = [10, 20, 30, 40];
-    print(xs.len());
+    print(xs.elem_count());
 
     # dispatch through a native method carried in a `dyn Measure` vtable
     print(total(["ab", "cde", "f"]));

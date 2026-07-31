@@ -1,0 +1,24 @@
+#! expect: conflicting definitions of method 'scale' for type 'W<T>'
+# A bound is not a way to win a name from a wider impl: the language has no
+# specialisation, so `impl<T: Ord> W<T>` does not beat `impl<T> W<T>` at a
+# receiver they both accept. Overlap is asked with bounds ignored, the same
+# conservative question trait coherence asks.
+use std::cmp::Ord;
+
+struct W<T> {
+  v: T,
+}
+
+impl<T> W<T> {
+  fun scale(self) -> Int {
+    return 1;
+  }
+}
+
+impl<T: Ord> W<T> {
+  fun scale(self) -> Int {
+    return 2;
+  }
+}
+
+fun main() {}

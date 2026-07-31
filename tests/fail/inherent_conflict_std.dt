@@ -1,0 +1,13 @@
+#! expect: conflicting definitions of method 'first' for type '[T]'
+# std::array already gives `[T]` a `first`, and the prelude's std::iter → std::array
+# edge makes it visible to every program whether it imported the module or not.
+# Before milestone 68 this silently lost to std's — not shadowed but unreachable,
+# since nothing a call site can write names the loser.
+
+impl<T> [T] {
+  fun first(self) -> Int {
+    return 0;
+  }
+}
+
+fun main() {}

@@ -2204,10 +2204,11 @@
   **The cost the milestone actually buys is a wart, and it is worth naming.**
   Shipping `impl String` / `impl<T> [T]` / `impl Char` widely means a program that
   imports the module can no longer add its own inherent method of the same name to
-  that primitive — overlapping inherent methods are silently first-wins (there is
-  no coherence check on inherent impls), so it shadows with no diagnostic. This is
-  the `Display`/`Ord`-for-containers tradeoff, one level over, minus even the
-  error: a trait impl coherence would reject, an inherent one it accepts.
+  that primitive — overlapping inherent methods were silently first-wins (there
+  was no coherence check on inherent impls), so it shadowed with no diagnostic.
+  This is the `Display`/`Ord`-for-containers tradeoff, one level over, minus even
+  the error: a trait impl coherence would reject, an inherent one it accepted.
+  *Milestone 68 supplied the missing error; the name budget it describes stands.*
   `std::strbuf` is the free case — `StringBuf` is a type only it defines, so no
   program competes for those names.
 
@@ -2237,8 +2238,9 @@
   `Option`- and `[String]`-returning operations one module up. That did not
   block the migration: an `impl String` is legal in any module that can see
   `String`, so `std::text` ships a **second `impl String`** beside the leaf's.
-  Two inherent impls for one type coexist with no coherence question because
-  their method names are disjoint and neither is a trait impl — `impl_index_*`
+  Two inherent impls for one type coexist because their method names are
+  disjoint — which milestone 68 turned from the reason there was no coherence
+  question into the question coherence asks. `impl_index_*`
   finds each name in whichever *visible* impl declares it, so a call site sees
   `s.len()` (the leaf's) and `s.trim()` (this one) as one flat method surface
   and never learns they live in different files. The module boundary the cycle
@@ -3654,6 +3656,51 @@
     (The other two sabotages, sharing a def that does have fields, turn `5 0`
     into `5 5` and `3 1 2` into `2 2 2`.) Milestone 63's rule keeps earning it.
 
+- **Inherent coherence (milestone 68)** — two impls giving one type the same
+  *inherent* method name are now an error where the second is written, closing
+  the oldest open wart. `impl_defs_share_method` in `sema.c`, called from the
+  two places `impl_defs_conflict` already was, plus a pairwise loop for one
+  block. No new machinery: the overlap question is `impl_applies` with
+  `trait_ref` NULL. Design: `language.md` "Where an `impl` applies",
+  `architecture.md` "Coherence".
+
+  - **The granularity is the name, not the impl head** — which is why the rule
+    took this long to state. Trait coherence can compare two heads because a
+    trait impl *is* one indivisible claim; an inherent impl is a bag of
+    independent ones, and std splits `String`'s across three modules. So the
+    unit had to be the pair (self type, method name), and the check had to move
+    to the *end* of `resolve_impl_decl`: `tc_register_impl` allocates the
+    `MethodDef`s zeroed and the names arrive with the items, so there was
+    nothing to ask before.
+  - **What "inherent" turned out to mean is "not named by a trait".** A name a
+    trait declares is reached through a bound or a trait-qualified path, so two
+    traits may both declare `go` for one type and an inherent `cmp` may sit
+    beside `impl Ord`'s — the `Ord` rewrite gates on the trait before it looks
+    for a method, which is what makes that safe. Everything else is reached by
+    the receiver alone, and that *includes the extra methods a trait impl is
+    allowed to carry beyond its trait*: nothing names those, so they collide
+    like any other. The rule fell out of the question rather than being chosen.
+  - **Overlap is asked with bounds ignored, from both sides** — the same
+    conservative question trait coherence asks, minus the trait. So
+    `impl<T: Ord> W<T>` loses to `impl<T> W<T>` and `impl [Int]` loses to
+    `impl<T> [T]`: with no specialisation, neither a bound nor a narrower head
+    is a way to win a name from a wider impl. Each direction has its own test,
+    since the concrete-vs-generic case is caught by only one of them.
+  - **THE BUG IT FOUND: milestone 39's own test had been absorbed by std.**
+    `tests/run/native_method.dt` declared `@native("string_len") fun len` on
+    `String` and `@intrinsic("array_len") fun len` on `[T]` — byte-identical to
+    what `std::string` and `std::array` grew later and reach every program
+    through the prelude. Every call in it had been running std's body for
+    milestones, and it passed because a tautology cannot fail. The names are now
+    ones std does not spend (`byte_count`, `sub`, `elem_count`), so the file
+    tests its own declarations again. This is the wart's cost made concrete: the
+    silent loser was not a hypothetical program's method, it was the test suite's.
+  - **Sabotaged four ways**, per milestone 63's rule. Neutering the cross-impl
+    check fails 5 tests; deleting the same-block loop fails 1; making
+    `method_is_inherent` return true unconditionally over-fires on 9, including
+    `std::iter`'s own trait impls; dropping either direction of the overlap test
+    fails exactly the test written for that direction.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -3851,17 +3898,16 @@ via `Module.decl_base`) and is not part of the main line.
   help — it is the `Rhs` parameter that cannot be inferred where the trait is
   named. A mixed pair is reported as an argument mismatch on the rewritten call,
   which describes the desugaring rather than the mistake
-- **two inherent impls giving one type the same method name collide silently**,
-  and the visible one wins: a program writing `impl<T> [T] { fun first(..) }`
-  gets `std::array`'s `first` at the call site instead, with no diagnostic and
-  no way to reach its own. Every `[T]` and `String` method std ships is
-  therefore a name a program cannot use, and the reach is wider than it looks —
-  the prelude's `std::iter → std::array` and `std::string` edges make those
-  modules' impls visible to every program whether it imported them or not. A
-  *trait* impl collision is caught by coherence; this is only the inherent case.
-  Found while placing milestone 62, which is why `std::sort` is opt-in rather
-  than preluded. The fix is a diagnostic where the second impl is written, not a
-  resolution rule — silently preferring either one is the bug
+- ~~two inherent impls giving one type the same method name collide silently~~ —
+  **closed by milestone 68**, which took the fix this entry had already named: a
+  diagnostic where the second impl is written, not a resolution rule. What
+  remains is the fact underneath it rather than the silence — every `[T]` and
+  `String` method std ships is still a name a program cannot use, and the reach
+  is wider than it looks, since the prelude's `std::iter → std::array` and
+  `std::string` edges make those modules' impls visible to every program whether
+  it imported them or not. That is why `std::sort` is opt-in rather than
+  preluded (found while placing milestone 62). The change is that spending one
+  of those names now says so
 - `std::ops` ships `impl Add for Int` (and the other eleven primitive impls), so
   a program can no longer write its own — the `Display`/`Ord`-for-primitives
   cost, one module over, and unavoidable for the same reason: without them a
@@ -3961,11 +4007,13 @@ via `Module.decl_base`) and is not part of the main line.
 - shipping an inherent method on a primitive widely (`impl String`, `impl<T> [T]`,
   `impl Char` since milestone 40, and a *second* `impl String` in `std::text`
   since milestone 41) means a program importing that module cannot add its own
-  inherent method of the same name — overlapping inherent methods are silently
-  first-wins, with no coherence check, so it shadows rather than errors. The
-  `Display`/`Ord`-for-containers cost, one level over, minus the diagnostic.
-  Note this is only a problem *across* impls: two std impls for `String` coexist
-  fine because their names are disjoint, which is what milestone 41 relies on
+  inherent method of the same name. The `Display`/`Ord`-for-containers cost, one
+  level over. **Milestone 68 gave it the missing diagnostic** — it is now an
+  error where the impl is written rather than a silent first-wins shadowing — so
+  what remains is the name budget itself, not the silence. Note this is only a
+  problem *across* names: two std impls for `String` coexist fine because their
+  names are disjoint, which is what milestone 41 relies on and what milestone 68
+  turned from a convention into a rule
 - a native's C signature is not checked against its ducktape one — the registry
   knows only "n values in, one out", so a mismatch is a std bug that the
   checker cannot catch

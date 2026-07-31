@@ -1969,18 +1969,29 @@ void tc_import_impls(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
       ImplDef *impl = dep->all[j];
       for (int k = 0; k < m->visible_impls.count; k++) {
         ImplDef *other = m->visible_impls.all[k];
-        if (other == impl || !impl_defs_conflict(impl, other, tc->al)) {
+        if (other == impl) {
           continue;
         }
         // reported at the `use` that made the pair collide, because that is
         // the only span of the three modules involved that lies in *this*
         // module's source — and diagnostics are printed against it.
+        StringView method;
         char buf[64];
-        type_sprintf(impl->self_type, buf, sizeof(buf));
-        diag_error(tc->diags, imp->decl->as.use_decl.path.span,
-                   "this import makes two implementations of trait '" SV_FMT
-                   "' for type '%s' visible at once",
-                   SV_ARG(impl_trait_def(impl)->name), buf);
+        if (impl_defs_conflict(impl, other, tc->al)) {
+          type_sprintf(impl->self_type, buf, sizeof(buf));
+          diag_error(tc->diags, imp->decl->as.use_decl.path.span,
+                     "this import makes two implementations of trait '" SV_FMT
+                     "' for type '%s' visible at once",
+                     SV_ARG(impl_trait_def(impl)->name), buf);
+        } else if (impl_defs_share_method(impl, other, &method, tc->al)) {
+          type_sprintf(impl->self_type, buf, sizeof(buf));
+          diag_error(tc->diags, imp->decl->as.use_decl.path.span,
+                     "this import makes two definitions of method '" SV_FMT
+                     "' for type '%s' visible at once",
+                     SV_ARG(method), buf);
+        } else {
+          continue;
+        }
         diag_note(tc->diags, (Span){0}, "  one is in module '" SV_FMT "'",
                   SV_ARG(impl->module->file_path));
         diag_note(tc->diags, (Span){0}, "  the other in module '" SV_FMT "'",
@@ -2434,6 +2445,53 @@ static void resolve_enum_decl(ResolveCtx *rctx, Decl *decl) {
   rctx->tyres.tscope = tscope_pop(rctx->tyres.tscope);
 }
 
+// One type, one inherent method name. Two impl blocks for a type are ordinary
+// — std splits `String`'s methods across three modules — but two bodies under
+// one name are not: selection is first-registered-wins, so the loser is not
+// shadowed, it is unreachable, with nothing a call site can write to name it.
+// The fix is therefore a diagnostic here rather than a resolution rule, since
+// silently preferring either one is the bug.
+//
+// Reported against the impl being resolved, which makes the *second* one the
+// error — the same asymmetry trait coherence has, and the useful one: the
+// first is usually std's.
+static void resolve_impl_inherent_coherence(ResolveCtx *rctx, Decl *decl,
+                                            ImplDef *impl_def) {
+  for (int i = 0; i < impl_def->method_count; i++) {
+    for (int j = i + 1; j < impl_def->method_count; j++) {
+      if (!sv_equal(impl_def->methods[i].name, impl_def->methods[j].name)) {
+        continue;
+      }
+      diag_error(rctx->diags, impl_def->methods[j].fun->span,
+                 "method '" SV_FMT "' is defined twice in this impl block",
+                 SV_ARG(impl_def->methods[j].name));
+      return;
+    }
+  }
+
+  for (int i = 0; i < rctx->impls->count; i++) {
+    ImplDef *other = rctx->impls->all[i];
+    StringView name;
+    if (other == impl_def ||
+        !impl_defs_share_method(impl_def, other, &name, rctx->al)) {
+      continue;
+    }
+    char buf[64];
+    type_sprintf(impl_def->self_type, buf, sizeof(buf));
+    diag_error(rctx->diags, decl->span,
+               "conflicting definitions of method '" SV_FMT "' for type '%s'",
+               SV_ARG(name), buf);
+    if (other->module == impl_def->module) {
+      diag_note(rctx->diags, (Span){0}, "the other one is in this module");
+    } else {
+      diag_note(rctx->diags, (Span){0},
+                "the other one is in module '" SV_FMT "'",
+                SV_ARG(other->module->file_path));
+    }
+    break;
+  }
+}
+
 static void resolve_impl_decl(ResolveCtx *rctx, Decl *decl) {
   assert(decl->kind == DECL_IMPL && "expected impl decl");
   DeclImpl *impl_decl = &decl->as.impl_decl;
@@ -2575,6 +2633,11 @@ static void resolve_impl_decl(ResolveCtx *rctx, Decl *decl) {
       assert(false && "unhandled impl item kind");
     }
   }
+
+  // Inherent coherence, which is per *name* and so has to wait until the
+  // methods have theirs — the head check above ran before the items on
+  // purpose, so `Self.Assoc` could be looked up while they resolved.
+  resolve_impl_inherent_coherence(rctx, decl, impl_def);
 
   // end; impl level type scope
   rctx->tyres.tscope = tscope_pop(rctx->tyres.tscope);
@@ -8718,6 +8781,49 @@ bool impl_defs_conflict(ImplDef *a, ImplDef *b, Allocator *al) {
   Subst ignored;
   return impl_applies(a, b->self_type, b->trait_type, &ignored, NULL, al) ||
          impl_applies(b, a->self_type, a->trait_type, &ignored, NULL, al);
+}
+
+// Is `name` reached on this impl by the receiver alone? A method the impl's
+// trait declares is not: `it.next()` picks its body from a bound or a
+// trait-qualified path, so `Iterator` and some other trait may both spend the
+// name for one type without either becoming unreachable. Everything else is
+// inherent, including a method a trait impl carries beyond what the trait
+// asked for — nothing names *those*, so they collide like any other.
+static bool method_is_inherent(ImplDef *impl, StringView name) {
+  TraitDef *trait = impl_trait_def(impl);
+  return trait == NULL || trait_flat_method_index(trait, name) < 0;
+}
+
+bool impl_defs_share_method(ImplDef *a, ImplDef *b, StringView *out_name,
+                            Allocator *al) {
+  if (a->self_type == NULL || b->self_type == NULL ||
+      type_is_poison(a->self_type) || type_is_poison(b->self_type)) {
+    return false; // already diagnosed; don't pile on
+  }
+
+  // Overlap is the same conservative question trait coherence asks, minus the
+  // trait: does either impl apply to the other's self type, bounds ignored?
+  // So `impl<T> [T]` and `impl<T: Ord> [T]` overlap — the language has no
+  // specialisation, so a bound is not a way to win a name from a wider impl.
+  Subst ignored;
+  if (!impl_applies(a, b->self_type, NULL, &ignored, NULL, al) &&
+      !impl_applies(b, a->self_type, NULL, &ignored, NULL, al)) {
+    return false;
+  }
+
+  for (int i = 0; i < a->method_count; i++) {
+    StringView name = a->methods[i].name;
+    if (name.len == 0 || !method_is_inherent(a, name)) {
+      continue;
+    }
+    for (int j = 0; j < b->method_count; j++) {
+      if (sv_equal(b->methods[j].name, name) && method_is_inherent(b, name)) {
+        *out_name = name;
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 // A trait method the receiver inherits rather than defines: some

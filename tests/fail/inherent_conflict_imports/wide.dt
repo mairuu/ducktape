@@ -1,0 +1,11 @@
+use shape::P;
+
+impl P {
+  fun area(self) -> Int {
+    return self.v * self.v;
+  }
+}
+
+pub fun from_wide() -> Int {
+  return 1;
+}

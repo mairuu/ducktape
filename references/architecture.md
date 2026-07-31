@@ -285,8 +285,25 @@ reported twice over, at the two places a pair can first meet: in
 `resolve_impl_decl` when a module's own impl meets an imported one, and in
 `tc_import_impls` when one `use` makes two dependencies' impls visible at once.
 Both spans lie in the module being compiled, which is required — diagnostics
-are reported against that module's source. Inherent impls are exempt: splitting
-a type's methods across several blocks is ordinary.
+are reported against that module's source.
+
+**Inherent impls get the same treatment at the granularity of a name.**
+Splitting a type's methods across several blocks is ordinary, so the impl head
+is the wrong unit; `impl_defs_share_method` asks the overlap question with
+`trait_ref` NULL (the receiver alone, both directions, bounds ignored) and then
+looks for a method name both sides declare *inherently*. `method_is_inherent`
+answers that: a name the impl's trait declares — `trait_flat_method_index` ≥ 0,
+so a supertrait's methods count — is reached through a bound or a
+trait-qualified path and may repeat, while everything else, including the extra
+methods a trait impl carries beyond its trait, is reached by the receiver alone
+and may not.
+
+Two placement consequences. The check runs at the *end* of `resolve_impl_decl`
+rather than beside the trait one at the top: `tc_register_impl` allocates
+`ImplDef.methods` zeroed and the names are filled while the items resolve, so a
+name-granular question has nothing to ask until then. And an impl cannot
+conflict with itself, so two methods of one name in one block are a separate
+pairwise loop over `impl_def->methods` with its own diagnostic.
 
 `TypeChecker.all_impls` is the one program-wide list that survives, and it is
 **never selected from**. It exists so a failure can explain itself:
@@ -1470,7 +1487,9 @@ when the caller has one, a trait reference — against each impl's head: exact
 `types_equal` for non-generic impls, `impl_type_match` (structural, binds the
 impl's `TY_GENERIC` leaves) for generic ones. First match wins, except that a
 `ret_hint` breaks a tie between two impls of one generic trait (see "Generic
-traits"). A *bare generic self* — the canonical `Point<T>` that a path
+traits"). "First match wins" is only ever *reached* for a trait-declared name:
+inherent coherence rejects the pair that would otherwise make it arbitrary. A
+*bare generic self* — the canonical `Point<T>` that a path
 like `Point::new` resolves to, detected by pointer identity with
 `def->self_type` — instead selects by method name and opens the impl's params
 as unknowns for the call site to solve. That branch is gated on the caller's

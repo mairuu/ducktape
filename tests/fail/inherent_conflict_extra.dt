@@ -1,0 +1,32 @@
+#! expect: conflicting definitions of method 'helper' for type 'P'
+# A trait impl may carry methods the trait never asked for, and those are
+# inherent: nothing names them but the receiver. So an extra collides with an
+# ordinary inherent method exactly like a second inherent block would, while
+# `show` — which the trait *does* declare — is reached through the trait and
+# stays free for another trait to spend.
+
+struct P {
+  x: Int,
+}
+
+trait Show {
+  fun show(self) -> Int;
+}
+
+impl P {
+  fun helper(self) -> Int {
+    return 1;
+  }
+}
+
+impl Show for P {
+  fun show(self) -> Int {
+    return self.helper();
+  }
+
+  fun helper(self) -> Int {
+    return 2;
+  }
+}
+
+fun main() {}

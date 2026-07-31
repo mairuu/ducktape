@@ -1,0 +1,19 @@
+#! expect: method 'get' is defined twice in this impl block
+# The same collision inside one block. Worth its own check because the pairwise
+# impl comparison cannot see it: an impl never conflicts with itself.
+
+struct P {
+  x: Int,
+}
+
+impl P {
+  fun get(self) -> Int {
+    return 1;
+  }
+
+  fun get(self) -> Int {
+    return 2;
+  }
+}
+
+fun main() {}
