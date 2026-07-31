@@ -1,0 +1,143 @@
+# Pre-sizing a map in the units a caller actually has.
+#
+# `rehash(n)` takes *slots*; `with_capacity(n)` and `reserve(n)` take *entries*.
+# The load factor is 3/4, so the two numbers differ, and they differ in a way
+# that bites precisely where a caller is most likely to be: `capacity_for` rounds
+# up to a power of two, so any `n` in the top quarter of a power-of-two range —
+# every power of two included, and every round decimal like 100 or 1000 — gets a
+# table that rehashes before it reaches `n`. A quarter of all arguments.
+#
+# This test does not time anything. `capacity()` exists so that a rehash is
+# observable at all: the slot array is private, so before it there was no way for
+# a program *or* a test to tell a pre-sized build from a grown one, and timing is
+# not a test. The pattern below is therefore "read the capacity, fill, read it
+# again" — an unchanged capacity is a build that never rebuilt.
+#> rehash(7) still rebuilds: 6 -> 12, all present true
+#> with_capacity(7): 6 -> 12 12, all present true
+#> with_capacity(1000): no rehash true, len 1000
+#> with_capacity(0) is new: true
+#> capacity covers len: true true true true
+#> reserve grows once: 6 -> 768, len 500 true
+#> reserve(0) on a fresh map is free: true
+#> reserve cleans rather than grows: 768 true
+#> presized matches grown: true
+#> set with_capacity: no rehash true, len 300
+use std::io::print;
+use std::map::{HashMap, HashSet};
+use std::array;
+use std::sort;
+
+fun fill(m: HashMap<Int, Int>, from: Int, to: Int) {
+    var i = from;
+    while i < to {
+        m.insert(i, i * 3);
+        i += 1;
+    }
+}
+
+fun all_present(m: HashMap<Int, Int>, n: Int) -> Bool {
+    var i = 0;
+    while i < n {
+        match m.get(i) {
+            Option::Some(v) => {
+                if v != i * 3 {
+                    return false;
+                }
+            },
+            Option::None => {
+                return false;
+            },
+        }
+        i += 1;
+    }
+    return true;
+}
+
+fun main() {
+    # ── the smallest case where the two units disagree ────────────────────────
+    #
+    # 7 entries. As slots that is 8, whose 3/4 load is 6, so the 7th insert
+    # rehashes; as entries it is 16 slots, room for 12.
+    var a: HashMap<Int, Int> = HashMap::new();
+    a.rehash(7);
+    var a0 = a.capacity();
+    fill(a, 0, 7);
+    print("rehash(7) still rebuilds: {a0} -> {a.capacity()}, all present {all_present(a, 7)}");
+
+    var b: HashMap<Int, Int> = HashMap::with_capacity(7);
+    var b0 = b.capacity();
+    fill(b, 0, 7);
+    print("with_capacity(7): {a0} -> {b0} {b.capacity()}, all present {all_present(b, 7)}");
+
+    # ── the round number a caller would actually type ─────────────────────────
+    var c: HashMap<Int, Int> = HashMap::with_capacity(1000);
+    var c0 = c.capacity();
+    fill(c, 0, 1000);
+    var held = c.capacity() == c0 and all_present(c, 1000);
+    print("with_capacity(1000): no rehash {held}, len {c.len()}");
+
+    # `with_capacity(0)` is exactly `new` — `slots_for(0)` lands on the same
+    # minimum table size everything else is floored to.
+    var d: HashMap<Int, Int> = HashMap::with_capacity(0);
+    var e: HashMap<Int, Int> = HashMap::new();
+    print("with_capacity(0) is new: {d.capacity() == e.capacity()}");
+
+    # the promise, stated the way a caller reads it: room for what was asked
+    print("capacity covers len: {b0 >= 7} {c0 >= 1000} {c.len() <= c.capacity()} {d.capacity() >= 0}");
+
+    # ── reserve: the same promise for a map that already exists ───────────────
+    var f: HashMap<Int, Int> = HashMap::new();
+    var f0 = f.capacity();
+    f.reserve(500);
+    var f1 = f.capacity();
+    fill(f, 0, 500);
+    var once = f.capacity() == f1 and all_present(f, 500);
+    print("reserve grows once: {f0} -> {f1}, len {f.len()} {once}");
+
+    # asking for room that is already there does nothing at all
+    var g: HashMap<Int, Int> = HashMap::new();
+    var g0 = g.capacity();
+    g.reserve(0);
+    g.reserve(3);
+    print("reserve(0) on a fresh map is free: {g.capacity() == g0}");
+
+    # ── reserve reads two counters, and this is the case that tells them apart ─
+    #
+    # A map whose slots are full of tombstones has no room by the count that
+    # decides (`used`), but needs no more slots by the count that sizes
+    # (`live`). So it rebuilds at the same capacity: the cleanup and the growth
+    # are one operation, told apart by which counter is read.
+    var h: HashMap<Int, Int> = HashMap::with_capacity(500);
+    var h0 = h.capacity();
+    fill(h, 0, 500);
+    var i = 0;
+    while i < 500 {
+        h.remove(i);
+        i += 1;
+    }
+    h.reserve(400);
+    print("reserve cleans rather than grows: {h.capacity()} {h.capacity() == h0 and h.len() == 0}");
+
+    # pre-sizing must not change what a map contains, only how it got there
+    var grown: HashMap<Int, Int> = HashMap::new();
+    fill(grown, 0, 200);
+    var presized: HashMap<Int, Int> = HashMap::with_capacity(200);
+    fill(presized, 0, 200);
+    var ks1 = grown.keys();
+    ks1.sort();
+    var ks2 = presized.keys();
+    ks2.sort();
+    print("presized matches grown: {ks1 == ks2 and grown.len() == presized.len()}");
+
+    # ── the set forwards all three ────────────────────────────────────────────
+    var s: HashSet<Int> = HashSet::with_capacity(300);
+    var s0 = s.capacity();
+    var j = 0;
+    while j < 300 {
+        s.insert(j);
+        j += 1;
+    }
+    var kept = s.capacity() == s0 and s0 >= 300 and s.contains(299);
+    s.reserve(1);
+    print("set with_capacity: no rehash {kept}, len {s.len()}");
+}

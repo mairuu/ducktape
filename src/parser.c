@@ -3239,8 +3239,23 @@ static Decl *parse_impl_decl(Parser *p, bool is_pub) {
     }
   }
 
-  ImplItemNode items[16];
+  // grown rather than fixed, for the reason a block's statement list is: the
+  // number of methods a type wants is bounded by nothing but the source, so a
+  // cap could only ever be an abort on a valid program. It was 16, and
+  // `std::map`'s `HashMap` reached it by gaining a third capacity method.
+  ImplItemNode *items = NULL;
   int item_count = 0;
+  int item_cap = 0;
+
+#define RESERVE_ITEM()                                                         \
+  do {                                                                         \
+    if (item_count == item_cap) {                                              \
+      int new_cap = item_cap == 0 ? 8 : item_cap * 2;                          \
+      items = al_realloc(p->al, items, sizeof(ImplItemNode) * item_cap,        \
+                         sizeof(ImplItemNode) * new_cap);                      \
+      item_cap = new_cap;                                                      \
+    }                                                                          \
+  } while (0)
 
   WhereClause *where_clause = NULL;
   if (check_tok(p, TOKEN_WHERE)) {
@@ -3255,12 +3270,6 @@ static Decl *parse_impl_decl(Parser *p, bool is_pub) {
 
   if (!check_tok(p, TOKEN_RBRACE)) {
     do {
-      if (item_count >= 16) {
-        error_at(p, current_tok_span(p), "too many items in impl");
-        had_error = true;
-        break;
-      }
-
       if (match_tok(p, TOKEN_TYPE)) {
         Span start_span = previous_tok_span(p);
 
@@ -3286,6 +3295,7 @@ static Decl *parse_impl_decl(Parser *p, bool is_pub) {
           had_error = true;
         }
 
+        RESERVE_ITEM();
         items[item_count].kind = IMPL_ITEM_ASSOC_TYPE;
         items[item_count].name = assoc_type_name;
         items[item_count].assoc_type = ty;
@@ -3315,6 +3325,7 @@ static Decl *parse_impl_decl(Parser *p, bool is_pub) {
         if (fun_decl->kind == DECL_POISON) {
           had_error = true;
         } else {
+          RESERVE_ITEM();
           items[item_count].kind = IMPL_ITEM_METHOD;
           items[item_count].name = fun_decl->as.fun_decl.name;
           items[item_count].fun_decl = fun_decl;
@@ -3348,10 +3359,14 @@ static Decl *parse_impl_decl(Parser *p, bool is_pub) {
   impl_decl->type_params = type_params;
   impl_decl->type_param_count = type_param_count;
   impl_decl->where_clause = where_clause;
+  // right-size: the grown buffer is up to twice what the impl needs
   impl_decl->items = al_alloc(p->al, sizeof(ImplItemNode) * item_count);
-  memcpy(impl_decl->items, items, sizeof(ImplItemNode) * item_count);
+  if (item_count > 0) {
+    memcpy(impl_decl->items, items, sizeof(ImplItemNode) * item_count);
+  }
   impl_decl->item_count = item_count;
   return decl;
+#undef RESERVE_ITEM
 }
 
 static Decl *parse_decl(Parser *p) {
@@ -3448,20 +3463,34 @@ void parser_init(Parser *p, Token *tokens, int count, Allocator *al,
 }
 
 Program *parser_parse(Parser *p) {
-  Decl *decls[1024];
+  // grown, like a block's statements and an impl's items. This was a 1024-entry
+  // stack array guarded by an `assert`, and an assert is not a guard: the
+  // release build defines NDEBUG, so a module with a 1025th declaration wrote
+  // past the array and took the compiler down with SIGSEGV rather than a
+  // diagnostic. A cap on how much a file may contain has no defensible value
+  // anyway, so this grows instead of reporting.
+  Decl **decls = NULL;
   int count = 0;
+  int cap = 0;
 
   while (!is_at_end(p)) {
     Decl *decl = parse_decl(p);
     assert(decl && "declaration should not be NULL");
-    assert(count < 1024 && "too many declarations");
+    if (count == cap) {
+      int new_cap = cap == 0 ? 64 : cap * 2;
+      decls = al_realloc(p->al, decls, sizeof(Decl *) * cap,
+                         sizeof(Decl *) * new_cap);
+      cap = new_cap;
+    }
     decls[count++] = decl;
   }
 
   Program *prog = al_alloc_for(p->al, Program);
   prog->decls = al_alloc(p->al, sizeof(Decl *) * count);
   prog->decl_count = count;
-  memcpy(prog->decls, decls, sizeof(Decl *) * count);
+  if (count > 0) {
+    memcpy(prog->decls, decls, sizeof(Decl *) * count);
+  }
 
   return prog;
 }

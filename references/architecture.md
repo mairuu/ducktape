@@ -51,6 +51,15 @@ Notables:
   `parse_block`.
 - Error recovery: `error_at` sets panic mode; `sync_to_stmt`/`sync_to_decl`
   skip to a boundary; unparseable nodes become `*_POISON` kinds.
+- **Most list buffers are fixed at 16 and report "too many ..."** — arguments,
+  match arms, struct fields, enum variants, tuple elements, bounds. Three are
+  grown from the arena instead, and the rule for which is whether a cap could
+  ever refuse a program worth writing: a block's statements, an impl's items
+  (milestone 72, once `HashMap` wanted a 17th method), and a module's
+  declarations. The last of those had been a 1024-entry stack array guarded by
+  an `assert` — which the release build's `NDEBUG` deleted, so the 1025th
+  declaration in a file wrote past it and the compiler took SIGSEGV. The
+  remaining 16s are a wart, not a design (`roadmap.md`).
 
 AST (`include/ast.h`): `Decl`/`Stmt`/`Expr`/`Pattern`/`TypeNode` tagged
 unions, plus semantic def tables (`FunDef`, `StructDef`, `EnumDef`,

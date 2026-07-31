@@ -1,0 +1,271 @@
+# The parser grows its lists rather than capping them.
+#
+# Two fixed-size buffers were lifted for milestone 72, both reached by ordinary
+# code rather than by anything contrived:
+#
+# - **an impl's items were capped at 16**, in a stack array. `std::map`'s
+#   `HashMap` hit it by gaining a third capacity method, which is the whole
+#   story: 16 methods is not a lot for a container type. It is a diagnostic
+#   ("too many items in impl"), so it was an abort on a valid program rather
+#   than anything unsafe.
+# - **a module's declarations were capped at 1024**, in a stack array guarded by
+#   an `assert`. An assert is not a guard: the release build defines NDEBUG, so
+#   the check vanished and a 1025th declaration wrote past the end of the array.
+#   A release-built compiler took SIGSEGV on this file; the debug build aborted
+#   on the assertion. Both are now a grown buffer and neither has a limit.
+#
+# The impl below has 20 items, and the file has well over 1024 declarations —
+# packed several to a line, since the parser counts declarations and not lines.
+struct Wide;
+
+impl Wide {
+    fun m0(self) -> Int { return 0; }
+    fun m1(self) -> Int { return 1; }
+    fun m2(self) -> Int { return 2; }
+    fun m3(self) -> Int { return 3; }
+    fun m4(self) -> Int { return 4; }
+    fun m5(self) -> Int { return 5; }
+    fun m6(self) -> Int { return 6; }
+    fun m7(self) -> Int { return 7; }
+    fun m8(self) -> Int { return 8; }
+    fun m9(self) -> Int { return 9; }
+    fun m10(self) -> Int { return 10; }
+    fun m11(self) -> Int { return 11; }
+    fun m12(self) -> Int { return 12; }
+    fun m13(self) -> Int { return 13; }
+    fun m14(self) -> Int { return 14; }
+    fun m15(self) -> Int { return 15; }
+    fun m16(self) -> Int { return 16; }
+    fun m17(self) -> Int { return 17; }
+    fun m18(self) -> Int { return 18; }
+    fun m19(self) -> Int { return 19; }
+}
+
+fun f0() -> Int { return 0; } fun f1() -> Int { return 1; } fun f2() -> Int { return 2; } fun f3() -> Int { return 3; } fun f4() -> Int { return 4; }
+fun f5() -> Int { return 5; } fun f6() -> Int { return 6; } fun f7() -> Int { return 7; } fun f8() -> Int { return 8; } fun f9() -> Int { return 9; }
+fun f10() -> Int { return 10; } fun f11() -> Int { return 11; } fun f12() -> Int { return 12; } fun f13() -> Int { return 13; } fun f14() -> Int { return 14; }
+fun f15() -> Int { return 15; } fun f16() -> Int { return 16; } fun f17() -> Int { return 17; } fun f18() -> Int { return 18; } fun f19() -> Int { return 19; }
+fun f20() -> Int { return 20; } fun f21() -> Int { return 21; } fun f22() -> Int { return 22; } fun f23() -> Int { return 23; } fun f24() -> Int { return 24; }
+fun f25() -> Int { return 25; } fun f26() -> Int { return 26; } fun f27() -> Int { return 27; } fun f28() -> Int { return 28; } fun f29() -> Int { return 29; }
+fun f30() -> Int { return 30; } fun f31() -> Int { return 31; } fun f32() -> Int { return 32; } fun f33() -> Int { return 33; } fun f34() -> Int { return 34; }
+fun f35() -> Int { return 35; } fun f36() -> Int { return 36; } fun f37() -> Int { return 37; } fun f38() -> Int { return 38; } fun f39() -> Int { return 39; }
+fun f40() -> Int { return 40; } fun f41() -> Int { return 41; } fun f42() -> Int { return 42; } fun f43() -> Int { return 43; } fun f44() -> Int { return 44; }
+fun f45() -> Int { return 45; } fun f46() -> Int { return 46; } fun f47() -> Int { return 47; } fun f48() -> Int { return 48; } fun f49() -> Int { return 49; }
+fun f50() -> Int { return 50; } fun f51() -> Int { return 51; } fun f52() -> Int { return 52; } fun f53() -> Int { return 53; } fun f54() -> Int { return 54; }
+fun f55() -> Int { return 55; } fun f56() -> Int { return 56; } fun f57() -> Int { return 57; } fun f58() -> Int { return 58; } fun f59() -> Int { return 59; }
+fun f60() -> Int { return 60; } fun f61() -> Int { return 61; } fun f62() -> Int { return 62; } fun f63() -> Int { return 63; } fun f64() -> Int { return 64; }
+fun f65() -> Int { return 65; } fun f66() -> Int { return 66; } fun f67() -> Int { return 67; } fun f68() -> Int { return 68; } fun f69() -> Int { return 69; }
+fun f70() -> Int { return 70; } fun f71() -> Int { return 71; } fun f72() -> Int { return 72; } fun f73() -> Int { return 73; } fun f74() -> Int { return 74; }
+fun f75() -> Int { return 75; } fun f76() -> Int { return 76; } fun f77() -> Int { return 77; } fun f78() -> Int { return 78; } fun f79() -> Int { return 79; }
+fun f80() -> Int { return 80; } fun f81() -> Int { return 81; } fun f82() -> Int { return 82; } fun f83() -> Int { return 83; } fun f84() -> Int { return 84; }
+fun f85() -> Int { return 85; } fun f86() -> Int { return 86; } fun f87() -> Int { return 87; } fun f88() -> Int { return 88; } fun f89() -> Int { return 89; }
+fun f90() -> Int { return 90; } fun f91() -> Int { return 91; } fun f92() -> Int { return 92; } fun f93() -> Int { return 93; } fun f94() -> Int { return 94; }
+fun f95() -> Int { return 95; } fun f96() -> Int { return 96; } fun f97() -> Int { return 97; } fun f98() -> Int { return 98; } fun f99() -> Int { return 99; }
+fun f100() -> Int { return 100; } fun f101() -> Int { return 101; } fun f102() -> Int { return 102; } fun f103() -> Int { return 103; } fun f104() -> Int { return 104; }
+fun f105() -> Int { return 105; } fun f106() -> Int { return 106; } fun f107() -> Int { return 107; } fun f108() -> Int { return 108; } fun f109() -> Int { return 109; }
+fun f110() -> Int { return 110; } fun f111() -> Int { return 111; } fun f112() -> Int { return 112; } fun f113() -> Int { return 113; } fun f114() -> Int { return 114; }
+fun f115() -> Int { return 115; } fun f116() -> Int { return 116; } fun f117() -> Int { return 117; } fun f118() -> Int { return 118; } fun f119() -> Int { return 119; }
+fun f120() -> Int { return 120; } fun f121() -> Int { return 121; } fun f122() -> Int { return 122; } fun f123() -> Int { return 123; } fun f124() -> Int { return 124; }
+fun f125() -> Int { return 125; } fun f126() -> Int { return 126; } fun f127() -> Int { return 127; } fun f128() -> Int { return 128; } fun f129() -> Int { return 129; }
+fun f130() -> Int { return 130; } fun f131() -> Int { return 131; } fun f132() -> Int { return 132; } fun f133() -> Int { return 133; } fun f134() -> Int { return 134; }
+fun f135() -> Int { return 135; } fun f136() -> Int { return 136; } fun f137() -> Int { return 137; } fun f138() -> Int { return 138; } fun f139() -> Int { return 139; }
+fun f140() -> Int { return 140; } fun f141() -> Int { return 141; } fun f142() -> Int { return 142; } fun f143() -> Int { return 143; } fun f144() -> Int { return 144; }
+fun f145() -> Int { return 145; } fun f146() -> Int { return 146; } fun f147() -> Int { return 147; } fun f148() -> Int { return 148; } fun f149() -> Int { return 149; }
+fun f150() -> Int { return 150; } fun f151() -> Int { return 151; } fun f152() -> Int { return 152; } fun f153() -> Int { return 153; } fun f154() -> Int { return 154; }
+fun f155() -> Int { return 155; } fun f156() -> Int { return 156; } fun f157() -> Int { return 157; } fun f158() -> Int { return 158; } fun f159() -> Int { return 159; }
+fun f160() -> Int { return 160; } fun f161() -> Int { return 161; } fun f162() -> Int { return 162; } fun f163() -> Int { return 163; } fun f164() -> Int { return 164; }
+fun f165() -> Int { return 165; } fun f166() -> Int { return 166; } fun f167() -> Int { return 167; } fun f168() -> Int { return 168; } fun f169() -> Int { return 169; }
+fun f170() -> Int { return 170; } fun f171() -> Int { return 171; } fun f172() -> Int { return 172; } fun f173() -> Int { return 173; } fun f174() -> Int { return 174; }
+fun f175() -> Int { return 175; } fun f176() -> Int { return 176; } fun f177() -> Int { return 177; } fun f178() -> Int { return 178; } fun f179() -> Int { return 179; }
+fun f180() -> Int { return 180; } fun f181() -> Int { return 181; } fun f182() -> Int { return 182; } fun f183() -> Int { return 183; } fun f184() -> Int { return 184; }
+fun f185() -> Int { return 185; } fun f186() -> Int { return 186; } fun f187() -> Int { return 187; } fun f188() -> Int { return 188; } fun f189() -> Int { return 189; }
+fun f190() -> Int { return 190; } fun f191() -> Int { return 191; } fun f192() -> Int { return 192; } fun f193() -> Int { return 193; } fun f194() -> Int { return 194; }
+fun f195() -> Int { return 195; } fun f196() -> Int { return 196; } fun f197() -> Int { return 197; } fun f198() -> Int { return 198; } fun f199() -> Int { return 199; }
+fun f200() -> Int { return 200; } fun f201() -> Int { return 201; } fun f202() -> Int { return 202; } fun f203() -> Int { return 203; } fun f204() -> Int { return 204; }
+fun f205() -> Int { return 205; } fun f206() -> Int { return 206; } fun f207() -> Int { return 207; } fun f208() -> Int { return 208; } fun f209() -> Int { return 209; }
+fun f210() -> Int { return 210; } fun f211() -> Int { return 211; } fun f212() -> Int { return 212; } fun f213() -> Int { return 213; } fun f214() -> Int { return 214; }
+fun f215() -> Int { return 215; } fun f216() -> Int { return 216; } fun f217() -> Int { return 217; } fun f218() -> Int { return 218; } fun f219() -> Int { return 219; }
+fun f220() -> Int { return 220; } fun f221() -> Int { return 221; } fun f222() -> Int { return 222; } fun f223() -> Int { return 223; } fun f224() -> Int { return 224; }
+fun f225() -> Int { return 225; } fun f226() -> Int { return 226; } fun f227() -> Int { return 227; } fun f228() -> Int { return 228; } fun f229() -> Int { return 229; }
+fun f230() -> Int { return 230; } fun f231() -> Int { return 231; } fun f232() -> Int { return 232; } fun f233() -> Int { return 233; } fun f234() -> Int { return 234; }
+fun f235() -> Int { return 235; } fun f236() -> Int { return 236; } fun f237() -> Int { return 237; } fun f238() -> Int { return 238; } fun f239() -> Int { return 239; }
+fun f240() -> Int { return 240; } fun f241() -> Int { return 241; } fun f242() -> Int { return 242; } fun f243() -> Int { return 243; } fun f244() -> Int { return 244; }
+fun f245() -> Int { return 245; } fun f246() -> Int { return 246; } fun f247() -> Int { return 247; } fun f248() -> Int { return 248; } fun f249() -> Int { return 249; }
+fun f250() -> Int { return 250; } fun f251() -> Int { return 251; } fun f252() -> Int { return 252; } fun f253() -> Int { return 253; } fun f254() -> Int { return 254; }
+fun f255() -> Int { return 255; } fun f256() -> Int { return 256; } fun f257() -> Int { return 257; } fun f258() -> Int { return 258; } fun f259() -> Int { return 259; }
+fun f260() -> Int { return 260; } fun f261() -> Int { return 261; } fun f262() -> Int { return 262; } fun f263() -> Int { return 263; } fun f264() -> Int { return 264; }
+fun f265() -> Int { return 265; } fun f266() -> Int { return 266; } fun f267() -> Int { return 267; } fun f268() -> Int { return 268; } fun f269() -> Int { return 269; }
+fun f270() -> Int { return 270; } fun f271() -> Int { return 271; } fun f272() -> Int { return 272; } fun f273() -> Int { return 273; } fun f274() -> Int { return 274; }
+fun f275() -> Int { return 275; } fun f276() -> Int { return 276; } fun f277() -> Int { return 277; } fun f278() -> Int { return 278; } fun f279() -> Int { return 279; }
+fun f280() -> Int { return 280; } fun f281() -> Int { return 281; } fun f282() -> Int { return 282; } fun f283() -> Int { return 283; } fun f284() -> Int { return 284; }
+fun f285() -> Int { return 285; } fun f286() -> Int { return 286; } fun f287() -> Int { return 287; } fun f288() -> Int { return 288; } fun f289() -> Int { return 289; }
+fun f290() -> Int { return 290; } fun f291() -> Int { return 291; } fun f292() -> Int { return 292; } fun f293() -> Int { return 293; } fun f294() -> Int { return 294; }
+fun f295() -> Int { return 295; } fun f296() -> Int { return 296; } fun f297() -> Int { return 297; } fun f298() -> Int { return 298; } fun f299() -> Int { return 299; }
+fun f300() -> Int { return 300; } fun f301() -> Int { return 301; } fun f302() -> Int { return 302; } fun f303() -> Int { return 303; } fun f304() -> Int { return 304; }
+fun f305() -> Int { return 305; } fun f306() -> Int { return 306; } fun f307() -> Int { return 307; } fun f308() -> Int { return 308; } fun f309() -> Int { return 309; }
+fun f310() -> Int { return 310; } fun f311() -> Int { return 311; } fun f312() -> Int { return 312; } fun f313() -> Int { return 313; } fun f314() -> Int { return 314; }
+fun f315() -> Int { return 315; } fun f316() -> Int { return 316; } fun f317() -> Int { return 317; } fun f318() -> Int { return 318; } fun f319() -> Int { return 319; }
+fun f320() -> Int { return 320; } fun f321() -> Int { return 321; } fun f322() -> Int { return 322; } fun f323() -> Int { return 323; } fun f324() -> Int { return 324; }
+fun f325() -> Int { return 325; } fun f326() -> Int { return 326; } fun f327() -> Int { return 327; } fun f328() -> Int { return 328; } fun f329() -> Int { return 329; }
+fun f330() -> Int { return 330; } fun f331() -> Int { return 331; } fun f332() -> Int { return 332; } fun f333() -> Int { return 333; } fun f334() -> Int { return 334; }
+fun f335() -> Int { return 335; } fun f336() -> Int { return 336; } fun f337() -> Int { return 337; } fun f338() -> Int { return 338; } fun f339() -> Int { return 339; }
+fun f340() -> Int { return 340; } fun f341() -> Int { return 341; } fun f342() -> Int { return 342; } fun f343() -> Int { return 343; } fun f344() -> Int { return 344; }
+fun f345() -> Int { return 345; } fun f346() -> Int { return 346; } fun f347() -> Int { return 347; } fun f348() -> Int { return 348; } fun f349() -> Int { return 349; }
+fun f350() -> Int { return 350; } fun f351() -> Int { return 351; } fun f352() -> Int { return 352; } fun f353() -> Int { return 353; } fun f354() -> Int { return 354; }
+fun f355() -> Int { return 355; } fun f356() -> Int { return 356; } fun f357() -> Int { return 357; } fun f358() -> Int { return 358; } fun f359() -> Int { return 359; }
+fun f360() -> Int { return 360; } fun f361() -> Int { return 361; } fun f362() -> Int { return 362; } fun f363() -> Int { return 363; } fun f364() -> Int { return 364; }
+fun f365() -> Int { return 365; } fun f366() -> Int { return 366; } fun f367() -> Int { return 367; } fun f368() -> Int { return 368; } fun f369() -> Int { return 369; }
+fun f370() -> Int { return 370; } fun f371() -> Int { return 371; } fun f372() -> Int { return 372; } fun f373() -> Int { return 373; } fun f374() -> Int { return 374; }
+fun f375() -> Int { return 375; } fun f376() -> Int { return 376; } fun f377() -> Int { return 377; } fun f378() -> Int { return 378; } fun f379() -> Int { return 379; }
+fun f380() -> Int { return 380; } fun f381() -> Int { return 381; } fun f382() -> Int { return 382; } fun f383() -> Int { return 383; } fun f384() -> Int { return 384; }
+fun f385() -> Int { return 385; } fun f386() -> Int { return 386; } fun f387() -> Int { return 387; } fun f388() -> Int { return 388; } fun f389() -> Int { return 389; }
+fun f390() -> Int { return 390; } fun f391() -> Int { return 391; } fun f392() -> Int { return 392; } fun f393() -> Int { return 393; } fun f394() -> Int { return 394; }
+fun f395() -> Int { return 395; } fun f396() -> Int { return 396; } fun f397() -> Int { return 397; } fun f398() -> Int { return 398; } fun f399() -> Int { return 399; }
+fun f400() -> Int { return 400; } fun f401() -> Int { return 401; } fun f402() -> Int { return 402; } fun f403() -> Int { return 403; } fun f404() -> Int { return 404; }
+fun f405() -> Int { return 405; } fun f406() -> Int { return 406; } fun f407() -> Int { return 407; } fun f408() -> Int { return 408; } fun f409() -> Int { return 409; }
+fun f410() -> Int { return 410; } fun f411() -> Int { return 411; } fun f412() -> Int { return 412; } fun f413() -> Int { return 413; } fun f414() -> Int { return 414; }
+fun f415() -> Int { return 415; } fun f416() -> Int { return 416; } fun f417() -> Int { return 417; } fun f418() -> Int { return 418; } fun f419() -> Int { return 419; }
+fun f420() -> Int { return 420; } fun f421() -> Int { return 421; } fun f422() -> Int { return 422; } fun f423() -> Int { return 423; } fun f424() -> Int { return 424; }
+fun f425() -> Int { return 425; } fun f426() -> Int { return 426; } fun f427() -> Int { return 427; } fun f428() -> Int { return 428; } fun f429() -> Int { return 429; }
+fun f430() -> Int { return 430; } fun f431() -> Int { return 431; } fun f432() -> Int { return 432; } fun f433() -> Int { return 433; } fun f434() -> Int { return 434; }
+fun f435() -> Int { return 435; } fun f436() -> Int { return 436; } fun f437() -> Int { return 437; } fun f438() -> Int { return 438; } fun f439() -> Int { return 439; }
+fun f440() -> Int { return 440; } fun f441() -> Int { return 441; } fun f442() -> Int { return 442; } fun f443() -> Int { return 443; } fun f444() -> Int { return 444; }
+fun f445() -> Int { return 445; } fun f446() -> Int { return 446; } fun f447() -> Int { return 447; } fun f448() -> Int { return 448; } fun f449() -> Int { return 449; }
+fun f450() -> Int { return 450; } fun f451() -> Int { return 451; } fun f452() -> Int { return 452; } fun f453() -> Int { return 453; } fun f454() -> Int { return 454; }
+fun f455() -> Int { return 455; } fun f456() -> Int { return 456; } fun f457() -> Int { return 457; } fun f458() -> Int { return 458; } fun f459() -> Int { return 459; }
+fun f460() -> Int { return 460; } fun f461() -> Int { return 461; } fun f462() -> Int { return 462; } fun f463() -> Int { return 463; } fun f464() -> Int { return 464; }
+fun f465() -> Int { return 465; } fun f466() -> Int { return 466; } fun f467() -> Int { return 467; } fun f468() -> Int { return 468; } fun f469() -> Int { return 469; }
+fun f470() -> Int { return 470; } fun f471() -> Int { return 471; } fun f472() -> Int { return 472; } fun f473() -> Int { return 473; } fun f474() -> Int { return 474; }
+fun f475() -> Int { return 475; } fun f476() -> Int { return 476; } fun f477() -> Int { return 477; } fun f478() -> Int { return 478; } fun f479() -> Int { return 479; }
+fun f480() -> Int { return 480; } fun f481() -> Int { return 481; } fun f482() -> Int { return 482; } fun f483() -> Int { return 483; } fun f484() -> Int { return 484; }
+fun f485() -> Int { return 485; } fun f486() -> Int { return 486; } fun f487() -> Int { return 487; } fun f488() -> Int { return 488; } fun f489() -> Int { return 489; }
+fun f490() -> Int { return 490; } fun f491() -> Int { return 491; } fun f492() -> Int { return 492; } fun f493() -> Int { return 493; } fun f494() -> Int { return 494; }
+fun f495() -> Int { return 495; } fun f496() -> Int { return 496; } fun f497() -> Int { return 497; } fun f498() -> Int { return 498; } fun f499() -> Int { return 499; }
+fun f500() -> Int { return 500; } fun f501() -> Int { return 501; } fun f502() -> Int { return 502; } fun f503() -> Int { return 503; } fun f504() -> Int { return 504; }
+fun f505() -> Int { return 505; } fun f506() -> Int { return 506; } fun f507() -> Int { return 507; } fun f508() -> Int { return 508; } fun f509() -> Int { return 509; }
+fun f510() -> Int { return 510; } fun f511() -> Int { return 511; } fun f512() -> Int { return 512; } fun f513() -> Int { return 513; } fun f514() -> Int { return 514; }
+fun f515() -> Int { return 515; } fun f516() -> Int { return 516; } fun f517() -> Int { return 517; } fun f518() -> Int { return 518; } fun f519() -> Int { return 519; }
+fun f520() -> Int { return 520; } fun f521() -> Int { return 521; } fun f522() -> Int { return 522; } fun f523() -> Int { return 523; } fun f524() -> Int { return 524; }
+fun f525() -> Int { return 525; } fun f526() -> Int { return 526; } fun f527() -> Int { return 527; } fun f528() -> Int { return 528; } fun f529() -> Int { return 529; }
+fun f530() -> Int { return 530; } fun f531() -> Int { return 531; } fun f532() -> Int { return 532; } fun f533() -> Int { return 533; } fun f534() -> Int { return 534; }
+fun f535() -> Int { return 535; } fun f536() -> Int { return 536; } fun f537() -> Int { return 537; } fun f538() -> Int { return 538; } fun f539() -> Int { return 539; }
+fun f540() -> Int { return 540; } fun f541() -> Int { return 541; } fun f542() -> Int { return 542; } fun f543() -> Int { return 543; } fun f544() -> Int { return 544; }
+fun f545() -> Int { return 545; } fun f546() -> Int { return 546; } fun f547() -> Int { return 547; } fun f548() -> Int { return 548; } fun f549() -> Int { return 549; }
+fun f550() -> Int { return 550; } fun f551() -> Int { return 551; } fun f552() -> Int { return 552; } fun f553() -> Int { return 553; } fun f554() -> Int { return 554; }
+fun f555() -> Int { return 555; } fun f556() -> Int { return 556; } fun f557() -> Int { return 557; } fun f558() -> Int { return 558; } fun f559() -> Int { return 559; }
+fun f560() -> Int { return 560; } fun f561() -> Int { return 561; } fun f562() -> Int { return 562; } fun f563() -> Int { return 563; } fun f564() -> Int { return 564; }
+fun f565() -> Int { return 565; } fun f566() -> Int { return 566; } fun f567() -> Int { return 567; } fun f568() -> Int { return 568; } fun f569() -> Int { return 569; }
+fun f570() -> Int { return 570; } fun f571() -> Int { return 571; } fun f572() -> Int { return 572; } fun f573() -> Int { return 573; } fun f574() -> Int { return 574; }
+fun f575() -> Int { return 575; } fun f576() -> Int { return 576; } fun f577() -> Int { return 577; } fun f578() -> Int { return 578; } fun f579() -> Int { return 579; }
+fun f580() -> Int { return 580; } fun f581() -> Int { return 581; } fun f582() -> Int { return 582; } fun f583() -> Int { return 583; } fun f584() -> Int { return 584; }
+fun f585() -> Int { return 585; } fun f586() -> Int { return 586; } fun f587() -> Int { return 587; } fun f588() -> Int { return 588; } fun f589() -> Int { return 589; }
+fun f590() -> Int { return 590; } fun f591() -> Int { return 591; } fun f592() -> Int { return 592; } fun f593() -> Int { return 593; } fun f594() -> Int { return 594; }
+fun f595() -> Int { return 595; } fun f596() -> Int { return 596; } fun f597() -> Int { return 597; } fun f598() -> Int { return 598; } fun f599() -> Int { return 599; }
+fun f600() -> Int { return 600; } fun f601() -> Int { return 601; } fun f602() -> Int { return 602; } fun f603() -> Int { return 603; } fun f604() -> Int { return 604; }
+fun f605() -> Int { return 605; } fun f606() -> Int { return 606; } fun f607() -> Int { return 607; } fun f608() -> Int { return 608; } fun f609() -> Int { return 609; }
+fun f610() -> Int { return 610; } fun f611() -> Int { return 611; } fun f612() -> Int { return 612; } fun f613() -> Int { return 613; } fun f614() -> Int { return 614; }
+fun f615() -> Int { return 615; } fun f616() -> Int { return 616; } fun f617() -> Int { return 617; } fun f618() -> Int { return 618; } fun f619() -> Int { return 619; }
+fun f620() -> Int { return 620; } fun f621() -> Int { return 621; } fun f622() -> Int { return 622; } fun f623() -> Int { return 623; } fun f624() -> Int { return 624; }
+fun f625() -> Int { return 625; } fun f626() -> Int { return 626; } fun f627() -> Int { return 627; } fun f628() -> Int { return 628; } fun f629() -> Int { return 629; }
+fun f630() -> Int { return 630; } fun f631() -> Int { return 631; } fun f632() -> Int { return 632; } fun f633() -> Int { return 633; } fun f634() -> Int { return 634; }
+fun f635() -> Int { return 635; } fun f636() -> Int { return 636; } fun f637() -> Int { return 637; } fun f638() -> Int { return 638; } fun f639() -> Int { return 639; }
+fun f640() -> Int { return 640; } fun f641() -> Int { return 641; } fun f642() -> Int { return 642; } fun f643() -> Int { return 643; } fun f644() -> Int { return 644; }
+fun f645() -> Int { return 645; } fun f646() -> Int { return 646; } fun f647() -> Int { return 647; } fun f648() -> Int { return 648; } fun f649() -> Int { return 649; }
+fun f650() -> Int { return 650; } fun f651() -> Int { return 651; } fun f652() -> Int { return 652; } fun f653() -> Int { return 653; } fun f654() -> Int { return 654; }
+fun f655() -> Int { return 655; } fun f656() -> Int { return 656; } fun f657() -> Int { return 657; } fun f658() -> Int { return 658; } fun f659() -> Int { return 659; }
+fun f660() -> Int { return 660; } fun f661() -> Int { return 661; } fun f662() -> Int { return 662; } fun f663() -> Int { return 663; } fun f664() -> Int { return 664; }
+fun f665() -> Int { return 665; } fun f666() -> Int { return 666; } fun f667() -> Int { return 667; } fun f668() -> Int { return 668; } fun f669() -> Int { return 669; }
+fun f670() -> Int { return 670; } fun f671() -> Int { return 671; } fun f672() -> Int { return 672; } fun f673() -> Int { return 673; } fun f674() -> Int { return 674; }
+fun f675() -> Int { return 675; } fun f676() -> Int { return 676; } fun f677() -> Int { return 677; } fun f678() -> Int { return 678; } fun f679() -> Int { return 679; }
+fun f680() -> Int { return 680; } fun f681() -> Int { return 681; } fun f682() -> Int { return 682; } fun f683() -> Int { return 683; } fun f684() -> Int { return 684; }
+fun f685() -> Int { return 685; } fun f686() -> Int { return 686; } fun f687() -> Int { return 687; } fun f688() -> Int { return 688; } fun f689() -> Int { return 689; }
+fun f690() -> Int { return 690; } fun f691() -> Int { return 691; } fun f692() -> Int { return 692; } fun f693() -> Int { return 693; } fun f694() -> Int { return 694; }
+fun f695() -> Int { return 695; } fun f696() -> Int { return 696; } fun f697() -> Int { return 697; } fun f698() -> Int { return 698; } fun f699() -> Int { return 699; }
+fun f700() -> Int { return 700; } fun f701() -> Int { return 701; } fun f702() -> Int { return 702; } fun f703() -> Int { return 703; } fun f704() -> Int { return 704; }
+fun f705() -> Int { return 705; } fun f706() -> Int { return 706; } fun f707() -> Int { return 707; } fun f708() -> Int { return 708; } fun f709() -> Int { return 709; }
+fun f710() -> Int { return 710; } fun f711() -> Int { return 711; } fun f712() -> Int { return 712; } fun f713() -> Int { return 713; } fun f714() -> Int { return 714; }
+fun f715() -> Int { return 715; } fun f716() -> Int { return 716; } fun f717() -> Int { return 717; } fun f718() -> Int { return 718; } fun f719() -> Int { return 719; }
+fun f720() -> Int { return 720; } fun f721() -> Int { return 721; } fun f722() -> Int { return 722; } fun f723() -> Int { return 723; } fun f724() -> Int { return 724; }
+fun f725() -> Int { return 725; } fun f726() -> Int { return 726; } fun f727() -> Int { return 727; } fun f728() -> Int { return 728; } fun f729() -> Int { return 729; }
+fun f730() -> Int { return 730; } fun f731() -> Int { return 731; } fun f732() -> Int { return 732; } fun f733() -> Int { return 733; } fun f734() -> Int { return 734; }
+fun f735() -> Int { return 735; } fun f736() -> Int { return 736; } fun f737() -> Int { return 737; } fun f738() -> Int { return 738; } fun f739() -> Int { return 739; }
+fun f740() -> Int { return 740; } fun f741() -> Int { return 741; } fun f742() -> Int { return 742; } fun f743() -> Int { return 743; } fun f744() -> Int { return 744; }
+fun f745() -> Int { return 745; } fun f746() -> Int { return 746; } fun f747() -> Int { return 747; } fun f748() -> Int { return 748; } fun f749() -> Int { return 749; }
+fun f750() -> Int { return 750; } fun f751() -> Int { return 751; } fun f752() -> Int { return 752; } fun f753() -> Int { return 753; } fun f754() -> Int { return 754; }
+fun f755() -> Int { return 755; } fun f756() -> Int { return 756; } fun f757() -> Int { return 757; } fun f758() -> Int { return 758; } fun f759() -> Int { return 759; }
+fun f760() -> Int { return 760; } fun f761() -> Int { return 761; } fun f762() -> Int { return 762; } fun f763() -> Int { return 763; } fun f764() -> Int { return 764; }
+fun f765() -> Int { return 765; } fun f766() -> Int { return 766; } fun f767() -> Int { return 767; } fun f768() -> Int { return 768; } fun f769() -> Int { return 769; }
+fun f770() -> Int { return 770; } fun f771() -> Int { return 771; } fun f772() -> Int { return 772; } fun f773() -> Int { return 773; } fun f774() -> Int { return 774; }
+fun f775() -> Int { return 775; } fun f776() -> Int { return 776; } fun f777() -> Int { return 777; } fun f778() -> Int { return 778; } fun f779() -> Int { return 779; }
+fun f780() -> Int { return 780; } fun f781() -> Int { return 781; } fun f782() -> Int { return 782; } fun f783() -> Int { return 783; } fun f784() -> Int { return 784; }
+fun f785() -> Int { return 785; } fun f786() -> Int { return 786; } fun f787() -> Int { return 787; } fun f788() -> Int { return 788; } fun f789() -> Int { return 789; }
+fun f790() -> Int { return 790; } fun f791() -> Int { return 791; } fun f792() -> Int { return 792; } fun f793() -> Int { return 793; } fun f794() -> Int { return 794; }
+fun f795() -> Int { return 795; } fun f796() -> Int { return 796; } fun f797() -> Int { return 797; } fun f798() -> Int { return 798; } fun f799() -> Int { return 799; }
+fun f800() -> Int { return 800; } fun f801() -> Int { return 801; } fun f802() -> Int { return 802; } fun f803() -> Int { return 803; } fun f804() -> Int { return 804; }
+fun f805() -> Int { return 805; } fun f806() -> Int { return 806; } fun f807() -> Int { return 807; } fun f808() -> Int { return 808; } fun f809() -> Int { return 809; }
+fun f810() -> Int { return 810; } fun f811() -> Int { return 811; } fun f812() -> Int { return 812; } fun f813() -> Int { return 813; } fun f814() -> Int { return 814; }
+fun f815() -> Int { return 815; } fun f816() -> Int { return 816; } fun f817() -> Int { return 817; } fun f818() -> Int { return 818; } fun f819() -> Int { return 819; }
+fun f820() -> Int { return 820; } fun f821() -> Int { return 821; } fun f822() -> Int { return 822; } fun f823() -> Int { return 823; } fun f824() -> Int { return 824; }
+fun f825() -> Int { return 825; } fun f826() -> Int { return 826; } fun f827() -> Int { return 827; } fun f828() -> Int { return 828; } fun f829() -> Int { return 829; }
+fun f830() -> Int { return 830; } fun f831() -> Int { return 831; } fun f832() -> Int { return 832; } fun f833() -> Int { return 833; } fun f834() -> Int { return 834; }
+fun f835() -> Int { return 835; } fun f836() -> Int { return 836; } fun f837() -> Int { return 837; } fun f838() -> Int { return 838; } fun f839() -> Int { return 839; }
+fun f840() -> Int { return 840; } fun f841() -> Int { return 841; } fun f842() -> Int { return 842; } fun f843() -> Int { return 843; } fun f844() -> Int { return 844; }
+fun f845() -> Int { return 845; } fun f846() -> Int { return 846; } fun f847() -> Int { return 847; } fun f848() -> Int { return 848; } fun f849() -> Int { return 849; }
+fun f850() -> Int { return 850; } fun f851() -> Int { return 851; } fun f852() -> Int { return 852; } fun f853() -> Int { return 853; } fun f854() -> Int { return 854; }
+fun f855() -> Int { return 855; } fun f856() -> Int { return 856; } fun f857() -> Int { return 857; } fun f858() -> Int { return 858; } fun f859() -> Int { return 859; }
+fun f860() -> Int { return 860; } fun f861() -> Int { return 861; } fun f862() -> Int { return 862; } fun f863() -> Int { return 863; } fun f864() -> Int { return 864; }
+fun f865() -> Int { return 865; } fun f866() -> Int { return 866; } fun f867() -> Int { return 867; } fun f868() -> Int { return 868; } fun f869() -> Int { return 869; }
+fun f870() -> Int { return 870; } fun f871() -> Int { return 871; } fun f872() -> Int { return 872; } fun f873() -> Int { return 873; } fun f874() -> Int { return 874; }
+fun f875() -> Int { return 875; } fun f876() -> Int { return 876; } fun f877() -> Int { return 877; } fun f878() -> Int { return 878; } fun f879() -> Int { return 879; }
+fun f880() -> Int { return 880; } fun f881() -> Int { return 881; } fun f882() -> Int { return 882; } fun f883() -> Int { return 883; } fun f884() -> Int { return 884; }
+fun f885() -> Int { return 885; } fun f886() -> Int { return 886; } fun f887() -> Int { return 887; } fun f888() -> Int { return 888; } fun f889() -> Int { return 889; }
+fun f890() -> Int { return 890; } fun f891() -> Int { return 891; } fun f892() -> Int { return 892; } fun f893() -> Int { return 893; } fun f894() -> Int { return 894; }
+fun f895() -> Int { return 895; } fun f896() -> Int { return 896; } fun f897() -> Int { return 897; } fun f898() -> Int { return 898; } fun f899() -> Int { return 899; }
+fun f900() -> Int { return 900; } fun f901() -> Int { return 901; } fun f902() -> Int { return 902; } fun f903() -> Int { return 903; } fun f904() -> Int { return 904; }
+fun f905() -> Int { return 905; } fun f906() -> Int { return 906; } fun f907() -> Int { return 907; } fun f908() -> Int { return 908; } fun f909() -> Int { return 909; }
+fun f910() -> Int { return 910; } fun f911() -> Int { return 911; } fun f912() -> Int { return 912; } fun f913() -> Int { return 913; } fun f914() -> Int { return 914; }
+fun f915() -> Int { return 915; } fun f916() -> Int { return 916; } fun f917() -> Int { return 917; } fun f918() -> Int { return 918; } fun f919() -> Int { return 919; }
+fun f920() -> Int { return 920; } fun f921() -> Int { return 921; } fun f922() -> Int { return 922; } fun f923() -> Int { return 923; } fun f924() -> Int { return 924; }
+fun f925() -> Int { return 925; } fun f926() -> Int { return 926; } fun f927() -> Int { return 927; } fun f928() -> Int { return 928; } fun f929() -> Int { return 929; }
+fun f930() -> Int { return 930; } fun f931() -> Int { return 931; } fun f932() -> Int { return 932; } fun f933() -> Int { return 933; } fun f934() -> Int { return 934; }
+fun f935() -> Int { return 935; } fun f936() -> Int { return 936; } fun f937() -> Int { return 937; } fun f938() -> Int { return 938; } fun f939() -> Int { return 939; }
+fun f940() -> Int { return 940; } fun f941() -> Int { return 941; } fun f942() -> Int { return 942; } fun f943() -> Int { return 943; } fun f944() -> Int { return 944; }
+fun f945() -> Int { return 945; } fun f946() -> Int { return 946; } fun f947() -> Int { return 947; } fun f948() -> Int { return 948; } fun f949() -> Int { return 949; }
+fun f950() -> Int { return 950; } fun f951() -> Int { return 951; } fun f952() -> Int { return 952; } fun f953() -> Int { return 953; } fun f954() -> Int { return 954; }
+fun f955() -> Int { return 955; } fun f956() -> Int { return 956; } fun f957() -> Int { return 957; } fun f958() -> Int { return 958; } fun f959() -> Int { return 959; }
+fun f960() -> Int { return 960; } fun f961() -> Int { return 961; } fun f962() -> Int { return 962; } fun f963() -> Int { return 963; } fun f964() -> Int { return 964; }
+fun f965() -> Int { return 965; } fun f966() -> Int { return 966; } fun f967() -> Int { return 967; } fun f968() -> Int { return 968; } fun f969() -> Int { return 969; }
+fun f970() -> Int { return 970; } fun f971() -> Int { return 971; } fun f972() -> Int { return 972; } fun f973() -> Int { return 973; } fun f974() -> Int { return 974; }
+fun f975() -> Int { return 975; } fun f976() -> Int { return 976; } fun f977() -> Int { return 977; } fun f978() -> Int { return 978; } fun f979() -> Int { return 979; }
+fun f980() -> Int { return 980; } fun f981() -> Int { return 981; } fun f982() -> Int { return 982; } fun f983() -> Int { return 983; } fun f984() -> Int { return 984; }
+fun f985() -> Int { return 985; } fun f986() -> Int { return 986; } fun f987() -> Int { return 987; } fun f988() -> Int { return 988; } fun f989() -> Int { return 989; }
+fun f990() -> Int { return 990; } fun f991() -> Int { return 991; } fun f992() -> Int { return 992; } fun f993() -> Int { return 993; } fun f994() -> Int { return 994; }
+fun f995() -> Int { return 995; } fun f996() -> Int { return 996; } fun f997() -> Int { return 997; } fun f998() -> Int { return 998; } fun f999() -> Int { return 999; }
+fun f1000() -> Int { return 1000; } fun f1001() -> Int { return 1001; } fun f1002() -> Int { return 1002; } fun f1003() -> Int { return 1003; } fun f1004() -> Int { return 1004; }
+fun f1005() -> Int { return 1005; } fun f1006() -> Int { return 1006; } fun f1007() -> Int { return 1007; } fun f1008() -> Int { return 1008; } fun f1009() -> Int { return 1009; }
+fun f1010() -> Int { return 1010; } fun f1011() -> Int { return 1011; } fun f1012() -> Int { return 1012; } fun f1013() -> Int { return 1013; } fun f1014() -> Int { return 1014; }
+fun f1015() -> Int { return 1015; } fun f1016() -> Int { return 1016; } fun f1017() -> Int { return 1017; } fun f1018() -> Int { return 1018; } fun f1019() -> Int { return 1019; }
+fun f1020() -> Int { return 1020; } fun f1021() -> Int { return 1021; } fun f1022() -> Int { return 1022; } fun f1023() -> Int { return 1023; } fun f1024() -> Int { return 1024; }
+fun f1025() -> Int { return 1025; } fun f1026() -> Int { return 1026; } fun f1027() -> Int { return 1027; } fun f1028() -> Int { return 1028; } fun f1029() -> Int { return 1029; }
+fun f1030() -> Int { return 1030; } fun f1031() -> Int { return 1031; } fun f1032() -> Int { return 1032; } fun f1033() -> Int { return 1033; } fun f1034() -> Int { return 1034; }
+fun f1035() -> Int { return 1035; } fun f1036() -> Int { return 1036; } fun f1037() -> Int { return 1037; } fun f1038() -> Int { return 1038; } fun f1039() -> Int { return 1039; }
+fun f1040() -> Int { return 1040; } fun f1041() -> Int { return 1041; } fun f1042() -> Int { return 1042; } fun f1043() -> Int { return 1043; } fun f1044() -> Int { return 1044; }
+fun f1045() -> Int { return 1045; } fun f1046() -> Int { return 1046; } fun f1047() -> Int { return 1047; } fun f1048() -> Int { return 1048; } fun f1049() -> Int { return 1049; }
+fun f1050() -> Int { return 1050; } fun f1051() -> Int { return 1051; } fun f1052() -> Int { return 1052; } fun f1053() -> Int { return 1053; } fun f1054() -> Int { return 1054; }
+fun f1055() -> Int { return 1055; } fun f1056() -> Int { return 1056; } fun f1057() -> Int { return 1057; } fun f1058() -> Int { return 1058; } fun f1059() -> Int { return 1059; }
+fun f1060() -> Int { return 1060; } fun f1061() -> Int { return 1061; } fun f1062() -> Int { return 1062; } fun f1063() -> Int { return 1063; } fun f1064() -> Int { return 1064; }
+fun f1065() -> Int { return 1065; } fun f1066() -> Int { return 1066; } fun f1067() -> Int { return 1067; } fun f1068() -> Int { return 1068; } fun f1069() -> Int { return 1069; }
+fun f1070() -> Int { return 1070; } fun f1071() -> Int { return 1071; } fun f1072() -> Int { return 1072; } fun f1073() -> Int { return 1073; } fun f1074() -> Int { return 1074; }
+fun f1075() -> Int { return 1075; } fun f1076() -> Int { return 1076; } fun f1077() -> Int { return 1077; } fun f1078() -> Int { return 1078; } fun f1079() -> Int { return 1079; }
+fun f1080() -> Int { return 1080; } fun f1081() -> Int { return 1081; } fun f1082() -> Int { return 1082; } fun f1083() -> Int { return 1083; } fun f1084() -> Int { return 1084; }
+fun f1085() -> Int { return 1085; } fun f1086() -> Int { return 1086; } fun f1087() -> Int { return 1087; } fun f1088() -> Int { return 1088; } fun f1089() -> Int { return 1089; }
+fun f1090() -> Int { return 1090; } fun f1091() -> Int { return 1091; } fun f1092() -> Int { return 1092; } fun f1093() -> Int { return 1093; } fun f1094() -> Int { return 1094; }
+fun f1095() -> Int { return 1095; } fun f1096() -> Int { return 1096; } fun f1097() -> Int { return 1097; } fun f1098() -> Int { return 1098; } fun f1099() -> Int { return 1099; }
+
+fun main() {
+    var w = Wide;
+    var total = w.m0() + w.m19() + f0() + f1099();
+    if total != 0 + 19 + 0 + 1099 {
+        return;
+    }
+}

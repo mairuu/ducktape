@@ -3836,6 +3836,53 @@
     fails exactly `method_type_args_bare.dt`; reverting the empty-list fix
     fails exactly `turbofish_empty.dt`.
 
+- **Pre-sizing a map, in entries (milestone 72)** — `HashMap::with_capacity(n)`,
+  `m.reserve(n)` and `m.capacity()`, forwarded by `HashSet`. The top-ranked
+  item on the perf list, and the smallest kind of change: one `.dt` file, no
+  compiler change *asked for* — though two parser limits had to be lifted before
+  it would compile.
+  - **The finding is that the units were wrong, not that pre-sizing was
+    missing.** `rehash(n)` had been the documented pre-sizing tool since
+    milestone 63 and it takes a *slot* count, while every caller has an *entry*
+    count. Growth triggers at 3/4 load and a slot count is rounded up to a power
+    of two, so `n` entries fit only when `n <= 0.75 * capacity_for(n)` — false
+    for every `n` in the top quarter of a power-of-two range. That is a quarter
+    of all arguments, and it is the wrong quarter: every power of two is in it,
+    and so is every round decimal a person types. `m.rehash(1000)` gives room
+    for 768.
+  - **Measured, since speed is the whole reason.** At -O2, best of 7, control
+    subtracted, 30 000 entries built ten times: **382ms grown, 307ms after
+    `rehash(30000)`, 97ms after `with_capacity(30000)`**. The old advice
+    recovered 20% of the doubling cost and the new API recovers 75% — for an
+    `n` in the good three quarters (20 000, say) the two are identical, which is
+    why this was invisible until the conversion was written down.
+    `slots_for(n) = capacity_for((n * 4 + 2) / 3)` is the whole of it.
+  - **`capacity()` is there to make a rehash observable.** The slot array is
+    private, so nothing — no program and no test — could previously tell a
+    pre-sized build from a grown one. The alternative was a timing test, and a
+    timing test is not a test. It reports occupancy rather than population, so
+    tombstones count against it; that is a smaller promise than
+    `capacity() - len()`, not a broken one.
+  - **`reserve` splits the two counters the way `reserve_one` already did**:
+    whether to act reads `used`, since tombstones are what will be in the way,
+    while the size to ask for reads `live`, since a rebuild drops them. A map
+    whose room is entirely tombstones therefore reserves by *cleaning* and does
+    not grow at all — the case that tells the two counters apart, and a line of
+    the test.
+  - **BUG FOUND: a release-built compiler segfaulted on a module with 1025
+    declarations.** `parser_parse` held them in a 1024-entry stack array guarded
+    by `assert`, and the release build defines `NDEBUG` — so the guard was
+    deleted and the write went past the array (exit 139, confirmed). Unrelated
+    to maps; reached because the *other* parser cap, 16 items per impl, blocked
+    this milestone outright once `HashMap` wanted a 17th method, and lifting one
+    meant looking at the family. Both now grow from the arena, like a block's
+    statements. `tests/pass/wide_decls.dt` pins both.
+  - **Sabotaged three ways.** Collapsing `slots_for` to `capacity_for` — the
+    old, wrong conversion — fails 5 of the 10 lines of
+    `tests/run/map_with_capacity.dt`. Restoring either parser cap fails
+    `wide_decls.dt`, the impl one also taking `std/map.dt` itself down with it,
+    which is the version that cannot ship silently.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -4008,6 +4055,18 @@ via `Module.decl_base`) and is not part of the main line.
   and then, usually, an undefined variable for the type name — two diagnostics
   for one mistake. A note on the first names the turbofish, which is as far as
   the field-access site can see.
+- **most of the parser's list buffers are fixed at 16** — arguments, type
+  arguments, match arms, struct fields and initialisers, enum variants, tuple
+  elements, closure parameters, trait bounds, where-predicates, subpatterns,
+  path segments, trait items, interpolation segments. Each reports "too many
+  ...", so it is an abort on a valid program rather than anything unsafe, but 16
+  match arms or 16 struct fields is not a lot, and nothing about the numbers was
+  chosen. Milestone 72 grew three of them — a block's statements were already
+  grown, an impl's items and a module's declarations became so — and found a
+  segfault behind the third, so the rest are a wart with a known shape and a
+  known fix (the `PUSH`/`RESERVE` macro in `parse_block`). The cheap ones to do
+  first are the ones a real program hits: match arms, struct fields, enum
+  variants
 - ~~no bitwise operators at all~~ — **closed by milestone 65.** What is left of
   it is small and none of it blocks anything: there are no compound bitwise
   assignments (`&=`, `<<=`), matching the fact that `%=` does not exist either;

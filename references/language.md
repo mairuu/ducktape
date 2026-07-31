@@ -2133,10 +2133,15 @@ var ks = m.keys();  ks.sort();    # [K], in no particular order until sorted
 var vs = m.values();
 for pair in m.iter() { ... }      # (K, V), an ordinary Iterator
 
+var p: HashMap<Int, Int> = HashMap::with_capacity(1000);   # room for 1000
+p.capacity();                  # 1536 — entries it holds before it rehashes
+p.reserve(500);                # room for 500 *more* than it now holds
+
 var s: HashSet<Int> = HashSet::new();
 s.insert(4);                   # true — newly added
 s.insert(4);                   # false — already there
 s.contains(4); s.remove(4); s.to_array();
+HashSet::with_capacity(n); s.capacity(); s.reserve(n);   # forwarded, all three
 ```
 
 `K` needs `Hash` and nothing else.
@@ -2157,12 +2162,28 @@ s.contains(4); s.remove(4); s.to_array();
   too: masking clears it, where `%` kept the sign of its left operand and needed
   a fold. Growth is at 3/4 load, measured including tombstones so an
   insert/remove workload cleans rather than merely grows.
-- **`m.rehash(n)` pre-sizes a map**, and is worth far more than any constant
-  factor inside it — building a 20 000-entry map pre-sized is several times
-  faster than letting it double. `n` is a request: it is rounded up to a power
-  of two and raised to what the live entries need, because an impl method has no
-  visibility control and a capacity that is not a power of two would leave every
-  probe cycling over a handful of slots.
+- **`HashMap::with_capacity(n)` and `m.reserve(n)` pre-size a map**, and
+  pre-sizing is worth far more than any constant factor inside it — building a
+  30 000-entry map costs 382ms of map work grown and 97ms pre-sized. **`n` is a
+  number of entries**, which is the whole point of them: `rehash(n)` takes
+  *slots*, and at 3/4 load the two differ. Since a slot count is rounded up to a
+  power of two, any `n` in the top quarter of a power-of-two range — every power
+  of two, and round decimals like 100 and 1000 — gets a table that rehashes
+  before it reaches `n`, so `rehash(30000)` recovered only 20% of the doubling
+  cost where `with_capacity(30000)` recovers 75% (milestone 72).
+- **`m.capacity()` is what the table holds before its next rehash**, in
+  entries. It counts *occupancy*, not population, so a map with tombstones takes
+  fewer than `capacity() - len()` further entries — the rehash they trigger
+  clears them. It exists mostly so that a rehash is observable at all: the slot
+  array is private, and timing is not a test.
+- **`m.rehash(n)` is still there and still takes slots** — it is the rebuild
+  primitive the other two are written on, and it drops every tombstone. `n` is a
+  request: rounded up to a power of two and raised to what the live entries
+  need, because an impl method has no visibility control and a capacity that is
+  not a power of two would leave every probe cycling over a handful of slots.
+- **`clear()` releases the capacity** rather than keeping it — the slot array is
+  replaced by a minimal one, so a pre-sized map that is cleared and refilled
+  wants a `reserve` after it.
 - **Iteration order is unspecified** — slot order, which is hash order, and it
   changes when the table rehashes. Sort if you need an order; a test that prints
   a map without sorting is testing the hash function.

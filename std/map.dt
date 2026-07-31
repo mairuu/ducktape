@@ -93,6 +93,23 @@ fun capacity_for(n: Int) -> Int {
     return c;
 }
 
+# How many *slots* a table needs so that `n` *entries* fit without rehashing.
+#
+# **These are two different numbers, and confusing them is what this milestone
+# is about.** A caller counts entries; the table counts slots; the load factor
+# is the conversion between them, and until now every caller had to apply it by
+# hand. `rehash` takes slots, so `m.rehash(1000)` gives 1024 of them and the
+# 769th insert rehashes anyway — the pre-size is lost for every `n` in the top
+# quarter of a power-of-two range, which is to say for a quarter of all
+# arguments and for the round ones people actually type.
+#
+# Growth triggers when `(used + 1) * 4 > slots * 3`, so `n` entries need
+# `slots * 3 >= n * 4`, and the smallest such slot count is `ceil(4n/3)` rounded
+# up to a power of two. `(n * 4 + 2) / 3` is that ceiling in integer division.
+fun slots_for(n: Int) -> Int {
+    return capacity_for((n * 4 + 2) / 3);
+}
+
 # `live` is the number of entries a caller can see; `used` counts those *and*
 # the tombstones, because it is occupancy of the probe sequence rather than
 # population that decides when probing gets slow. Keeping both is what lets a
@@ -106,13 +123,59 @@ pub struct HashMap<K: Hash, V> {
 
 impl<K: Hash, V> HashMap<K, V> {
     fun new() -> HashMap<K, V> {
-        var slots: [Slot<K, V>] = empty_slots(8);
+        return HashMap::with_capacity(0);
+    }
+
+    # A map that can take `n` entries before it rehashes — the whole of
+    # pre-sizing, in the units a caller has.
+    #
+    # `n` is an *entry* count, not a slot count, which is the one thing that
+    # makes this more than an alias for `new` plus `rehash`. It is also a
+    # promise the type can keep: nothing else has touched the table, so there
+    # are no tombstones to eat into the room and no live entries to raise the
+    # floor. `with_capacity(0)` is `new` — `slots_for(0)` is the same minimum 8
+    # that `capacity_for` imposes on everything else.
+    fun with_capacity(n: Int) -> HashMap<K, V> {
+        var slots: [Slot<K, V>] = empty_slots(slots_for(n));
         return HashMap { slots: slots, live: 0, used: 0 };
     }
 
     # How many entries the map holds. Tombstones are not entries.
     fun len(self) -> Int {
         return self.live;
+    }
+
+    # How much the table has room for before the next rehash, in entries.
+    #
+    # **What it counts is occupancy, not population.** `capacity() - len()` is
+    # therefore the room left only in a map nothing has been removed from: a
+    # tombstone occupies the probe sequence and counts toward the load, so a map
+    # that has had removals takes fewer further entries than that subtraction
+    # suggests. The rehash they eventually trigger clears them, which is what
+    # makes this a smaller promise rather than a broken one.
+    #
+    # It exists because the slot array is private and a rehash is otherwise
+    # unobservable — a program cannot tell a pre-sized build from a grown one,
+    # and neither could a test. Timing would be the alternative, and a timing
+    # test is not a test.
+    fun capacity(self) -> Int {
+        return self.slots.len() * 3 / 4;
+    }
+
+    # Make room for `more` further entries, rehashing once if the table does not
+    # already have it.
+    #
+    # The pair to `with_capacity` for a map that already exists — and the two
+    # counters part company here the way they do in `reserve_one`. Whether to
+    # act reads `used`, because tombstones are what will actually be in the way;
+    # the size to ask for reads `live`, because a rehash drops them. A map whose
+    # capacity is spent entirely on tombstones therefore reserves by *cleaning*
+    # and may not grow at all.
+    fun reserve(self, more: Int) {
+        if (self.used + more) * 4 <= self.slots.len() * 3 {
+            return;
+        }
+        self.rehash(slots_for(self.live + more));
     }
 
     fun is_empty(self) -> Bool {
@@ -154,10 +217,13 @@ impl<K: Hash, V> HashMap<K, V> {
         self.rehash(self.live * 2 + 1);
     }
 
-    # Rebuild the table, dropping every tombstone on the way. Also the way to
-    # *pre-size* one: `m.rehash(n)` before a bulk insert skips the repeated
-    # doubling, which is worth a great deal more than any constant factor in
-    # here.
+    # Rebuild the table, dropping every tombstone on the way.
+    #
+    # **`cap` is a number of slots**, and that is why this is no longer the
+    # documented way to pre-size a map: `with_capacity` and `reserve` are, and
+    # they take entries. This one stays public and stays the primitive both of
+    # them are written on, since the rebuild is the same operation whichever
+    # number asks for it.
     #
     # **`cap` is a request rather than a command**, and it has to be, because an
     # impl method has no visibility control — every method on this type is public
@@ -399,6 +465,23 @@ impl<T: Hash> HashSet<T> {
     fun new() -> HashSet<T> {
         var map: HashMap<T, Bool> = HashMap::new();
         return HashSet { map: map };
+    }
+
+    # A set that can take `n` members before it rehashes. The set forwards the
+    # whole capacity API rather than owning any of it, which is what "a set is a
+    # map whose values are never read" is supposed to mean: a member is an
+    # entry, so the units already agree and there is nothing to convert.
+    fun with_capacity(n: Int) -> HashSet<T> {
+        var map: HashMap<T, Bool> = HashMap::with_capacity(n);
+        return HashSet { map: map };
+    }
+
+    fun capacity(self) -> Int {
+        return self.map.capacity();
+    }
+
+    fun reserve(self, more: Int) {
+        self.map.reserve(more);
     }
 
     # Add `value`, answering whether it was *newly* added — `false` means it was
