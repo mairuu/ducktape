@@ -1,0 +1,22 @@
+# A derived impl is registered in the deriving module's *visible* set, so it
+# travels through `use` exactly like a written one — including back into the
+# module that declared the traits, whose `greet` never saw this type.
+use std::io::print;
+use traits::{Greet, Loud, greet};
+
+struct P;
+
+impl Loud for P {
+    fun name(self) -> String { return "p"; }
+    fun shout(self) -> String { return "HI"; }
+}
+
+fun main() {
+    print(greet(P));
+#> p
+    var d: dyn Greet = P;
+    print(d.name());
+#> p
+    print(P.shout());
+#> HI
+}

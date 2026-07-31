@@ -1,0 +1,60 @@
+# The wart's own example, and the reason the derivation is worth having:
+# `impl DoubleEnded for Span` used to demand an `impl Iterator for Span` beside
+# it even though the block already said how to step. One block now supplies
+# both — the associated type included, which is the only place a derived impl
+# can get one, since an associated type has no default to fall back on.
+use std::io::print;
+use std::iter::{Iterator, DoubleEnded};
+
+struct Span { lo: Int, hi: Int }
+
+impl DoubleEnded for Span {
+    type Item = Int;
+
+    fun next(self) -> Option<Int> {
+        if self.lo >= self.hi { return Option::None; }
+        var v = self.lo;
+        self.lo = self.lo + 1;
+        return Option::Some(v);
+    }
+
+    fun next_back(self) -> Option<Int> {
+        if self.lo >= self.hi { return Option::None; }
+        self.hi = self.hi - 1;
+        return Option::Some(self.hi);
+    }
+}
+
+fun main() {
+    # `for` speaks Iterator, which nothing in this file writes an impl of.
+    # (the source is bound first: a struct literal cannot head a `for`'s
+    # iterable, since its `{` would open the loop body.)
+    var total = 0;
+    var s = Span { lo: 0, hi: 5 };
+    for x in s {
+        total = total + x;
+    }
+    print("{total}");
+#> 10
+
+    # so do the combinators, which reach it through an `<I: Iterator>` bound.
+    var doubled = Span { lo: 1, hi: 4 }.map(|x| x * 2).collect();
+    print("{doubled}");
+#> [2, 4, 6]
+
+    # and `rev` needs both halves at once: the written DoubleEnded impl for
+    # `next_back`, the derived Iterator impl for `Rev`'s own bound.
+    var back = Span { lo: 0, hi: 4 }.rev().collect();
+    print("{back}");
+#> [3, 2, 1, 0]
+
+    # a `dyn` over the sub lays its vtable out over the closure, so the derived
+    # impl has to fill the super's slots.
+    var it: dyn Iterator<Item = Int> = Span { lo: 7, hi: 9 };
+    print("{it.next()}");
+#> Some(7)
+    print("{it.next()}");
+#> Some(8)
+    print("{it.next()}");
+#> None
+}

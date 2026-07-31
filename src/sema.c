@@ -2704,6 +2704,198 @@ static void resolve_impl_decl(ResolveCtx *rctx, Decl *decl) {
   rctx->tyres.tscope = tscope_pop(rctx->tyres.tscope);
 }
 
+// ── discharging a supertrait obligation ──────────────────────────────────────
+//
+// `trait Loud: Greet` says every `Loud` is a `Greet`, and that used to be a
+// *demand*: an `impl Loud for P` was rejected unless an `impl Greet for P` had
+// been written out beside it, even when the block already said everything a
+// `Greet` needs. It is now a derivation. An impl of a trait implements the
+// trait's whole supertrait closure, and each of a super's items comes from
+//
+//   1. the impl block, if it writes an item under that name, else
+//   2. the super's own default body — so a super whose every requirement is
+//      defaulted, or which requires nothing at all, needs no block to derive.
+//
+// What neither supplies is what the obligation diagnostic still reports, and
+// that error is now the narrow case it always described: the program has not
+// said how `P` is a `Greet`.
+//
+// Two facts of the existing machinery are what make this cheap rather than a
+// second kind of impl. `method_is_inherent` already asks
+// `trait_flat_method_index` — the *closure* — so a super's method written in
+// the sub's block was never an inherent name to begin with, and coherence
+// tolerated it as an extra the trait did not ask for. And the derived impl
+// shares its `MethodDef`s with the block's, so there is exactly one `FunDef`
+// per body: nothing is compiled twice and no name resolves two ways.
+
+static MethodDef *impl_find_method(ImplDef *impl, StringView name) {
+  for (int i = 0; i < impl->method_count; i++) {
+    if (sv_equal(impl->methods[i].name, name)) {
+      return &impl->methods[i];
+    }
+  }
+  return NULL;
+}
+
+static AssocTypeDef *impl_find_assoc(ImplDef *impl, StringView name) {
+  for (int i = 0; i < impl->assoc_type_count; i++) {
+    if (sv_equal(impl->assoc_types[i].name, name)) {
+      return &impl->assoc_types[i];
+    }
+  }
+  return NULL;
+}
+
+// The first item of `super` that `impl`'s block cannot supply, or false when it
+// can supply them all. Asked twice — once here to decide whether to derive, and
+// once by tc_check_impl_conformance to name what is missing — so the two can
+// never disagree about which impls exist.
+static bool impl_lacks_super_item(ImplDef *impl, TraitDef *super,
+                                  StringView *out_name, bool *out_is_assoc) {
+  // an associated type has no default to fall back on, so the block is the
+  // only source. `impl DoubleEnded for X { type Item = Int; .. }` is how a
+  // derived `Iterator` impl gets one.
+  for (int i = 0; i < super->assoc_type_count; i++) {
+    if (impl_find_assoc(impl, super->assoc_types[i].name) == NULL) {
+      *out_name = super->assoc_types[i].name;
+      *out_is_assoc = true;
+      return true;
+    }
+  }
+  for (int i = 0; i < super->method_count; i++) {
+    if (super->methods[i].has_default) {
+      continue;
+    }
+    if (impl_find_method(impl, super->methods[i].name) == NULL) {
+      *out_name = super->methods[i].name;
+      *out_is_assoc = false;
+      return true;
+    }
+  }
+  return false;
+}
+
+// The impl `impl Sub for X`'s block implies for one of Sub's supers. It carries
+// only the items the block wrote: a super method the block omits is one the
+// super defaults, and a default is inherited through a derived impl exactly as
+// it is through a written one (impl_index_default_method finds it either way).
+static ImplDef *derive_super_impl(ResolveCtx *rctx, ImplDef *impl,
+                                  TraitDef *super, Type *super_ref) {
+  ImplDef *def = al_alloc_zero_for(rctx->al, ImplDef);
+  def->module = impl->module;
+  def->trait_type = super_ref;
+  def->self_type = impl->self_type;
+  // the same parameters, bounds and all: `impl<I: DoubleEnded> Sub for Rev<I>`
+  // derives an impl of the super that applies under exactly the same
+  // conditions, which is what selection has to re-check at every use.
+  def->type_params = impl->type_params;
+  def->type_param_count = impl->type_param_count;
+
+  def->methods =
+      al_alloc_zero(rctx->al, sizeof(MethodDef) * super->method_count);
+  def->method_cap = super->method_count;
+  for (int i = 0; i < super->method_count; i++) {
+    MethodDef *m = impl_find_method(impl, super->methods[i].name);
+    if (m != NULL) {
+      def->methods[def->method_count++] = *m;
+    }
+  }
+
+  def->assoc_types =
+      al_alloc_zero(rctx->al, sizeof(AssocTypeDef) * super->assoc_type_count);
+  def->assoc_type_cap = super->assoc_type_count;
+  for (int i = 0; i < super->assoc_type_count; i++) {
+    AssocTypeDef *a = impl_find_assoc(impl, super->assoc_types[i].name);
+    if (a != NULL) {
+      def->assoc_types[def->assoc_type_count++] = *a;
+    }
+  }
+  return def;
+}
+
+// The block writes an item of a super that something else already implements.
+// Nothing can reach the copy written here through the super — a bound, a `dyn`
+// and a trait-qualified path all go to the written impl — while a plain
+// receiver call finds this one, so the two spellings of `p.name()` would run
+// different bodies.
+static void report_super_item_taken(ResolveCtx *rctx, Decl *decl, ImplDef *impl,
+                                    TraitDef *super) {
+  for (int i = 0; i < super->method_count; i++) {
+    MethodDef *m = impl_find_method(impl, super->methods[i].name);
+    if (m == NULL) {
+      continue;
+    }
+    diag_error(rctx->diags, m->fun->span,
+               "method '" SV_FMT "' is declared by supertrait '" SV_FMT
+               "', which this type already implements elsewhere",
+               SV_ARG(m->name), SV_ARG(super->name));
+    diag_note(rctx->diags, (Span){0},
+              "put it in that impl, or drop the impl so this block derives "
+              "'" SV_FMT "' itself",
+              SV_ARG(super->name));
+    return;
+  }
+  for (int i = 0; i < super->assoc_type_count; i++) {
+    if (impl_find_assoc(impl, super->assoc_types[i].name) == NULL) {
+      continue;
+    }
+    diag_error(rctx->diags, decl->span,
+               "associated type '" SV_FMT "' is declared by supertrait '" SV_FMT
+               "', which this type already implements elsewhere",
+               SV_ARG(super->assoc_types[i].name), SV_ARG(super->name));
+    return;
+  }
+}
+
+// Walk one impl's supertrait closure and derive what it can. The closure rather
+// than the direct supers, so `trait C: B` and `trait B: A` derive both from one
+// `impl C for X` — and in the closure's own order, supers first, so a derived
+// impl is registered before anything that could be derived from it is asked
+// about.
+static void derive_impl_supers(ResolveCtx *rctx, Decl *decl) {
+  ImplDef *impl = decl->as.impl_decl.def;
+  if (impl == NULL || impl->trait_type == NULL ||
+      impl->trait_type->kind != TY_TRAIT || impl->self_type == NULL ||
+      type_is_poison(impl->self_type)) {
+    return; // inherent impl, or a poisoned head already diagnosed
+  }
+  TraitDef *trait = impl->trait_type->as.trait.def;
+  Subst trait_subst = trait_ref_subst(impl->trait_type, rctx->al);
+
+  for (int i = 0; i < trait->flat_count; i++) {
+    TraitDef *super = trait->flat[i].def;
+    if (super == trait) {
+      continue; // the closure ends with the trait itself
+    }
+    Type *super_ref = trait->flat[i].ref;
+    if (trait_subst.count > 0) {
+      super_ref = subst_apply_(&trait_subst, NULL, super_ref, /*total=*/false,
+                               rctx->al);
+    }
+    if (super_ref->kind != TY_TRAIT) {
+      continue; // a poisoned super head, already diagnosed
+    }
+    if (impl_index_implements(rctx->impls, impl->self_type, super_ref,
+                              rctx->al)) {
+      // A written impl always wins, so nothing is derived — and that makes an
+      // item of this super written *here* a second definition of it. Reported
+      // rather than resolved, for m68's reason one relation over: the block's
+      // copy is what a receiver finds and the written impl's is what a bound
+      // and a `dyn` find, so silently preferring either is the bug.
+      report_super_item_taken(rctx, decl, impl, super);
+      continue;
+    }
+    StringView missing;
+    bool is_assoc;
+    if (impl_lacks_super_item(impl, super, &missing, &is_assoc)) {
+      continue; // not derivable; tc_check_impl_conformance reports it
+    }
+    ImplDef *derived = derive_super_impl(rctx, impl, super, super_ref);
+    impl_index_add(rctx->impls, derived);
+    impl_index_add(&rctx->tc->all_impls, derived);
+  }
+}
+
 static Type *trait_project(Type *t, TraitDef *trait, Type *self_to,
                            ImplDef *impl, Allocator *al);
 
@@ -3340,6 +3532,18 @@ bool tc_resolve_module(TypeChecker *tc, Module *m) {
     Decl *decl = m->ast->decls[i];
     rctx.tyres.tscope = &m->tscope;
     resolve_decl(&rctx, decl);
+  }
+
+  // A fourth sweep, because a supertrait obligation is discharged by whatever
+  // the *module* implements rather than by what precedes the impl in the file:
+  // deriving inside resolve_impl_decl would make `impl Loud for P` above an
+  // explicit `impl Greet for P` derive one and then collide with it. Every
+  // dependency's impls arrived in tc_import_impls, before any of this ran.
+  for (int i = 0; i < m->ast->decl_count; i++) {
+    Decl *decl = m->ast->decls[i];
+    if (decl->kind == DECL_IMPL) {
+      derive_impl_supers(&rctx, decl);
+    }
   }
 
   return true;
@@ -7572,6 +7776,12 @@ static void tc_check_impl_conformance(TypeChecker *tc, Decl *decl,
   // reads `Iterator` straight off a `T: DoubleEnded` without looking for an
   // impl). Checked against the impl's own module: an impl it cannot see is one
   // its bodies could not have used either.
+  //
+  // derive_impl_supers ran in the resolve pass and has already supplied every
+  // super this block could supply, so what is left here is the case it
+  // declined: an item neither the block nor a default provides. The note names
+  // it, because "does not implement" alone sends the reader looking for a
+  // missing impl when the fix is usually a missing method.
   ImplIndex *visible = &impl_def->module->visible_impls;
   for (int i = 0; i < trait->super_count; i++) {
     Type *super_ref = trait->supers[i];
@@ -7579,7 +7789,8 @@ static void tc_check_impl_conformance(TypeChecker *tc, Decl *decl,
       super_ref =
           subst_apply_(&trait_subst, NULL, super_ref, /*total=*/false, tc->al);
     }
-    if (impl_index_implements(visible, impl_def->self_type, super_ref,
+    if (super_ref->kind != TY_TRAIT ||
+        impl_index_implements(visible, impl_def->self_type, super_ref,
                               tc->al)) {
       continue;
     }
@@ -7590,6 +7801,16 @@ static void tc_check_impl_conformance(TypeChecker *tc, Decl *decl,
                "'%s' does not implement '%s', which trait '" SV_FMT
                "' requires of every implementing type",
                self_buf, super_buf, SV_ARG(trait->name));
+    StringView missing;
+    bool is_assoc;
+    if (impl_lacks_super_item(impl_def, super_ref->as.trait.def, &missing,
+                              &is_assoc)) {
+      diag_note(tc->diags, (Span){0},
+                "this impl would supply it, but no %s '" SV_FMT
+                "' is written here or defaulted by '%s'",
+                is_assoc ? "associated type" : "method", SV_ARG(missing),
+                super_buf);
+    }
   }
 
   for (int i = 0; i < trait->assoc_type_count; i++) {

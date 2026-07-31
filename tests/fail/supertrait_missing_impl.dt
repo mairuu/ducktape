@@ -4,6 +4,11 @@
 # straight off a `T: Greeter` bound without looking for an impl at all, so if an
 # `impl Greeter` could exist without an `impl Named`, that bound would be a lie
 # the checker had already believed.
+#
+# Milestone 74 discharges the obligation from the block, so this block is the
+# one that cannot be: it writes nothing of `Named` and `label` has no default
+# body, leaving the derivation with no source for it. The narrower case where
+# the block supplies *some* of the super is tests/fail/supertrait_partial.dt.
 trait Named {
     fun label(self) -> String;
 }

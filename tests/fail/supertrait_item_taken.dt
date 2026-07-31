@@ -1,0 +1,25 @@
+#! expect: method 'name' is declared by supertrait 'Greet', which this type already implements elsewhere
+# A written impl always wins, so this block derives nothing — and that leaves
+# two definitions of `name` for one type, reachable by different routes:
+# `P.name()` finds the one written here, while a `T: Greet` bound, a
+# `dyn Greet` and `Greet::name(p)` all find the other. Milestone 68's rule one
+# relation over: silently preferring either is the bug, so it is an error
+# where the second definition is written.
+trait Greet {
+    fun name(self) -> String;
+}
+
+trait Loud: Greet {
+    fun shout(self) -> String;
+}
+
+struct P;
+
+impl Loud for P {
+    fun name(self) -> String { return "from-loud"; }
+    fun shout(self) -> String { return "HI"; }
+}
+
+impl Greet for P {
+    fun name(self) -> String { return "from-greet"; }
+}

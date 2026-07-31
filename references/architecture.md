@@ -1000,6 +1000,43 @@ impl's self type in the impl's *own module*'s visible set. That check is the
 only thing making the assumption half sound — `impl_index_implements` reads a
 super off a `TY_GENERIC`'s declared bounds without looking for an impl at all.
 
+#### Deriving the super's impl
+
+The obligation is *discharged* before it is checked. `derive_impl_supers` walks
+one impl's closure and, for each super the module does not already implement,
+synthesises a real `ImplDef` — same module, same self type, the same
+`type_params` array (so the derived impl applies under exactly the conditions
+the written one does), the super's reference as `trait_type`, and the block's
+own `MethodDef`s for whatever items the super declares. `impl_lacks_super_item`
+decides derivability and is asked twice: here, and by
+`tc_check_impl_conformance` to *name* the item that stopped it.
+
+Three things make this small rather than a second kind of impl:
+
+- **The `MethodDef`s are shared, not copied.** One `FunDef` per body, so
+  nothing is compiled twice and a name cannot resolve two ways. The derived
+  impl simply lists the subset the super declares; a super method the block
+  omits is one the super defaults, and `impl_index_default_method` finds a
+  default through a derived impl exactly as through a written one.
+- **Nothing had to be taught that these methods were legal in that block.**
+  `method_is_inherent` already asks `trait_flat_method_index` — the closure —
+  so a super's method written in the sub's block was never an inherent name,
+  and `impl_defs_share_method` skipped it. The block always accepted the items;
+  only the obligation loop rejected the impl.
+- **It is a fourth sweep of `tc_resolve_module`, not a step of
+  `resolve_impl_decl`.** The obligation is discharged against what the *module*
+  implements rather than against what precedes the impl in the file, so
+  deriving in place would make `impl Loud for P` written above an explicit
+  `impl Greet for P` derive one and then collide with it. Every dependency's
+  impls arrived in `tc_import_impls`, one phase earlier.
+
+A written impl always wins, so derivation can never create a conflicting pair.
+The cost of that rule is `report_super_item_taken`: where the super is already
+implemented and the block writes one of its items anyway, the copy in the block
+is unreachable through the super while a receiver call finds it and not the
+other — milestone 68's argument one relation over, so it is an error where the
+second definition is written.
+
 Two details are consequences rather than choices:
 
 - **`trait_project` has to look past the impl it was given.** A supertrait's

@@ -1,0 +1,12 @@
+# The traits live here; the impl that derives one lives next door.
+pub trait Greet {
+    fun name(self) -> String;
+}
+
+pub trait Loud: Greet {
+    fun shout(self) -> String;
+}
+
+# a bound in *this* module, so what it selects from is what `impl` module's
+# derived impl reached through the import graph.
+pub fun greet<T: Greet>(x: T) -> String { return x.name(); }

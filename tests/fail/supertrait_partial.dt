@@ -1,0 +1,21 @@
+#! expect: no method 'age' is written here or defaulted by 'Greet'
+# The obligation survives the derivation, narrowed to the case it always
+# described: an item neither the block nor a default supplies. `name` is here,
+# so the block is halfway to a `Greet` impl and the note says which half is
+# missing — "does not implement" alone sends the reader looking for a missing
+# *impl* when the fix is a missing method.
+trait Greet {
+    fun name(self) -> String;
+    fun age(self) -> Int;
+}
+
+trait Loud: Greet {
+    fun shout(self) -> String;
+}
+
+struct P;
+
+impl Loud for P {
+    fun name(self) -> String { return "p"; }
+    fun shout(self) -> String { return "HI"; }
+}

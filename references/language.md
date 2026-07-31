@@ -337,14 +337,57 @@ compose transitively (`trait Tagged: Described` reaches `Shape` too).
 
 It says one thing, which has two readings, and both hold:
 
-- **As an obligation.** `impl DoubleEnded for Span` is legal only where
-  `impl Iterator for Span` is visible; otherwise the impl is rejected naming
+- **As an obligation.** `impl DoubleEnded for Span` is legal only where the
+  whole of `Iterator` is accounted for; otherwise the impl is rejected naming
   the missing one (`tests/fail/supertrait_missing_impl.dt`).
 - **As an assumption.** A `T: DoubleEnded` bound offers everything `Iterator`
   declares — its methods (`it.next()`, `it.collect()`), its associated types
   (`T.Item`), and its own supers in turn — and `T` may be handed to anything
   asking for `T: Iterator`. The obligation is what makes this sound: the
   assumption is answered off the declaration, without searching for an impl.
+
+#### Discharging the obligation
+
+An impl of a trait implements the trait's **whole supertrait closure**, so a
+separate `impl Iterator for Span` is not something you have to write. Each of a
+super's items is taken from
+
+1. **the impl block**, if it writes an item under that name, else
+2. **the super's own default body**.
+
+So one block can be the whole story:
+
+```rust
+impl DoubleEnded for Span {
+    type Item = Int;
+    fun next(self) -> Option<Int> { .. }
+    fun next_back(self) -> Option<Int> { .. }
+}
+```
+
+and `for x in span`, `span.map(f)`, `span.rev()` and a
+`dyn Iterator<Item = Int>` all work, because what is derived is a *real* impl —
+registered in the module's visible set, travelling through `use` like any
+other, and monomorphised per instantiation. An associated type has no default,
+so the block is its only source; a method the super defaults may be omitted, or
+written to override the default. A super that requires nothing at all — a
+marker trait, or one whose every method is defaulted — therefore derives with
+no block content at all (`tests/run/supertrait_derived.dt`).
+
+Two rules keep this from making a name mean two things:
+
+- **A written impl always wins.** Derivation happens only where the super is
+  not already implemented, so it can never create a conflicting pair.
+- Consequently, an item of a super that *is* implemented elsewhere may not also
+  be written in the sub's block: nothing could reach the copy in the block
+  through the super, while a plain receiver call would find it and not the
+  other. That is an error where the second definition is written
+  (`tests/fail/supertrait_item_taken.dt`), for the same reason two inherent
+  impls sharing a method name are.
+
+What is left of the obligation is the case it always described — an item
+neither the block nor a default supplies — and the diagnostic now names it
+(`tests/fail/supertrait_partial.dt`).
 
 The point of the feature is that `Self.Item` above means `Iterator`'s `Item`.
 Written as an independent trait, `DoubleEnded` would have to declare an `Item`
@@ -367,7 +410,8 @@ was declared. And a `dyn Sub` satisfies a `Super` bound, so it may be handed to
 a `<I: Iterator>` function or driven by a `for` loop
 (`tests/run/dyn_supertrait.dt`).
 
-See `tests/run/supertrait.dt`, `tests/run/supertrait_generic.dt`.
+See `tests/run/supertrait.dt`, `tests/run/supertrait_generic.dt`,
+`tests/run/supertrait_derived.dt`, `tests/run/supertrait_derived_iter.dt`.
 
 ### Generic traits
 
@@ -778,6 +822,14 @@ one is `Self.Item`: `Item` belongs to `Iterator`, so only `: Iterator` makes it
 call both `self.inner.next()` and `self.inner.next_back()` when `I` was bounded
 only by the sub. Unlike `Iterator` it is not a lang item, so it is imported by
 name.
+
+std keeps those pairs as pairs, though since milestone 74 each could be a
+single `impl DoubleEnded` block — `Rev`, `ArrayIter`, `RangeIter` and
+`CharIter` all bound their two impls identically. Merging them would save four
+lines in the file a reader opens *for* the trait boundary, so it is left
+unmerged; a program that would rather write one block should
+(`tests/run/supertrait_derived_iter.dt`). `Map` and `Filter` could not merge in
+any case, since their `Iterator` impls carry the weaker bound.
 
 `Map` and `Filter` forward it — a transform does not care which end an element
 came from — so a pipeline stays reversible across them. The others do not, each
@@ -2217,7 +2269,7 @@ HashSet::with_capacity(n); s.capacity(); s.reserve(n);   # forwarded, all three
 | a bound naming a *later* type parameter (`fun f<U: Into<T>, T>`) | "unknown type: T" — bounds resolve left to right |
 | an equality binding between two *projections* (`J: Iterator<Item = I.Item2>` where both sides are abstract) | works, and is compared exactly — but only because a projection over a parameter is interned like any type; there is no unification, so nothing *solves* one side from the other |
 | `where Self: B` on a trait *method* | rejected — a supertrait is a property of the trait, so `trait A: B` is the one spelling for it |
-| an impl of a supertrait *inferred* from the sub's | none: `impl DoubleEnded for X` requires an `impl Iterator for X` written out. The obligation is checked, never discharged for you |
+| an impl of a supertrait derived from something *other than* the sub's own block or the super's defaults | nothing else is a source. A super's required method that the block does not write is not searched for among the type's inherent methods, and no blanket impl is consulted — the obligation is discharged from what the impl says, or reported |
 | an array or a range that *is* an `Iterator` | neither implements the trait; `xs.iter()` / `(0..n).iter()` are the seeds, and `for x in xs` keeps its own desugaring rather than routing through them |
 | an array iterator detached from the array it walks | `xs.iter()` holds the array and snapshots nothing, so a `push`/`pop` mid-walk is visible (never out of bounds — see "Sources"). `xs.iter().collect()` is the copy |
 | a heterogeneous operator (`V2 * Float`, `Matrix * Vec`) | the `std::ops` traits are homogeneous (`other: Self`, no `Output`): an operator would have to select an impl by its *right* operand, which only the written `Meters::from(x)` / `Into::<U>::into(x)` forms can do. A mixed pair is an argument mismatch on the rewritten call |

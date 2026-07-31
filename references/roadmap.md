@@ -3927,6 +3927,76 @@
   - Also verified under `BUILD=release`, since the last bug in this family was
     invisible in a debug build.
 
+- **A supertrait obligation is discharged (milestone 74)** — `impl DoubleEnded
+  for Span` no longer demands an `impl Iterator for Span` beside it. An impl
+  implements its trait's whole supertrait closure, taking each of a super's
+  items from the block if it writes one and from the super's default body
+  otherwise. Design: `language.md` "Supertraits" → "Discharging the
+  obligation", `architecture.md` "Supertraits" → "Deriving the super's impl".
+
+  - **The obligation was two claims wearing one name, and only one of them was
+    load-bearing.** What makes a `T: DoubleEnded` bound sound is that *some*
+    `impl Iterator for Span` exists; that it was written by hand was never part
+    of the argument. Milestone 58 conflated them because it had no way to make
+    one, so the check became "find one" where it should have been "get one".
+  - **Relaxing the check would have been wrong, and one experiment says so.**
+    Short-circuiting the obligation loop makes `span.next()` work immediately —
+    a receiver call resolves a method by name across impls and never asks which
+    trait it came from. The bound and the `dyn` do not: `hello(P)` reports "type
+    'P' does not implement trait 'Greet'" and `var d: dyn Greet = P` reports a
+    type mismatch, because both search the impl index. So the milestone is a
+    *synthesised `ImplDef`*, registered like any other, and the receiver call
+    that already worked is the misleading half of the evidence.
+  - **Two facts of the existing machinery made it small.** `method_is_inherent`
+    has asked `trait_flat_method_index` — the *closure* — since milestone 68, so
+    a super's method written in the sub's block was never an inherent name and
+    coherence already tolerated it as an extra the trait had not asked for. And
+    the derived impl *shares* its `MethodDef`s with the block's, so there is one
+    `FunDef` per body: nothing is compiled twice and no name resolves two ways.
+    The whole of it is ~140 lines in `sema.c` and no change to codegen, the
+    vtable layout, or the bytecode image.
+  - **It walks the closure, not the direct supers**, so `trait C: B` and
+    `trait B: A` derive both from one `impl C for X` — and in the closure's own
+    order, supers first, which is already the order that guarantees a derived
+    impl is registered before anything derivable from it is asked about.
+  - **It is a fourth sweep of `tc_resolve_module`.** The obligation is
+    discharged against what the *module* implements, not against what precedes
+    the impl in the file; deriving inside `resolve_impl_decl` would make an
+    `impl Loud for P` written above an explicit `impl Greet for P` derive one
+    and then collide with it.
+  - **THE HAZARD IT CREATES, and the second diagnostic that answers it.** A
+    written impl always wins, so derivation can never produce a conflicting
+    pair — but that leaves the case where the super is implemented elsewhere
+    *and* the block writes one of its items anyway. Before this milestone that
+    program was legal and silent; it now runs two different bodies for one name
+    depending on how you reach it (`P.name()` finds the block's,
+    `Greet::name(P)` / a bound / a `dyn` find the other). Verified by running
+    it: "from-loud" then "from-greet" twice. `report_super_item_taken` rejects
+    it where the second definition is written — milestone 68's argument one
+    relation over. `tests/fail/supertrait_item_taken.dt`.
+  - **The obligation diagnostic kept its wording and gained a note**, because
+    the error it now reports is narrower than the one it used to: not "you
+    forgot an impl" but "nothing supplies `label`". `impl_lacks_super_item` is
+    asked by the derivation and by the diagnostic, so the two can never disagree
+    about which impls exist.
+  - **std was left alone on purpose.** `Rev`, `ArrayIter`, `RangeIter` and
+    `CharIter` each carry an `Iterator` impl and a `DoubleEnded` impl whose
+    bounds match, and each pair could now be one block. Merging them would trade
+    a visible trait boundary for four saved lines in the file a reader goes to
+    *for* the trait boundary. `Map` and `Filter` could not merge in any case —
+    their `Iterator` impls have the weaker bound.
+  - **Sabotaged seven ways, each caught by the test that names it.** Dropping
+    the derive sweep fails the three new run tests and `supertrait_item_taken`
+    **at exit 0**; requiring every super method rather than only the undefaulted
+    ones fails the two run tests that lean on defaults; dropping
+    `report_super_item_taken` fails `supertrait_item_taken` at exit 0; walking
+    `supers` instead of `flat` fails the transitive case; dropping the note
+    fails `supertrait_partial` with the wrong error; not copying the impl's type
+    parameters fails the generic case; not copying the assoc types fails
+    `supertrait_derived_iter`. Clean under `make sanitize` and `BUILD=release`.
+  - **Left open:** the one-block spelling and a separate super impl cannot be
+    mixed for the same name, which is the price of "a written impl always wins".
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -4194,10 +4264,15 @@ via `Module.decl_base`) and is not part of the main line.
   54's equality binding (`J: Iterator<Item = I.Item>`) made `chain` one. The
   family is closed; what it does not do is *infer*, since an equality is
   compared rather than unified
-- a supertrait obligation is *checked*, never discharged: `impl DoubleEnded for
-  X` requires an `impl Iterator for X` written out, and nothing derives one. Nor
-  is a supertrait inherited by an impl of the sub in any weaker sense — the two
-  impls are wholly separate definitions
+- ~~a supertrait obligation is *checked*, never discharged~~ — **closed by
+  milestone 74**, which took the wider of the two readings the entry allowed:
+  an impl implements its trait's whole closure, taking each super item from the
+  block or from the super's default. What is left of it is the rule that keeps
+  derivation from ever conflicting — a *written* impl always wins, so an item
+  of a super that something else already implements may not also be written in
+  the sub's block. That is an error rather than a preference, but it means the
+  one-block spelling and a separate super impl cannot be mixed for the same
+  name
 - a supertrait is resolved in its own sub-pass, so it may name a trait declared
   *later* in the file — unlike a type-parameter bound, which is still resolved
   in the declare pass and so stays order-sensitive. The two spellings of "a
