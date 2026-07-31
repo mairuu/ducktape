@@ -94,6 +94,22 @@ pub fun total_weight(items: [dyn Weigh]) -> Int {
     return sum;
 }
 
+# and the coercion asked backwards: `as?` recovers one concrete type from a
+# trait object, `Option<T>` because it may not be that one. The test is vtable
+# identity — a table is memoised per (trait reference, concrete type) — so it
+# needs no runtime type tag, and it can only name a type that implements the
+# trait, since otherwise there would be no table to recognise.
+pub fun bricks_only(items: [dyn Weigh]) -> Int {
+    var kg = 0;
+    for item in items {
+        match item as? Brick {
+            Option::Some(b) => { kg += b.kg; },
+            Option::None => {},
+        }
+    }
+    return kg;
+}
+
 # a trait may take type parameters of its own. They are supplied wherever the
 # trait is *named* — this impl head, the bound on `packed` below, a `dyn` — and
 # a trait reference is what carries them, so the signatures a trait declares

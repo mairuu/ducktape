@@ -1,0 +1,45 @@
+# A user's `@lang` marker is inert, and milestone 77 is the first time that
+# matters for a *type*: `as?` is the one construct that names `Option` rather
+# than reading one structurally, so a program that could claim the marker could
+# redirect what every downcast in it builds.
+#
+# It cannot. `tc_lang_item_ok` honours a marker only inside the embedded
+# standard library — the same rule that keeps `"{v}"` dispatching to std's
+# `Display` — and it is not an *error* out here either, because a std file run
+# by path carries the same marker and is still an ordinary module.
+use std::io::print;
+
+# same name, same shape, same marker, no effect
+@lang("option")
+pub enum Maybe<T> {
+    Some(T),
+    None,
+}
+
+trait Shape {
+    fun area(self) -> Int;
+}
+
+struct Sq { side: Int }
+impl Shape for Sq {
+    fun area(self) -> Int { self.side * self.side }
+}
+
+fun main() {
+    var s: dyn Shape = Sq { side: 3 };
+
+    # the marker was ignored: the result is std's `Option`, which is what
+    # `is_some` and `unwrap` are declared on — `Maybe` has neither
+    print((s as? Sq).is_some());
+#> true
+    print((s as? Sq).unwrap().side);
+#> 3
+
+    # and the user's enum is still an ordinary, usable enum
+    var m: Maybe<Int> = Maybe::Some(5);
+    match m {
+        Maybe::Some(v) => { print(v); },
+        Maybe::None => { print(0); },
+    }
+#> 5
+}

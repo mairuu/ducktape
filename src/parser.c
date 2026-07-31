@@ -924,12 +924,16 @@ static Expr *parse_postfix(Parser *p) {
       base = expr;
 
     } else if (match_tok(p, TOKEN_AS)) {
-      // cast: expr as type
+      // cast: `expr as Type`, or the fallible `expr as? Type` — a downcast of
+      // a trait object, whose result is an `Option`. No type starts with `?`,
+      // so the two never have to be told apart by more than this peek.
+      bool fallible = match_tok(p, TOKEN_QUESTION);
       TypeNode *target = parse_type(p);
       Expr *expr = ast_expr(
           EXPR_CAST, span_merge(base->span, previous_tok_span(p)), p->al);
       expr->as.cast.operand = base;
       expr->as.cast.target_type = target;
+      expr->as.cast.fallible = fallible;
       base = expr;
 
     } else {

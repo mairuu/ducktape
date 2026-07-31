@@ -812,8 +812,9 @@ bodyless fun) and this *marker* (which keeps the definition's body), so the two
 compose; a `@lang` on anything but a trait, enum, or top-level fun is a parse
 error.
 
-Capture is `tc_register_lang_trait`/`tc_register_lang_fun`, called from the
-matching register pass: read the marker's key, dispatch it to the field. Two
+Capture is `tc_register_lang_trait`/`tc_register_lang_enum`/
+`tc_register_lang_fun`, called from the matching register pass: read the
+marker's key, dispatch it to the field. Two
 properties replace what the old hard-coded `mod_is_std(m,"fmt") && name=="Display"`
 matches gave:
 
@@ -828,7 +829,21 @@ matches gave:
   `<std>/…` key, and "a std file is an ordinary module, directly runnable" is a
   property worth keeping (`mod_is_std_module` is the gate). The unknown-key error
   is therefore reachable only from within std, which is exactly where a typo
-  would be.
+  would be. Milestone 77 makes the inertness matter for a *type* rather than a
+  dispatch target, which is a sharper claim — a user's `@lang("option")` on its
+  own two-variant enum would otherwise redirect what every `as?` in the program
+  builds — so `tests/run/dyn_downcast_lang_inert.dt` pins it.
+
+**`Option` is the one lang item that is a type** (`TypeChecker.option_enum`,
+`@lang("option")` in `std/option.dt`, milestone 77), and it is worth saying why
+it took until then. Every other consumer of `Option` takes one *apart* and can
+do so structurally: `for` reads `next()`'s result through `enum_is_optionish`,
+and `?` builds its early `Err` out of the operand's own `EnumDef`. A downcast
+(`d as? T`) is the first construct that must *produce* an `Option` with no
+operand to read the definition off — so it is the first that has to name the
+type. The marker captures only the definition; which variants are `Some`/`None`
+is still asked structurally at the use site, since the variants are stubs at
+registration time.
 
 ### `for` over an iterator
 
@@ -1613,7 +1628,10 @@ caller, whose mismatch could only say the two types differ and not that the
 trait is implemented and only the binding is wrong. The one exception is a
 binding that is still an unsolved unknown (`[dyn Iterator<Item = T>]`): the
 impl is the only thing that knows, so that case unifies instead of comparing —
-the single place the coercion solves rather than checks.
+the single place the coercion solves rather than checks. That loop is
+`dyn_assoc_bindings_agree`, shared with the downcast below: the two directions
+ask the same question about the same pair and differ only in what they do with
+the answer.
 
 The result is recorded on the expression (`Expr.coerce_dyn`) rather than
 folded into its type, so the node keeps saying what it *is*. That is the same
@@ -1638,6 +1656,36 @@ nothing in. Because `subst_apply` and `infer_apply` both project through that
 one function, this is what collapses `I.Item` to `Int` everywhere at once — the
 loop variable of a `for` over a bounded parameter, the element type of
 `collect`, and the `where I.Item: Ord` a combinator carries.
+
+**The downcast is that coercion asked backwards** (`resolve_downcast_expr`,
+milestone 77): `d as? T` is `Option<T>`, and what makes it expressible is that
+the *vtable* is already a runtime type identity — `Mono.vtables` memoises on
+exactly (trait reference, interned self type), so codegen can ask for the table
+`T` would have been coerced through and the VM compares pointers. See
+`runtime.md`. The checker's whole job is therefore to establish that the pair is
+one a coercion could have produced, which is the same two questions
+`check_coerce_dyn` asks in the other direction — `impl_index_implements`, then
+`dyn_assoc_bindings_agree` — plus a target that is not another `dyn` (that would
+be an upcast, a different operation). Failing either is an *error* rather than a
+statically-`None` test, since a type with no table is one the object could never
+be holding.
+
+The target's *abstract* forms are where the two lists part company. A coercion
+declines a `TY_ASSOC` source; a downcast accepts one as a target, because
+`d as? I.Item` under a `where I.Item: Shape` collapses at the instantiation
+exactly as a `TY_GENERIC` does — the bound answers the checker, `cg_subst`
+answers codegen. `Self` inside a default body works for the same reason, and is
+the mirror of a standing gap: `self` there cannot be *made* into a trait object,
+but a trait object can be recognised as it.
+
+The node keeps three things for codegen: the trait reference (the half of the
+vtable key the target does not supply), the resolved target, and the `Option`
+lang item's two variants. Only the reference is queued through
+`cctx_record_coercion`, for the same reason `coerce_dyn` is — a generic trait's
+argument can still be unsolved. The target cannot need it: it comes from a
+written `TypeNode`, and the grammar has no hole, so it never resolves to an
+inference variable. Both still go through `cg_subst` at the instantiation, which
+is the *other* rewrite — type parameters, not unknowns.
 
 Two special cases died with it. `resolve_for_iterator` had carried a second
 disjunct admitting a `dyn Iterator` by trait-def identity (milestone 47), since

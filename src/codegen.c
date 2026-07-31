@@ -1731,6 +1731,53 @@ static void compile_variant_init(Cg *cg, Expr *expr) {
   emit(cg, variant->tag);
 }
 
+// `d as? T` — the coercion recognised rather than performed. The whole test is
+// that a vtable is memoised per (trait reference, concrete type), so asking
+// `cg_vtable_for` for the table a coercion of `T` would have built yields the
+// one pointer every `T` behind this trait carries and no other type does. The
+// downcast site is therefore an ordinary vtable requester: a program that only
+// ever asks *whether* something is a `Point` still slots that table, exactly as
+// a coercion site would.
+static void compile_downcast(Cg *cg, Expr *expr) {
+  ExprCast *cast = &expr->as.cast;
+  EnumDef *option = cast->option_enum;
+  assert(option && cast->target && "downcast unresolved after checking");
+
+  compile_expr(cg, cast->operand); // [dyn]
+
+  Type *target = cg_subst(cg, cast->target);
+  if (!type_is_concrete(target)) {
+    char buf[64];
+    type_sprintf(target, buf, sizeof(buf));
+    diag_error(cg->diags, expr->span,
+               "cannot downcast to '%s': the concrete type is not known here",
+               buf);
+    cg->ok = false;
+    return;
+  }
+  int slot =
+      cg_vtable_for(cg, cg_subst(cg, cast->dyn_trait), target, expr->span);
+  if (slot < 0 || !cg_reach_enum(cg, option)) {
+    emit(cg, OP_UNIT);
+    return;
+  }
+
+  emit_slot(cg, OP_DYN_IS, slot);             // [dyn, is]
+  int miss = emit_jump(cg, OP_JUMP_IF_FALSE); // peeks `is`
+  emit(cg, OP_POP);                           // is (true) -> [dyn]
+  emit(cg, OP_DYN_INNER);                     // [inner]
+  emit_slot(cg, OP_ENUM, option->slot);       // [Some(inner)]
+  emit(cg, cast->some_variant->tag);
+  int done = emit_jump(cg, OP_JUMP);
+
+  patch_jump(cg, miss);                 // [dyn, is]
+  emit(cg, OP_POP);                     // is (false) -> [dyn]
+  emit(cg, OP_POP);                     // the object was not it -> []
+  emit_slot(cg, OP_ENUM, option->slot); // [None]
+  emit(cg, cast->none_variant->tag);
+  patch_jump(cg, done);
+}
+
 // ── pattern matching ─────────────────────────────────────────────────────────
 //
 // a match subject is stored once in a hidden local; a pattern's "location"
@@ -2242,6 +2289,10 @@ static void compile_expr_inner(Cg *cg, Expr *expr) {
 
   case EXPR_CAST: {
     ExprCast *cast = &expr->as.cast;
+    if (cast->fallible) {
+      compile_downcast(cg, expr);
+      break;
+    }
     compile_expr(cg, cast->operand);
     Type *target = cast->target_type->resolved;
     assert(target && "cast target unresolved after checking");

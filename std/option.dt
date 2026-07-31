@@ -8,6 +8,11 @@ use std::cmp::Ord;
 use std::fmt::Display;
 use std::panic::panic;
 
+# The lang item behind `d as? T`, which evaluates to an `Option<T>`. Every
+# other consumer takes an `Option` *apart* and reads its two variants
+# structurally; a downcast produces one, and has no operand to read the
+# definition off, so it is the one construct that must name this enum.
+@lang("option")
 pub enum Option<T> {
     Some(T),
     None,

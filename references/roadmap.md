@@ -4155,6 +4155,86 @@
     concrete base written in source (`V2.Output`) names no trait — there is no
     syntax for one — so it answers by name alone.
 
+- **77. Downcasting a trait object (`d as? T`).** The last construct the "known
+  warts" list named as needing something the runtime does not have. It did not:
+  `as?` yields `Option<T>`, `Some` holding exactly the value that was wrapped,
+  and the whole runtime test is one pointer comparison. 452 tests; clean under
+  debug, `make sanitize` and `BUILD=release`.
+  - **THE FINDING: the entry was wrong about the cost, and wrong in the useful
+    direction.** "Needs runtime type identity the VM does not carry" assumed the
+    identity would have to be *added* — a type tag on every value, or a
+    reflection table in the image. The VM already had one and had had it since
+    milestone 28: `Mono.vtables` memoises on exactly `(trait reference, interned
+    self type)`, so one concrete type reaching one trait reference means one
+    `VTable *` for the whole program. A downcast site knows both halves of that
+    key statically, so it asks `cg_vtable_for` for the table `T` *would* have
+    been coerced through, and `OP_DYN_IS` compares pointers. **A memo built for
+    deduplication turned out to be an identity**, because it was keyed on
+    exactly the thing identity means.
+  - **Nothing new in the image, which is the strongest evidence for the above.**
+    The operand is a vtable slot, already serialized for `OP_MAKE_DYN`, and
+    `bc_read` allocates one `VTable` per slot so pointer identity survives the
+    round trip. Every `tests/run` program is re-run from an image, so the three
+    new run tests would have caught it if it did not.
+  - **The case that decides whether the identity is good enough: `Box<Int>` vs
+    `Box<String>`.** Structs are *not* monomorphised — the two share one
+    `StructDef` — so the runtime value carries nothing that separates them, and
+    any answer keyed on the value's shape would have conflated them. The vtable
+    is keyed on the interned *type*, which still exists at the point the table
+    is built, so the erasure never happens. This is the one place the milestone
+    could have shipped something quietly wrong.
+  - **What it actually cost was producing an `Option`.** `Option` becomes the
+    first lang item that is a *type* (`@lang("option")`, `TypeChecker.
+    option_enum`), and the reason it took 77 milestones is exact: every previous
+    consumer takes an `Option` *apart* and can do it structurally — `for` reads
+    `next()`'s result through `enum_is_optionish`, `?` builds its early `Err`
+    out of the operand's own `EnumDef`. A downcast has no operand to read the
+    definition off, so it is the first construct that must *name* the type.
+    **Consuming a shape structurally is free; producing one is not.** (The
+    parser already permitted `@lang` on an enum — the placement was legal and
+    unclaimed.)
+  - **A downcast to a type with no impl is an error, not an always-`None` test.**
+    That falls out of the mechanism rather than being imposed on it: without an
+    impl there is no table to compare against. Same for a type whose impl binds a
+    different associated type — it satisfies the trait and still could never be
+    behind *this* object. That second check is `dyn_assoc_bindings_agree`,
+    extracted from `check_coerce_dyn` and shared: the two directions ask the same
+    question about the same pair.
+  - **Two opcodes, not one.** `OP_DYN_IS` peeks (so the value survives) and
+    `OP_DYN_INNER` unwraps on the proven branch; the `Some`/`None` construction
+    is ordinary `OP_ENUM`. Folding them into one opcode would have meant pushing
+    a different number of values on each branch, or teaching the VM to name an
+    enum it has no operand for.
+  - **The target's abstract forms are wider than the coercion's, and finding
+    that out was worth the sabotage pass.** The first cut copied
+    `check_coerce_dyn`'s refusal list and rejected a `TY_ASSOC`; nothing pinned
+    that branch, and probing it showed the rejection was simply wrong —
+    `d as? I.Item` under a `where I.Item: Shape` collapses at the instantiation
+    exactly as a `TY_GENERIC` does, and works once allowed. `Self` inside a
+    default body works too, which is a pleasing asymmetry with the known wart
+    one line above: `self` there cannot be *made* into a trait object, but a
+    trait object can be recognised as it, so `(other as? Self)` is how a default
+    body asks whether something is its own type.
+  - **Sabotage: 16 ways, 15 caught.** The runtime comparison (either constant
+    answer), `OP_DYN_INNER`, and swapped `Some`/`None` fail 3 each; dropping
+    `cg_subst` on the target fails 2, on the trait reference 1; each checker gate
+    (implements, assoc agreement, operand-is-a-`dyn`, target-is-not-a-`dyn`) has
+    exactly one test; ignoring the `?` fails 8; never capturing the lang item
+    fails 305; honouring `@lang` outside std fails 1.
+  - **Left open, and honestly:** three defensive branches nothing pins — the
+    `cctx_record_coercion` on the trait reference, the checker's
+    `TY_UNKNOWN`/`TY_TRAIT` target refusal, and codegen's `type_is_concrete`
+    backstop (which `compile_coerce_dyn` has in the same shape, equally
+    unreached). The first mirrors `coerce_dyn`, and
+    the case it guards (a generic trait argument still unsolved when the node
+    resolves) needs an operand whose `dyn` type is produced where the argument is
+    not yet decided; nothing in std or the suite writes one, and it is not clear
+    a program can. Also open: no upcast (`dyn Sub` → `dyn Super`), which would
+    build a table rather than recognise one; and a downcast site is a vtable
+    *requester*, so asking about a type nothing ever coerces still builds its
+    table — never wrong, occasionally wasteful, and its failure mode inherits
+    `cg_vtable_for`'s "cannot build a trait object" wording.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -4605,7 +4685,13 @@ via `Module.decl_base`) and is not part of the main line.
   Iterator`'s `map` is `Iterator::map` even for a type that wrote its own
   (milestone 56). Rust behaves the same way, and it is confined to exactly the
   methods object safety could not carry
-- no downcast from `dyn Trait` back to a concrete type
+- ~~no downcast from `dyn Trait` back to a concrete type~~ — **closed by
+  milestone 77** (`d as? T` → `Option<T>`), and the entry's own diagnosis was
+  the thing that was wrong: it had been filed as needing "runtime type identity
+  the VM does not carry", when the vtable memo had been exactly that identity
+  since milestone 28. What is left of it is the *other* direction: no upcast
+  from a `dyn Sub` to a `dyn Super`, which is a different operation — it would
+  build a second table rather than recognise the one the value carries
 - a trait's type arguments are never *inferred* at the place the trait is
   named: an impl head, a bound and a `dyn` each write them out, and a bare
   `Into` is an arity error rather than a request to work it out. The one

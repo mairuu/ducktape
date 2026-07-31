@@ -1,0 +1,21 @@
+#! expect: 'Circle' does not implement 'Shape', so it can never be behind this trait object
+# The target must implement the trait, for the same reason the coercion's
+# source must: without an impl there is no vtable, so there is no table to
+# recognise and the answer would be `None` at every run. The language says so
+# rather than compiling a test that cannot pass.
+
+
+trait Shape {
+    fun area(self) -> Int;
+}
+
+struct Sq { side: Int }
+struct Circle { r: Int }
+impl Shape for Sq {
+    fun area(self) -> Int { self.side * self.side }
+}
+
+fun main() {
+    var s: dyn Shape = Sq { side: 2 };
+    var got = s as? Circle;
+}

@@ -1,0 +1,20 @@
+#! expect: 'as?' downcasts a trait object, but this is a 'Int'
+# `as` and `as?` share a keyword and nothing else: the total form converts
+# between numbers, the fallible one recognises a trait object. So a downcast of
+# something that never was one is a mistake at the operand, not a cast that
+# always yields `None`.
+
+
+trait Shape {
+    fun area(self) -> Int;
+}
+
+struct Sq { side: Int }
+impl Shape for Sq {
+    fun area(self) -> Int { self.side * self.side }
+}
+
+fun main() {
+    var n = 5;
+    var got = n as? Sq;
+}

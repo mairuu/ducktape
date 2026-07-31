@@ -1,0 +1,127 @@
+# A downcast whose target is a type *parameter*, and the case that decides
+# whether the vtable is a good enough identity: two instantiations of one
+# generic struct.
+#
+# Structs are not monomorphised — `Box<Int>` and `Box<String>` share a single
+# `StructDef` — so the runtime value carries nothing that tells them apart. The
+# vtable does: it is keyed by the *interned* self type, and those are two
+# distinct types, so they are two tables. Erasure never happens, because the
+# identity is fixed where the type still exists.
+use std::io::print;
+use std::iter::Iterator;
+
+trait Tag {
+    fun tag(self) -> Int;
+}
+
+struct Box<T> { v: T }
+impl<T> Tag for Box<T> {
+    fun tag(self) -> Int { 0 }
+}
+
+struct Plain { n: Int }
+impl Tag for Plain {
+    fun tag(self) -> Int { self.n }
+}
+
+trait Kin {
+    fun mark(self) -> Int;
+
+    # `Self` is an abstract target here, and the default body is instantiated
+    # once per impl — so this asks "is that object my own type?" and each copy
+    # compares against its own table. Note the asymmetry with the coercion:
+    # `self` inside a default body cannot be *made* into a trait object, but a
+    # trait object can be recognised as it.
+    fun kin(self, other: dyn Kin) -> Bool {
+        return (other as? Self).is_some();
+    }
+}
+
+struct Red { n: Int }
+struct Blue { n: Int }
+impl Kin for Red {
+    fun mark(self) -> Int { self.n }
+}
+impl Kin for Blue {
+    fun mark(self) -> Int { self.n }
+}
+
+# `T` is abstract here: the bound answers the checker, and the instantiation
+# answers codegen, which substitutes before it asks for a table. The same rule
+# `check_coerce_dyn` already applied in the other direction.
+fun recover<T: Tag>(d: dyn Tag) -> Option<T> {
+    return d as? T;
+}
+
+fun tag_of<T: Tag>(d: dyn Tag, fallback: Int) -> Int {
+    match d as? T {
+        Option::Some(v) => v.tag(),
+        Option::None => fallback,
+    }
+}
+
+# and a projection is the same situation one step along: `I.Item` is abstract
+# here and collapses at the instantiation exactly as a type parameter does, so
+# it is a usable target where the coercion's list would have refused it.
+fun of_item<I: Iterator>(d: dyn Tag) -> Bool where I.Item: Tag {
+    return (d as? I.Item).is_some();
+}
+
+struct Plains { left: Int }
+impl Iterator for Plains {
+    type Item = Plain;
+    fun next(self) -> Option<Plain> { return Option::None; }
+}
+
+struct Boxes { left: Int }
+impl Iterator for Boxes {
+    type Item = Box<Int>;
+    fun next(self) -> Option<Box<Int>> { return Option::None; }
+}
+
+fun main() {
+    var ints: dyn Tag = Box::<Int> { v: 7 };
+    var strs: dyn Tag = Box::<String> { v: "seven" };
+
+    # one StructDef, two self types, two tables — so two answers
+    print((ints as? Box<Int>).unwrap().v);
+#> 7
+    print((ints as? Box<String>).is_some());
+#> false
+    print((strs as? Box<String>).unwrap().v);
+#> seven
+    print((strs as? Box<Int>).is_some());
+#> false
+
+    # the target arriving as a type parameter, at two instantiations
+    print(recover::<Box<Int>>(ints).is_some());
+#> true
+    print(recover::<Plain>(ints).is_some());
+#> false
+    print(tag_of::<Plain>(Plain { n: 42 }, -1));
+#> 42
+    print(tag_of::<Plain>(ints, -1));
+#> -1
+
+    # a downcast site is an ordinary vtable requester: `Plain` is never coerced
+    # to a `dyn Tag` anywhere above, and asking about it still compiles
+    var only_asked: dyn Tag = Box::<Int> { v: 1 };
+    print((only_asked as? Plain).is_none());
+#> true
+
+    # the target as a projection, at two instantiations
+    print(of_item::<Plains>(ints));
+#> false
+    print(of_item::<Boxes>(ints));
+#> true
+
+    # `Self` as the target, one instantiation of the default body per impl
+    var red: dyn Kin = Red { n: 1 };
+    var blue: dyn Kin = Blue { n: 2 };
+    print(Red { n: 9 }.kin(red));
+#> true
+    print(Red { n: 9 }.kin(blue));
+#> false
+    print(Blue { n: 9 }.kin(blue));
+#> true
+}

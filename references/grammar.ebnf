@@ -199,7 +199,11 @@ postfixOp      = "(" ( expr ( "," expr )* )? ")"        (* call *)
                     `a.b < c > (d)` is two comparisons. *)
                | "." INT                                (* tuple access *)
                | "[" expr "]"                           (* index *)
-               | "as" type                              (* cast *)
+               | "as" "?"? type                         (* cast / downcast *)
+                 (* `as` converts between numbers and cannot fail; `as?`
+                    downcasts a trait object to one concrete type and yields
+                    an `Option`. No type begins with "?", so the peek after
+                    the keyword is all that tells the two apart. *)
                | "?" ;                                  (* propagate *)
 
 primary        = INT | FLOAT | CHAR | STRING | interpString

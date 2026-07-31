@@ -1016,6 +1016,27 @@ typedef struct {
 typedef struct {
   Expr *operand;
   TypeNode *target_type;
+
+  // `as?` — the fallible form: a downcast from a trait object back to one
+  // concrete type, evaluating to an `Option<Target>`. Plain `as` is a total
+  // conversion between numbers and cannot fail, so the two share only a
+  // keyword. Everything below is filled by the checker for the fallible form
+  // and stays NULL for the total one.
+  bool fallible;
+
+  // the trait *reference* the operand's `dyn` was written with. This is the
+  // half of the vtable memo key the target type does not supply, so codegen
+  // asks for the very table a coercion of `target` would have built and
+  // compares it with the one the value carries — see `compile_downcast`.
+  Type *dyn_trait;
+  Type *target; // the resolved target, i.e. the vtable key's self type
+
+  // the `Option` the result is built from: the enum lang item, and the two
+  // variants by name. Recorded here for the same reason `ExprFor` records
+  // them — codegen constructs the answer and cannot look a lang item up.
+  EnumDef *option_enum;
+  VariantDef *some_variant;
+  VariantDef *none_variant;
 } ExprCast;
 
 typedef struct {

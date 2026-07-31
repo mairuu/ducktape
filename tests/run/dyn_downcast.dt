@@ -1,0 +1,97 @@
+# Downcasting a trait object back to its concrete type (milestone 77):
+# `d as? T` evaluates to `Option<T>`.
+#
+# What makes it possible is that a vtable is *already* a runtime type identity.
+# Codegen memoises one table per (trait reference, concrete type), so two trait
+# objects carry the same table exactly when they were coerced from the same
+# type — and the downcast site knows both halves of that key statically. So the
+# whole test is one pointer comparison against the table `T` would have been
+# coerced through, and the VM needs no type tags, no reflection and nothing new
+# in the bytecode image: the operand is a vtable slot, which `OP_MAKE_DYN`
+# already serialized.
+#
+# The coercion stays one-way, which is what makes the test sound: a value only
+# ever acquires a table by *being* that type.
+use std::io::print;
+
+trait Shape {
+    fun area(self) -> Int;
+}
+
+struct Sq { side: Int }
+struct Circle { r: Int }
+enum Blob { Small, Big(Int) }
+
+impl Shape for Sq {
+    fun area(self) -> Int { self.side * self.side }
+}
+impl Shape for Circle {
+    fun area(self) -> Int { 3 * self.r * self.r }
+}
+# a primitive and an enum are self types like any other: the identity is the
+# table, not anything the *value* carries, so nothing here has to be an object
+impl Shape for Blob {
+    fun area(self) -> Int {
+        match self {
+            Blob::Small => 1,
+            Blob::Big(n) => n,
+        }
+    }
+}
+impl Shape for Int {
+    fun area(self) -> Int { self }
+}
+
+# The shape a downcast is for: recover what can be recovered, fall back on the
+# trait for everything else.
+fun describe(s: dyn Shape) -> String {
+    match s as? Sq {
+        Option::Some(q) => { return "square {q.side}"; },
+        Option::None => {},
+    }
+    match s as? Circle {
+        Option::Some(c) => { return "circle {c.r}"; },
+        Option::None => {},
+    }
+    return "shape of area {s.area()}";
+}
+
+fun main() {
+    var shapes: [dyn Shape] = [Sq { side: 3 }, Circle { r: 2 }, Blob::Big(9), 7];
+    for s in shapes {
+        print(describe(s));
+    }
+#> square 3
+#> circle 2
+#> shape of area 9
+#> shape of area 7
+
+    # the answer is an ordinary `Option`, so every combinator on one applies
+    var one: dyn Shape = Sq { side: 4 };
+    print((one as? Sq).is_some());
+#> true
+    print((one as? Circle).is_none());
+#> true
+    print(one as? Sq);
+#> Some(Sq { side: 4 })
+    print((one as? Circle).unwrap_or(Circle { r: 0 }).r);
+#> 0
+
+    # a primitive and an enum come back out as themselves
+    var n: dyn Shape = 12;
+    print((n as? Int).unwrap() + 1);
+#> 13
+    print((n as? Blob).is_some());
+#> false
+    var b: dyn Shape = Blob::Big(5);
+    print(b as? Blob);
+#> Some(Big(5))
+
+    # the recovered value is the *same* value, not a copy of one: coercion
+    # wraps, so a downcast hands back exactly what was wrapped
+    var sq = Sq { side: 6 };
+    var wrapped: dyn Shape = sq;
+    (wrapped as? Sq).unwrap().side = 10;
+    print(sq.side);
+#> 10
+}

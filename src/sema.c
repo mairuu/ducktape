@@ -1565,6 +1565,20 @@ static void tc_register_lang_trait(TypeChecker *tc, Module *m, Decl *decl,
              SV_ARG(attr->name));
 }
 
+static void tc_register_lang_enum(TypeChecker *tc, Module *m, Decl *decl,
+                                  EnumDef *def) {
+  const AttrNode *attr = &decl->lang_attr;
+  if (!tc_lang_item_ok(tc, m, attr)) {
+    return;
+  }
+  if (sv_equal_cstr(attr->name, "option")) {
+    tc->option_enum = def;
+    return;
+  }
+  diag_error(tc->diags, attr->span, "unknown enum lang item '" SV_FMT "'",
+             SV_ARG(attr->name));
+}
+
 static void tc_register_lang_fun(TypeChecker *tc, Module *m, Decl *decl,
                                  FunDef *def) {
   const AttrNode *attr = &decl->lang_attr;
@@ -1667,6 +1681,11 @@ static void tc_register_enum(TypeChecker *tc, Module *m, Decl *decl) {
   // set backpointers
   decl->as.enum_decl.def = def;
   def->module = m;
+
+  // the variants are still stubs here, so the marker captures only the
+  // definition; which of its variants are `Some`/`None` is asked structurally
+  // at the use site (`enum_is_optionish`), where they are filled in.
+  tc_register_lang_enum(tc, m, decl, def);
 }
 
 static void tc_register_impl(TypeChecker *tc, Module *m, Decl *decl) {
@@ -4264,6 +4283,61 @@ static Type *resolve_callee(CheckCtx *ctx, Expr *expr, Subst *subst,
 // Coercion to a trait object
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Implementing the trait is not the whole question a `dyn` asks: the trait
+// object states what each associated type *is*, so an impl that binds a
+// different one satisfies the trait and still cannot be this type. Reports and
+// returns false on a disagreement; the caller must then not add a second,
+// vaguer diagnostic.
+//
+// Shared by the two directions, which ask it about the same pair: a coercion
+// (can this value become that `dyn`?) and a downcast (can that `dyn` be
+// holding this type?). They differ in what they do with the answer, not in
+// what the answer is.
+static bool dyn_assoc_bindings_agree(CheckCtx *ctx, Type *dyn_ty, Type *actual,
+                                     Type *trait_ref, Span span) {
+  TraitDef *trait = dyn_trait_def(dyn_ty);
+  for (int i = 0; i < dyn_ty->as.dyn.assoc_type_count; i++) {
+    StringView name = trait->assoc_types[i].name;
+    Type *want =
+        infer_apply(&ctx->infer, dyn_ty->as.dyn.assoc_types[i], ctx->al);
+    Type *got = impl_index_assoc_type(ctx->impls, actual, name, trait, ctx->al);
+    if (got == NULL || type_is_poison(want) || type_is_poison(got)) {
+      // NULL means the impl is generic enough that no binding is readable
+      // here (a bounded `T`); the coercion is re-checked where that parameter
+      // is instantiated, which is the same trust `impl_index_implements`
+      // already places in a bound.
+      continue;
+    }
+    if (want->kind == TY_UNKNOWN) {
+      // the binding is not written down after all — it is being *inferred*,
+      // as in `fun first<T>(xs: [dyn Iterator<Item = T>])`. The impl is the
+      // only thing that knows, so it decides: this is the one place the
+      // coercion solves rather than checks.
+      infer_unify(&ctx->infer, want, got, ctx->diags, span);
+      continue;
+    }
+    if (types_equal(got, want)) {
+      continue;
+    }
+
+    // Reported here rather than left to the caller: the mismatch the caller
+    // would print names the two *types* ("expected 'dyn Iterator<Item = Int>'
+    // but got 'Counter'") and cannot say that the trait is implemented and
+    // only the binding disagrees, which is the entire mistake.
+    char ab[64], wb[64], gb[64], tb[64];
+    type_sprintf(actual, ab, sizeof(ab));
+    type_sprintf(want, wb, sizeof(wb));
+    type_sprintf(got, gb, sizeof(gb));
+    type_sprintf(trait_ref, tb, sizeof(tb));
+    diag_error(ctx->diags, span,
+               "'%s' cannot be a 'dyn %s<" SV_FMT
+               " = %s>': it implements '%s' with '" SV_FMT "' = '%s'",
+               ab, tb, SV_ARG(name), wb, tb, SV_ARG(name), gb);
+    return false;
+  }
+  return true;
+}
+
 // The language has no subtyping: type identity is pointer equality and
 // `infer_unify` only ever decomposes structurally. A trait object is the one
 // place that is not enough — `Sq` and `dyn Shape` are genuinely different
@@ -4337,48 +4411,7 @@ static bool check_coerce_dyn(CheckCtx *ctx, Expr *e, Type *actual,
     return false;
   }
 
-  // Implementing the trait is no longer the whole question: the trait object
-  // states what each associated type *is*, so an impl that binds a different
-  // one satisfies the trait and still cannot be this type.
-  for (int i = 0; i < expected->as.dyn.assoc_type_count; i++) {
-    StringView name = trait->assoc_types[i].name;
-    Type *want =
-        infer_apply(&ctx->infer, expected->as.dyn.assoc_types[i], ctx->al);
-    Type *got = impl_index_assoc_type(ctx->impls, actual, name,
-                                      dyn_trait_def(expected), ctx->al);
-    if (got == NULL || type_is_poison(want) || type_is_poison(got)) {
-      // NULL means the impl is generic enough that no binding is readable
-      // here (a bounded `T`); the coercion is re-checked where that parameter
-      // is instantiated, which is the same trust `impl_index_implements`
-      // already places in a bound.
-      continue;
-    }
-    if (want->kind == TY_UNKNOWN) {
-      // the binding is not written down after all — it is being *inferred*,
-      // as in `fun first<T>(xs: [dyn Iterator<Item = T>])`. The impl is the
-      // only thing that knows, so it decides: this is the one place the
-      // coercion solves rather than checks.
-      infer_unify(&ctx->infer, want, got, ctx->diags, e->span);
-      continue;
-    }
-    if (types_equal(got, want)) {
-      continue;
-    }
-
-    // Reported here rather than left to the caller: the mismatch the caller
-    // would print names the two *types* ("expected 'dyn Iterator<Item = Int>'
-    // but got 'Counter'") and cannot say that the trait is implemented and
-    // only the binding disagrees, which is the entire mistake.
-    char ab[64], wb[64], gb[64];
-    type_sprintf(actual, ab, sizeof(ab));
-    type_sprintf(want, wb, sizeof(wb));
-    type_sprintf(got, gb, sizeof(gb));
-    char tb[64];
-    type_sprintf(trait_ref, tb, sizeof(tb));
-    diag_error(ctx->diags, e->span,
-               "'%s' cannot be a 'dyn %s<" SV_FMT
-               " = %s>': it implements '%s' with '" SV_FMT "' = '%s'",
-               ab, tb, SV_ARG(name), wb, tb, SV_ARG(name), gb);
+  if (!dyn_assoc_bindings_agree(ctx, expected, actual, trait_ref, e->span)) {
     // reported, so the caller must not add a second, vaguer diagnostic — the
     // poison convention, one level up: one mistake, one message.
     return true;
@@ -6303,6 +6336,117 @@ static Type *resolve_for_iterator(CheckCtx *ctx, Expr *for_expr,
   return infer_apply(&ctx->infer, ret->as.enm.type_args[0], ctx->al);
 }
 
+// `d as? Point` — the one-way coercion asked backwards. What makes it possible
+// is that the *vtable* is already a runtime type identity: `Mono.vtables`
+// memoises on exactly (trait reference, interned self type), so one concrete
+// type reaching one trait reference means one `VTable *` for the whole program.
+// The site knows both halves statically, so codegen asks for the table `target`
+// *would* have been coerced through and the VM compares pointers — no type tag,
+// no reflection, nothing new in the image.
+//
+// That is also why the target must implement the trait: without an impl there
+// is no table to compare against, and the answer would be `None` at every run.
+// The language says so instead of compiling a test that cannot pass.
+static Type *resolve_downcast_expr(CheckCtx *ctx, Expr *expr) {
+  ExprCast *cast = &expr->as.cast;
+
+  Type *op_ty = resolve_expr(ctx, cast->operand, NULL);
+  op_ty = infer_apply(&ctx->infer, op_ty, ctx->al);
+  Type *target = infer_apply(
+      &ctx->infer, tyres_resolve(&ctx->tyres, cast->target_type), ctx->al);
+
+  if (type_is_poison(op_ty) || type_is_poison(target)) {
+    return ctx->tc->t_poison;
+  }
+
+  if (op_ty->kind != TY_DYN) {
+    char buf[64];
+    type_sprintf(op_ty, buf, sizeof(buf));
+    diag_error(ctx->diags, expr->span,
+               "'as?' downcasts a trait object, but this is a '%s'; the total "
+               "'as' is the cast between numbers",
+               buf);
+    return ctx->tc->t_poison;
+  }
+
+  switch (target->kind) {
+  case TY_DYN:
+    // a `dyn Sub` to a `dyn Super` is an *upcast*, and a different question:
+    // it would rebuild a table rather than recognise one.
+    diag_error(ctx->diags, expr->span,
+               "'as?' recovers the concrete type behind a trait object, so its "
+               "target cannot itself be a trait object");
+    return ctx->tc->t_poison;
+  case TY_UNKNOWN:
+  case TY_TRAIT: {
+    // defensive, and shaped after `compile_coerce_dyn`'s own guard: a written
+    // TypeNode has no spelling that resolves to either — there is no hole in
+    // the grammar, and `Self` in a signature is the receiver's type rather
+    // than the trait's abstract one.
+    char buf[64];
+    type_sprintf(target, buf, sizeof(buf));
+    diag_error(ctx->diags, expr->span,
+               "'as?' needs to know what it is looking for, and '%s' is not a "
+               "concrete type here",
+               buf);
+    return ctx->tc->t_poison;
+  }
+  default:
+    // A `TY_GENERIC` is allowed for the reason `check_coerce_dyn` allows one:
+    // the bound answers `impl_index_implements` here, and codegen substitutes
+    // before it asks for a vtable. A `TY_ASSOC` (`I.Item` under a
+    // `where I.Item: Shape`) is the same situation one step along — a
+    // projection over a parameter collapses at the instantiation exactly as
+    // the parameter does — so it is allowed too, which is where this parts
+    // company with the coercion's list.
+    break;
+  }
+
+  Type *trait_ref = infer_apply(&ctx->infer, op_ty->as.dyn.trait, ctx->al);
+  if (!impl_index_implements(ctx->impls, target, trait_ref, ctx->al)) {
+    char tb[64], rb[64];
+    type_sprintf(target, tb, sizeof(tb));
+    type_sprintf(trait_ref, rb, sizeof(rb));
+    diag_error(ctx->diags, expr->span,
+               "'%s' does not implement '%s', so it can never be behind this "
+               "trait object",
+               tb, rb);
+    return ctx->tc->t_poison;
+  }
+  if (!dyn_assoc_bindings_agree(ctx, op_ty, target, trait_ref, expr->span)) {
+    return ctx->tc->t_poison; // reported
+  }
+
+  // The lang item, and the only thing here that could be missing: `Option` is
+  // preluded, so a NULL means std failed to load rather than that the user
+  // forgot an import.
+  EnumDef *option = ctx->tc->option_enum;
+  VariantDef *some = NULL, *none = NULL;
+  if (option == NULL || option->type_param_count != 1 ||
+      !enum_is_optionish(option, &some, &none)) {
+    diag_error(ctx->diags, expr->span,
+               "'as?' evaluates to an 'Option', which this program has no "
+               "usable definition of");
+    return ctx->tc->t_poison;
+  }
+
+  cast->dyn_trait = trait_ref;
+  cast->target = target;
+  cast->option_enum = option;
+  cast->some_variant = some;
+  cast->none_variant = none;
+  // Only the trait reference is recorded, and only for the reason `coerce_dyn`
+  // is: a generic trait's argument can still be an unsolved unknown when the
+  // node is resolved. The *target* needs no such rewrite — it is a written
+  // TypeNode, and the grammar has no hole, so it resolves to concrete types,
+  // `Self`, a type parameter or poison, never to an inference variable. (Both
+  // halves still need `cg_subst` at the instantiation, which is the other
+  // rewrite: type *parameters*, not unknowns.)
+  cctx_record_coercion(ctx, &cast->dyn_trait);
+
+  return ty_enum(option, &target, 1, ctx->al);
+}
+
 static Type *resolve_propagate_expr(CheckCtx *ctx, Expr *expr) {
   ExprPropagate *prop = &expr->as.propagate;
 
@@ -7830,6 +7974,10 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   }
   case EXPR_CAST: {
     ExprCast *cast = &expr->as.cast;
+    if (cast->fallible) {
+      result = resolve_downcast_expr(ctx, expr);
+      break;
+    }
     Type *target = tyres_resolve(&ctx->tyres, cast->target_type);
     Type *op_ty = resolve_expr(ctx, cast->operand, NULL);
     op_ty = infer_find(&ctx->infer, op_ty);

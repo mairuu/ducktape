@@ -1,0 +1,62 @@
+# The other half of the vtable key: the trait *reference*, not the trait.
+#
+# `dyn Sink<Int>` and `dyn Sink<String>` over one self type are two tables,
+# because each names a different impl — the rule `cg_vtable_for` was written to
+# in milestone 56. A downcast reads its key from the operand's `dyn`, so it asks
+# about the same reference the value was written as, and one concrete type can
+# be recognised through either without the two answers interfering.
+#
+# The generic function is the part that pins the *substitution*: inside it the
+# reference is `Sink<T>`, and codegen must push the instantiation through it
+# before asking for a table. Leaving it abstract does not merely give a wrong
+# answer, it fails to find an impl at all.
+use std::io::print;
+
+trait Sink<T> {
+    fun put(self, v: T) -> Int;
+}
+
+struct Any { n: Int }
+struct Ints { n: Int }
+
+# one type, two references, two tables
+impl Sink<Int> for Any {
+    fun put(self, v: Int) -> Int { v + self.n }
+}
+impl Sink<String> for Any {
+    fun put(self, v: String) -> Int { self.n }
+}
+impl Sink<Int> for Ints {
+    fun put(self, v: Int) -> Int { v }
+}
+
+fun is_it<T, S: Sink<T>>(d: dyn Sink<T>) -> Bool {
+    return (d as? S).is_some();
+}
+
+fun main() {
+    var a: dyn Sink<Int> = Any { n: 1 };
+    var b: dyn Sink<String> = Any { n: 1 };
+
+    # recognised through either reference — the tables differ, the type does not
+    print((a as? Any).is_some());
+#> true
+    print((b as? Any).is_some());
+#> true
+    print((a as? Ints).is_some());
+#> false
+
+    # and the answer is still the value that was wrapped, through both
+    print((a as? Any).unwrap().put(10));
+#> 11
+    print((b as? Any).unwrap().put("ten"));
+#> 1
+
+    # the reference arriving with a type parameter in it, at two instantiations
+    print(is_it::<Int, Any>(a));
+#> true
+    print(is_it::<Int, Ints>(a));
+#> false
+    print(is_it::<String, Any>(b));
+#> true
+}

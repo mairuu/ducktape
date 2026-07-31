@@ -108,6 +108,8 @@ Operands are u8 unless noted.
 | `OP_TAG` | pops an enum instance, pushes its variant tag as `Int` |
 | `OP_MAKE_DYN vtable_slot(u16)` | pops a value, pushes it wrapped as a trait object carrying `exe->vtables[slot]` |
 | `OP_DYN_METHOD index` | pops a trait object, pushes its `index`-th method *then* the unwrapped receiver — so the `OP_CALL` that follows sees an ordinary callee-beneath-args stack |
+| `OP_DYN_IS vtable_slot(u16)` | peeks a trait object, pushes whether it carries `exe->vtables[slot]`. One table per (trait, concrete type), so this *is* the type test `d as? T` compiles to; peeks rather than pops so the value survives for `OP_DYN_INNER` |
+| `OP_DYN_INNER` | pops a trait object, pushes the value inside it — emitted only where an `OP_DYN_IS` just proved which type that is |
 | `OP_MATCH_FAIL` | runtime error "no match arm matched" — a backstop; the checker enforces exhaustiveness, but guards can still fail every arm |
 
 `OP_ADD` additionally handles `String + String` (interned concat) alongside
@@ -685,7 +687,7 @@ self type name two impls, so they are two tables — and a trait's type argument
 is erased at runtime exactly as an associated type is, so that is again the
 only thing that changed.
 
-Two opcodes, and deliberately no third:
+Four opcodes:
 
 - `OP_MAKE_DYN <vtable>` pops a value and pushes it wrapped as an `ObjDyn`.
   Codegen emits it from `compile_expr`, which wraps every expression so a
@@ -696,6 +698,31 @@ Two opcodes, and deliberately no third:
   `OP_CALL` already understands — callee beneath its arguments, concrete
   receiver as argument zero — so dynamic dispatch needs no call machinery of
   its own, the same way methods reuse `OP_GET_GLOBAL`.
+- `OP_DYN_IS <vtable>` peeks the trait object and pushes whether it carries
+  *that* table — the whole of a downcast's runtime test (milestone 77).
+- `OP_DYN_INNER` pops a trait object and pushes the value inside it, emitted
+  only on the branch an `OP_DYN_IS` just proved.
+
+**The vtable is a runtime type identity, and this is where that gets spent.**
+The memo above hands out exactly one table per `(trait reference, self type)`
+for the whole program, so two trait objects share a table precisely when they
+were coerced from the same type. A downcast site knows both halves of that key
+statically, so `compile_downcast` asks `cg_vtable_for` for the table `T` *would*
+have been coerced through and the test is one pointer comparison. Nothing new
+had to be carried: no type tag on the value, no reflection table, and nothing
+in the image format — the operand is a vtable slot, which `OP_MAKE_DYN` already
+serialized, and `bc_read` allocates one `VTable` per slot so pointer identity
+survives the round trip. A downcast site is simply another vtable *requester*,
+so a program that only ever asks whether something is a `Point` still slots
+that table.
+
+Two things fall out of the key being the type rather than the value's shape.
+`Box<Int>` and `Box<String>` share one `StructDef` — structs are not
+monomorphised — yet they are distinct interned types and so two tables, which
+is why erasure never bites. And since the key is the trait *reference*, one
+self type behind `dyn Sink<Int>` and `dyn Sink<String>` has two tables; a
+downcast reads its half of the key off the operand, so it always asks about the
+reference the value was written as.
 
 The receiver is unwrapped because the method was compiled for the concrete
 type, not for the trait object; coercion *wraps*, it never converts, so the

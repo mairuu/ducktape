@@ -1,0 +1,25 @@
+#! expect: its target cannot itself be a trait object
+# `dyn Sub` -> `dyn Super` is an *upcast*, a different question with a different
+# answer: it would have to build a second table rather than recognise the one
+# the value already carries. Rejected here rather than half-supported.
+
+
+trait Shape {
+    fun area(self) -> Int;
+}
+trait Named {
+    fun name(self) -> String;
+}
+
+struct Sq { side: Int }
+impl Shape for Sq {
+    fun area(self) -> Int { self.side * self.side }
+}
+impl Named for Sq {
+    fun name(self) -> String { "sq" }
+}
+
+fun main() {
+    var s: dyn Shape = Sq { side: 2 };
+    var got = s as? dyn Named;
+}

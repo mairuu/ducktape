@@ -742,6 +742,19 @@ static bool run(Vm *vm, int stop_depth) {
       break;
     }
 
+    case OP_DYN_IS: {
+      VTable *vt = vm->exe->vtables[READ_U16()];
+      // pointer equality *is* the type test: `cg_vtable_for` hands out one
+      // table per (trait reference, concrete type), so two objects share a
+      // table exactly when they were coerced from the same type.
+      push(vm, val_bool(val_as_dyn(peek(vm, 0))->vtable == vt));
+      break;
+    }
+
+    case OP_DYN_INNER:
+      push(vm, val_as_dyn(pop(vm))->inner);
+      break;
+
     case OP_MATCH_FAIL:
       // the checker doesn't enforce match exhaustiveness yet, so this is a
       // real, reachable failure mode rather than a should-never-happen case.

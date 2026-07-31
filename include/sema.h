@@ -285,6 +285,15 @@ struct TypeChecker {
   // `rewrite_ops_binary` / `rewrite_ops_unary`.
   TraitDef *ops_traits[OPS_TRAIT_COUNT];
 
+  // `std::option`'s `Option`, and the first lang item that is a *type* rather
+  // than something to call. Every other consumer of `Option` takes one apart
+  // and so needs no handle on the enum at all — `for` unwraps `next()`'s
+  // result structurally, and `?` builds its early `Err` out of the operand's
+  // own definition. A downcast (`d as? T`) is the first construct that must
+  // *produce* an `Option` with no operand to borrow the definition from, so it
+  // is the first that has to name the type. Preluded, like the rest.
+  EnumDef *option_enum;
+
   // The format functions a `{v:>8}` / `{f:.3}` spec desugars to, captured the
   // same way `display_trait` is and for the same reason: the user never types
   // these names. `pad_*` live in `std::string`, `fmt_float` in `std::fmt` —

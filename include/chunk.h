@@ -111,6 +111,14 @@ typedef enum {
                  // method's function *then* the unwrapped receiver, so the
                  // ordinary OP_CALL below sees a normal callee-beneath-args
                  // stack and needs no dynamic-dispatch case of its own
+  OP_DYN_IS,     // u16 vtable slot — peeks a trait object, pushes whether it
+                 // carries *that* table. A vtable is memoised per (trait,
+                 // concrete type), so one table is one type: this is the
+                 // whole of `as?`'s runtime test, and the reason the VM needs
+                 // no type tags to answer it. Peeks rather than pops so the
+                 // value survives for OP_DYN_INNER on the matching branch.
+  OP_DYN_INNER,  // pops a trait object, pushes the value inside it. Only ever
+                 // emitted where an OP_DYN_IS just proved which type that is
   OP_TAG,        // pops an enum instance, pushes its variant tag as Int
   OP_MATCH_FAIL, // no arm matched a subject not statically proven exhaustive
                  // (checker doesn't enforce exhaustiveness yet); runtime error

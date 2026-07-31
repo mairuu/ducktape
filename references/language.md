@@ -145,7 +145,9 @@ ending in `return` has type `!` (never), which unifies with anything.
 - Ranges: `a..b`, `a..=b` — Int-only, first-class values (`var r = 0..10;`) of
   type `Range`, which is nameable (`fun span(r: Range)`) and carries one
   method, `r.iter()`.
-- Casts: `x as T` — only `Int`↔`Float` and identity casts.
+- Casts: `x as T` — only `Int`↔`Float` and identity casts. The separate `x as?
+  T` is the fallible **downcast** of a trait object (see "Trait objects"),
+  which yields an `Option<T>` rather than a `T`.
 - String interpolation: `"x = {x}"` — a primitive segment (Int/Float/Bool/
   String) renders itself; anything else must implement `std::fmt::Display`. A
   `:` format spec (`"{v:>8}"`, `"{f:.3}"`) is sugar for the `std::string::pad_*`
@@ -547,10 +549,12 @@ argument, a `return` value, a `var` initializer with a `dyn` annotation, a
 struct or enum-variant field initializer, or an element of a `[dyn T]` or
 `(dyn T, ..)` literal. This is the language's only
 subtyping, and it is one-way and non-transitive — a `dyn Shape` is not a `Sq`
-again, and there is no cast back. The coercion needs an `impl Trait for T` to
+again. The coercion needs an `impl Trait for T` to
 exist, the same question a bound asks; without one the type error is the
 ordinary "expected 'dyn Shape' but got 'Circle'". A bounded type parameter
 coerces too, so a generic function can hand its own parameter over.
+
+It can, however, be **recognised** — see "Downcasting" below.
 
 Not every trait can be one. A method is **dispatchable** — reachable through
 the vtable — only if it takes `self`, has no type parameters of its own, does
@@ -656,6 +660,63 @@ impl that overrides it wins, exactly as under static dispatch. Printing and
 `==` see through the wrapper — a `dyn Shape` over a `Sq` prints as the `Sq`.
 See `tests/run/trait_objects.dt`, and `runtime.md` "Trait objects" for the
 vtable representation.
+
+#### Downcasting
+
+The coercion is one-way, but the *question* it answers can be asked backwards.
+`d as? T` recovers one concrete type from a trait object:
+
+```
+fun describe(s: dyn Shape) -> String {
+    match s as? Sq {
+        Option::Some(q) => { return "square {q.side}"; },
+        Option::None => {},
+    }
+    return "shape of area {s.area()}";
+}
+```
+
+The result is an `Option<T>` — `Some` holding exactly the value that was
+wrapped (coercion wraps, it never converts, so writing through the recovered
+value is writing through the original), `None` when the object is some other
+type. `as?` shares a keyword with the numeric cast and nothing else: `as` is
+total and converts, `as?` is fallible and recognises. Its operand must be a
+trait object.
+
+**The target must implement the trait.** Not a limitation borrowed from the
+runtime — it is what makes the question answerable: recognition works by
+comparing the vtable the object carries against the one `T` would have been
+coerced through, and a type with no impl has no such table, so the answer would
+be `None` on every run. The language says so instead
+(`tests/fail/dyn_downcast_no_impl.dt`). For the same reason a type whose impl
+binds a different associated type is rejected outright — it satisfies the trait
+and still could never be behind *this* trait object
+(`tests/fail/dyn_downcast_assoc.dt`).
+
+Two consequences of the identity being the vtable rather than a runtime tag:
+
+- **Generic types keep their arguments.** A `Box<Int>` behind a `dyn Tag` is
+  not a `Box<String>`, even though the two share one definition at runtime —
+  the tables are keyed by the type, which still exists where the table is
+  built.
+- **The trait argument is part of the key.** `dyn Sink<Int>` and
+  `dyn Sink<String>` over one self type are two tables, and a downcast asks
+  through whichever reference its operand was written as, so one type can be
+  recognised through either.
+
+The target need not be written concretely. A bounded type parameter
+(`fun get<T: Shape>(d: dyn Shape) -> Option<T>`), a projection over one
+(`d as? I.Item` under `where I.Item: Shape`), and `Self` inside a trait's
+default body all work: each is abstract where it is written and concrete at the
+instantiation, which is where the table is asked for. `Self` is worth noting for
+its asymmetry — `self` inside a default body cannot be *made* into a trait
+object, but a trait object can be recognised as it, so `(other as? Self)` is how
+a default body asks whether something is its own type.
+
+The target may **not** be another trait object: `dyn Sub as? dyn Super` is an
+upcast, a different operation, and is not offered
+(`tests/fail/dyn_downcast_to_dyn.dt`). See `tests/run/dyn_downcast.dt`,
+`dyn_downcast_generic.dt` and `dyn_downcast_trait_arg.dt`.
 
 ### match
 
@@ -2379,7 +2440,8 @@ HashSet::with_capacity(n); s.capacity(); s.reserve(n);   # forwarded, all three
 | indexing a `String` by character (`s[i]`) | there is none: `s.chars()` walks, because a byte offset is not a character position. `s.chars().collect()` is the array, and `s.chars().skip(i).next()` is the one character |
 | a `String` that is guaranteed valid UTF-8 | it is a byte string — `slice` cuts at byte offsets, so a walk over a halved sequence reports a runtime error when it reaches it (`chars()` itself never does: it is lazy) |
 | a *dynamic* width or precision in a format spec (`{v:>{n}}`) | the width and precision in a `{v:>8}` / `{f:.3}` spec are literals; a runtime value there has no spelling. The spec itself is sugar for `std::string::pad_*` / `std::fmt::float` (milestone 35) |
-| casting a `dyn Trait` back to its concrete type | no downcast; the coercion is one-way |
+| upcasting a `dyn Sub` to a `dyn Super` | `as?` downcasts to a *concrete* type; a trait-object target is rejected. Recognising a table is not the same operation as building one |
+| a downcast to a type that does not implement the trait, or binds a different associated type | rejected, rather than compiled as an always-`None` test: the identity is the vtable, and such a type has no table to recognise |
 | a trait's type arguments at a *bare* method call | the expected type breaks the tie between two impls of one generic trait, and pins an impl parameter the receiver cannot reach (`impl<T, U: From<T>> Into<U> for T`); with no expected type the first impl wins — or, where the parameter was only pinnable that way, no impl applies at all. The trait-qualified spelling (`Into::<Fahrenheit>::into(c)`) settles it explicitly without an expected type |
 | disambiguating a qualified selection whose *argument is itself unresolved* (`Steps::from(None)`) | the argument (for `from`) or the receiver (for a trait-qualified `into`) must type on its own to choose the impl, so a value that would need the impl chosen first cannot be disambiguated |
 | a bound naming a *later* type parameter (`fun f<U: Into<T>, T>`) | "unknown type: T" — bounds resolve left to right |
