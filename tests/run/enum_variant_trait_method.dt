@@ -1,0 +1,41 @@
+# The other side of tests/fail/enum_assoc_shadows_variant.dt: only an
+# *inherent* method collides with a variant name. A trait's method is reached
+# through the receiver (`e.next()`) or through the trait (`Step::next(e)`), so
+# a variant taking the bare `E::next` spelling costs it nothing — and
+# forbidding the pair would turn an enum's variant names into reserved words
+# for every trait it ever implements.
+#
+# This is milestone 68's "inherent" granularity applied one type over: it is
+# the *name a receiver alone reaches* that is scarce, not the identifier.
+#> 1
+#> 0
+#> 1
+
+use std::io::print;
+
+trait Step {
+  fun next(self) -> Int;
+}
+
+enum E {
+  next,
+  done,
+}
+
+impl Step for E {
+  fun next(self) -> Int {
+    match self {
+      E::next => 1,
+      E::done => 0,
+    }
+  }
+}
+
+fun main() {
+  var e = E::next;
+  print("{e.next()}");
+  print("{Step::next(E::done)}");
+  # the bare path still names the variant, and the trait method is still
+  # there — this is `E::next` the value, calling `next` on itself.
+  print("{E::next.next()}");
+}

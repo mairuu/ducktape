@@ -3744,6 +3744,50 @@
     new `diag_error` alone fails exactly one, `tests/fail/unit_variant_hint_swapped.dt`,
     *with exit 0* — which is the regression that test exists to name.
 
+- **An enum's associated functions (milestone 70)** — `Opt::none()` reaches an
+  inherent `impl<T> Opt<T>` instead of reporting "unknown variant 'none'". The
+  enum path context asks the variant first and falls through to the impl index
+  on a miss; an inherent method under a variant's name is refused where the
+  impl is written, so the fallback is not a precedence rule. Design:
+  `architecture.md` under "A **builtin type** may qualify a path".
+  - **The gap was in path resolution, not in the impl.** The declaration
+    registered, checked and monomorphised correctly the whole time — nothing
+    ever *named* it. That is why the fix is a fallback in one `switch` arm and
+    not a change to how enums carry impls, and why the wart entry (which had
+    already said so) survived from milestone 69's probing unmodified.
+  - **The two resolvers were the same resolver.** `PATHRES_CTX_TYPE`'s body
+    became `pathres_assoc_item` and both arms call it, so an enum reaches an
+    associated function through the identical code a struct does — the turbofish
+    form, the bare generic self that selects by method name, `overload_recv`
+    for a trait implemented several times, and a `self` method called as an
+    associated function all came along without being written twice.
+  - **The miss is the one thing the helper does not report.** Everything else
+    (a member off an associated item, type arguments on the function segment)
+    is a mistake wherever it appears, but "no such associated item" is only
+    half the story for an enum, whose message has to name the variant reading
+    too: *unknown variant or associated item 'Nnoe' in enum 'Opt'*. So the
+    helper returns a tri-state and lets each caller phrase the miss.
+  - **Which reading wins is not a question, because the pair is illegal.**
+    Asking the variant first and stopping there would make an associated
+    function silently unreachable — precisely the loss milestone 68 was
+    written to refuse — so the same answer applies one type over:
+    `impl_shadows_enum_variant` reports at the impl. The granularity carries
+    over unchanged: a name the impl's *trait* declares is exempt, since it is
+    still reached through the receiver and through the trait, and forbidding it
+    would turn an enum's variant names into reserved words for every trait it
+    implements (`tests/run/enum_variant_trait_method.dt`).
+  - **Sabotaged three ways**, per milestone 63's rule. Deleting the fallback
+    fails exactly `tests/run/enum_assoc_fn.dt`; neutering
+    `impl_shadows_enum_variant` fails exactly
+    `tests/fail/enum_assoc_shadows_variant.dt` **at exit 0** — the silent
+    acceptance of an uncallable function, which is the regression that test
+    names; dropping the `method_is_inherent` filter fails exactly
+    `tests/run/enum_variant_trait_method.dt`.
+  - **Left open:** an associated function written where a pattern expects a
+    variant now draws a second, cascading diagnostic about an unsolved type
+    parameter. It is inherited rather than caused — a struct's `P::new` in a
+    pattern has always done the same — and is recorded in the warts list.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -3898,13 +3942,16 @@ via `Module.decl_base`) and is not part of the main line.
 
 - ~~a call argument's hint will not solve a generic unit variant to the
   enclosing function's type parameters~~ — **closed by milestone 69.**
-- **an inherent associated function on an *enum* is unreachable by name.**
-  `impl<T> Opt<T> { fun none() -> Opt<T> { .. } }` declares it, but
-  `Opt::none()` resolves the path as a *variant* first and reports "unknown
-  variant 'none' in enum 'Opt'" without ever consulting the impls. The same
-  spelling works on a struct (`Point::new(..)`), so it is the enum path
-  resolution that is missing the fallback rather than the impl. Found probing
-  milestone 69, which had nothing to do with it; predates that change.
+- ~~an inherent associated function on an *enum* is unreachable by name~~ —
+  **closed by milestone 70**, which took the fix this entry had already named:
+  a fallback in the enum path context, not a change to how impls register.
+  What is left of it is one cascade the fix inherits rather than causes: an
+  associated function written where a *pattern* expects a variant now reports
+  "expected an enum variant in this pattern" **and** an unsolved type
+  parameter, because the bare-path lookup introduced an inference variable
+  nothing goes on to solve. A struct has always done exactly this
+  (`P::new` in a pattern), so the enum now matches it — but two diagnostics
+  for one mistake is still one too many.
 - **`a.b < c > (d)` reads as a type application, not two comparisons.** A `<`
   after a field or method access is ambiguous — type arguments are spelled bare,
   with no turbofish — and milestone 63's fix disambiguates by scanning for the

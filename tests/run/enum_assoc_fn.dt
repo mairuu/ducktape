@@ -1,0 +1,105 @@
+# `Enum::name` has always been read as a variant and nothing else, so an
+# inherent associated function on an enum was declared, type-checked, and then
+# unreachable — the identical spelling worked on a struct (`Point::new(..)`),
+# which is what made it a gap in path resolution rather than a missing feature.
+#
+# The variant is still asked first, and the fallback runs only on a miss, so
+# the two readings can never both answer. That they can never *both exist* is
+# the other half, enforced where the impl is written (tests/fail/
+# enum_assoc_shadows_variant.dt).
+#
+# What this file pins down is that the fallback reaches every shape the struct
+# spelling reaches: a non-generic enum, a generic one whose parameter comes
+# from the annotation, from a turbofish, or from an argument, and a `self`
+# method called as an associated function.
+#> red
+#> green
+#> none
+#> 9
+#> fallback
+#> 3
+#> 7
+
+use std::io::print;
+
+enum Color {
+  Red,
+  Green,
+}
+
+impl Color {
+  fun default() -> Color {
+    return Color::Red;
+  }
+
+  fun name(self) -> String {
+    match self {
+      Color::Red => "red",
+      Color::Green => "green",
+    }
+  }
+}
+
+enum Opt<T> {
+  None,
+  Some(T),
+}
+
+impl<T> Opt<T> {
+  fun none() -> Opt<T> {
+    return Opt::None;
+  }
+
+  fun wrap(v: T) -> Opt<T> {
+    return Opt::Some(v);
+  }
+
+  fun get_or(self, d: T) -> T {
+    match self {
+      Opt::Some(v) => v,
+      Opt::None => d,
+    }
+  }
+}
+
+# A trait's method is reached through the receiver or a qualified path, so it
+# is not what the enum path is asking about — but it is still an item on the
+# type, and the fallback finds it too.
+trait Zero {
+  fun zero() -> Self;
+}
+
+impl Zero for Opt<Int> {
+  fun zero() -> Opt<Int> {
+    return Opt::Some(7);
+  }
+}
+
+fun main() {
+  print("{Color::default().name()}");
+  # a `self` method through the associated spelling: the receiver is the first
+  # argument, exactly as on a struct.
+  print("{Color::name(Color::Green)}");
+
+  # the variant still wins the name it owns.
+  var red = Color::default();
+  match red {
+    Color::Red => print("none"),
+    Color::Green => print("unreachable"),
+  }
+
+  # the type parameter arrives three ways: from the annotation, from the
+  # turbofish, and from the argument.
+  var a: Opt<Int> = Opt::none();
+  print("{Opt::get_or(a, 9)}");
+
+  var b = Opt::<String>::none();
+  var fb = "fallback";
+  print("{b.get_or(fb)}");
+
+  var c = Opt::wrap(3);
+  print("{c.get_or(0)}");
+
+  var z = Opt::zero();
+  print("{z.get_or(0)}");
+}

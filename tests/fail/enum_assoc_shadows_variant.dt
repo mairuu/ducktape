@@ -1,0 +1,20 @@
+#! expect: associated function 'None' has the same name as a variant of enum 'Opt'
+# An enum's variants and its inherent associated functions share one spelling,
+# and `Enum::name` asks the variant first — so a method under a variant's name
+# is not shadowed, it is unreachable, with nothing a call site can write to
+# name it. That is the same loss two inherent impls inflict on each other
+# (tests/fail/impl_conflict_std.dt), so it gets the same answer: a diagnostic
+# where the impl is written, not a resolution rule that silently prefers one.
+
+enum Opt<T> {
+  None,
+  Some(T),
+}
+
+impl<T> Opt<T> {
+  fun None() -> Opt<T> {
+    return Opt::None;
+  }
+}
+
+fun main() {}

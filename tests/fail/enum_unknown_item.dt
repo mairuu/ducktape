@@ -1,0 +1,19 @@
+#! expect: unknown variant or associated item 'Nnoe' in enum 'Opt'
+# A misspelling now has two ways to have been meant, so the diagnostic names
+# both. The message used to say "unknown variant" only, which was the whole
+# truth back when a variant was the only thing an enum path could name.
+
+enum Opt<T> {
+  None,
+  Some(T),
+}
+
+impl<T> Opt<T> {
+  fun none() -> Opt<T> {
+    return Opt::None;
+  }
+}
+
+fun main() {
+  var o: Opt<Int> = Opt::Nnoe;
+}

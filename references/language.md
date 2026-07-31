@@ -176,7 +176,12 @@ ending in `return` has type `!` (never), which unifies with anything.
   infers the type arguments from the call (first name match wins if several
   impls define the same name). A builtin type qualifies a path like any
   declared one (`Float::from(7)`, `Int::from('A')`), which is what makes an
-  impl written for a primitive reachable by name.
+  impl written for a primitive reachable by name. An **enum** qualifies one
+  too: `Opt::none()` reads as a variant first and as an associated function
+  when no variant answers to the name, so an enum's impls are reachable the
+  same way a struct's are (`tests/run/enum_assoc_fn.dt`). The two readings
+  never both apply — an inherent method under a variant's name is refused
+  where the impl is written (see "Impl blocks").
 - A path may also be qualified by a **type parameter**: `T::make(1)`, or
   `Self::make(1)` inside a trait default body. The parameter names no
   definition, so the item is looked up on its *bounds* — first bound declaring
@@ -1004,6 +1009,20 @@ body was meant, so two traits may both declare `go` for one type, and an
 inherent `cmp` may sit beside `impl Ord`'s. The diagnostic exists because the
 alternative is not shadowing but unreachability — selection is
 first-registered-wins, and nothing a call site can write names the loser.
+
+**An enum's variants spend from the same pool.** `Enum::name` is one spelling
+with two readings, and the variant is asked first, so an inherent associated
+function under a variant's name would be unreachable for exactly the reason
+above — and is refused the same way, where the impl is written:
+
+```
+error: associated function 'None' has the same name as a variant of enum 'Opt'
+> note: 'Opt::None' names the variant, so the function could never be called
+```
+
+The exemption carries over unchanged: a method the impl's *trait* declares is
+reached through the receiver or through the trait, so `impl Step for E` may
+define `next` even when `E` has a `next` variant.
 
 A cycle in the import graph is an error, reported with the chain of modules
 involved.
@@ -2191,7 +2210,7 @@ s.contains(4); s.remove(4); s.to_array();
 | tuple-struct struct-patterns `Pair { a, b }` | write the constructor spelling `Pair(a, b)` — "matching tuple struct with struct pattern syntax is not allowed" |
 | variable shadowing diagnostics | a `var` may silently shadow an earlier one in the same scope (top-level *item* names do collide — that is an error) |
 | declaring a type whose name is a builtin (`struct Range`, `struct String`) | accepted, but a builtin name is resolved before the type scope is consulted, so every mention of it means the builtin and the declaration is unreachable |
-| overlapping method names across impls of one type | rejected since milestone 68: one type spends an inherent name once, whether the two definitions sit in two impl blocks or in one. A name the impl's *trait* declares is exempt — a bound or a trait-qualified path names which body was meant, so two traits may both declare `next` for one type. Where several impls legitimately declare a name (a generic trait like `Into<Int>` / `Into<String>`), a bare path still picks the first registered impl |
+| overlapping method names across impls of one type | rejected since milestone 68: one type spends an inherent name once, whether the two definitions sit in two impl blocks or in one. A name the impl's *trait* declares is exempt — a bound or a trait-qualified path names which body was meant, so two traits may both declare `next` for one type. Where several impls legitimately declare a name (a generic trait like `Into<Int>` / `Into<String>`), a bare path still picks the first registered impl. Milestone 70 extends the same rule to an enum's variants, which spend from the same pool: an inherent associated function under a variant's name is refused, since `Enum::name` reads the variant |
 | capturing a `for` loop variable in a closure | runs, but the closure sees the loop variable's *final* value (one shared cell), not a per-iteration copy — `runtime.md` "Closures & upvalues" |
 | infinitely deep generic instantiation | `fun grow<T>(v: T) { grow([v]) }` type-checks but names a new instantiation at every level; codegen stops at 32 and reports it (`runtime.md` "Monomorphisation") |
 | more than 65536 functions, counting one per instantiation | each instantiation takes a global slot, so a heavily generic program can outgrow the two-byte operand space (`runtime.md` "Bytecode") |

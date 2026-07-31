@@ -1075,6 +1075,17 @@ struct path context carried only a `Type` anyway, so it became
 `PATHRES_CTX_TYPE` and the builtin names moved into `type_named_builtin`,
 shared with `TYNODE_NAMED` so the two spellings of `Float` cannot drift.
 
+An **enum** qualifies one too, and is the one context where a segment has two
+readings: `PATHRES_CTX_ENUM` asks `find_enum_variant` first — the enum's own
+declaration — and falls through to the impl index when nothing answers. The
+impl half is `pathres_assoc_item`, shared verbatim with `PATHRES_CTX_TYPE`; it
+reports everything except the miss, which goes back to the caller, since only
+the caller knows whether "no such associated item" is the whole story (a
+struct) or half of it (an enum, whose message names both). The fallback is
+unambiguous rather than a precedence rule: `impl_shadows_enum_variant` refuses
+an inherent method under a variant's name where the impl is written, so the
+two readings can never both apply.
+
 ### Trait default bodies
 
 A default body is checked and compiled *once per receiver type*, like the

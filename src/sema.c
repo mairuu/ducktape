@@ -89,16 +89,15 @@ static bool check_field_visible(CheckCtx *ctx, const StructDef *def,
   return false;
 }
 
-VariantDef *find_enum_variant(const EnumDef *def, StringView name,
-                              DiagBag *diags, Span span) {
+// silent by design: `Enum::name` may still name an inherent associated
+// function when no variant answers to it, so a miss here is a question for the
+// impl index rather than a mistake. The one caller reports both misses at once.
+VariantDef *find_enum_variant(const EnumDef *def, StringView name) {
   for (int i = 0; i < def->variant_count; i++) {
     if (sv_equal(def->variants[i].name, name)) {
       return &def->variants[i];
     }
   }
-
-  diag_error(diags, span, "unknown variant '" SV_FMT "' in enum '" SV_FMT "'",
-             SV_ARG(name), SV_ARG(def->name));
   return NULL;
 }
 
@@ -2484,6 +2483,19 @@ static void resolve_impl_inherent_coherence(ResolveCtx *rctx, Decl *decl,
                  SV_ARG(impl_def->methods[j].name));
       return;
     }
+  }
+
+  StringView shadowed;
+  if (impl_shadows_enum_variant(impl_def, &shadowed)) {
+    EnumDef *enum_def = impl_def->self_type->as.enm.def;
+    diag_error(rctx->diags, decl->span,
+               "associated function '" SV_FMT "' has the same name as a "
+               "variant of enum '" SV_FMT "'",
+               SV_ARG(shadowed), SV_ARG(enum_def->name));
+    diag_note(rctx->diags, (Span){0},
+              "'" SV_FMT "::" SV_FMT "' names the variant, so the function "
+              "could never be called",
+              SV_ARG(enum_def->name), SV_ARG(shadowed));
   }
 
   for (int i = 0; i < rctx->impls->count; i++) {
@@ -8822,6 +8834,35 @@ static bool method_is_inherent(ImplDef *impl, StringView name) {
   return trait == NULL || trait_flat_method_index(trait, name) < 0;
 }
 
+// The same question one type over: an enum's variants and its inherent methods
+// share the `Enum::name` spelling, and path resolution asks the variant first,
+// so a method under a variant's name is unreachable exactly the way the loser
+// of two inherent impls is. Reported for the same reason and in the same place
+// — where the impl is written, not where a call fails to find it.
+//
+// Only *inherent* names collide, by the rule method_is_inherent states: a
+// trait's method is still reached through a receiver or a trait-qualified
+// path, so an `impl Iterator for E` may name a method `next` even if `E` has a
+// `next` variant. Nothing is lost, and forbidding it would make an enum's
+// variant names into reserved words for every trait it implements.
+bool impl_shadows_enum_variant(ImplDef *impl, StringView *out_name) {
+  if (impl->self_type == NULL || impl->self_type->kind != TY_ENUM) {
+    return false;
+  }
+  EnumDef *def = impl->self_type->as.enm.def;
+  for (int i = 0; i < impl->method_count; i++) {
+    StringView name = impl->methods[i].name;
+    if (name.len == 0 || !method_is_inherent(impl, name)) {
+      continue;
+    }
+    if (find_enum_variant(def, name) != NULL) {
+      *out_name = name;
+      return true;
+    }
+  }
+  return false;
+}
+
 bool impl_defs_share_method(ImplDef *a, ImplDef *b, StringView *out_name,
                             Allocator *al) {
   if (a->self_type == NULL || b->self_type == NULL ||
@@ -9653,6 +9694,76 @@ static PathStep pathres_step_entry(PathResCtx *ctx, Path *path, int i,
   }
 }
 
+// resolving a final segment against the impl index: the associated-item half
+// of a qualified path. Shared by the type state and by the enum state, which
+// reaches it only after no variant answered to the name.
+typedef enum {
+  ASSOC_FOUND,   // *out_res is filled
+  ASSOC_MISSING, // no item by that name; nothing reported
+  ASSOC_ERROR,   // a diagnostic was emitted
+} AssocRes;
+
+// Everything but the miss is reported here; the miss goes back to the caller,
+// which is the only one that knows whether "no such associated item" is the
+// whole story (a struct) or half of it (an enum, where a variant was the other
+// thing the name could have been).
+static AssocRes pathres_assoc_item(PathResCtx *ctx, Path *path, int i,
+                                   bool is_last, Type *self_ty,
+                                   PathRes *out_res) {
+  StringView segment = path->segments[i].name;
+
+  if (!is_last) {
+    diag_error(ctx->diags, path->span,
+               "cannot access member '" SV_FMT "' of associated item",
+               SV_ARG(segment));
+    return ASSOC_ERROR;
+  }
+
+  if (path->segments[i].type_arg_count > 0) {
+    diag_error(ctx->diags, path->span,
+               "cannot apply type arguments to associated function '" SV_FMT
+               "'",
+               SV_ARG(segment));
+    return ASSOC_ERROR;
+  }
+
+  ImplMatch match;
+  MethodDef *method =
+      impl_index_method(ctx->tyres->impls, self_ty, /*trait_ref=*/NULL, segment,
+                        /*ret_hint=*/NULL, &match, ctx->tyres->infer,
+                        /*bare_path=*/true, path->span, ctx->al);
+  if (!method) {
+    return ASSOC_MISSING;
+  }
+
+  FunDef *fun = method->fun;
+  Subst subst = subst_exclude_shadowed(match.subst, fun->type_params,
+                                       fun->type_param_count, ctx->al);
+  Type *fun_ty = subst_apply(&subst, fun->fun_type, ctx->al);
+
+  // A generic trait may be implemented for one type several times
+  // (`From<Int>` and `From<Char>` for `Steps`), and the path names none of
+  // the trait arguments — so `method` above is only the first match. Flag
+  // it so a *call* re-selects by its argument types; a value context keeps
+  // the first match, which is all it can do without arguments. The bare
+  // generic self of `Point::new` is excluded: it selects by method name,
+  // not by a trait argument, so its several impls are not this ambiguity.
+  Type *overload_recv = NULL;
+  if (!type_is_bare_generic_self(self_ty) &&
+      assoc_candidate_count(ctx->tyres->impls, self_ty, segment, ctx->al) > 1) {
+    overload_recv = self_ty;
+  }
+
+  *out_res = (PathRes){
+      .kind = PATHRES_METHOD,
+      .type = fun_ty,
+      .as.method.fun = fun,
+      .as.method.subst = subst,
+      .as.method.overload_recv = overload_recv,
+  };
+  return ASSOC_FOUND;
+}
+
 bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
   assert(out_res && "out_res is null");
   PathResCtx_ res_ctx = {.kind = PATHRES_CTX_SCOPE};
@@ -9766,95 +9877,69 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
       EnumDef *def = res_ctx.scope.enum_.def;
       Type *enum_ty = res_ctx.scope.enum_.inst;
 
-      VariantDef *variant =
-          find_enum_variant(def, segment, ctx->diags, path->span);
-      if (!variant) {
-        return false;
+      VariantDef *variant = find_enum_variant(def, segment);
+      if (variant != NULL) {
+        if (!is_last) {
+          diag_error(ctx->diags, path->span,
+                     "cannot access member '" SV_FMT "' of enum variant",
+                     SV_ARG(segment));
+          return false;
+        }
+
+        if (path->segments[i].type_arg_count > 0) {
+          diag_error(ctx->diags, path->span,
+                     "cannot apply type arguments to enum variant '" SV_FMT
+                     "'. did you mean to apply them to the enum '" SV_FMT
+                     "' instead?",
+                     SV_ARG(segment), SV_ARG(def->name));
+          return false;
+        }
+
+        *out_res = (PathRes){
+            .kind = PATHRES_VARIANT,
+            .type = enum_ty,
+            .as.variant.enum_def = def,
+            .as.variant.def = variant,
+        };
+        return true;
       }
 
-      if (!is_last) {
-        diag_error(ctx->diags, path->span,
-                   "cannot access member '" SV_FMT "' of enum variant",
-                   SV_ARG(segment));
+      // No variant by that name — but `Enum::name` is also how an inherent
+      // associated function is spelled, and a struct has always been able to
+      // say it. The variant is asked first because it is the enum's own
+      // declaration; the two can never both answer, since an inherent method
+      // sharing a variant's name is rejected where the impl is written.
+      switch (pathres_assoc_item(ctx, path, i, is_last, enum_ty, out_res)) {
+      case ASSOC_FOUND:
+        return true;
+      case ASSOC_ERROR:
         return false;
+      case ASSOC_MISSING:
+        break;
       }
-
-      if (path->segments[i].type_arg_count > 0) {
-        diag_error(ctx->diags, path->span,
-                   "cannot apply type arguments to enum variant '" SV_FMT
-                   "'. did you mean to apply them to the enum '" SV_FMT
-                   "' instead?",
-                   SV_ARG(segment), SV_ARG(def->name));
-        return false;
-      }
-
-      *out_res = (PathRes){
-          .kind = PATHRES_VARIANT,
-          .type = enum_ty,
-          .as.variant.enum_def = def,
-          .as.variant.def = variant,
-      };
-      return true;
+      diag_error(ctx->diags, path->span,
+                 "unknown variant or associated item '" SV_FMT
+                 "' in enum '" SV_FMT "'",
+                 SV_ARG(segment), SV_ARG(def->name));
+      return false;
     }
     case PATHRES_CTX_TYPE: {
       Type *struct_ty = res_ctx.scope.type_.inst;
 
-      if (!is_last) {
-        diag_error(ctx->diags, path->span,
-                   "cannot access member '" SV_FMT "' of associated item",
-                   SV_ARG(segment));
+      switch (pathres_assoc_item(ctx, path, i, is_last, struct_ty, out_res)) {
+      case ASSOC_FOUND:
+        return true;
+      case ASSOC_ERROR:
         return false;
+      case ASSOC_MISSING:
+        break;
       }
-
-      if (path->segments[i].type_arg_count > 0) {
-        diag_error(ctx->diags, path->span,
-                   "cannot apply type arguments to associated function '" SV_FMT
-                   "'",
-                   SV_ARG(segment));
-        return false;
-      }
-
-      ImplMatch match;
-      MethodDef *method = impl_index_method(
-          ctx->tyres->impls, struct_ty, /*trait_ref=*/NULL, segment,
-          /*ret_hint=*/NULL, &match, ctx->tyres->infer, /*bare_path=*/true,
-          path->span, ctx->al);
-      if (!method) {
-        char ty_buf[64];
-        type_sprintf(struct_ty, ty_buf, sizeof(ty_buf));
-        diag_error(ctx->diags, path->span,
-                   "no associated item named '" SV_FMT "' found for type '%s'",
-                   SV_ARG(segment), ty_buf);
-        return false;
-      }
-
-      FunDef *fun = method->fun;
-      Subst subst = subst_exclude_shadowed(match.subst, fun->type_params,
-                                           fun->type_param_count, ctx->al);
-      Type *fun_ty = subst_apply(&subst, fun->fun_type, ctx->al);
-
-      // A generic trait may be implemented for one type several times
-      // (`From<Int>` and `From<Char>` for `Steps`), and the path names none of
-      // the trait arguments — so `method` above is only the first match. Flag
-      // it so a *call* re-selects by its argument types; a value context keeps
-      // the first match, which is all it can do without arguments. The bare
-      // generic self of `Point::new` is excluded: it selects by method name,
-      // not by a trait argument, so its several impls are not this ambiguity.
-      Type *overload_recv = NULL;
-      if (!type_is_bare_generic_self(struct_ty) &&
-          assoc_candidate_count(ctx->tyres->impls, struct_ty, segment,
-                                ctx->al) > 1) {
-        overload_recv = struct_ty;
-      }
-
-      *out_res = (PathRes){
-          .kind = PATHRES_METHOD,
-          .type = fun_ty,
-          .as.method.fun = fun,
-          .as.method.subst = subst,
-          .as.method.overload_recv = overload_recv,
-      };
-      return true;
+      char ty_buf[64];
+      type_sprintf(struct_ty, ty_buf, sizeof(ty_buf));
+      diag_error(ctx->diags, path->span,
+                 "no associated item named '" SV_FMT "' found for type '%s'",
+                 SV_ARG(segment), ty_buf);
+      return false;
     }
     case PATHRES_CTX_GENERIC: {
       Type *param = res_ctx.scope.generic.param;

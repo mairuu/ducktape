@@ -92,6 +92,13 @@ bool impl_defs_conflict(ImplDef *a, ImplDef *b, Allocator *al);
 bool impl_defs_share_method(ImplDef *a, ImplDef *b, StringView *out_name,
                             Allocator *al);
 
+// Does an inherent method of `impl` spend a name the enum it is written for has
+// already spent on a variant? `Enum::name` resolves the variant first, so the
+// method would be unreachable — the same loss as two impls sharing a name, and
+// the same "inherent" granularity. False for any non-enum self type. On a hit
+// *out_name is the first name spent twice.
+bool impl_shadows_enum_variant(ImplDef *impl, StringView *out_name);
+
 // find a method named `name` applicable to `self_type`, trying every
 // registered impl. on a match, *out_match is filled with the impl and the
 // substitution mapping the impl's type params to the concrete type args
