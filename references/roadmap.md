@@ -3606,6 +3606,54 @@
     turns the test from a hang into a named runtime error, which is how that
     bound was checked.
 
+- **Fieldless defs are singletons (milestone 67)** — a `StructDef`/`VariantDef`
+  with no fields is constructed once per run and shared thereafter, so
+  `Option::None`, `Slot::Empty` and `struct Marker;` stop allocating. Runtime
+  only: `heap_struct`/`heap_enum`, a new GC root, no compiler change and no
+  opcode change. Design: `runtime.md` "Fieldless defs are singletons".
+
+  The observable behaviour is *nothing*, which is the whole reason it is legal,
+  and the two supports are both decisions that were made for other reasons.
+  `==` on an aggregate is structural, so two separately-built `None`s already
+  compared equal — sharing changes how the answer is reached, not what it is.
+  And an aggregate is a handle whose fields can be written through, but
+  `OP_FIELD_SET` needs a field index, and a def with no fields has none: there
+  is no state to alias. Type erasure adds a third for free — there is one
+  `EnumDef` per source enum, so `Option::<Int>::None` and `Option::<String>::None`
+  are now literally one object, which they were already indistinguishable from.
+
+  - **Measured, with the control inside the same binary.** Two builds laid out
+    differently differ by ~7% on a program that touches none of this, so the
+    honest measurement is the *gap* between a construct-only loop and a loop
+    identical but for the construction, taken within each build. 5M
+    constructions: **97ms of enum work before, 35ms after** — a 64% cut, and the
+    residue is dispatch rather than allocation. Holding them is where it shows
+    up as more than time: 1 000 000 `Option::None` in an array is 307ms and
+    81.1 MiB before, **259ms and 51.8 MiB** after.
+  - **`std::map` did not move at all, and that is the finding.** It was the case
+    the perf note named — a table is mostly `Slot::Empty` — but `empty_slots`
+    builds one `var empty: Slot<K, V> = Slot::Empty;` and pushes *it* n times,
+    because a bare `slots.push(Slot::Empty)` does not type-check inside a
+    generic function (the unit-variant hint wart, still open). The workaround
+    for a language wart was already the optimisation, by hand. What this
+    milestone actually buys is the case nobody hand-optimised: a `None` returned
+    from a lookup, a `Tomb` written on a remove, a sentinel built in a loop.
+  - **The root has to be strong.** A singleton is reached by the collector from
+    its *def*, not from any value, and marking it there rather than clearing it
+    in the sweep is not a preference: a weak cache would let a collection that
+    lands between two constructions free an object the def still points at, and
+    the next construction would hand back freed memory. Immortality is cheap
+    here because the set is bounded by the source text — one object per
+    fieldless def the program constructs.
+  - **The oracle needed sabotaging, and this time it failed the sabotage.**
+    `tests/run/unit_variant_shared.dt` originally held 100 000 `Slot::Empty` in
+    an array across a churn loop, which looks like the rooting test and is not:
+    the array roots the singleton by itself, so the file passed with the root
+    walk deliberately deleted. The test only bites once a singleton is built and
+    then *dropped* before the collections — then the sabotaged build segfaults.
+    (The other two sabotages, sharing a def that does have fields, turn `5 0`
+    into `5 5` and `3 1 2` into `2 2 2`.) Milestone 63's rule keeps earning it.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -3766,6 +3814,11 @@ via `Module.decl_base`) and is not part of the main line.
   (`var e: Slot<K, V> = Slot::Empty;`) drives the same inference from the other
   side and checks. Found writing `std::map` (milestone 63), which uses the
   workaround; it is the same family as the struct-literal field-hint gap below.
+  Milestone 67 found that the workaround had been doing a second job: hoisting
+  the variant into a local is also what kept `empty_slots` from allocating one
+  object per slot. The runtime does that now for every fieldless def, so fixing
+  this wart would cost nothing — but until it is fixed, `std::map` still needs
+  the annotated local to type-check at all.
 - **`a.b < c > (d)` reads as a type application, not two comparisons.** A `<`
   after a field or method access is ambiguous — type arguments are spelled bare,
   with no turbofish — and milestone 63's fix disambiguates by scanning for the

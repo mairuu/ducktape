@@ -101,8 +101,8 @@ Operands are u8 unless noted.
 | `OP_INTERP seg_count` | pops that many values, stringifies + concatenates them in order, pushes the result string |
 | `OP_DUP depth` | pushes a copy of the value `depth` slots below the top |
 | `OP_TUPLE count` | pops `count` elems (left-to-right order), pushes a new tuple |
-| `OP_STRUCT struct_slot(u16)` | pops `module->structs[slot]->field_count` elems (declaration order), pushes a struct instance |
-| `OP_ENUM enum_slot(u16) tag` | pops that variant's `field_count` elems (declaration order), pushes an enum instance |
+| `OP_STRUCT struct_slot(u16)` | pops `module->structs[slot]->field_count` elems (declaration order), pushes a struct instance — the *same* instance every time when the def has no fields (see "Fieldless defs are singletons") |
+| `OP_ENUM enum_slot(u16) tag` | pops that variant's `field_count` elems (declaration order), pushes an enum instance — likewise shared for a fieldless variant, which is what makes `Option::None` free |
 | `OP_FIELD_GET index` | pops a tuple/struct/enum instance, pushes its `index`-th field — no bounds check, since the index is always a compile-time-valid constant |
 | `OP_FIELD_SET index` | pops value then a tuple/struct/enum instance, writes the `index`-th field, pushes the value back (assignment is an expression) — the mirror of `OP_FIELD_GET` |
 | `OP_TAG` | pops an enum instance, pushes its variant tag as `Int` |
@@ -137,6 +137,39 @@ list used by sweep):
 whole compilation), not GC objects, so marking a struct/enum instance walks
 its `fields` array but never touches the def pointer itself.
 
+### Fieldless defs are singletons
+
+A `StructDef` or `VariantDef` with `field_count == 0` has **one** instance for
+the whole run: `heap_struct`/`heap_enum` build it on the first construction,
+file it on the def as `singleton`, and hand that same object back forever after.
+`Option::None`, `Slot::Empty` and `struct Marker;` therefore stop allocating.
+
+Nothing in the language can see the sharing, and the two reasons are the whole
+argument for it:
+
+- **`==` on an aggregate is structural** (`value_equal` compares the variant/def
+  and then the fields), so two separately-constructed `None`s already compared
+  equal. Sharing changes how that answer is reached, not what it is.
+- **there is no field to write through.** Aggregates are handles — a struct
+  passed to a function mutates through to the caller — but `OP_FIELD_SET` needs
+  a field index, and a fieldless def has none. There is no state to alias.
+
+Two consequences worth knowing:
+
+- **A generic enum shares one singleton across every type argument.** There is
+  one `EnumDef` per source enum (instantiation monomorphises *functions*, never
+  defs), so `Option::<Int>::None` and `Option::<String>::None` are literally the
+  same object. Types are erased at runtime, so this was already indistinguishable
+  — those two values compared equal before the change too.
+- **The def is a GC root, not a weak cache.** `heap_collect` marks
+  `structs[i]->singleton` and `enums[i]->variants[j].singleton` off `Heap.exe`,
+  so a singleton never dies. It has to be this way round: a weak cache would let
+  a collection that lands between two constructions free an object the def is
+  still pointing at, and the next construction would hand back freed memory.
+  (The set is bounded by the source text — one object per fieldless def the
+  program actually constructs — so immortality costs nothing that matters.)
+  `heap_destroy` unfiles every singleton, because the defs outlive the heap.
+
 A `StringBuf` is the one object defined by what it is *not*: an `ObjString` is
 in the intern table, so its bytes cannot change (see below); a buffer is out of
 it, so they can. Nothing else about the two differs, and `StringBuf`'s `build`
@@ -170,7 +203,8 @@ rooting rule.
 **Collection** is mark-sweep, triggered from `heap_alloc` (the sole entry
 point that grows `bytes_allocated`) once it crosses `next_gc` (starts at
 1 MiB, doubles `bytes_allocated` after each cycle), or unconditionally under
-`--gc-stress`. Roots: every compiled chunk's constant pool, scanned directly
+`--gc-stress`. Roots: every fieldless def's `singleton` (see above) and every
+compiled chunk's constant pool, the latter scanned directly
 off `Heap.exe`'s `globals[]` *and* `closures[]` (so constants need no special
 "immortal" case — each function has its own chunk with its own constants;
 nested closure `FunDef`s are in no slot space, so codegen appends them to
@@ -195,7 +229,9 @@ enough collect cycles every slot was tombstoned and a miss in `table_find`
 Any allocating call (`heap_intern`, `heap_concat`, `heap_strbuf`, `heap_array`,
 `heap_tuple`, `heap_struct`, `heap_enum`, `heap_closure`, `heap_upvalue`,
 `heap_array_reserve`, `heap_strbuf_reserve`) may collect *before* the new
-object exists, so the discipline throughout codegen/VM is: keep every
+object exists — `heap_struct`/`heap_enum` only when the def has fields, since a
+fieldless one allocates at most once per run — so the discipline throughout
+codegen/VM is: keep every
 already-live operand reachable from a root (still on the VM stack, not yet
 popped) until the new object is built and pushed. See the
 `OP_ARRAY`/`OP_INTERP`/`OP_TUPLE`/

@@ -21,6 +21,8 @@ typedef struct Pattern Pattern;
 typedef struct TypeNode TypeNode;
 typedef struct Path Path;
 
+typedef struct Obj Obj; // object.h; only ever a `singleton` below
+
 typedef struct Module Module;
 typedef struct StructDef StructDef;
 typedef struct EnumDef EnumDef;
@@ -326,6 +328,11 @@ struct StructDef {
   bool is_tuple;
 
   int slot; // OP_STRUCT operand; SLOT_NONE until something constructs one
+
+  // when `field_count == 0`: the one instance every construction of this def
+  // returns. See `heap_struct` — the heap owns the object, this is only where
+  // it is filed.
+  Obj *singleton;
 };
 
 struct VariantDef {
@@ -334,6 +341,11 @@ struct VariantDef {
   int field_count;
   bool is_tuple;
   uint8_t tag;
+
+  // as `StructDef.singleton`, and for the same reason: a variant with no
+  // fields has no state to tell two instances apart. This is what makes
+  // `Option::None` free.
+  Obj *singleton;
 };
 
 struct EnumDef {

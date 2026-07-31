@@ -1,0 +1,148 @@
+# A def with no fields has no state, so the runtime builds *one* instance of it
+# and hands that same object back to every construction. Nothing in the language
+# can see the sharing — `==` on an aggregate is structural, and with no fields
+# there is no assignable field to write through — so what this file pins down is
+# that "nothing" stays nothing.
+#
+# The two halves it has to keep apart: a fieldless def is shared, and a def with
+# fields is emphatically *not* (two `Cell { n: 0 }` are two objects, and writing
+# through one must not be visible through the other).
+#
+# The singleton is reached by the collector from its def rather than from any
+# value, so the loops here are sized to make collections actually happen while
+# unit variants are the thing being held.
+#> None
+#> Some(7)
+#> true
+#> true
+#> false
+#> 100000
+#> Tomb true 60000
+#> 0
+#> 5 0
+#> Marker Marker true
+#> gone Empty
+#> 3 1 2
+use std::io::print;
+use std::fmt::Display;
+use std::array;
+use std::string::from_chars;
+
+enum Slot {
+    Empty,
+    Tomb,
+    Full(Int),
+}
+
+struct Cell { n: Int }
+struct Marker;
+
+# a method on a fieldless struct receives the shared object as `self`, which is
+# the one place the sharing could have shown up as a wrong receiver
+impl Display for Marker {
+    fun to_string(self) -> String {
+        return "Marker";
+    }
+}
+
+fun describe(s: Slot) -> String {
+    match s {
+        Slot::Empty => { return "Empty"; },
+        Slot::Tomb => { return "Tomb"; },
+        Slot::Full(n) => { return "Full"; },
+    }
+}
+
+fun main() {
+    # the baseline: a unit variant still prints, matches and compares as itself
+    var none: Option<Int> = Option::None;
+    print("{none}");
+    var some: Option<Int> = Option::Some(7);
+    print("{some}");
+
+    # two separate constructions are equal — they were before the sharing, by
+    # structural comparison, and they are after it, by pointer
+    var a: Option<Int> = Option::None;
+    var b: Option<Int> = Option::None;
+    print("{a == b}");
+    print("{Slot::Empty == Slot::Empty}");
+    # ...and distinct variants of one enum are still distinct
+    print("{Slot::Empty == Slot::Tomb}");
+
+    # a hundred thousand of them, all live at once, all in one array: this is
+    # the case the sharing is for, and it is also the one that would break
+    # loudest if the collector could not reach the shared object
+    var many: [Slot] = [];
+    var i = 0;
+    while i < 100000 {
+        many.push(Slot::Empty);
+        i = i + 1;
+    }
+    print("{many.len()}");
+
+    # Build a singleton and then drop every reference to it. The object is now
+    # reachable *only* from its own def, which is the whole of why the def is a
+    # root: if the collector cannot see it there, the sweep frees it, the def
+    # keeps the pointer, and the next `Slot::Tomb` hands back freed memory.
+    # (Without this the array above would keep every singleton alive by itself
+    # and the root would never be load-bearing — the version of this test that
+    # only held `many` passed with the roots deliberately removed.)
+    var dropped: Slot = Slot::Tomb;
+    dropped = Slot::Full(0);
+
+    # allocate hard enough to force collections, then check the unit variants
+    # held across them survived
+    var j = 0;
+    var churn = 0;
+    while j < 20000 {
+        var s = from_chars(['x', 'y', 'z']);
+        churn = churn + s.len();
+        j = j + 1;
+    }
+
+    var revived: Slot = Slot::Tomb;
+    print("{describe(revived)} {revived == Slot::Tomb} {churn}");
+    var bad = 0;
+    var k = 0;
+    while k < many.len() {
+        var d = describe(many[k]);
+        if d != "Empty" {
+            bad = bad + 1;
+        }
+        k = k + 1;
+    }
+    print("{bad}");
+
+    # the other half: a def *with* fields is never shared, so a write through
+    # one handle is invisible through the other
+    var c1 = Cell { n: 0 };
+    var c2 = Cell { n: 0 };
+    c1.n = 5;
+    print("{c1.n} {c2.n}");
+
+    # a fieldless struct gets the same treatment as a fieldless variant
+    var m1 = Marker;
+    var m2 = Marker;
+    print("{m1} {m2} {m1 == m2}");
+
+    # overwriting a slot that held a shared object must not disturb the object
+    # every other slot is still pointing at
+    var slots: [Slot] = [Slot::Empty, Slot::Empty, Slot::Empty];
+    slots[0] = Slot::Full(1);
+    print("gone {describe(slots[1])}");
+
+    # and the shared object is not somehow a shared *slot*: three fresh Fulls
+    # carry three different payloads
+    var f: [Slot] = [Slot::Full(3), Slot::Full(1), Slot::Full(2)];
+    var out: [Int] = [];
+    var t = 0;
+    while t < f.len() {
+        match f[t] {
+            Slot::Full(n) => { out.push(n); },
+            Slot::Empty => {},
+            Slot::Tomb => {},
+        }
+        t = t + 1;
+    }
+    print("{out[0]} {out[1]} {out[2]}");
+}

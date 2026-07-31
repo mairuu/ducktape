@@ -310,14 +310,31 @@ ObjTuple *heap_tuple(Heap *h, int count) {
   return tup;
 }
 
-ObjStruct *heap_struct(Heap *h, StructDef *def) {
-  Value *fields = NULL;
-  if (def->field_count > 0) {
-    fields = heap_alloc(h, sizeof(Value) * (size_t)def->field_count);
-    for (int i = 0; i < def->field_count; i++) {
-      fields[i] = val_unit();
-    }
+// `fields` for an aggregate of `count` values, or NULL when there are none.
+static Value *heap_fields(Heap *h, int count) {
+  if (count == 0) {
+    return NULL;
   }
+  Value *fields = heap_alloc(h, sizeof(Value) * (size_t)count);
+  for (int i = 0; i < count; i++) {
+    fields[i] = val_unit();
+  }
+  return fields;
+}
+
+ObjStruct *heap_struct(Heap *h, StructDef *def) {
+  if (def->field_count == 0) {
+    if (def->singleton == NULL) {
+      ObjStruct *s = (ObjStruct *)new_obj(h, OBJ_STRUCT, sizeof(ObjStruct));
+      s->def = def;
+      s->fields = NULL;
+      // filed only now: new_obj may have collected, and the root walk reading
+      // a half-built singleton would be worse than reading none.
+      def->singleton = &s->obj;
+    }
+    return (ObjStruct *)def->singleton;
+  }
+  Value *fields = heap_fields(h, def->field_count);
   ObjStruct *s = (ObjStruct *)new_obj(h, OBJ_STRUCT, sizeof(ObjStruct));
   s->def = def;
   s->fields = fields;
@@ -325,13 +342,16 @@ ObjStruct *heap_struct(Heap *h, StructDef *def) {
 }
 
 ObjEnum *heap_enum(Heap *h, VariantDef *variant) {
-  Value *fields = NULL;
-  if (variant->field_count > 0) {
-    fields = heap_alloc(h, sizeof(Value) * (size_t)variant->field_count);
-    for (int i = 0; i < variant->field_count; i++) {
-      fields[i] = val_unit();
+  if (variant->field_count == 0) {
+    if (variant->singleton == NULL) {
+      ObjEnum *e = (ObjEnum *)new_obj(h, OBJ_ENUM, sizeof(ObjEnum));
+      e->variant = variant;
+      e->fields = NULL;
+      variant->singleton = &e->obj;
     }
+    return (ObjEnum *)variant->singleton;
   }
+  Value *fields = heap_fields(h, variant->field_count);
   ObjEnum *e = (ObjEnum *)new_obj(h, OBJ_ENUM, sizeof(ObjEnum));
   e->variant = variant;
   e->fields = fields;
@@ -461,6 +481,21 @@ void heap_collect(Heap *h) {
     for (int i = 0; i < h->exe->closure_count; i++) {
       mark_fun_consts(h->exe->closures[i]);
     }
+    // fieldless singletons are roots rather than a weak cache: there is one
+    // per def the program constructs, so the set is bounded by the source
+    // text, and keeping them alive is what makes the next `Option::None` a
+    // pointer read. A weak cache would have to be cleared in the sweep, and
+    // would hand back the allocation the moment a collection landed between
+    // two constructions.
+    for (int i = 0; i < h->exe->struct_count; i++) {
+      mark_obj(h->exe->structs[i]->singleton);
+    }
+    for (int i = 0; i < h->exe->enum_count; i++) {
+      EnumDef *e = h->exe->enums[i];
+      for (int j = 0; j < e->variant_count; j++) {
+        mark_obj(e->variants[j].singleton);
+      }
+    }
   }
   if (h->mark_roots != NULL) {
     h->mark_roots(h->mark_roots_ctx);
@@ -510,6 +545,22 @@ void heap_init(Heap *h, Executable *exe, bool stress) {
 }
 
 void heap_destroy(Heap *h) {
+  // the singletons are about to be freed with everything else, and the defs
+  // holding them outlive this heap (they belong to the compiler's arena, or to
+  // the image's). Unfile them so a second heap over the same program starts
+  // from NULL rather than from dangling pointers.
+  if (h->exe != NULL) {
+    for (int i = 0; i < h->exe->struct_count; i++) {
+      h->exe->structs[i]->singleton = NULL;
+    }
+    for (int i = 0; i < h->exe->enum_count; i++) {
+      EnumDef *e = h->exe->enums[i];
+      for (int j = 0; j < e->variant_count; j++) {
+        e->variants[j].singleton = NULL;
+      }
+    }
+  }
+
   Obj *o = h->objects;
   while (o != NULL) {
     Obj *next = o->next;

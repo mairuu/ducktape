@@ -272,6 +272,13 @@ ObjString *heap_concat(Heap *h, ObjString *a, ObjString *b);
 ObjStrBuf *heap_strbuf(Heap *h); // empty; no buffer until the first push
 ObjArray *heap_array(Heap *h, int count); // items start as unit; cap == count
 ObjTuple *heap_tuple(Heap *h, int count); // items start as unit
+// these two are the exception: a def with no fields has no state, so every
+// construction of it returns the *same* object, built once and then filed on
+// the def as its `singleton`. Nothing can tell the sharing apart — `==` on an
+// aggregate is structural, and with no fields there is no `OP_FIELD_SET` index
+// to write through — so what it buys is that `Option::None` and `Slot::Empty`
+// stop allocating. A singleton never dies: `heap_collect` marks it from the
+// def, and only `heap_destroy` unfiles it.
 ObjStruct *heap_struct(Heap *h, StructDef *def);
 ObjEnum *heap_enum(Heap *h, VariantDef *variant);
 ObjClosure *heap_closure(Heap *h, FunDef *fun, int upvalue_count);
