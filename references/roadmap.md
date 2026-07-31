@@ -3415,9 +3415,10 @@
     table may decline a key. `NaN != NaN` would make such a key unfindable in a
     table that compares with `==`, and a truncating `as Int` is the only number
     a Float can reach here anyway.
-  - **Capacities are primes because they are allowed to be.** Every table that
-    indexes with `h & (cap - 1)` is forced to a power of two by the mask; with
-    no `&` the reduction is `%`, nothing pushes toward powers of two, and a
+  - **Capacities are primes because they are allowed to be.** (Superseded by
+    milestone 66, which switched to powers of two once `&` existed.) Every table
+    that indexes with `h & (cap - 1)` is forced to a power of two by the mask;
+    with no `&` the reduction is `%`, nothing pushes toward powers of two, and a
     prime is `%`'s natural partner. The sign fold that goes with it is not
     optional — `%` keeps the sign of its left operand, so `(0 - 17) % 5` is
     `-2`, and getting it wrong is an out-of-bounds read rather than a bad
@@ -3567,6 +3568,43 @@
   instruction with the promise actually written down — and the two overflowing
   divisions answer `INT64_MIN` and `0`. Nothing in the suite had reached either,
   because nothing had needed arithmetic to wrap on purpose before.
+
+- **A masked hash table (milestone 66)** — `std::map` swaps prime capacities and
+  `%` for powers of two and `h & (cap - 1)`. One `.dt` file, no compiler change.
+  Design: `language.md` `std::map`.
+
+  The first thing milestone 65 paid for, and the smallest kind of milestone
+  there is: a change that became *available* rather than one that became
+  necessary. `next_prime`/`is_prime` are gone, the sign fold is gone — masking
+  against a positive mask clears the sign along with the high bits — and the
+  probe advance is `(i + 1) & mask`.
+
+  - **Measured, not assumed**, since the whole reason to do it is speed. At
+    `-O2`, best of 7, with a control program subtracting the loop and hashing:
+    20 000 entries built then looked up eleven times costs 112ms of map work
+    before and 87ms after; at 100 000 it is 1088ms against 907ms. So **17–22%**,
+    consistently, which is worth having and is nowhere near the 3.7x that
+    pre-sizing the same map already buys.
+  - **What made it safe is a decision milestone 63 made for another reason.**
+    Masking reads only a hash's low bits, so it is the arrangement a hash with
+    structure down there ruins — which is exactly why a prime is worth paying
+    for when a table cannot know what it will be handed. This table does know:
+    `Hash` writes into a `Hasher` instead of returning a number, so every hash
+    reaching it has been through `mix`, whose last step is a shift-xor bringing
+    the high bits down. A program cannot hand it a raw hash even deliberately.
+  - **A bug the switch created, caught before it shipped.** An impl method has
+    no visibility control, so `rehash` is public — and it is also the documented
+    way to pre-size a map. Under primes any capacity was merely suboptimal;
+    under a mask, 5 slots means a mask of 4, every probe visits slots 0 and 4
+    alone, and `(i + 1) & 4` never leaves 0. `rehash` now treats its argument as
+    a *request*, rounding up to a power of two and raising it to what the live
+    entries need. `tests/run/map_capacity.dt` pins it.
+  - **`insert`'s probe is bounded now**, like the two searches always were. It
+    still cannot run out of slots, so the bound never ends the loop; it is there
+    because masking turns a broken invariant into an infinite cycle rather than
+    a wrong answer, and a hang tells nobody anything. Removing the rounding
+    turns the test from a hang into a named runtime error, which is how that
+    bound was checked.
 
 ## Next (in recommended order)
 

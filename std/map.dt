@@ -24,6 +24,7 @@
 
 use std::option::Option;
 use std::hash::{Hash, Hasher, hash_of};
+use std::panic::panic;
 use std::array;
 use std::iter::Iterator;
 
@@ -67,45 +68,33 @@ fun empty_slots<K, V>(n: Int) -> [Slot<K, V>] {
     return slots;
 }
 
-# The smallest prime at least `n`, and never below 7 — a table small enough to
-# grow on its second insert is not worth the arithmetic.
+# The smallest power of two at least `n`, and never below 8 — a table small
+# enough to grow on its second insert is not worth the arithmetic.
 #
-# **Capacities are primes here because they are allowed to be.** Every table that
-# indexes with `h & (cap - 1)` is forced to a power of two by the mask; ducktape
-# has no `&` at all, so the reduction is `%` and nothing pushes toward powers of
-# two. A prime is `%`'s natural partner, and it is the cheapest insurance there
-# is against a hash with structure in its low bits — which `std::hash` should
-# never hand out, but a table that survives a bad hash is better than one that
-# merely deserves a good one.
-fun next_prime(n: Int) -> Int {
-    var c = n;
-    if c < 7 {
-        c = 7;
-    }
-    if c % 2 == 0 {
-        c += 1;
-    }
-    while not is_prime(c) {
-        c += 2;
+# **Capacities are powers of two, and the reduction is a mask.** This module
+# used primes and `%` until milestone 66, for the blunt reason that the language
+# had no `&`: without a mask nothing pushed toward powers of two, and a prime is
+# `%`'s natural partner. The operators exist now, so the ordinary choice is
+# available and this takes it.
+#
+# What made it safe to take is a decision `std::hash` had already made. Masking
+# reads only the *low* bits of a hash, so it is the arrangement that a hash with
+# structure down there ruins — which is why a prime is worth paying for when a
+# table cannot know what it will be handed. This table does know: `Hash` writes
+# into a `Hasher` rather than returning a number, so **every hash that reaches
+# here has been through `mix`**, whose last step is a shift-xor that brings the
+# high bits down. A program cannot hand this table a raw hash even if it wants
+# to. The trait shape milestone 63 chose for one reason turns out to buy this
+# for another.
+fun capacity_for(n: Int) -> Int {
+    var c = 8;
+    # `c > 0` is a termination guard rather than a real case: reaching it means
+    # `c` has overflowed past 2^62 slots, and an array that long exhausts memory
+    # a long way before the arithmetic runs out.
+    while c < n and c > 0 {
+        c = c << 1;
     }
     return c;
-}
-
-fun is_prime(n: Int) -> Bool {
-    if n < 2 {
-        return false;
-    }
-    if n % 2 == 0 {
-        return n == 2;
-    }
-    var d = 3;
-    while d * d <= n {
-        if n % d == 0 {
-            return false;
-        }
-        d += 2;
-    }
-    return true;
 }
 
 # `live` is the number of entries a caller can see; `used` counts those *and*
@@ -121,7 +110,7 @@ pub struct HashMap<K: Hash, V> {
 
 impl<K: Hash, V> HashMap<K, V> {
     fun new() -> HashMap<K, V> {
-        var slots: [Slot<K, V>] = empty_slots(7);
+        var slots: [Slot<K, V>] = empty_slots(8);
         return HashMap { slots: slots, live: 0, used: 0 };
     }
 
@@ -134,20 +123,23 @@ impl<K: Hash, V> HashMap<K, V> {
         return self.live == 0;
     }
 
+    # The mask that turns a hash, or a walked index, into a slot. One less than
+    # the capacity, which is all a power of two needs.
+    fun mask(self) -> Int {
+        return self.slots.len() - 1;
+    }
+
     # Where `key`'s probe sequence begins.
     #
-    # The fold of the sign is the whole reason this is a function rather than one
-    # expression written three times: `%` in ducktape keeps the sign of its left
-    # operand, so `(0 - 17) % 5` is `-2` and a hash — which spans all of `Int`,
-    # negatives included — cannot index an array directly. Getting this wrong is
-    # an out-of-bounds read rather than a bad distribution, so it lives in one
-    # place and every probe starts here.
+    # **The sign takes care of itself here**, which it did not under `%`. A hash
+    # spans the whole of `Int`, negatives included, and `%` keeps the sign of its
+    # left operand — so the modulo form had to fold a negative result back into
+    # range, and getting that wrong was an out-of-bounds read rather than merely
+    # a bad distribution. Masking against a positive mask clears the high bits
+    # along with the sign, so the fold has nothing left to do and this is one
+    # expression again.
     fun start(self, key: K) -> Int {
-        var i = hash_of(key) % self.slots.len();
-        if i < 0 {
-            i += self.slots.len();
-        }
-        return i;
+        return hash_of(key) & self.mask();
     }
 
     # Make sure one more entry fits, rehashing if it would not.
@@ -163,17 +155,36 @@ impl<K: Hash, V> HashMap<K, V> {
         if (self.used + 1) * 4 <= self.slots.len() * 3 {
             return;
         }
-        self.rehash(next_prime(self.live * 2 + 1));
+        self.rehash(self.live * 2 + 1);
     }
 
-    # Rebuild into a table of `cap` slots, dropping every tombstone on the way.
+    # Rebuild the table, dropping every tombstone on the way. Also the way to
+    # *pre-size* one: `m.rehash(n)` before a bulk insert skips the repeated
+    # doubling, which is worth a great deal more than any constant factor in
+    # here.
     #
-    # Re-inserting through `insert` cannot recurse into another rehash: `cap` is
-    # at least `2 * live + 1`, which keeps every one of the `live` inserts under
-    # the 3/4 load, and the minimum capacity of 7 covers the empty case.
+    # **`cap` is a request rather than a command**, and it has to be, because an
+    # impl method has no visibility control — every method on this type is public
+    # whether or not it wants to be, so this one is reachable with any Int a
+    # program cares to pass. Masking only works on a power of two: given 5 slots
+    # the mask would be 4, every probe would visit slots 0 and 4 alone, and
+    # `(i + 1) & 4` would never leave 0. So the request is rounded up to a power
+    # of two, and raised to what the live entries need if it is below that.
+    # Under the old prime-and-modulo scheme any capacity at all was merely
+    # suboptimal; under a mask a wrong one is silently broken, which is what
+    # makes the rounding part of the change rather than a nicety.
+    #
+    # Rounding is also what keeps the re-insert loop from recursing: the result
+    # is at least `2 * live + 1`, so every one of the `live` inserts stays under
+    # the 3/4 load and none of them triggers a rehash of its own.
     fun rehash(self, cap: Int) {
+        var want = cap;
+        var need = self.live * 2 + 1;
+        if want < need {
+            want = need;
+        }
         var old = self.slots;
-        var fresh: [Slot<K, V>] = empty_slots(cap);
+        var fresh: [Slot<K, V>] = empty_slots(capacity_for(want));
         self.slots = fresh;
         self.live = 0;
         self.used = 0;
@@ -201,7 +212,17 @@ impl<K: Hash, V> HashMap<K, V> {
         self.reserve_one();
         var i = self.start(key);
         var tomb = 0 - 1;
-        while true {
+        # Bounded like the two searches below, rather than the `while true` this
+        # used to be. The probe genuinely cannot run out of slots — `reserve_one`
+        # has just guaranteed a free one — so the bound is never what ends the
+        # loop, and it is here for what happens when the invariant it rests on is
+        # broken. Masking makes that failure sharp: a capacity that is not a
+        # power of two leaves `(i + 1) & mask` cycling over a handful of indices
+        # forever, so an unbounded probe would hang the program rather than
+        # report anything. A wrong answer is bad and a diagnosable error is
+        # tolerable; a hang tells nobody anything.
+        var steps = 0;
+        while steps <= self.slots.len() {
             match self.slots[i] {
                 Slot::Empty => {
                     if tomb < 0 {
@@ -226,15 +247,10 @@ impl<K: Hash, V> HashMap<K, V> {
                     }
                 },
             }
-            i += 1;
-            if i == self.slots.len() {
-                i = 0;
-            }
+            i = (i + 1) & self.mask();
+            steps += 1;
         }
-        # The probe always meets an `Empty`, because `reserve_one` has just
-        # guaranteed a free slot — so this is unreachable, and only written
-        # because the checker reads `while true` as a loop like any other.
-        return Option::None;
+        return panic("std::map: probe found no free slot — capacity is not a power of two");
     }
 
     # The value filed under `key`, or `None`.
@@ -256,10 +272,7 @@ impl<K: Hash, V> HashMap<K, V> {
                     }
                 },
             }
-            i += 1;
-            if i == self.slots.len() {
-                i = 0;
-            }
+            i = (i + 1) & self.mask();
             steps += 1;
         }
         return Option::None;
@@ -298,10 +311,7 @@ impl<K: Hash, V> HashMap<K, V> {
                     }
                 },
             }
-            i += 1;
-            if i == self.slots.len() {
-                i = 0;
-            }
+            i = (i + 1) & self.mask();
             steps += 1;
         }
         return Option::None;
@@ -311,7 +321,7 @@ impl<K: Hash, V> HashMap<K, V> {
     # holding it sees the emptying too — and the slot array is replaced rather
     # than walked, so the tombstones go with the entries.
     fun clear(self) {
-        var fresh: [Slot<K, V>] = empty_slots(7);
+        var fresh: [Slot<K, V>] = empty_slots(8);
         self.slots = fresh;
         self.live = 0;
         self.used = 0;

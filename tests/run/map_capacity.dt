@@ -1,0 +1,110 @@
+# What a masked table has to be defensive about.
+#
+# `std::map` indexes with `h & (cap - 1)`, which is only a reduction into range
+# when `cap` is a power of two. Given 5 slots the mask would be 4, every probe
+# would visit slots 0 and 4 alone, and `(i + 1) & 4` would never leave 0 — so a
+# capacity that is not a power of two is not merely suboptimal here, it is
+# silently broken. Under the prime-and-modulo scheme it replaced, any capacity
+# at all worked.
+#
+# That matters because an impl method has no visibility control: `rehash` is
+# public whether it wants to be or not, and it is also the documented way to
+# pre-size a map before a bulk insert. So it rounds its argument up rather than
+# trusting it, and this pins that.
+#
+# The second half is the other thing masking changed: a hash spans the whole of
+# `Int`, and roughly half of them are negative. `%` kept the sign of its left
+# operand and needed a fold; `&` against a positive mask clears the sign along
+# with the high bits. Getting that wrong is an out-of-bounds read, so the keys
+# below are chosen to include hashes on both sides of zero.
+#> rehash(5) survives: 40 true
+#> rehash(0) survives: 40 true
+#> rehash(1000) survives: 40 true
+#> negative hashes: 400 true
+#> presized matches grown: true
+use std::io::print;
+use std::map::HashMap;
+use std::hash::hash_of;
+use std::array;
+use std::sort;
+
+fun fill(m: HashMap<Int, Int>, n: Int) {
+    var i = 0;
+    while i < n {
+        m.insert(i, i * 3);
+        i += 1;
+    }
+}
+
+fun all_present(m: HashMap<Int, Int>, n: Int) -> Bool {
+    var i = 0;
+    while i < n {
+        match m.get(i) {
+            Option::Some(v) => {
+                if v != i * 3 {
+                    return false;
+                }
+            },
+            Option::None => {
+                return false;
+            },
+        }
+        i += 1;
+    }
+    # and a key that was never inserted must still answer None
+    match m.get(n + 1) {
+        Option::Some(v) => {
+            return false;
+        },
+        Option::None => {},
+    }
+    return true;
+}
+
+fun main() {
+    # a capacity that is not a power of two, one that is far too small, and one
+    # far larger than needed — all have to leave a working table
+    var a: HashMap<Int, Int> = HashMap::new();
+    fill(a, 40);
+    a.rehash(5);
+    print("rehash(5) survives: {a.len()} {all_present(a, 40)}");
+
+    var b: HashMap<Int, Int> = HashMap::new();
+    fill(b, 40);
+    b.rehash(0);
+    print("rehash(0) survives: {b.len()} {all_present(b, 40)}");
+
+    var c: HashMap<Int, Int> = HashMap::new();
+    fill(c, 40);
+    c.rehash(1000);
+    print("rehash(1000) survives: {c.len()} {all_present(c, 1000 - 960)}");
+
+    # ── hashes on both sides of zero ──────────────────────────────────────────
+    #
+    # `mix` spreads across the whole of `Int`, so a run of small keys already
+    # produces plenty of negative hashes; count them so this test fails loudly
+    # if that ever stops being true and the case stops being covered.
+    var negatives = 0;
+    var i = 0;
+    while i < 400 {
+        if hash_of(i) < 0 {
+            negatives += 1;
+        }
+        i += 1;
+    }
+    var d: HashMap<Int, Int> = HashMap::new();
+    fill(d, 400);
+    print("negative hashes: {d.len()} {negatives > 100 and all_present(d, 400)}");
+
+    # pre-sizing must not change what the map contains, only how it got there
+    var grown: HashMap<Int, Int> = HashMap::new();
+    fill(grown, 200);
+    var presized: HashMap<Int, Int> = HashMap::new();
+    presized.rehash(400);
+    fill(presized, 200);
+    var ks1 = grown.keys();
+    ks1.sort();
+    var ks2 = presized.keys();
+    ks2.sort();
+    print("presized matches grown: {ks1 == ks2 and grown.len() == presized.len()}");
+}

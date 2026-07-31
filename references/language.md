@@ -2082,10 +2082,21 @@ s.contains(4); s.remove(4); s.to_array();
 - **Open addressing with linear probing**, the shape the VM's own intern table
   already has. A removed slot becomes a **tombstone** rather than empty,
   because a probe that stopped there would miss keys that had walked past it.
-- **Capacities are primes.** With no `&`, the mask trick that forces
-  power-of-two capacities elsewhere is unavailable, so the reduction is `%` and
-  a prime is its natural partner. Growth is at 3/4 load, measured including
-  tombstones so an insert/remove workload cleans rather than merely grows.
+- **Capacities are powers of two and the reduction is `h & (cap - 1)`** (primes
+  and `%` until milestone 66, when `&` existed to make the ordinary choice
+  available). Masking reads only a hash's low bits, which is safe here because
+  `Hash` writes into a `Hasher` rather than returning a number — so every hash
+  reaching the table has been through `mix`, whose last step brings the high
+  bits down, and a program cannot supply a raw one. The sign looks after itself
+  too: masking clears it, where `%` kept the sign of its left operand and needed
+  a fold. Growth is at 3/4 load, measured including tombstones so an
+  insert/remove workload cleans rather than merely grows.
+- **`m.rehash(n)` pre-sizes a map**, and is worth far more than any constant
+  factor inside it — building a 20 000-entry map pre-sized is several times
+  faster than letting it double. `n` is a request: it is rounded up to a power
+  of two and raised to what the live entries need, because an impl method has no
+  visibility control and a capacity that is not a power of two would leave every
+  probe cycling over a handful of slots.
 - **Iteration order is unspecified** — slot order, which is hash order, and it
   changes when the table rehashes. Sort if you need an order; a test that prints
   a map without sorting is testing the hash function.
