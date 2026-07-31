@@ -28,6 +28,26 @@ implemented, with the not-yet-implemented table), `architecture.md`
 `grammar.ebnf`. **When you change syntax, pipeline behavior, or the runtime
 subset, update the matching references/ file in the same change.** Old notes
 in `.vscode/ref/` are historical — do not trust them.
+Completed milestones through 54 are archived in `references/history/`; the
+roadmap keeps 55 on. Archive again when it passes ~150KB.
+
+### One narrative, one home
+
+A milestone's full write-up goes in **the commit body**, once. Everything else
+points at it:
+
+- `roadmap.md` Done entry: ~8 lines — what shipped, the SHA, which
+  `references/` sections cover it, the one finding, what's left over.
+- `references/` prose: what the language/compiler *does now*, not the story of
+  arriving at it. No milestone narration.
+- A test file: one or two lines on what it pins. Rationale lives in
+  `references/`.
+- A new code comment: state the non-obvious invariant and stop. No 8-line
+  block over a 10-line function; existing comments stay as they are.
+
+Prose is output tokens, which cost several times what reading does, so the same
+paragraph written three times is the most expensive habit available. Prefer
+short. Don't re-explain what the diff already shows.
 
 ## Standard library
 
