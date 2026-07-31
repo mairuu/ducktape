@@ -9,13 +9,11 @@
 # bare `Mul` still means `Mul<Self>`, so `impl Mul for V2` and `fun twice<T:
 # Add>` say exactly what they said before, and nothing in `std` moved.
 #
-# The output stays `Self`. `V2 * 2.0` is a `V2` because scaling a vector does
-# not change what it is — an operator returns its left operand's type, which is
-# the same reading that lets `a.cmp(b) < 0` leave the outer comparison numeric.
-# What that gives up is an `Output` associated type, and the reason is in
-# `references/roadmap.md`: `T: Mul<Output = T>` is an equality binding naming
-# its own subject, and while a *bound* may now do that, an `Output` would break
-# every generic use of these traits before it fixed one.
+# Every result here is the left operand's type, which was all milestone 75 could
+# say: `V2 * 2.0` is a `V2` because scaling a vector does not change what it is.
+# The `type Output` lines are milestone 76's, and each one here writes down the
+# answer this file already had. What that milestone *adds* — a result that is
+# neither operand's type — is `ops_output.dt`.
 
 #> 3.0
 #> 4.5
@@ -34,12 +32,14 @@ struct V2 { x: Float, y: Float }
 # the homogeneous spelling, unchanged by the milestone: `Add` with no argument
 # is `Add<Self>`, which is `Add<V2>` here.
 impl Add for V2 {
+    type Output = V2;
     fun add(self, other: V2) -> V2 {
         return V2 { x: self.x + other.x, y: self.y + other.y };
     }
 }
 
 impl Mul for V2 {
+    type Output = V2;
     fun mul(self, other: V2) -> V2 {
         return V2 { x: self.x * other.x, y: self.y * other.y };
     }
@@ -49,12 +49,14 @@ impl Mul for V2 {
 # Coherence lets them stand for milestone 28's reason — they differ in the
 # trait's argument — and the operator now *reads* that argument.
 impl Mul<Float> for V2 {
+    type Output = V2;
     fun mul(self, k: Float) -> V2 {
         return V2 { x: self.x * k, y: self.y * k };
     }
 }
 
 impl Mul<Int> for V2 {
+    type Output = V2;
     fun mul(self, k: Int) -> V2 {
         var f = Float::from(k);
         return V2 { x: self.x * f, y: self.y * f };
@@ -64,22 +66,26 @@ impl Mul<Int> for V2 {
 # `Neg` has no right operand, so it never grew a parameter: it is the one
 # operator trait still spelled exactly as milestone 55 wrote it.
 impl Neg for V2 {
+    type Output = V2;
     fun neg(self) -> V2 { return V2 { x: 0.0 - self.x, y: 0.0 - self.y }; }
 }
 
 # a bound with no argument still means the homogeneous impl, which is the whole
-# point of the default — this function is byte-identical to what it was.
-fun twice<T: Add>(v: T) -> T { return v + v; }
+# point of the default. The `Output = T` is milestone 76's cost: there is no
+# default for an associated type, so a bound that does not name the result gets
+# an opaque `T.Output` back and cannot return it as a `T`.
+fun twice<T: Add<Output = T>>(v: T) -> T { return v + v; }
 
-# and a bound may now *name* its subject, which is what the default expands to.
-# Written out here so the expansion is a thing the language can say, not a
-# private spelling of the compiler's.
-fun thrice<T: Add<T>>(v: T) -> T { return v + v + v; }
+# and a bound may *name* its subject — in both halves. `Add<T, Output = T>` is
+# the argument and the binding both pointing back at the bounded parameter,
+# which is what the defaults expand to and what milestone 75 made expressible.
+fun thrice<T: Add<T, Output = T>>(v: T) -> T { return v + v + v; }
 
 struct Cents { v: Int }
 
 # heterogeneity is not only about a scalar: two unrelated types, one operator.
 impl Add<Int> for Cents {
+    type Output = Cents;
     fun add(self, n: Int) -> Cents { return Cents { v: self.v + n }; }
 }
 

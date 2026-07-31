@@ -148,12 +148,33 @@ typedef struct {
 // (check_bounds_satisfied). NULL when the parameter only carries trait bounds
 // for this name; the two kinds merge into one entry, since `J: Iterator<Item =
 // I.Item>` and `where J.Item: Ord` constrain the same projection.
-typedef struct {
+//
+// `assoc_bounds` is the same list one level down, and exists for exactly one
+// spelling: `where Self.Item: Add<Output = Self.Item>` (milestone 76), a
+// binding whose *subject* is a projection rather than a parameter. It is the
+// only way a bounded generic can say what an operator returns, so it is what
+// makes `Output` writable at a bound. Depth stops here — a nested entry is
+// reached only through a trait ref's bindings, and nothing gives a third level
+// a subject to name (`T.Item.Inner` is already rejected as a where-lhs).
+//
+// `owner` is the trait that *declares* the name, and it is half of the entry's
+// key rather than a note on it: an impl is searched for the binding, and a name
+// alone says neither which impl nor which entry. That was invisible while every
+// associated type in the language had a unique name — until milestone 76,
+// `Item` was the only one — and became load-bearing the moment all six
+// `std::ops` traits declared an `Output`, since `T: Add<Output = T> +
+// Mul<Output = Int>` is then two entries sharing a name. See
+// impl_index_assoc_type, which takes it as a filter.
+typedef struct AssocBound AssocBound;
+struct AssocBound {
   StringView name; // the associated type's name, e.g. "Item"
+  TraitDef *owner; // the trait declaring it, e.g. Iterator (never NULL)
   Type **bounds;   // TY_TRAIT refs it must satisfy, e.g. [Ord]
   int bound_count;
-  Type *equals; // the type it is required to *be*, or NULL
-} AssocBound;
+  Type *equals;             // the type it is required to *be*, or NULL
+  AssocBound *assoc_bounds; // bindings on *this* projection's own assoc types
+  int assoc_bound_count;
+};
 
 // TY_GENERIC — an unresolved type parameter like T
 typedef struct {

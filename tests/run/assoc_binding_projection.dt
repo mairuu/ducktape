@@ -1,0 +1,53 @@
+# Milestone 76 — an equality binding whose *subject* is a projection.
+#
+# `where I.Item: Iterator<Item = Int>` was rejected outright before this
+# milestone ("it can only constrain a type parameter's own associated type"),
+# because a binding is recorded on the thing being bounded and a projection had
+# nowhere to record one. It does now, one level down, and the discharge is the
+# same one milestone 54 gave the parameter case: `I.Item.Item` is never built
+# as a projection at all, it simply *is* `Int`, so nothing downstream has two
+# spellings to reconcile.
+#
+# The shape `std::ops` needed is the self-referential version of this — see
+# `ops_output.dt` — but the general form is what was actually implemented, and
+# this is it: a nested binding to an unrelated type.
+
+#> 2
+#> 8
+
+use std::iter::Iterator;
+use std::option::Option;
+use std::io::print;
+
+# `inner.next()` is an `Option<I.Item.Item>`, and the binding is what makes that
+# an `Option<Int>` — so `+ 1` type-checks with no numeric bound in sight.
+fun first_of_first<I: Iterator>(it: I) -> Int where I.Item: Iterator<Item = Int> {
+    var inner = it.next().unwrap();
+    return inner.next().unwrap() + 1;
+}
+
+struct Count { n: Int, }
+impl Iterator for Count {
+    type Item = Int;
+    fun next(self) -> Option<Int> {
+        if self.n > 9 { return Option::None; }
+        var v = self.n;
+        self.n = self.n + 1;
+        return Option::Some(v);
+    }
+}
+
+struct Outer { done: Bool, at: Int, }
+impl Iterator for Outer {
+    type Item = Count;
+    fun next(self) -> Option<Count> {
+        if self.done { return Option::None; }
+        self.done = true;
+        return Option::Some(Count { n: self.at });
+    }
+}
+
+fun main() {
+    print(first_of_first(Outer { done: false, at: 1 }));
+    print(first_of_first(Outer { done: false, at: 7 }));
+}

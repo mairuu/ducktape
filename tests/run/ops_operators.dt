@@ -10,12 +10,14 @@ use std::io::print;
 struct V2 { x: Int, y: Int }
 
 impl Add for V2 {
+    type Output = V2;
     fun add(self, other: V2) -> V2 {
         return V2 { x: self.x + other.x, y: self.y + other.y };
     }
 }
 
 impl Sub for V2 {
+    type Output = V2;
     fun sub(self, other: V2) -> V2 {
         return V2 { x: self.x - other.x, y: self.y - other.y };
     }
@@ -25,12 +27,14 @@ impl Sub for V2 {
 # operator to select an impl by its right operand, which no written form of
 # selection reaches.
 impl Mul for V2 {
+    type Output = V2;
     fun mul(self, other: V2) -> V2 {
         return V2 { x: self.x * other.x, y: self.y * other.y };
     }
 }
 
 impl Neg for V2 {
+    type Output = V2;
     fun neg(self) -> V2 { return V2 { x: -self.x, y: -self.y }; }
 }
 
@@ -41,15 +45,15 @@ impl Display for V2 {
 # A bound is what lets a generic body use an operator at all, and it
 # instantiates at a struct and at a primitive alike — the impls `std::ops` ships
 # for `Int`/`Float`/`String` are what make the second work.
-fun twice<T: Add>(v: T) -> T { return v + v; }
+fun twice<T: Add<Output = T>>(v: T) -> T { return v + v; }
 
-fun negate<T: Neg>(v: T) -> T { return -v; }
+fun negate<T: Neg<Output = T>>(v: T) -> T { return -v; }
 
 # `/` and `%` on a type parameter are the same rewrite: `Int` is only reachable
 # through its impl here, since a concrete `10 / 3` would take the opcode.
-fun quot<T: Div>(a: T, b: T) -> T { return a / b; }
+fun quot<T: Div<Output = T>>(a: T, b: T) -> T { return a / b; }
 
-fun rest<T: Rem>(a: T, b: T) -> T { return a % b; }
+fun rest<T: Rem<Output = T>>(a: T, b: T) -> T { return a % b; }
 
 fun main() {
     var a = V2 { x: 1, y: 2 };

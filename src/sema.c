@@ -141,7 +141,8 @@ void subst_init(Subst *s, StringView *params, Type **args, int count) {
 #define MAX_BOUNDS 16
 
 static Type *impl_index_assoc_type(ImplIndex *idx, Type *self_type,
-                                   StringView name, Allocator *al);
+                                   StringView name, TraitDef *owner,
+                                   Allocator *al);
 
 // recursively replace TY_GENERIC nodes whose .name matches an entry.
 //
@@ -302,8 +303,8 @@ static Type *subst_apply_(const Subst *s, ImplIndex *impls, Type *t, bool total,
       // to. Recurse on the answer: a pass-through adapter binds `Item` to a
       // projection of its own (`type Item = I.Item`), so one lookup can land
       // on another projection rather than on the element type.
-      Type *bound =
-          impl_index_assoc_type(impls, base, t->as.assoc.assoc_name, al);
+      Type *bound = impl_index_assoc_type(impls, base, t->as.assoc.assoc_name,
+                                          t->as.assoc.trait, al);
       if (bound != NULL) {
         return subst_apply(s, bound, al);
       }
@@ -340,6 +341,58 @@ static void infer_note_explicit_bound(InferCtx *ctx, Type *param, Type *arg,
   }
   ctx->explicit_bounds[ctx->explicit_bound_count++] =
       (ExplicitBound){.param = param, .arg = arg, .span = span};
+}
+
+// Rewrite every type inside an associated-type bound list, nested list and
+// all. Two callers rewrite such a list — a substitution, and a projection out
+// of a trait's terms — and they differ only in the two functions, so the walk
+// is written once. Written once is also what keeps the nested level from being
+// forgotten by one of them: a `where T.Item: Add<Output = T.Item>` whose
+// promise still spelled the *definition's* terms after instantiation would be
+// compared against a concrete type and always disagree.
+//
+// The trait refs and the plain types take different functions because a bound
+// position is not an ordinary type position — see trait_project_bound, where
+// only a trait reference's *arguments* move.
+typedef Type *(*AssocMapFn)(void *ctx, Type *t);
+
+static AssocBound *assoc_bounds_map(const AssocBound *src, int count,
+                                    AssocMapFn map_bound, AssocMapFn map_type,
+                                    void *fctx, bool *changed, Allocator *al) {
+  if (count == 0) {
+    return NULL;
+  }
+  AssocBound *out = al_alloc(al, sizeof(AssocBound) * (size_t)count);
+  for (int a = 0; a < count; a++) {
+    out[a] = src[a];
+    Type **traits = al_alloc(al, sizeof(Type *) * (size_t)src[a].bound_count);
+    for (int b = 0; b < src[a].bound_count; b++) {
+      traits[b] = map_bound(fctx, src[a].bounds[b]);
+      *changed |= traits[b] != src[a].bounds[b];
+    }
+    out[a].bounds = traits;
+    if (src[a].equals != NULL) {
+      out[a].equals = map_type(fctx, src[a].equals);
+      *changed |= out[a].equals != src[a].equals;
+    }
+    out[a].assoc_bounds =
+        assoc_bounds_map(src[a].assoc_bounds, src[a].assoc_bound_count,
+                         map_bound, map_type, fctx, changed, al);
+  }
+  return out;
+}
+
+// The substitution flavour of the walk above. Partial, for the reason its
+// caller documents: a bound may name an *enclosing* scope's parameters, which
+// this substitution deliberately does not open.
+typedef struct {
+  const Subst *s;
+  Allocator *al;
+} SubstMapCtx;
+
+static Type *subst_map_type(void *fctx, Type *t) {
+  SubstMapCtx *m = fctx;
+  return subst_apply_(m->s, NULL, t, /*total=*/false, m->al);
 }
 
 // build a substitution mapping generic type parameters to either fresh unknowns
@@ -404,23 +457,10 @@ Subst infer_open_generics(InferCtx *ctx, Type **params, int count,
     // `J: Iterator<Item = I.Item>` in the type it is required to *be* — the
     // second is the whole point of an equality binding, since `I` is what the
     // caller is about to solve.
-    AssocBound assoc[MAX_BOUNDS];
-    for (int a = 0; a < g->as.generic.assoc_bound_count && a < MAX_BOUNDS;
-         a++) {
-      const AssocBound *src = &g->as.generic.assoc_bounds[a];
-      assoc[a] = *src;
-      Type **traits = al_alloc(al, sizeof(Type *) * (size_t)src->bound_count);
-      for (int b = 0; b < src->bound_count; b++) {
-        traits[b] = subst_apply_(&s, NULL, src->bounds[b], /*total=*/false, al);
-        changed |= traits[b] != src->bounds[b];
-      }
-      assoc[a].bounds = traits;
-      if (src->equals != NULL) {
-        assoc[a].equals =
-            subst_apply_(&s, NULL, src->equals, /*total=*/false, al);
-        changed |= assoc[a].equals != src->equals;
-      }
-    }
+    SubstMapCtx mctx = {.s = &s, .al = al};
+    AssocBound *assoc = assoc_bounds_map(
+        g->as.generic.assoc_bounds, g->as.generic.assoc_bound_count,
+        subst_map_type, subst_map_type, &mctx, &changed, al);
 
     if (!changed) {
       continue;
@@ -882,8 +922,8 @@ Type *infer_apply(InferCtx *ctx, Type *ty, Allocator *al) {
     Type *bound = NULL;
     if (base->kind != TY_UNKNOWN && base->kind != TY_GENERIC &&
         base->kind != TY_TRAIT && ctx->impls != NULL) {
-      bound =
-          impl_index_assoc_type(ctx->impls, base, ty->as.assoc.assoc_name, al);
+      bound = impl_index_assoc_type(ctx->impls, base, ty->as.assoc.assoc_name,
+                                    ty->as.assoc.trait, al);
     }
     if (bound != NULL) {
       return infer_apply(ctx, bound, al);
@@ -1129,7 +1169,8 @@ static void note_blocking_bound(DiagBag *diags, ImplIndex *idx, Type *self_type,
       // `Iterator` impl for a reason no part of that type shows.
       for (int a = 0; a < param->as.generic.assoc_bound_count; a++) {
         const AssocBound *ab = &param->as.generic.assoc_bounds[a];
-        Type *projected = impl_index_assoc_type(idx, arg, ab->name, al);
+        Type *projected =
+            impl_index_assoc_type(idx, arg, ab->name, ab->owner, al);
         if (projected == NULL) {
           continue;
         }
@@ -1278,7 +1319,7 @@ static void check_bounds_satisfied(InferCtx *ictx, TypeChecker *tc,
     // without a `where J.Item: Ord`), which was silently accepted and surfaced
     // as a codegen error inside `largest` at the instantiation.
     bool abstract_proj = false;
-    Type *projected = impl_index_assoc_type(idx, arg, ab->name, al);
+    Type *projected = impl_index_assoc_type(idx, arg, ab->name, ab->owner, al);
     if (projected == NULL) {
       TraitDef *owner = generic_assoc_owner(arg, ab->name);
       if (owner == NULL) {
@@ -2136,23 +2177,40 @@ static Type *trait_ref_resolve(TypeResolver *r, TraitDef *def,
 // list. The two predicate kinds meet here: `J: Iterator<Item = I.Item>` and
 // `where J.Item: Ord` constrain the same projection, so they merge into one
 // entry rather than sitting in two lists.
-static AssocBound *assoc_bound_entry(ResolveCtx *rctx, AssocBound *assoc,
+// Taken by pointer-to-array so a *nested* list can be allocated on demand: the
+// outer list is a stack buffer the caller owns, but an entry's own list exists
+// only for the rare `Add<Output = ..>` shape and is not worth reserving on
+// every entry.
+static AssocBound *assoc_bound_entry(ResolveCtx *rctx, AssocBound **assoc,
                                      int *assoc_count, StringView name,
-                                     Span span) {
+                                     TraitDef *owner, Span span) {
+  // Keyed by trait as well as name. `where T.Item: A, T.Item: B` is still one
+  // entry, but `T: Add<Output = T> + Mul<Output = Int>` is two — the name is
+  // shared and the projections are not, and merging them would report the
+  // second binding as a contradiction of the first. Nothing could reach that
+  // before milestone 76, when `Item` was the only associated type in the
+  // language; all six `std::ops` traits declaring an `Output` puts it one line
+  // away.
   for (int k = 0; k < *assoc_count; k++) {
-    if (sv_equal(assoc[k].name, name)) {
-      return &assoc[k];
+    if (sv_equal((*assoc)[k].name, name) && (*assoc)[k].owner == owner) {
+      return &(*assoc)[k];
     }
   }
   if (*assoc_count >= MAX_BOUNDS) {
     diag_error(rctx->diags, span, "too many associated-type bounds");
     return NULL;
   }
-  AssocBound *entry = &assoc[(*assoc_count)++];
+  if (*assoc == NULL) {
+    *assoc = al_alloc_zero(rctx->al, sizeof(AssocBound) * MAX_BOUNDS);
+  }
+  AssocBound *entry = &(*assoc)[(*assoc_count)++];
   entry->name = name;
+  entry->owner = owner;
   entry->bounds = al_alloc(rctx->al, sizeof(Type *) * MAX_BOUNDS);
   entry->bound_count = 0;
   entry->equals = NULL;
+  entry->assoc_bounds = NULL;
+  entry->assoc_bound_count = 0;
   return entry;
 }
 
@@ -2163,14 +2221,14 @@ static AssocBound *assoc_bound_entry(ResolveCtx *rctx, AssocBound *assoc,
 // TY_TRAIT would make the reference non-canonical and break the pointer
 // identity every bound comparison rests on.
 static void resolve_assoc_bindings(ResolveCtx *rctx, const TraitRef *ref,
-                                   TraitDef *trait, AssocBound *assoc,
+                                   TraitDef *trait, AssocBound **assoc,
                                    int *assoc_count) {
   for (int b = 0; b < ref->binding_count; b++) {
     const AssocBindingNode *binding = &ref->bindings[b];
     if (assoc == NULL) {
       // a binding is a promise about the type being bounded, and here there is
-      // none to make it about: `where I.Item: Iterator<Item = X>` would be
-      // constraining a projection's projection.
+      // none to make it about — an impl head or a supertrait, where the bound
+      // is not attached to a parameter at all.
       diag_error(rctx->diags, binding->span,
                  "an associated-type binding is not allowed here; it can only "
                  "constrain a type parameter's own associated type");
@@ -2188,8 +2246,9 @@ static void resolve_assoc_bindings(ResolveCtx *rctx, const TraitRef *ref,
     if (type_is_poison(bound_to)) {
       continue; // already diagnosed
     }
-    AssocBound *entry = assoc_bound_entry(rctx, assoc, assoc_count,
-                                          binding->name, binding->span);
+    AssocBound *entry = assoc_bound_entry(
+        rctx, assoc, assoc_count, binding->name,
+        trait_flat_assoc_owner(trait, binding->name), binding->span);
     if (entry == NULL) {
       continue;
     }
@@ -2213,7 +2272,7 @@ static void resolve_assoc_bindings(ResolveCtx *rctx, const TraitRef *ref,
 // defaulted trait argument's `Self` resolves to (`T: Add` ⇒ `Add<T>`).
 static void resolve_bound_refs(ResolveCtx *rctx, const TraitBound *bound,
                                Type *subject, Type **out, int *count,
-                               AssocBound *assoc, int *assoc_count) {
+                               AssocBound **assoc, int *assoc_count) {
   for (int i = 0; i < bound->ref_count; i++) {
     const TraitRef *ref = &bound->refs[i];
     if (ref->path.count > 1) {
@@ -2274,7 +2333,8 @@ static Type *resolve_generic_param(ResolveCtx *rctx, const TypeParamNode *param,
   int count = 0;
   // zeroed: an entry's `equals` stays NULL unless a binding fills it, and a
   // stale one would make ty_assoc rewrite a projection to garbage.
-  AssocBound assoc[MAX_BOUNDS] = {0};
+  AssocBound assoc_storage[MAX_BOUNDS] = {0};
+  AssocBound *assoc = assoc_storage;
   int assoc_count = 0;
 
   // what a defaulted trait argument's `Self` means here: the parameter being
@@ -2285,14 +2345,14 @@ static Type *resolve_generic_param(ResolveCtx *rctx, const TypeParamNode *param,
 
   if (param->inline_bound.ref_count > 0) {
     resolve_bound_refs(rctx, &param->inline_bound, subject, bounds, &count,
-                       assoc, &assoc_count);
+                       &assoc, &assoc_count);
   }
   if (where != NULL) {
     for (int i = 0; i < where->pred_count; i++) {
       const WherePred *pred = &where->preds[i];
       if (pred->lhs.segment_count == 1 &&
           sv_equal(pred->lhs.segments[0], param->name)) {
-        resolve_bound_refs(rctx, &pred->bound, subject, bounds, &count, assoc,
+        resolve_bound_refs(rctx, &pred->bound, subject, bounds, &count, &assoc,
                            &assoc_count);
       }
     }
@@ -2336,7 +2396,8 @@ static Type *resolve_generic_param(ResolveCtx *rctx, const TypeParamNode *param,
       // reading `T: A, T: B` already gets — and the same entry an
       // `Iterator<Item = ..>` binding may already have made.
       AssocBound *entry =
-          assoc_bound_entry(rctx, assoc, &assoc_count, aname, pred->lhs.span);
+          assoc_bound_entry(rctx, &assoc, &assoc_count, aname,
+                            generic_assoc_owner(&probe, aname), pred->lhs.span);
       if (entry == NULL) {
         continue;
       }
@@ -2361,8 +2422,12 @@ static Type *resolve_generic_param(ResolveCtx *rctx, const TypeParamNode *param,
               ? ty_assoc(subject, aname, generic_assoc_owner(&probe, aname),
                          rctx->al)
               : NULL;
+      // A binding written here constrains the *projection's* own associated
+      // type (`where T.Item: Add<Output = T.Item>`), so it goes on the entry
+      // rather than on the parameter — see AssocBound's nested list.
       resolve_bound_refs(rctx, &pred->bound, projected, entry->bounds,
-                         &entry->bound_count, /*assoc=*/NULL, NULL);
+                         &entry->bound_count, &entry->assoc_bounds,
+                         &entry->assoc_bound_count);
     }
   }
   return ty_generic(param->name, bounds, count, assoc, assoc_count, rctx->al);
@@ -3057,6 +3122,32 @@ static Type *trait_project(Type *t, TraitDef *trait, Type *self_to,
 // from the declaration. So `Self` is per *method* rather than per trait —
 // interning makes it the same node for every method that declares no such
 // bound, which is all of them until one does.
+static Type *trait_project_bound(Type *bound_ref, TraitDef *trait,
+                                 Type *self_to, ImplDef *impl, Allocator *al);
+static Type *project_then_subst(Type *t, TraitDef *trait, Type *self_to,
+                                ImplDef *impl, const Subst *impl_subst,
+                                Allocator *al);
+
+// The projection flavour of `assoc_bounds_map`'s two functions.
+typedef struct {
+  TraitDef *trait;
+  Type *self_to;
+  ImplDef *impl;
+  const Subst *impl_subst;
+  Allocator *al;
+} ProjectMapCtx;
+
+static Type *project_map_bound(void *fctx, Type *t) {
+  ProjectMapCtx *m = fctx;
+  return trait_project_bound(t, m->trait, m->self_to, m->impl, m->al);
+}
+
+static Type *project_map_type(void *fctx, Type *t) {
+  ProjectMapCtx *m = fctx;
+  return project_then_subst(t, m->trait, m->self_to, m->impl, m->impl_subst,
+                            m->al);
+}
+
 static Type *trait_self_param(TraitDef *trait, AssocBound *assoc_bounds,
                               int assoc_bound_count, Allocator *al) {
   // bounded by the trait *reference* stating the trait's own parameters as
@@ -3064,6 +3155,32 @@ static Type *trait_self_param(TraitDef *trait, AssocBound *assoc_bounds,
   // makes a call on `self` inside a default body resolve against the very
   // signatures being declared.
   Type *bounds[1] = {trait->self_type};
+
+  // The clause those bounds came from was resolved with `Self` in scope as the
+  // trait *type*, so an `Output = Self.Item` binding spells its subject
+  // `Iterator.Item` — while the body, checked against the parameter being built
+  // here, spells the very same thing `Self.Item`. Two spellings of one subject
+  // is what the equality binding cannot survive: `ty_assoc` hands back what the
+  // binding named, and it would name the wrong one. So project the list onto
+  // the parameter first, against the bound-less spelling of it for the reason
+  // `resolve_self_assoc_bounds` gives — the real one carries the very list this
+  // is building.
+  //
+  // Only the *bindings* need it. A trait bound (`where Self.Item: Ord`) was
+  // already resolved against the projection off this same placeholder, and a
+  // projection is a leaf that `trait_project` leaves alone.
+  if (assoc_bound_count > 0) {
+    Subst empty = subst_empty();
+    ProjectMapCtx m = {.trait = trait,
+                       .self_to = trait_self_param(trait, NULL, 0, al),
+                       .impl = NULL,
+                       .impl_subst = &empty,
+                       .al = al};
+    bool changed = false;
+    assoc_bounds =
+        assoc_bounds_map(assoc_bounds, assoc_bound_count, project_map_bound,
+                         project_map_type, &m, &changed, al);
+  }
   return ty_generic(sv_from_cstr("Self"), bounds, 1, assoc_bounds,
                     assoc_bound_count, al);
 }
@@ -3168,7 +3285,8 @@ static void resolve_self_assoc_bounds(ResolveCtx *rctx, TraitDef *trait_def,
 
   // zeroed: an entry's `equals` stays NULL unless a binding fills it, and a
   // stale one would make ty_assoc rewrite a projection to garbage.
-  AssocBound assoc[MAX_BOUNDS] = {0};
+  AssocBound assoc_storage[MAX_BOUNDS] = {0};
+  AssocBound *assoc = assoc_storage;
   int assoc_count = 0;
 
   for (int i = 0; i < where->pred_count; i++) {
@@ -3225,8 +3343,9 @@ static void resolve_self_assoc_bounds(ResolveCtx *rctx, TraitDef *trait_def,
 
     // `where Self.Item: A, Self.Item: B` is one entry with two traits, the
     // same reading `T: A, T: B` gets.
-    AssocBound *entry =
-        assoc_bound_entry(rctx, assoc, &assoc_count, aname, pred->lhs.span);
+    AssocBound *entry = assoc_bound_entry(
+        rctx, &assoc, &assoc_count, aname,
+        trait_flat_assoc_owner(trait_def, aname), pred->lhs.span);
     if (entry == NULL) {
       continue;
     }
@@ -3243,7 +3362,8 @@ static void resolve_self_assoc_bounds(ResolveCtx *rctx, TraitDef *trait_def,
         ty_assoc(
             trait_self_param(trait_def, /*assoc_bounds=*/NULL, 0, rctx->al),
             aname, trait_flat_assoc_owner(trait_def, aname), rctx->al),
-        entry->bounds, &entry->bound_count, /*assoc=*/NULL, NULL);
+        entry->bounds, &entry->bound_count, &entry->assoc_bounds,
+        &entry->assoc_bound_count);
   }
 
   if (assoc_count == 0) {
@@ -4224,7 +4344,8 @@ static bool check_coerce_dyn(CheckCtx *ctx, Expr *e, Type *actual,
     StringView name = trait->assoc_types[i].name;
     Type *want =
         infer_apply(&ctx->infer, expected->as.dyn.assoc_types[i], ctx->al);
-    Type *got = impl_index_assoc_type(ctx->impls, actual, name, ctx->al);
+    Type *got = impl_index_assoc_type(ctx->impls, actual, name,
+                                      dyn_trait_def(expected), ctx->al);
     if (got == NULL || type_is_poison(want) || type_is_poison(got)) {
       // NULL means the impl is generic enough that no binding is readable
       // here (a bounded `T`); the coercion is re-checked where that parameter
@@ -5536,22 +5657,14 @@ static Type *trait_project_param(Type *param, TraitDef *trait, Type *self_to,
     changed |= bounds[i] != g->bounds[i];
   }
 
-  AssocBound assoc[MAX_BOUNDS];
-  for (int a = 0; a < g->assoc_bound_count && a < MAX_BOUNDS; a++) {
-    const AssocBound *src = &g->assoc_bounds[a];
-    assoc[a] = *src;
-    Type **traits = al_alloc(al, sizeof(Type *) * (size_t)src->bound_count);
-    for (int b = 0; b < src->bound_count; b++) {
-      traits[b] = trait_project_bound(src->bounds[b], trait, self_to, impl, al);
-      changed |= traits[b] != src->bounds[b];
-    }
-    assoc[a].bounds = traits;
-    if (src->equals != NULL) {
-      assoc[a].equals =
-          project_then_subst(src->equals, trait, self_to, impl, impl_subst, al);
-      changed |= assoc[a].equals != src->equals;
-    }
-  }
+  ProjectMapCtx mctx = {.trait = trait,
+                        .self_to = self_to,
+                        .impl = impl,
+                        .impl_subst = impl_subst,
+                        .al = al};
+  AssocBound *assoc =
+      assoc_bounds_map(g->assoc_bounds, g->assoc_bound_count, project_map_bound,
+                       project_map_type, &mctx, &changed, al);
 
   if (!changed) {
     return param;
@@ -5818,7 +5931,8 @@ static Type *resolve_method_call_typed(CheckCtx *ctx, Expr *expr, Type *self_ty,
     // it — the same deal a type parameter gets, one level down
     const TypeGeneric *g = &self_ty->as.assoc.base->as.generic;
     for (int i = 0; i < g->assoc_bound_count; i++) {
-      if (sv_equal(g->assoc_bounds[i].name, self_ty->as.assoc.assoc_name)) {
+      if (sv_equal(g->assoc_bounds[i].name, self_ty->as.assoc.assoc_name) &&
+          g->assoc_bounds[i].owner == self_ty->as.assoc.trait) {
         bound_count = g->assoc_bounds[i].bound_count;
         bounds = assoc_bounds_rebound(self_ty, g->assoc_bounds[i].bounds,
                                       bound_count, ctx->al);
@@ -7955,9 +8069,9 @@ static Type *trait_project(Type *t, TraitDef *trait, Type *self_to,
       // impl's own module, which conformance already required to see that other
       // impl.
       if (t->as.assoc.trait != trait && impl->module != NULL) {
-        Type *bound =
-            impl_index_assoc_type(&impl->module->visible_impls, impl->self_type,
-                                  t->as.assoc.assoc_name, al);
+        Type *bound = impl_index_assoc_type(
+            &impl->module->visible_impls, impl->self_type,
+            t->as.assoc.assoc_name, t->as.assoc.trait, al);
         if (bound != NULL) {
           return bound;
         }
@@ -8475,7 +8589,8 @@ void tscope_define(TypeScope *scope, StringView name, Type *type,
 // ═══════════════════════════════════════════════════════════════════════════════
 
 static Type *impl_index_assoc_type(ImplIndex *idx, Type *self_type,
-                                   StringView name, Allocator *al);
+                                   StringView name, TraitDef *owner,
+                                   Allocator *al);
 
 // does `t` mention `trait`'s abstract `Self`, either directly or under a
 // projection (`Self.Item`)? Used for object safety: such a type is only
@@ -8951,7 +9066,13 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
       break;
     }
 
-    result = impl_index_assoc_type(r->impls, base, assoc->assoc_name, r->al);
+    // A projection off a *concrete* base written in source (`V2.Output`) names
+    // no trait — there is no syntax for one — so the lookup is by name alone
+    // and a type carrying two impls that bind it answers with the first. The
+    // spelling that does say which trait is the one a bound produces, and that
+    // is the spelling every generic use goes through.
+    result = impl_index_assoc_type(r->impls, base, assoc->assoc_name,
+                                   /*owner=*/NULL, r->al);
     if (result == NULL) {
       char buf[64];
       type_sprintf(base, buf, sizeof(buf));
@@ -9094,7 +9215,8 @@ static bool impl_type_match(Type *pattern, Type *concrete,
 // the resolved type with the matched impl's type params substituted, or NULL
 // if no impl defines it.
 static Type *impl_index_assoc_type(ImplIndex *idx, Type *self_type,
-                                   StringView name, Allocator *al) {
+                                   StringView name, TraitDef *owner,
+                                   Allocator *al) {
   if (type_is_poison(self_type)) {
     return NULL;
   }
@@ -9117,6 +9239,14 @@ static Type *impl_index_assoc_type(ImplIndex *idx, Type *self_type,
     ImplDef *impl = idx->all[i];
     if (impl->assoc_type_count == 0 || impl->self_type == NULL ||
         type_is_poison(impl->self_type)) {
+      continue;
+    }
+    // The name alone does not identify the binding: since milestone 76 all six
+    // `std::ops` traits declare an `Output`, so one self type can carry several
+    // impls each binding that name to something different. `owner` is the trait
+    // that declared it, and NULL means the caller genuinely has no trait in
+    // hand — which is only where the name is known to be unique.
+    if (owner != NULL && impl_trait_def(impl) != owner) {
       continue;
     }
 
@@ -9221,7 +9351,8 @@ static bool impl_bounds_satisfied(ImplDef *impl, Type **args, int n,
     // not apply — the milestone-20 reading, one predicate kind over.
     for (int a = 0; ok && a < param->as.generic.assoc_bound_count; a++) {
       const AssocBound *ab = &param->as.generic.assoc_bounds[a];
-      Type *projected = impl_index_assoc_type(idx, args[j], ab->name, al);
+      Type *projected =
+          impl_index_assoc_type(idx, args[j], ab->name, ab->owner, al);
       if (projected == NULL) {
         continue; // the trait declaring it is not implemented — already
                   // answered
@@ -9960,7 +10091,8 @@ bool impl_index_implements(ImplIndex *idx, Type *type, Type *trait_ref,
     // instantiated (check_bounds_satisfied).
     const TypeGeneric *g = &type->as.assoc.base->as.generic;
     for (int i = 0; i < g->assoc_bound_count; i++) {
-      if (!sv_equal(g->assoc_bounds[i].name, type->as.assoc.assoc_name)) {
+      if (!sv_equal(g->assoc_bounds[i].name, type->as.assoc.assoc_name) ||
+          g->assoc_bounds[i].owner != type->as.assoc.trait) {
         continue;
       }
       Type **abounds = assoc_bounds_rebound(type, g->assoc_bounds[i].bounds,

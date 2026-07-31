@@ -1,0 +1,81 @@
+# Milestone 76 — an operator's result is an associated type.
+#
+# Until now `fun mul(self, other: Rhs) -> Self`, so an operator returned its
+# left operand's type and two things had no spelling at all: a dot product
+# `V2 * V2 -> Float`, whose result is neither operand, and `2.0 * v`, whose
+# left operand is a primitive that can only return itself. Both are here.
+#
+# `Output` is not free the way milestone 75's `Rhs = Self` default was, and the
+# difference is the point: there is no default for an associated type, so a
+# *bound* learns nothing about the result. Under a bare `T: Mul`, `a * b` is an
+# opaque `T.Output` — see `ops_output_unbound.dt`, which is that mistake. A
+# generic keeps its result by naming it, `T: Mul<Output = T>`.
+
+#> 8.5
+#> 3.0
+#> 4.0
+#> 3.0
+#> 6.25
+#> 9
+
+use std::io::print;
+use std::ops::{Add, Mul};
+
+struct V2 { x: Float, y: Float }
+
+# the dot product: both operands are `V2`, the result is a `Float`. There is no
+# `-> Self` that says this, which is the whole reason `Output` exists.
+impl Mul for V2 {
+    type Output = Float;
+    fun mul(self, other: V2) -> Float {
+        return self.x * other.x + self.y * other.y;
+    }
+}
+
+# scaling, the other direction: a `V2` result from a `Float` argument.
+impl Mul<Float> for V2 {
+    type Output = V2;
+    fun mul(self, k: Float) -> V2 {
+        return V2 { x: self.x * k, y: self.y * k };
+    }
+}
+
+# and the reversed spelling, which `-> Self` could never have: the receiver is
+# the primitive, so an impl returning `Self` would have to return a `Float`.
+# `std::ops` already ships `impl Mul for Float`; this one stands beside it
+# because coherence tells the two apart by the trait's argument (milestone 28).
+impl Mul<V2> for Float {
+    type Output = V2;
+    fun mul(self, v: V2) -> V2 {
+        return V2 { x: self * v.x, y: self * v.y };
+    }
+}
+
+impl Add for V2 {
+    type Output = V2;
+    fun add(self, other: V2) -> V2 {
+        return V2 { x: self.x + other.x, y: self.y + other.y };
+    }
+}
+
+# a generic that keeps accumulating has to say the result is its own type. This
+# is the binding naming its own subject that milestone 75 made expressible, now
+# earning its place: without it `v + v` is a `T.Output` and cannot be returned.
+fun twice<T: Add<Output = T>>(v: T) -> T { return v + v; }
+
+# and a generic that does *not* keep it — the result is whatever the impl said,
+# named as a projection. `V2 * V2` is a Float here without this function ever
+# mentioning Float.
+fun square<T: Mul>(v: T) -> T.Output { return v * v; }
+
+fun main() {
+    var a = V2 { x: 1.5, y: 2.0 };
+    var b = V2 { x: 3.0, y: 2.0 };
+
+    print(a * b);        # dot product -> 8.5
+    print((a * 2.0).x);  # V2 * Float  -> 3.0
+    print((2.0 * a).y);  # Float * V2  -> 4.0
+    print(twice(a).x);   # Add<V2>     -> 3.0 ... x is 1.5 + 1.5
+    print(square(a));    # T.Output    -> 6.25
+    print(square(3));    # T.Output    -> 9
+}

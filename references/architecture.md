@@ -775,12 +775,24 @@ Three details are the design:
   naming the reference (`'Cents' does not implement 'Add<Int>'`) rather than an
   argument mismatch on the rewritten call, which was the old message's cost:
   it described the desugaring instead of the mistake.
-- **The result is `Self`, with no `Output`.** A generic use would need
-  `T: Add<Output = T>` — an equality binding naming its own subject, which is
-  writable as of milestone 75 but discharges the projection to the type the
-  *caller* named rather than to what the impl bound it to, so `sum`'s
-  accumulator would be pinned from the wrong side. Kept as a wart rather than
-  built halfway; see `roadmap.md`.
+- **The result is an associated type** (milestone 76). Each trait declares a
+  `type Output` and the method returns `Self.Output`, so a dot product
+  `V2 * V2 -> Float` and a reversed `impl Mul<V2> for Float` both have a
+  spelling. The operator side of this cost nothing: `rewrite_ops_call` builds an
+  `EXPR_METHOD_CALL` and returns whatever `resolve_method_call_typed` says, so
+  changing the trait's return type changed the operator's result with no
+  operator-specific code at all.
+
+  What it cost was a bound. There is no default for an associated type, so
+  `T: Add` says nothing about the result — `a + b` is the opaque `T.Output` —
+  and a generic keeps its accumulator only by writing `T: Add<Output = T>`.
+  The old note here said such a binding "discharges the projection to the type
+  the *caller* named rather than to what the impl bound it to". Half right: it
+  does discharge by rewriting, but the promise is checked against the impl at
+  every instantiation (`check_bounds_satisfied`), which is the trust every bound
+  already rests on. What was genuinely missing was the *projection*-subject form
+  of it — `where Self.Item: Add<Output = Self.Item>`, which `std::iter`'s `sum`
+  and `product` need — and that is what milestone 76 built.
 
 Since `other: Rhs` takes `Self` by default (and, for `Neg`, `-> Self`) these are
 still object-safety violations, so none of the six can be a `dyn`; they are
@@ -1343,9 +1355,22 @@ abstract answer is trusted inside the body because the concrete one is checked
 at every instantiation.
 
 Because a bound is part of what a parameter *is*, `ty_generic` interns on the
-associated-type list too, canonicalising it (by name, then each entry's traits)
-the way it already sorts plain bounds: `I` and `I where I.Item: Ord` accept
-different instantiations and must not share a type.
+associated-type list too, canonicalising it (by name and owning trait, then each
+entry's traits) the way it already sorts plain bounds: `I` and
+`I where I.Item: Ord` accept different instantiations and must not share a type.
+
+**An entry is keyed by the trait as well as the name** (milestone 76). While
+`Item` was the only associated type in the language a name identified an entry,
+and both the bound list and `impl_index_assoc_type` searched by name alone.
+Giving all six `std::ops` traits an `Output` broke that in two places at once:
+`T: Add<Output = T> + Mul<Output = Int>` merged into one entry and reported the
+second binding as contradicting the first, and a `Cents` with two impls binding
+`Output` answered a projection with whichever impl was registered first. So
+`AssocBound` carries the declaring `owner`, the entry lookup and every reader
+match on it, and `impl_index_assoc_type` takes it as a filter — NULL only where
+the caller genuinely has no trait in hand, which is a projection off a concrete
+base written in source (`V2.Output`), the one spelling with no syntax for
+naming a trait.
 
 **An equality binding is a rewrite, not a check.** `J: Iterator<Item = I.Item>`
 is the second predicate kind, stored as `AssocBound.equals` beside the trait
@@ -1356,7 +1381,31 @@ the base parameter's list at *construction*, so building `J.Item` returns
 `infer_apply`, monomorphisation and the VM therefore need nothing — there are
 not two types to reconcile. (One hop suffices and cannot cycle: the stored type
 came through the same constructor, and a bound may only name a parameter
-declared *earlier*.)
+declared *earlier* — or, since milestone 75, the subject itself, which
+`ty_assoc` recognises by *name* and answers with the spelling the caller
+already holds.)
+
+**The subject may itself be a projection** (milestone 76). `where Self.Item:
+Add<Output = Self.Item>` is the shape a reduce over a bounded element type
+needs, and it had been rejected outright — a binding is recorded on the thing
+being bounded, and a projection had nowhere to record one. It does now:
+`AssocBound` carries a nested list of its own, `resolve_bound_refs` is handed
+that list as the sink when the where-lhs names a projection, and `ty_assoc`
+gains the matching second collapse (walk to the `TY_GENERIC` base, find the
+outer entry, find the nested one). Depth stops at two, because only a trait
+ref's bindings build a nested entry and only a where-lhs — capped at one
+associated type — builds a level for them to sit on.
+
+Two things the nesting forced. Every rewriter of an associated-type bound list
+has to reach the nested level or an instantiation would compare a promise still
+spelled in the definition's own terms; the substitution and the `Self`
+projection are the two, so the walk is written once (`assoc_bounds_map`) with
+the differing steps passed in. And `trait_self_param` now *projects* the list it
+is given: the clause was resolved with `Self` in scope as the trait type, so a
+binding spells its subject `Iterator.Item` while the default body — checked
+against the `TY_GENERIC` `Self` being built — spells the same thing `Self.Item`.
+Two spellings is exactly what an equality binding cannot survive, since
+`ty_assoc` hands back what the binding named.
 
 The price of a rewrite is that it must be earned, so the promise is discharged
 in the two places a parameter is bound. `check_bounds_satisfied` compares the

@@ -311,10 +311,21 @@ ending in `return` has type `!` (never), which unifies with anything.
   reads as "an iterator of Ints", and a body may then use its elements as the
   Ints they are without bounding them further.
 
-  The binding names an associated type the trait declares, may not be repeated
-  with two different types, and may only be written where there is a parameter
-  to constrain — not on a `where I.Item: ..` predicate, whose left side is
-  already a projection.
+  The subject may itself be a projection: `where Self.Item: Add<Output =
+  Self.Item>` binds the associated type of an associated type, and is what lets
+  a reduce over a bounded element type keep its accumulator
+  (`tests/run/assoc_binding_projection.dt`). The nesting stops there — a third
+  level has no subject to name, the same reason `T.Item.Inner` is not a
+  `where` left side.
+
+  The binding names an associated type the trait declares and may not be
+  repeated with two different types *for that trait*. Two traits declaring the
+  same name are two different projections, so
+  `T: Add<Output = T> + Mul<Output = Int>` binds both and is not a
+  contradiction (`tests/run/assoc_binding_two_traits.dt`). It may only be
+  written where there is something to constrain — not on a supertrait
+  (`trait Pairs: Iterator<Item = Int>`), which bounds every future impl's
+  `Self` rather than a parameter this declaration owns.
 - A bound may name an *earlier* type parameter of the same list
   (`fun conv<T, U: Into<T>>(v: U) -> T`), which is what a generic trait is for.
   The bound is opened alongside the parameter it mentions, so what gets
@@ -1528,12 +1539,12 @@ the width and precision are literals.
 ### `std::ops`
 
 ```
-pub trait Add<Rhs = Self> { fun add(self, other: Rhs) -> Self; }   # +
-pub trait Sub<Rhs = Self> { fun sub(self, other: Rhs) -> Self; }   # -
-pub trait Mul<Rhs = Self> { fun mul(self, other: Rhs) -> Self; }   # *
-pub trait Div<Rhs = Self> { fun div(self, other: Rhs) -> Self; }   # /
-pub trait Rem<Rhs = Self> { fun rem(self, other: Rhs) -> Self; }   # %
-pub trait Neg             { fun neg(self) -> Self; }               # unary -
+pub trait Add<Rhs = Self> { type Output; fun add(self, other: Rhs) -> Self.Output; }
+pub trait Sub<Rhs = Self> { type Output; fun sub(self, other: Rhs) -> Self.Output; }
+pub trait Mul<Rhs = Self> { type Output; fun mul(self, other: Rhs) -> Self.Output; }
+pub trait Div<Rhs = Self> { type Output; fun div(self, other: Rhs) -> Self.Output; }
+pub trait Rem<Rhs = Self> { type Output; fun rem(self, other: Rhs) -> Self.Output; }
+pub trait Neg             { type Output; fun neg(self) -> Self.Output; }
 ```
 
 What `std::cmp` is to `<`, this is to `+`: a trait decides what the operator
@@ -1543,16 +1554,20 @@ the checker (`tests/run/ops_operators.dt`).
 ```
 struct V2 { x: Int, y: Int }
 impl Add for V2 {
+    type Output = V2;
     fun add(self, other: V2) -> V2 {
         return V2 { x: self.x + other.x, y: self.y + other.y };
     }
 }
-impl Neg for V2 { fun neg(self) -> V2 { return V2 { x: -self.x, y: -self.y }; } }
+impl Neg for V2 {
+    type Output = V2;
+    fun neg(self) -> V2 { return V2 { x: -self.x, y: -self.y }; }
+}
 
 var c = V2 { x: 1, y: 2 } + V2 { x: 10, y: 20 };   # (11, 22)
 var d = -c;                                        # (-11, -22)
 
-fun twice<T: Add>(v: T) -> T { return v + v; }     # and so a generic can add
+fun twice<T: Add<Output = T>>(v: T) -> T { return v + v; }
 print(twice(3));                                   # 6      — via impl Add for Int
 print(twice("ab"));                                # abab   — via impl Add for String
 ```
@@ -1586,13 +1601,26 @@ Three things are worth knowing about the shape:
   operand inference has not solved is reported as the failure to *choose* that
   it is (`tests/fail/ops_rhs_unsolved.dt`). See
   `tests/run/ops_heterogeneous.dt`.
-- **The result is always `Self`.** There is no `Output` associated type, so
-  `V2 * Float` is a `V2` and a dot product `V2 * V2 -> Float` has no spelling.
-  An operator returns its left operand's type — the same reading that lets the
-  `Ord` rewrite leave `a.cmp(b) < 0` a numeric comparison. `Output` is a wart in
-  `roadmap.md` rather than an omission: a generic use would need
-  `T: Add<Output = T>`, and that binding pins the result from the *caller's*
-  side rather than the impl's.
+- **The result is an associated type**, so it need not be either operand:
+
+  ```
+  impl Mul       for V2    { type Output = Float; .. }   # a dot product
+  impl Mul<V2>   for Float { type Output = V2;    .. }   # 2.0 * v
+  ```
+
+  Neither has a `-> Self` spelling — the first returns neither operand's type,
+  the second is a primitive receiver that could only return itself. An impl
+  states `type Output = ..` like any associated type, and omitting it is
+  "impl of trait 'Add' is missing associated type 'Output'".
+
+  It is not free the way `Rhs = Self` is, and the asymmetry is worth holding
+  onto: **a type parameter may carry a default, an associated type may not**.
+  So a bound learns nothing about the result — under a bare `T: Mul`, `a * b`
+  is the opaque projection `T.Output`, not a `T`
+  (`tests/fail/ops_output_unbound.dt`). A generic that wants to keep
+  accumulating names it, `T: Add<Output = T>`; one that does not can return the
+  projection itself (`fun square<T: Mul>(v: T) -> T.Output`). See
+  `tests/run/ops_output.dt`.
 - **None is object-safe** (`other: Rhs` once `Rhs` takes its default, and
   `-> Self` throughout), so they are bounds and never a `dyn Add` — the position
   `Ord` is in, and the same rule: object safety is demanded only where `dyn` is
@@ -1802,7 +1830,7 @@ standard library marks them with a third attribute, `@lang("…")`:
 ```
 @lang("display") pub trait Display { fun to_string(self) -> String; }
 @lang("ord")     pub trait Ord     { fun cmp(self, other: Self) -> Int; }
-@lang("add")     pub trait Add     { fun add(self, other: Self) -> Self; }
+@lang("add")     pub trait Add     { type Output; fun add(self, o: Self) -> Self.Output; }
 @native("fmt_float") @lang("float") pub fun float(v: Float, p: Int) -> String;
 ```
 
@@ -2360,7 +2388,8 @@ HashSet::with_capacity(n); s.capacity(); s.reserve(n);   # forwarded, all three
 | an impl of a supertrait derived from something *other than* the sub's own block or the super's defaults | nothing else is a source. A super's required method that the block does not write is not searched for among the type's inherent methods, and no blanket impl is consulted — the obligation is discharged from what the impl says, or reported |
 | an array or a range that *is* an `Iterator` | neither implements the trait; `xs.iter()` / `(0..n).iter()` are the seeds, and `for x in xs` keeps its own desugaring rather than routing through them |
 | an array iterator detached from the array it walks | `xs.iter()` holds the array and snapshots nothing, so a `push`/`pop` mid-walk is visible (never out of bounds — see "Sources"). `xs.iter().collect()` is the copy |
-| an operator whose *result* differs from its left operand (a dot product `V2 * V2 -> Float`) | `V2 * Float` works as of milestone 75, but the traits return `Self` — there is no `Output` associated type, because a generic use would need `T: Add<Output = T>`, which pins the result from the caller's side rather than the impl's |
+| an *inferred* trait type argument, or an equality binding that solves one side from the other | a trait's arguments are written where the trait is named, and an equality is compared rather than unified. So `T: Add<Output = T>` is a promise checked against the impl, never a way to work out what `Output` should be |
+| an associated *type* default (`type Output = Self;` in a trait) | not parsed. A trait's *type parameter* may carry a default (`Rhs = Self`), which is why the `std::ops` migration for `Rhs` was free and the one for `Output` was not: every impl states its `Output`, and every bound that wants to keep the result names it |
 | custom `==` (an `Eq` trait) | equality stays structural and import-less for every type; only ordering and arithmetic are traits. `std::map` was the consumer this was waiting on and did not need it: a hash map resolves collisions with the structural `==` on a `K` bounded only by `Hash` |
 | a bitwise operator on a non-`Int` | refused, with no trait to appeal to: there is no `BitAnd` the way there is an `Add`, so `1.5 & 2` is a type error rather than a call. A `Float`'s bits have no spelling at all — there is no reinterpreting cast |
 | compound bitwise assignment (`&=`, `\|=`, `<<=`) | not parsed, matching `%=`, which does not exist either; write `x = x & y`. `+=`, `-=`, `*=`, `/=` are the whole set |

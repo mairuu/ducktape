@@ -22,6 +22,45 @@ typedef struct {
 // run before that arena is torn down — see compiler_destroy.
 static TypeInternTable g_intern;
 
+// The three operations a TY_GENERIC's associated-type bound list needs from
+// interning — hash, compare, canonicalise — each written once and recursing
+// into the nested list milestone 76 added. The recursion terminates because
+// only a trait ref's bindings can build a nested entry, and only a where-lhs
+// (capped at one associated type) can build a level for them to sit on.
+static void assoc_bounds_hash(uint32_t *h, const AssocBound *abs, int count) {
+  for (int i = 0; i < count; i++) {
+    const AssocBound *ab = &abs[i];
+    for (int j = 0; j < (int)ab->name.len; j++)
+      *h = *h * 31 + (uint8_t)ab->name.chars[j];
+    for (int j = 0; j < ab->bound_count; j++)
+      *h = *h * 31 + (uint32_t)(uintptr_t)ab->bounds[j];
+    *h = *h * 31 + (uint32_t)(uintptr_t)ab->equals;
+    *h = *h * 31 + (uint32_t)(uintptr_t)ab->owner;
+    assoc_bounds_hash(h, ab->assoc_bounds, ab->assoc_bound_count);
+  }
+}
+
+static bool assoc_bounds_equal(const AssocBound *x, const AssocBound *y,
+                               int count) {
+  for (int i = 0; i < count; i++) {
+    if (!sv_equal(x[i].name, y[i].name) || x[i].owner != y[i].owner ||
+        x[i].bound_count != y[i].bound_count || x[i].equals != y[i].equals ||
+        x[i].assoc_bound_count != y[i].assoc_bound_count) {
+      return false;
+    }
+    for (int j = 0; j < x[i].bound_count; j++) {
+      if (x[i].bounds[j] != y[i].bounds[j]) {
+        return false;
+      }
+    }
+    if (!assoc_bounds_equal(x[i].assoc_bounds, y[i].assoc_bounds,
+                            x[i].assoc_bound_count)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 static uint32_t type_hash(const Type *t) {
   uint32_t h = (uint32_t)t->kind * 2654435761u;
   switch (t->kind) {
@@ -30,14 +69,8 @@ static uint32_t type_hash(const Type *t) {
       h = h * 31 + (uint8_t)t->as.generic.name.chars[i];
     for (int i = 0; i < t->as.generic.bound_count; i++)
       h = h * 31 + (uint32_t)(uintptr_t)t->as.generic.bounds[i];
-    for (int i = 0; i < t->as.generic.assoc_bound_count; i++) {
-      const AssocBound *ab = &t->as.generic.assoc_bounds[i];
-      for (int j = 0; j < (int)ab->name.len; j++)
-        h = h * 31 + (uint8_t)ab->name.chars[j];
-      for (int j = 0; j < ab->bound_count; j++)
-        h = h * 31 + (uint32_t)(uintptr_t)ab->bounds[j];
-      h = h * 31 + (uint32_t)(uintptr_t)ab->equals;
-    }
+    assoc_bounds_hash(&h, t->as.generic.assoc_bounds,
+                      t->as.generic.assoc_bound_count);
     break;
   case TY_TUPLE:
     for (int i = 0; i < t->as.tuple.elem_count; i++)
@@ -109,20 +142,9 @@ static bool type_structurally_equal(const Type *a, const Type *b) {
     if (a->as.generic.assoc_bound_count != b->as.generic.assoc_bound_count) {
       return false;
     }
-    for (int i = 0; i < a->as.generic.assoc_bound_count; i++) {
-      const AssocBound *x = &a->as.generic.assoc_bounds[i];
-      const AssocBound *y = &b->as.generic.assoc_bounds[i];
-      if (!sv_equal(x->name, y->name) || x->bound_count != y->bound_count ||
-          x->equals != y->equals) {
-        return false;
-      }
-      for (int j = 0; j < x->bound_count; j++) {
-        if (x->bounds[j] != y->bounds[j]) {
-          return false;
-        }
-      }
-    }
-    return true;
+    return assoc_bounds_equal(a->as.generic.assoc_bounds,
+                              b->as.generic.assoc_bounds,
+                              a->as.generic.assoc_bound_count);
   case TY_TUPLE:
     if (a->as.tuple.elem_count != b->as.tuple.elem_count)
       return false;
@@ -203,6 +225,45 @@ static void sort_bounds(Type **bounds, int count) {
       }
     }
   }
+}
+
+// Copy an associated-type bound list into canonical order: entries by name,
+// each entry's trait list by pointer like any bound list, and the same again
+// for the nested list. The caller's array is borrowed (often a stack buffer),
+// so this always copies.
+static AssocBound *assoc_bounds_canon(const AssocBound *src, int count,
+                                      Allocator *al) {
+  if (count == 0) {
+    return NULL;
+  }
+  AssocBound *out = al_alloc(al, (size_t)count * sizeof(AssocBound));
+  for (int i = 0; i < count; i++) {
+    out[i] = src[i];
+    Type **b = al_alloc(al, (size_t)out[i].bound_count * sizeof(Type *));
+    for (int j = 0; j < out[i].bound_count; j++) {
+      b[j] = src[i].bounds[j];
+    }
+    sort_bounds(b, out[i].bound_count);
+    out[i].bounds = b;
+    out[i].assoc_bounds =
+        assoc_bounds_canon(src[i].assoc_bounds, src[i].assoc_bound_count, al);
+  }
+  // Ties on the name are broken by the owning trait, because since milestone 76
+  // a name no longer identifies an entry: `Add<Output = T> + Mul<Output = Int>`
+  // is two entries called `Output`, and without the tie-break the two orders of
+  // writing that bound would sort into two different lists and intern as two
+  // different types.
+  for (int i = 0; i < count - 1; i++) {
+    for (int j = 0; j < count - i - 1; j++) {
+      int c = sv_order(out[j].name, out[j + 1].name);
+      if (c > 0 || (c == 0 && out[j].owner > out[j + 1].owner)) {
+        AssocBound tmp = out[j];
+        out[j] = out[j + 1];
+        out[j + 1] = tmp;
+      }
+    }
+  }
+  return out;
 }
 
 static inline bool type_is_internable(Type *t) {
@@ -478,29 +539,8 @@ Type *ty_generic(StringView name, Type **bounds, int bound_count,
 
   // Same argument one level down: the associated-type bounds are a set too, so
   // `where T.A: X, T.B: Y` and `where T.B: Y, T.A: X` must intern as one type.
-  // Sorted by name, then each entry's own trait list sorted like a bound list.
-  AssocBound *assoc_sorted = NULL;
-  if (assoc_bound_count > 0) {
-    assoc_sorted = al_alloc(al, assoc_bound_count * sizeof(AssocBound));
-    for (int i = 0; i < assoc_bound_count; i++) {
-      assoc_sorted[i] = assoc_bounds[i];
-      Type **b = al_alloc(al, assoc_sorted[i].bound_count * sizeof(Type *));
-      for (int j = 0; j < assoc_sorted[i].bound_count; j++) {
-        b[j] = assoc_bounds[i].bounds[j];
-      }
-      sort_bounds(b, assoc_sorted[i].bound_count);
-      assoc_sorted[i].bounds = b;
-    }
-    for (int i = 0; i < assoc_bound_count - 1; i++) {
-      for (int j = 0; j < assoc_bound_count - i - 1; j++) {
-        if (sv_order(assoc_sorted[j].name, assoc_sorted[j + 1].name) > 0) {
-          AssocBound tmp = assoc_sorted[j];
-          assoc_sorted[j] = assoc_sorted[j + 1];
-          assoc_sorted[j + 1] = tmp;
-        }
-      }
-    }
-  }
+  AssocBound *assoc_sorted =
+      assoc_bounds_canon(assoc_bounds, assoc_bound_count, al);
 
   Type probe = {.kind = TY_GENERIC,
                 .as.generic = {
@@ -541,7 +581,10 @@ Type *ty_assoc(Type *base, StringView assoc_name, TraitDef *trait,
   if (base->kind == TY_GENERIC) {
     for (int i = 0; i < base->as.generic.assoc_bound_count; i++) {
       const AssocBound *ab = &base->as.generic.assoc_bounds[i];
-      if (ab->equals == NULL || !sv_equal(ab->name, assoc_name)) {
+      // the trait is part of the key: one parameter may carry an `Output` from
+      // each of two operator traits, and they are different projections.
+      if (ab->equals == NULL || !sv_equal(ab->name, assoc_name) ||
+          (ab->owner != NULL && trait != NULL && ab->owner != trait)) {
         continue;
       }
       // `T: Iter<Out = T>` binds the projection to the parameter itself, and
@@ -554,6 +597,44 @@ Type *ty_assoc(Type *base, StringView assoc_name, TraitDef *trait,
         return base;
       }
       return ab->equals;
+    }
+  }
+
+  // The same discharge one level down, for a binding whose subject is itself a
+  // projection: `where Self.Item: Add<Output = Self.Item>` makes
+  // `Self.Item.Output` **be** `Self.Item`, which is the only way a bounded
+  // generic can say what an operator over its element type returns.
+  //
+  // The self-reference is compared by *name* rather than by pointer, for the
+  // reason milestone 75 found one level up: the type in `equals` was built
+  // against the parameter's bound-less placeholder, so the base it names is a
+  // second interned node spelling the same parameter. Two names decide it here
+  // — the parameter's and the projection's — because that is the whole path.
+  if (base->kind == TY_ASSOC && base->as.assoc.base->kind == TY_GENERIC) {
+    const TypeGeneric *g = &base->as.assoc.base->as.generic;
+    for (int i = 0; i < g->assoc_bound_count; i++) {
+      const AssocBound *outer = &g->assoc_bounds[i];
+      if (!sv_equal(outer->name, base->as.assoc.assoc_name) ||
+          (outer->owner != NULL && base->as.assoc.trait != NULL &&
+           outer->owner != base->as.assoc.trait)) {
+        continue;
+      }
+      for (int j = 0; j < outer->assoc_bound_count; j++) {
+        const AssocBound *ab = &outer->assoc_bounds[j];
+        if (ab->equals == NULL || !sv_equal(ab->name, assoc_name) ||
+            (ab->owner != NULL && trait != NULL && ab->owner != trait)) {
+          continue;
+        }
+        if (ab->equals->kind == TY_ASSOC &&
+            ab->equals->as.assoc.base->kind == TY_GENERIC &&
+            sv_equal(ab->equals->as.assoc.base->as.generic.name, g->name) &&
+            sv_equal(ab->equals->as.assoc.assoc_name,
+                     base->as.assoc.assoc_name)) {
+          return base;
+        }
+        return ab->equals;
+      }
+      break;
     }
   }
 

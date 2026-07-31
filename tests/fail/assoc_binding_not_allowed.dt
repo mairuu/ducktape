@@ -1,10 +1,14 @@
 #! expect: an associated-type binding is not allowed here
-# A binding is a promise about the type being bounded, and a `where I.Item: ..`
-# predicate bounds a *projection* — which has no declaration to hang one on.
-# Constraining `I.Item`'s own associated type would need a parameter for it.
+# A binding is a promise about the type being *bounded*, so it needs a
+# declaration to hang on. A supertrait has none: `trait Pairs: Iterator<..>` is
+# a bound on every future impl's `Self`, not on a parameter this declaration
+# owns, and there is nowhere to record what the impl must bind `Item` to.
+#
+# Milestone 76 lifted the same rejection one position over — a binding whose
+# subject is a *projection* (`where I.Item: Iterator<Item = Int>`) does have a
+# place to live now, on the projection's own entry. This is what is left.
 use std::iter::Iterator;
-use std::option::Option;
 
-fun f<I: Iterator>(i: I) -> Int where I.Item: Iterator<Item = Int> {
-    return 1;
+pub trait Pairs: Iterator<Item = Int> {
+    fun pair_count(self) -> Int;
 }

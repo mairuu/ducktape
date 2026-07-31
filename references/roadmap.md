@@ -4086,6 +4086,75 @@
     in `std` or the suite, and the failure mode is a reported ambiguity rather
     than a wrong choice.
 
+- **76. An operator's result is its own type: the wart's remainder was two
+  questions, not one.** `std::ops` grows an `Output` associated type, so a dot
+  product `V2 * V2 -> Float` and a reversed `impl Mul<V2> for Float` have
+  spellings that `-> Self` could never give them. What the milestone actually
+  built was a *binding whose subject is a projection*
+  (`where Self.Item: Add<Output = Self.Item>`), which is what `std::iter`'s
+  `sum` and `product` need and what had been rejected outright.
+  - **The operator half cost nothing at all.** `rewrite_ops_call` builds an
+    `EXPR_METHOD_CALL` and returns whatever `resolve_method_call_typed` says, so
+    changing the trait's return type from `Self` to `Self.Output` changed every
+    operator's result with no operator-specific code touched. The milestone's
+    whole cost was in what a *bound* can say.
+  - **THE FINDING: a type parameter may carry a default, an associated type may
+    not — and that is the whole difference between the two halves of the same
+    trait.** Milestone 75's `Rhs = Self` made its migration *zero*; `Output` has
+    no such escape, so every impl states it and every generic that wants to keep
+    its accumulator names it (`T: Add<Output = T>`). The old note predicted this
+    would "break every generic use before it enabled one". Half right: every
+    generic use did move, but there were exactly two in `std`, and the move is
+    one clause each. What it got *wrong* was the reason — it read the binding's
+    discharge as pinning the result to a caller's promise, when the promise is
+    checked against the impl at every instantiation, which is the trust every
+    bound already rests on.
+  - **The blocker was where a binding could be recorded, not what it meant.** A
+    binding hangs off the thing being bounded, and a projection had nowhere to
+    hang one — `resolve_generic_param` passed `assoc = NULL` for a two-segment
+    where-lhs and the diagnostic said so. So `AssocBound` grew a nested list of
+    its own, and `ty_assoc` a matching second collapse. Depth stops at two by
+    construction: only a trait ref's bindings build a nested entry, and only a
+    where-lhs — already capped at one associated type — builds a level for them.
+  - **The self-reference is recognised by name, one level down.** The type in
+    `equals` is built against the parameter's bound-less placeholder, so
+    comparing pointers would miss; two names decide it, the parameter's and the
+    projection's. That is milestone 75's finding applied one level lower, and it
+    is why `Self.Item.Output` collapses back to `Self.Item` rather than to a
+    second interned node spelling the same thing.
+  - **`Output` is the first associated-type name two traits share, and it broke
+    two lookups that a unique `Item` had been hiding.** The bound list keyed
+    entries by name, so `T: Add<Output = T> + Mul<Output = Int>` merged into one
+    and reported the second binding as contradicting the first; and
+    `impl_index_assoc_type` searched impls by name, so a `Cents` with two impls
+    binding `Output` answered with whichever was registered first. Both are now
+    keyed by the declaring trait (`AssocBound.owner`), which is a latent bug
+    this milestone forced into the open rather than one it introduced.
+  - **`trait_self_param` has to project the bounds it is handed.** The clause is
+    resolved with `Self` in scope as the trait *type*, so a binding spells its
+    subject `Iterator.Item` while the default body — checked against the
+    `TY_GENERIC` `Self` — spells it `Self.Item`. Two spellings is exactly what an
+    equality binding cannot survive, since `ty_assoc` hands back what the binding
+    named. Sabotaging this one fails 156 tests.
+  - **Sabotaged eight ways in the compiler.** Deleting the nested collapse, not
+    recognising its self-reference, `trait_self_param` not projecting, or
+    `assoc_bounds_map` skipping the nested list each fail ~156 (std's `sum` and
+    `product` drive them); the trait `Self` clause losing its binding sink fails
+    257. The remaining three fail **exactly one test each**: the owner filter in
+    `impl_index_assoc_type`, keying the bound list by trait, and `ty_assoc`
+    matching the trait in its collapse. Clean under `make sanitize` and
+    `BUILD=release`; 440 tests.
+  - **Left open, and honestly:** three lines are defensive rather than pinned —
+    `owner` in `type_hash`, in `types_equal`, and the canonicalisation's
+    tie-break on it. No program can reach them, because an entry's owner is
+    *derived* from the parameter's bounds and those are already part of the key,
+    so two lists cannot differ in owner alone. They are there because the field
+    is part of what an entry means, not because a test fails without them. Also
+    still open: an equality is compared, never unified (so nothing infers an
+    `Output`), there is no associated-type *default*, and a projection off a
+    concrete base written in source (`V2.Output`) names no trait — there is no
+    syntax for one — so it answers by name alone.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -4100,9 +4169,11 @@ by appetite rather than by necessity.
 milestone 75: `V2 * Float`. What it needed from the language was two things
 neither of which was about operators — a trait type parameter with a default,
 and a bound that may name its own subject — plus milestone 30's argument-driven
-selection at the *receiver* spelling. What is left of it is an `Output`
-associated type, which is blocked on the same "an equality is compared, never
-unified" limit this list already records.)
+selection at the *receiver* spelling. Its remainder, an `Output` associated
+type, is milestone 76, which is also where the "an equality is compared, never
+unified" limit stopped being a blocker and became a *cost*: `Output` works, it
+just has to be written down at every bound that keeps the result, because
+nothing infers one.)
 
 1. **Growing std on top of the natives** — the mechanism landed in milestone
    16 with a deliberately small registry, and the pieces with a design question
@@ -4176,10 +4247,12 @@ the smaller entanglement, matching how `Display` names exactly `to_string`.)
 
 (**The associated-type-bound work is finished.** The trait half landed in
 milestone 52 (`where I.Item: Ord`), the placement half in 53 (the same clause on
-a trait method's signature, which made `it.max()` a combinator), and the
-equality binding in 54 (`J: Iterator<Item = I.Item>`, which made `chain` one).
-What the family still cannot do is *infer*: an equality is compared, never
-unified, so a binding will not solve a type argument from the other side.)
+a trait method's signature, which made `it.max()` a combinator), the equality
+binding in 54 (`J: Iterator<Item = I.Item>`, which made `chain` one), and the
+*projection*-subject binding in 76 (`where Self.Item: Add<Output = Self.Item>`,
+which made `sum` one again once operators grew an `Output`). What the family
+still cannot do is *infer*: an equality is compared, never unified, so a binding
+will not solve a type argument from the other side.)
 
 (**`sum`/`product` are no longer blocked** — they were waiting on an `Add` trait
 rather than on any predicate, and that is milestone 55: the arithmetic operators

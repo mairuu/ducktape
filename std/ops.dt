@@ -23,7 +23,7 @@
 #
 # ── the shape of the traits ──────────────────────────────────────────────────
 #
-# `fun add(self, other: Rhs) -> Self`, where `Rhs` defaults to `Self`
+# `fun add(self, other: Rhs) -> Self.Output`, where `Rhs` defaults to `Self`
 # (milestone 75). The five binary operators are heterogeneous; `Neg`, which has
 # no right operand, has no parameter.
 #
@@ -46,17 +46,30 @@
 # what saves every `T: Add` and `impl Add for Int` in this file and elsewhere
 # from being rewritten. Nothing in `std` moved.
 #
-# ── why there is no `Output` ─────────────────────────────────────────────────
+# ── `Output`, and why it costs a bound ───────────────────────────────────────
 #
-# Rust's `Add` also carries an associated `Output`; ours returns `Self`, so
-# `V2 * Float` is a `V2` and a dot product `V2 * V2 -> Float` has no spelling.
-# The reason is the mirror of the one above. A generic use would need
-# `T: Add<Output = T>`, an equality binding naming its own subject — and while a
-# *bound* may now do that, the binding is discharged by rewriting the projection
-# to the type it names, so `sum`'s accumulator would be pinned by a promise the
-# caller makes rather than by the impl. Adding `Output` would break every
-# generic use of these traits before it enabled one, so it stays a wart in
-# references/roadmap.md rather than a half-built feature here.
+# The result is an associated type, not `Self` (milestone 76), so a dot product
+# `V2 * V2 -> Float` has a spelling and so does `2.0 * v` (an `impl Mul<V2> for
+# Float` whose `Output` is `V2`, which a `-> Self` could never return).
+#
+# It is not free the way `Rhs = Self` was. There is no default for an associated
+# type, so a *bound* learns nothing about the result: under `T: Add`, `a + b` is
+# a `T.Output` and not a `T`, which is opaque and cannot be added to anything.
+# A generic that wants to keep accumulating has to say so —
+# `where T: Add<Output = T>` — and that is an equality binding naming its own
+# subject, which milestone 75's self-referential bound already permits. What was
+# genuinely missing was the *projection* form of it, `where Self.Item: Add<Output
+# = Self.Item>`, since the subject there is not a parameter but a projection;
+# milestone 76 is that, and `std::iter`'s `sum` and `product` are its consumers.
+#
+# The old note here predicted this would "break every generic use before it
+# enabled one". Half right: every generic use did have to be rewritten, but
+# there were exactly two, and the rewrite is one clause each rather than a
+# redesign. What it got wrong was the reason — it read the binding's discharge
+# (`ty_assoc` rewrites the projection to the type named) as pinning the result
+# to a caller's promise, when the promise is checked against the impl at every
+# instantiation (check_bounds_satisfied), which is the same trust every bound
+# already rests on.
 #
 # `other: Rhs` still means none of these is object-safe once `Rhs` takes its
 # default, so they are bounds and never a `dyn Add` — the same position `Ord`
@@ -65,22 +78,26 @@
 
 @lang("add")
 pub trait Add<Rhs = Self> {
-    fun add(self, other: Rhs) -> Self;
+    type Output;
+    fun add(self, other: Rhs) -> Self.Output;
 }
 
 @lang("sub")
 pub trait Sub<Rhs = Self> {
-    fun sub(self, other: Rhs) -> Self;
+    type Output;
+    fun sub(self, other: Rhs) -> Self.Output;
 }
 
 @lang("mul")
 pub trait Mul<Rhs = Self> {
-    fun mul(self, other: Rhs) -> Self;
+    type Output;
+    fun mul(self, other: Rhs) -> Self.Output;
 }
 
 @lang("div")
 pub trait Div<Rhs = Self> {
-    fun div(self, other: Rhs) -> Self;
+    type Output;
+    fun div(self, other: Rhs) -> Self.Output;
 }
 
 # `%`. Named for the operation rather than the operator, and "remainder" rather
@@ -88,7 +105,8 @@ pub trait Div<Rhs = Self> {
 # dividend (C's `%` on Int, `fmod` on Float), so `-7 % 3` is -1 and not 2.
 @lang("rem")
 pub trait Rem<Rhs = Self> {
-    fun rem(self, other: Rhs) -> Self;
+    type Output;
+    fun rem(self, other: Rhs) -> Self.Output;
 }
 
 # Unary `-`. The only one with no right operand, so it is the only one whose
@@ -97,7 +115,8 @@ pub trait Rem<Rhs = Self> {
 # could not name what it got back).
 @lang("neg")
 pub trait Neg {
-    fun neg(self) -> Self;
+    type Output;
+    fun neg(self) -> Self.Output;
 }
 
 # ── the primitives ───────────────────────────────────────────────────────────
@@ -109,50 +128,62 @@ pub trait Neg {
 # visible and coherence rejects the second.
 
 impl Add for Int {
+    type Output = Int;
     fun add(self, other: Int) -> Int { return self + other; }
 }
 
 impl Sub for Int {
+    type Output = Int;
     fun sub(self, other: Int) -> Int { return self - other; }
 }
 
 impl Mul for Int {
+    type Output = Int;
     fun mul(self, other: Int) -> Int { return self * other; }
 }
 
 impl Div for Int {
+    type Output = Int;
     fun div(self, other: Int) -> Int { return self / other; }
 }
 
 impl Rem for Int {
+    type Output = Int;
     fun rem(self, other: Int) -> Int { return self % other; }
 }
 
 impl Neg for Int {
+    type Output = Int;
     fun neg(self) -> Int { return 0 - self; }
 }
 
 impl Add for Float {
+    type Output = Float;
     fun add(self, other: Float) -> Float { return self + other; }
 }
 
 impl Sub for Float {
+    type Output = Float;
     fun sub(self, other: Float) -> Float { return self - other; }
 }
 
 impl Mul for Float {
+    type Output = Float;
     fun mul(self, other: Float) -> Float { return self * other; }
 }
 
 impl Div for Float {
+    type Output = Float;
     fun div(self, other: Float) -> Float { return self / other; }
 }
 
 impl Rem for Float {
+    type Output = Float;
     fun rem(self, other: Float) -> Float { return self % other; }
 }
 
 impl Neg for Float {
+    type Output = Float;
     fun neg(self) -> Float { return 0.0 - self; }
 }
 
@@ -162,5 +193,6 @@ impl Neg for Float {
 # words is the reason it earns its place — and its body is the same built-in
 # path the primitives' are.
 impl Add for String {
+    type Output = String;
     fun add(self, other: String) -> String { return self + other; }
 }

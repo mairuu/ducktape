@@ -1,0 +1,42 @@
+# One parameter, one associated-type *name*, two traits.
+#
+# `Output` is the first name in the language that more than one trait declares —
+# all six of `std::ops` do — and it makes a question visible that `Item` never
+# could: an associated-type bound list is keyed by name, so `Add`'s `Output` and
+# `Mul`'s `Output` would be one entry, and the second binding would be reported
+# as contradicting the first ("bound twice, to 'T' and to 'Int'"). They are
+# different projections, so the key is the trait as well as the name.
+#
+# The same fact one layer down decides which *impl* a projection reads: `Cents`
+# here has two impls binding `Output`, and a lookup by name alone answers with
+# whichever was registered first. See impl_index_assoc_type's `owner` filter.
+
+#> 28
+#> 6
+
+use std::ops::{Add, Mul};
+use std::io::print;
+
+struct Cents { v: Int }
+
+impl Add for Cents {
+    type Output = Cents;
+    fun add(self, o: Cents) -> Cents { return Cents { v: self.v + o.v }; }
+}
+
+# a different `Output` for the same self type, which is what makes the name
+# ambiguous and the trait the thing that resolves it.
+impl Mul for Cents {
+    type Output = Int;
+    fun mul(self, o: Cents) -> Int { return self.v * o.v; }
+}
+
+# both bindings on one parameter: adding keeps the type, multiplying leaves it.
+fun sum_then_scale<T: Add<Output = T> + Mul<Output = Int>>(a: T, b: T) -> Int {
+    return (a + b) * b;
+}
+
+fun main() {
+    print(sum_then_scale(Cents { v: 3 }, Cents { v: 4 }));  # (3+4)*4
+    print(sum_then_scale(Cents { v: 1 }, Cents { v: 2 }));  # (1+2)*2
+}

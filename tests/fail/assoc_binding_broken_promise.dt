@@ -1,0 +1,24 @@
+#! expect: does not satisfy 'T.Output = T'
+# An equality binding is discharged by *rewriting* the projection to the type it
+# names, which is only honest if a real instantiation keeps the promise. This is
+# where it is made to: `Cents + Int` is a `Cents`, so `Cents.Output` is `Cents`
+# and the impl keeps it — but `Cents * Cents` was written to produce an `Int`,
+# so instantiating a `T: Mul<Output = T>` at `Cents` breaks it.
+#
+# The diagnostic names the predicate rather than the rewrite, which is the point
+# of checking it here: inside `scale` the mistake is invisible, because there
+# the projection has already collapsed to `T`.
+use std::ops::Mul;
+
+struct Cents { v: Int }
+
+impl Mul for Cents {
+    type Output = Int;
+    fun mul(self, other: Cents) -> Int { return self.v * other.v; }
+}
+
+fun scale<T: Mul<Output = T>>(a: T, b: T) -> T { return a * b; }
+
+fun main() {
+    scale(Cents { v: 3 }, Cents { v: 4 });
+}

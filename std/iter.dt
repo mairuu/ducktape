@@ -330,7 +330,13 @@ pub trait Iterator {
     # on an element had nothing to bound: the operators were built-in numeric
     # opcodes, so a sequence of anything else could only be reduced through
     # `fold` with a closure spelling the operation out.
-    fun sum(self) -> Option<Self.Item> where Self.Item: Add {
+    #
+    # `Output = Self.Item` is milestone 76's half, and it is what a reduce is:
+    # an accumulator only accumulates if adding to it gives back its own type.
+    # Without the binding `t + v` is a `Self.Item.Output`, which is opaque and
+    # cannot go back into `total`. It is a binding whose subject is a
+    # *projection*, which is the language piece that milestone bought.
+    fun sum(self) -> Option<Self.Item> where Self.Item: Add<Output = Self.Item> {
         var total = self.next();
         while true {
             match self.next() {
@@ -347,7 +353,8 @@ pub trait Iterator {
     }
 
     # The product of every element, or `None` for an empty sequence.
-    fun product(self) -> Option<Self.Item> where Self.Item: Mul {
+    fun product(self) -> Option<Self.Item>
+        where Self.Item: Mul<Output = Self.Item> {
         var total = self.next();
         while true {
             match self.next() {

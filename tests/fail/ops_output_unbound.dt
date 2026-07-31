@@ -1,0 +1,12 @@
+#! expect: expected 'T' but got 'T.Output'
+# Milestone 76's cost, stated. There is no default for an associated type, so a
+# bare `T: Mul` says nothing about what `a * b` returns: the result is the
+# opaque projection `T.Output`, which is not `T` and cannot be returned as one.
+#
+# This is exactly what `Rhs = Self` spared the *argument* side in milestone 75,
+# and the asymmetry is the finding: a type parameter may carry a default, an
+# associated type may not, so the two halves of `Mul<Rhs = Self>` and `Output`
+# migrate differently. The fix is to name it — `T: Mul<Output = T>`.
+use std::ops::Mul;
+
+fun square<T: Mul>(v: T) -> T { return v * v; }
