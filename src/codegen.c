@@ -771,6 +771,24 @@ static void compile_binary(Cg *cg, Expr *expr) {
   case TOKEN_PERCENT:
     emit(cg, OP_MOD);
     break;
+  case TOKEN_AMP:
+    emit(cg, OP_BIT_AND);
+    break;
+  case TOKEN_PIPE:
+    emit(cg, OP_BIT_OR);
+    break;
+  case TOKEN_CARET:
+    emit(cg, OP_BIT_XOR);
+    break;
+  case TOKEN_SHL:
+    emit(cg, OP_SHL);
+    break;
+  case TOKEN_SHR:
+    emit(cg, OP_SHR);
+    break;
+  case TOKEN_USHR:
+    emit(cg, OP_USHR);
+    break;
   case TOKEN_EQEQ:
     emit(cg, OP_EQ);
     break;
@@ -2200,7 +2218,17 @@ static void compile_expr_inner(Cg *cg, Expr *expr) {
 
   case EXPR_UNARY: {
     compile_expr(cg, expr->as.unary.operand);
-    emit(cg, expr->as.unary.op == TOKEN_NOT ? OP_NOT : OP_NEG);
+    switch (expr->as.unary.op) {
+    case TOKEN_NOT:
+      emit(cg, OP_NOT);
+      break;
+    case TOKEN_TILDE:
+      emit(cg, OP_BIT_NOT);
+      break;
+    default:
+      emit(cg, OP_NEG);
+      break;
+    }
     break;
   }
 

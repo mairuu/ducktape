@@ -270,20 +270,19 @@ static Value n_fmt_float(NativeCtx *ctx, Value *args, int argc) {
 // std::hash
 // ───────────────────────────────────────────────────────────────────────────────
 
-// These two are the whole of what hashing cannot say about itself in ducktape,
-// and the reason is unusually sharp: **the language has no bitwise operator at
-// all.** No `^`, no `&`, no shift — `^` is taken by the centre-align token in a
-// format spec, `|` by closure syntax. Every mixing function worth the name is
-// built out of exactly those, so a hash is not "slow to write in ducktape", it
-// is *unwritable*. What a program could still express is `h * 31 + x`, the
-// multiply-add mixer — and that is precisely the weak one, whose high bits
-// never reach the low bits the table indexes with.
+// These two were once the whole of what hashing could not say about itself in
+// ducktape: the language had no bitwise operator at all, so a mixing function
+// was not "slow to write" up there, it was *unwritable*, and the only mixer a
+// program could express was the weak `h * 31 + x`.
 //
-// So the tier split here is not an optimisation. It is the same argument
-// `std::strbuf` makes about interning: put the un-expressible part behind one
-// object, and let the .dt own everything above it. `Hasher` is that object, and
-// because the mixing lives in one place rather than in every `impl Hash`, it is
-// also the only place that has to be got right.
+// **Milestone 65 added the operators, so that argument has expired.** What
+// keeps these here now is cost rather than capability: `hash_mix` is six
+// operations of pure arithmetic with no callback into the interpreter, which is
+// exactly the shape milestone 64's measurements say to move into C — a native
+// call costs a few nanoseconds against roughly thirty for each interpreted
+// step. tests/run/bitwise_mixer.dt writes this function out in ducktape,
+// constant for constant, and checks the two agree on a thousand inputs; that
+// twin is what keeps an optimisation from quietly becoming a black box.
 
 // Fold `value` into `state`, one round. `value` is finalised through a
 // splitmix64 step first so that a low-entropy Int (0, 1, 2 — the commonest keys

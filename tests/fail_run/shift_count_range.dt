@@ -1,0 +1,19 @@
+#! expect: shift count must be between 0 and 63
+# A shift count outside 0..63 is a runtime error rather than a wrapped count.
+#
+# C leaves the case undefined; Java masks the count to its low six bits, so
+# `x << 64` there is `x` — an answer that looks deliberate and is essentially
+# never what was meant. An out-of-range array index already reports here rather
+# than guessing, and asking for the 64th bit of a 64-bit integer is the same
+# kind of mistake, so it gets the same treatment.
+#
+# The count is checked at run time and not in the checker because it is an
+# ordinary expression: `x << n` cannot be rejected at compile time unless `n`
+# is a literal, and a rule that fires only for literals would be worse than no
+# rule at all.
+use std::io::print;
+
+fun main() {
+    var width = 64;
+    print("{1 << width}");
+}

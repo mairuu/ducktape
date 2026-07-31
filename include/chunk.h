@@ -43,6 +43,18 @@ typedef enum {
   OP_NEG,
   OP_NOT,
 
+  // Int-only, and the reason the language has them at all: nothing above this
+  // tier can express a bit. `OP_SHR` propagates the sign, `OP_USHR` shifts
+  // zeros in; both refuse a count outside 0..63 rather than inheriting C's
+  // undefined behaviour for one.
+  OP_BIT_AND,
+  OP_BIT_OR,
+  OP_BIT_XOR,
+  OP_BIT_NOT,
+  OP_SHL,
+  OP_SHR,
+  OP_USHR,
+
   OP_EQ,
   OP_NEQ,
   OP_LT,

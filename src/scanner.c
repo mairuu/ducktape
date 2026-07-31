@@ -86,6 +86,11 @@ static const char *token_type_string[] = {
     [TOKEN_PIPE] = "PIPE",         // |
     [TOKEN_AT] = "AT",             // @
     [TOKEN_CARET] = "CARET",       // ^
+    [TOKEN_AMP] = "AMP",           // &
+    [TOKEN_TILDE] = "TILDE",       // ~
+    [TOKEN_SHL] = "SHL",           // <<   (parser-synthesised)
+    [TOKEN_SHR] = "SHR",           // >>   (parser-synthesised)
+    [TOKEN_USHR] = "USHR",         // >>>  (parser-synthesised)
 
     // control
     [TOKEN_EOF] = "EOF",
@@ -525,6 +530,10 @@ Token scanner_next_token(Scanner *s) {
     return make_token(s, TOKEN_AT);
   case '^':
     return make_token(s, TOKEN_CARET);
+  case '&':
+    return make_token(s, TOKEN_AMP);
+  case '~':
+    return make_token(s, TOKEN_TILDE);
   case '%':
     return make_token(s, TOKEN_PERCENT);
 

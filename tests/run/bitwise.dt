@@ -1,0 +1,63 @@
+# The bitwise operators, and the two things about them that are decisions
+# rather than arithmetic: where they sit in the precedence table, and how the
+# shifts are spelled given `>` has to stay its own token.
+#> and or xor: 8 14 6
+#> not: -1 -6 42
+#> shifts: 1024 -4 9223372036854775804
+#> ushr fills zeros: 4294967295
+#> precedence over comparison: true true
+#> among themselves: 3 5 32
+#> shift binds looser than add: 32 17
+#> inference: 5 [9, 10, 11] 15
+#> masks: 255 65280 true
+#> nested generic still parses: 1
+use std::io::print;
+use std::array;
+use std::map::HashMap;
+
+fun main() {
+    print("and or xor: {12 & 10} {12 | 10} {12 ^ 10}");
+    print("not: {~0} {~5} {~~42}");
+    print("shifts: {1 << 10} {(0 - 8) >> 1} {(0 - 8) >>> 1}");
+
+    # the difference between the two right shifts, stated at the one input
+    # where it is unmistakable: all-ones shifted down by half its width
+    print("ushr fills zeros: {(0 - 1) >>> 32}");
+
+    # ── precedence ────────────────────────────────────────────────────────────
+    #
+    # Every bitwise operator binds tighter than comparison, which is Rust's
+    # ordering rather than C's. In C, `1 & 3 == 1` means `1 & (3 == 1)` — the
+    # trap that has needed parentheses for fifty years. Here it reads left to
+    # right as written.
+    print("precedence over comparison: {1 & 3 == 1} {4 >> 1 == 2}");
+
+    # among themselves: `&` tighter than `^` tighter than `|`
+    print("among themselves: {1 | 2 & 2} {1 | 6 ^ 3} {1 + 1 << 4}");
+
+    # a shift is looser than the arithmetic around it, which is the half of
+    # C's ordering worth keeping: a shift scales the sum, it does not join it
+    print("shift binds looser than add: {1 + 1 << 4} {1 + (1 << 4)}");
+
+    # ── inference ─────────────────────────────────────────────────────────────
+    #
+    # A bitwise operator has exactly one possible operand type, so unlike `+`
+    # it can *solve* an unannotated closure parameter rather than demand an
+    # annotation for it. `|x| x + 1` is still an error; `|x| x | 1` is not.
+    var f = |x| x | 1;
+    var xs = [1, 2, 3];
+    var thunk = || 7 | 8;
+    print("inference: {f(4)} {xs.iter().map(|v| v | 8).collect()} {(thunk)()}");
+
+    # ── the shapes a program actually writes ──────────────────────────────────
+    var low_byte = ~(~0 << 8);
+    var second_byte = 255 << 8;
+    var has_bit = (5 & 4) != 0;
+    print("masks: {low_byte} {second_byte} {has_bit}");
+
+    # a type closing with `>>` must not lex as a shift — the reason the scanner
+    # leaves angle brackets alone and the parser fuses them instead
+    var m: HashMap<String, Option<Int>> = HashMap::new();
+    m.insert("a", Option::Some(1));
+    print("nested generic still parses: {m.len()}");
+}

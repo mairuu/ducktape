@@ -6394,6 +6394,9 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
                    op == TOKEN_GTEQ);
     bool is_eq = (op == TOKEN_EQEQ || op == TOKEN_BANGEQ);
     bool is_logic = (op == TOKEN_AND || op == TOKEN_OR);
+    bool is_bitwise =
+        (op == TOKEN_AMP || op == TOKEN_PIPE || op == TOKEN_CARET ||
+         op == TOKEN_SHL || op == TOKEN_SHR || op == TOKEN_USHR);
 
     if (op == TOKEN_PLUS && lhs->kind == TY_STRING && rhs->kind == TY_STRING) {
       result = ty_string();
@@ -6413,6 +6416,27 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
         result = rewrite_ops_call(ctx, expr, ops_trait_for_token(op),
                                   binary->left, l, binary->right);
       }
+    } else if (is_bitwise) {
+      // **Int only, and no trait behind it.** Every other operator that could
+      // mean something for a user type routes through `std::ops` when its
+      // operands are not numeric; these do not, and the reason is that a bit
+      // pattern is not an abstraction a type can supply its own meaning for the
+      // way an order or a sum is. `Float` is excluded for the same reason it
+      // has no `impl Hash`: its bits are not what its value means, and the
+      // language has no reinterpreting cast to ask for them deliberately.
+      //
+      // So these are the only binary operators whose operand type is known
+      // *before* the operands are — and that makes them the only ones that can
+      // **drive** inference rather than merely check it. `+` has to look first,
+      // because it could be Int, Float, String or a call to `Add`, which is why
+      // `|x| x + 1` cannot solve `x` and `|x| x | 1` can. Unifying rather than
+      // testing is what buys that, and it is the same thing a range does to its
+      // two bounds.
+      bool ok = infer_unify(&ctx->infer, ctx->tc->t_int, lhs, ctx->diags,
+                            binary->left->span);
+      ok &= infer_unify(&ctx->infer, ctx->tc->t_int, rhs, ctx->diags,
+                        binary->right->span);
+      result = ok ? ctx->tc->t_int : ctx->tc->t_poison;
     } else if (is_cmp) {
       if (type_is_numeric(lhs) && type_is_numeric(rhs)) {
         result = ty_bool();
@@ -7017,9 +7041,12 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   case EXPR_UNARY: {
     ExprUnary *unary = &expr->as.unary;
     bool is_not = unary->op == TOKEN_NOT;
+    bool is_bitnot = unary->op == TOKEN_TILDE;
 
-    Type *op_ty =
-        resolve_expr(ctx, unary->operand, is_not ? ctx->tc->t_bool : hint);
+    Type *op_ty = resolve_expr(ctx, unary->operand,
+                               is_not      ? ctx->tc->t_bool
+                               : is_bitnot ? ctx->tc->t_int
+                                           : hint);
     op_ty = infer_find(&ctx->infer, op_ty);
 
     if (type_is_poison(op_ty)) {
@@ -7037,6 +7064,14 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       } else {
         result = ctx->tc->t_bool;
       }
+    } else if (is_bitnot) {
+      // Int only, and unified rather than tested, for the reason the binary
+      // bitwise operators are: `~` has exactly one operand type, so it can
+      // solve an unknown instead of complaining about one.
+      result = infer_unify(&ctx->infer, ctx->tc->t_int, op_ty, ctx->diags,
+                           unary->operand->span)
+                   ? ctx->tc->t_int
+                   : ctx->tc->t_poison;
     } else {
       if (!type_is_numeric(op_ty)) {
         // `-a` → `a.neg()`, the unary case of the same rewrite `+` gets. The

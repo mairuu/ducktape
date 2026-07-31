@@ -1,24 +1,36 @@
 # std::hash — turning a value into an Int a table can index with.
 #
-# The trait here is shaped differently from every other trait in std, and the
-# reason is a gap in the language rather than a preference. **ducktape has no
-# bitwise operator at all**: `^` is the centre-align token in a format spec,
-# `|` opens a closure, and `&` and the shifts do not exist. Every mixing
-# function worth using is built out of exactly those, so a hash function is not
-# merely awkward to write in ducktape — it is unwritable. The one mixer the
-# language *can* express is `h * 31 + x`, and that is the weak one: multiply and
-# add both carry information upward, so the high bits never reach the low bits
-# that `%` reads to pick a slot.
+# The trait here is shaped differently from every other trait in std. A
+# `fun hash(self) -> Int` would make every implementor supply a mixer, which
+# means every implementor writing a bad one. So `Hash` **writes into a
+# `Hasher`** instead, and an impl only says *which parts of me matter*, never
+# how they are combined. The combining lives in one object, and being one place
+# is what makes it the only place that has to be right.
 #
-# That is what decides the trait's shape. A `fun hash(self) -> Int` would make
-# every implementor supply a mixer, which means every implementor writing the
-# bad one. So `Hash` **writes into a `Hasher`** instead, and an impl only says
-# *which parts of me matter*, never how they are combined. The combining lives
-# in one object, that object reaches C for the two steps ducktape cannot take,
-# and being one place is also what makes it the only place that has to be right.
+# **That shape was forced by a gap in the language, and the gap is now closed.**
+# Until milestone 65 there were no bitwise operators at all — `^` was only the
+# centre-align token in a format spec, `|` only opened a closure — so a mixing
+# function was not merely awkward to write here, it was *unwritable*, and the
+# one mixer a program could express was `h * 31 + x`: the weak one, whose high
+# bits never reach the low bits `%` reads to pick a slot. An implementor asked
+# for a number would have had no good way to produce one.
 #
-# `Hasher` is to `Hash` exactly what `StringBuf` is to building text: the object
-# that exists because the work below it cannot be said up here.
+# The operators exist now, and `tests/run/bitwise_mixer.dt` writes `mix` below
+# in ducktape — constant for constant — and checks it against this module on a
+# thousand inputs. So the trait's shape is no longer forced, and it is kept
+# anyway, because the gap was never the only reason for it: an impl that names
+# its fields and combines nothing is the better interface whether or not it
+# *could* combine them, and one mixer with one set of constants is better than
+# one per implementor.
+#
+# What the native buys is now measured rather than assumed. Milestone 64's cost
+# model puts an interpreted operation near 30ns against a few for a native call,
+# and `mix` is six operations of pure arithmetic with no callback — exactly the
+# shape that pays. It stays in C as a **choice** now rather than a necessity,
+# and is a fair example of what that tier is for.
+#
+# `Hasher` is to `Hash` what `StringBuf` is to building text: the object that
+# holds an accumulation the values themselves should not have to.
 #
 # Deliberately not preluded — a program that never keys a map never needs the
 # name. `std::map` imports it, so `use std::map;` is enough to get the impls
@@ -39,10 +51,17 @@ use std::char;
 @intrinsic("array_len")
 fun len<T>(xs: [T]) -> Int;
 
-# ── the two steps ducktape cannot take ────────────────────────────────────────
+# ── the two steps worth taking in C ───────────────────────────────────────────
 
-# Fold `value` into `state`. XOR and the shifts inside are the entire reason
-# this is C rather than the four lines it looks like.
+# Fold `value` into `state`: a splitmix64 finalisation of the incoming value, so
+# that low-entropy keys still spread, then FNV-1a's prime and a last shift-xor
+# to bring the good bits down where `%` reads them.
+#
+# Six operations of pure arithmetic with no callback — a native call costs a few
+# nanoseconds against roughly thirty for each interpreted step, so this is the
+# shape milestone 64's cost model says to move. It is *writable* in ducktape as
+# of milestone 65; `tests/run/bitwise_mixer.dt` writes it out and checks the two
+# agree, which is what keeps this an optimisation rather than a black box.
 @native("hash_mix")
 fun mix(state: Int, value: Int) -> Int;
 

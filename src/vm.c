@@ -7,6 +7,7 @@
 #include <assert.h>
 #include <math.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 
 #define STACK_MAX 4096
@@ -246,21 +247,36 @@ static bool run(Vm *vm, int stop_depth) {
         if ((op == OP_DIV || op == OP_MOD) && y == 0) {
           VM_RETURN(runtime_error(vm, "division by zero"));
         }
+        // The language promises that `Int` **wraps**, two's complement. Doing
+        // that with signed operands is undefined behaviour in C — it happens
+        // to produce the promised answer on the hardware, but a sanitizer
+        // reports it and an optimiser is entitled to assume it cannot happen.
+        // Computing in `uint64_t` and converting back is the same instruction
+        // with the promise actually written down: unsigned arithmetic is
+        // defined to wrap, and the narrowing conversion is two's complement in
+        // C23. (Found by UBSan the moment a hash mixer was written in
+        // ducktape; every multiply in one overflows by design.)
+        uint64_t ux = (uint64_t)x, uy = (uint64_t)y;
         switch (op) {
         case OP_ADD:
-          r = x + y;
+          r = (int64_t)(ux + uy);
           break;
         case OP_SUB:
-          r = x - y;
+          r = (int64_t)(ux - uy);
           break;
         case OP_MUL:
-          r = x * y;
+          r = (int64_t)(ux * uy);
           break;
+        // `INT64_MIN / -1` is the one division that overflows, and unlike the
+        // rest it is not merely undefined — on x86 it raises SIGFPE and kills
+        // the process, so a ducktape program could crash the VM outright. The
+        // wrapping answer is `INT64_MIN` again (`+2^63` has no representation
+        // and folds back), and the remainder is exactly zero.
         case OP_DIV:
-          r = x / y;
+          r = (x == INT64_MIN && y == -1) ? INT64_MIN : x / y;
           break;
         case OP_MOD:
-          r = x % y;
+          r = (x == INT64_MIN && y == -1) ? 0 : x % y;
           break;
         default:
           break;
@@ -292,6 +308,56 @@ static bool run(Vm *vm, int stop_depth) {
       }
       vm->sp -= 2;
       push(vm, result);
+      break;
+    }
+
+    // The bitwise operators are Int-only — the checker has already refused a
+    // Float or anything else — so unlike the arithmetic above there is no
+    // widening case and no string case to test for.
+    case OP_BIT_AND:
+    case OP_BIT_OR:
+    case OP_BIT_XOR: {
+      Value b = pop(vm), a = pop(vm);
+      uint64_t x = (uint64_t)a.as.i, y = (uint64_t)b.as.i;
+      uint64_t r = op == OP_BIT_AND  ? (x & y)
+                   : op == OP_BIT_OR ? (x | y)
+                                     : (x ^ y);
+      push(vm, val_int((int64_t)r));
+      break;
+    }
+
+    case OP_BIT_NOT:
+      push(vm, val_int((int64_t)~(uint64_t)pop(vm).as.i));
+      break;
+
+    // A shift count outside 0..63 is **a runtime error, not a wrapped count**.
+    // C leaves it undefined and Java quietly masks it to the low six bits, so
+    // `x << 64` there is `x` — an answer that looks deliberate and is almost
+    // never meant. An array index out of range already reports here rather
+    // than guessing, and a shift is the same kind of mistake.
+    case OP_SHL:
+    case OP_SHR:
+    case OP_USHR: {
+      Value b = pop(vm), a = pop(vm);
+      int64_t n = b.as.i;
+      if (n < 0 || n > 63) {
+        VM_RETURN(runtime_error(vm, "shift count must be between 0 and 63"));
+      }
+      uint64_t x = (uint64_t)a.as.i;
+      int64_t r;
+      if (op == OP_SHL) {
+        // shifting in the unsigned domain: a signed left shift that pushes
+        // bits past the sign is undefined in C, and the language promises
+        // wrapping
+        r = (int64_t)(x << n);
+      } else if (op == OP_USHR) {
+        r = (int64_t)(x >> n);
+      } else {
+        // arithmetic: propagate the sign rather than the zero, so `>>` stays
+        // division by a power of two on a negative
+        r = a.as.i >> n;
+      }
+      push(vm, val_int(r));
       break;
     }
 

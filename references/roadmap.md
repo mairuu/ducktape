@@ -80,7 +80,7 @@
   Fixed by having `heap_collect` also mark `module->methods[]`' constants.
 
 - **Aggregate runtime, closures + upvalues (milestone 5c-iii)** — closure
-  expressions (`|x| => body`) compile to their own chunk against a child
+  expressions (`|x| body`) compile to their own chunk against a child
   `Cg` chained to the enclosing function, so name resolution turns captures
   into an upvalue list (`cg_resolve_upvalue`, de-duped by `cg_add_upvalue`,
   threaded through every intervening closure for multi-level capture). A
@@ -2482,7 +2482,7 @@
 
   What *did* need a compiler change was one inference gap, and it is the
   interesting part. `map`'s closure parameter is typed `I.Item`, an associated
-  projection; the closure body (`|x| => x * 2`) cannot be checked while `x` is an
+  projection; the closure body (`|x| x * 2`) cannot be checked while `x` is an
   abstract `I.Item` — a projection is neither numeric nor comparable. The element
   type *is* known — the first argument (the iterator) pins `I` — but
   `resolve_call_expr` hinted each argument with the raw `param_types[i]`, so the
@@ -3184,7 +3184,7 @@
     side: the element that *ends* the skipping is the first one yielded, and
     dropping it would silently eat one element of every sequence.
   - **`for_each` takes a `fun(Self.Item) -> Unit` and there is no discard
-    coercion.** A shorthand closure *is* its expression, so `|x| => f(x)` fits
+    coercion.** A shorthand closure *is* its expression, so `|x| f(x)` fits
     only where `f` returns nothing; `|x| { f(x); }` is the way round it, the
     trailing `;` doing the dropping by the ordinary block rule rather than by
     anything bought for this method (`tests/fail/iter_for_each_returns.dt`).
@@ -3390,10 +3390,12 @@
   `Hash`/`Eq` contract nearly unbreakable, since there is no custom equality for
   a hash to disagree with.
 
-  - **The trait's shape is decided by a gap in the language.** ducktape has no
-    bitwise operator at all — `^` is the centre-align token in a format spec,
-    `|` opens a closure, `&` and the shifts do not exist — so a mixing function
-    is not awkward to write here, it is *unwritable*. The one an implementor
+  - **The trait's shape is decided by a gap in the language.** (Closed since,
+    by milestone 65 — the shape is kept, and the argument below is what it was
+    at the time.) ducktape had no bitwise operator at all — `^` was the
+    centre-align token in a format spec, `|` opened a closure, `&` and the
+    shifts did not exist — so a mixing function was not awkward to write here,
+    it was *unwritable*. The one an implementor
     could write is `h * 31 + x`, which is precisely the weak one: multiply and
     add both carry information upward, so the high bits never reach the low
     bits `%` reads. Hence `fun hash(self, h: Hasher)` rather than
@@ -3495,7 +3497,7 @@
   **Measured, it is ~3×, and the interesting half of that is what is left.**
   Both implementations in one `-O2` binary, images pre-compiled, best-of-5, with
   an array-building baseline subtracted: 2.9× at n=2 000, 3.3–3.8× at n=10 000,
-  2.7× at n=50 000, all with a cheap `|a, b| => a - b`. `xs.sort()` gets only
+  2.7× at n=50 000, all with a cheap `|a, b| a - b`. `xs.sort()` gets only
   2.2×, because the `Ord` path's comparator is two interpreted calls (the
   closure, then `cmp`) and moving the merge to C does not touch either. A
   temporary probe doing the comparison in C instead of calling back finished the
@@ -3506,6 +3508,65 @@
   minus the callbacks it must still make, which is why a container whose
   per-operation work is a user-written trait method is a much worse candidate
   than a sort.
+
+- **Bitwise operators (milestone 65)** — `& | ^ << >> >>>` and unary `~`, Int
+  only. Scanner, parser, checker, two opcode families, no std change. Design:
+  `language.md` "Expressions".
+
+  This closes the gap milestone 63 recorded as its sharpest finding: with no
+  bitwise operator, anything defined in terms of bits was not awkward to write
+  in ducktape but *unwritable*, which is why `std::hash` puts its mixing in C.
+  The evidence that it is closed is `tests/run/bitwise_mixer.dt`, which writes
+  `hash_mix` out in ducktape constant for constant and checks it against the
+  native on a thousand inputs plus the awkward ones. **The native stays**, and
+  that is the point rather than a compromise: it is now a choice justified by
+  milestone 64's cost model — six operations of pure arithmetic with no callback
+  is the shape that pays — instead of the only option. Keeping the ducktape twin
+  under test is what stops the optimisation from becoming a black box.
+
+  - **Two spellings were already taken, and neither had to move.** `|` opens a
+    closure and `^` is the format spec's centre-align, but both are settled by
+    position: a closure is only ever reached from `parse_primary`, so a `|` with
+    a left operand is unambiguously the operator, and a format spec is parsed on
+    its own path. Dropping the fat arrow first made this *more* delicate rather
+    than less — a closure body is now an unbraced expression, so `|x| x | 1` has
+    to take the `|` as part of the body — and greedy parsing gets it right.
+  - **`>>` cannot be a token.** A nested generic closes with a run of `>`
+    (`HashMap<String, Option<Int>>`), and `parse_type` consumes those one at a
+    time, so a scanner that fused `>>` would break every type that nests. The
+    scanner therefore emits single angle brackets and `parse_shift` fuses
+    adjacent ones, which also leaves milestone 63's `looks_like_type_args` scan
+    exact. The adjacency test is what separates `a >> b` from `a > > b`, and it
+    is the only place in the grammar where whitespace changes a parse.
+  - **Precedence is Rust's, not C's**: every bitwise operator binds tighter than
+    comparison, so `a & b == c` is `(a & b) == c` rather than C's fifty-year-old
+    `a & (b == c)` trap. Shifts stay looser than `+`, which is the half of C's
+    ordering worth keeping.
+  - **`>>` propagates the sign and `>>>` shifts in zeros**, because `Int` is
+    signed and there is no unsigned type to make the distinction for us. The
+    milestone's own test is what proves the split earns its keep: transliterating
+    splitmix64 with `>>` in place of `>>>` agrees on small positives and
+    diverges everywhere else.
+  - **A shift count outside 0..63 is a runtime error**, not a masked count.
+    Java's masking makes `x << 64` equal `x`, which looks deliberate and is
+    almost never meant; an out-of-range index already reports rather than
+    guesses.
+  - **They are the only binary operators that can drive inference.** Every other
+    one has to look at its operands before it knows what it means — `+` might be
+    Int, Float, String or a call to `Add` — while a bitwise operator has exactly
+    one operand type. So they unify with `Int` rather than testing for it, and
+    `|x| x | 1` solves `x` where `|x| x + 1` still cannot.
+
+  And one bug found rather than decided, which is the milestone's real dividend.
+  Writing a mixer in ducktape means multiplying constants that overflow by
+  design, and UBSan reported it immediately: **the VM was getting the wrapping
+  the language promises out of undefined behaviour**, computing `x * y` on
+  `int64_t`. Worse, `INT64_MIN / -1` is not merely undefined but raises SIGFPE,
+  so `lo / neg` in ordinary ducktape killed the process. Addition, subtraction
+  and multiplication now compute in `uint64_t` and convert back — the same
+  instruction with the promise actually written down — and the two overflowing
+  divisions answer `INT64_MIN` and `0`. Nothing in the suite had reached either,
+  because nothing had needed arithmetic to wrap on purpose before.
 
 ## Next (in recommended order)
 
@@ -3674,13 +3735,12 @@ via `Module.decl_base`) and is not part of the main line.
   only legal immediately before their call. That one shape satisfies the test
   without meaning it. Parenthesising the left comparison is the workaround, and
   a turbofish spelling would be the real fix.
-- **no bitwise operators at all** (`&`, `|`, `^`, `<<`, `>>`). Two spellings are
-  taken (`|` by closures, `^` by the format spec's centre-align) and the rest
-  were never added, so anything defined in terms of bits cannot be written in
-  ducktape: milestone 63's hashing had to reach C for its mixing, and a table
-  indexes with `%` rather than a mask. Division by a power of two is the
-  stand-in for a right shift. Adding them is a scanner/parser/opcode job with no
-  design question in it, and would let `std::hash` be written in ducktape.
+- ~~no bitwise operators at all~~ — **closed by milestone 65.** What is left of
+  it is small and none of it blocks anything: there are no compound bitwise
+  assignments (`&=`, `<<=`), matching the fact that `%=` does not exist either;
+  there is no unsigned integer type, so `>>>` stands in for one and a bit
+  pattern with the top bit set prints as a negative number; and `a > > b` versus
+  `a >> b` is now the one place in the grammar where whitespace changes a parse.
 - a format spec inside `{}` exists as of milestone 35 (`{v:>8}`, `{f:.3}`,
   `{f:>10.3}`), desugaring to `std::string::pad_*` / `std::fmt::float`. What has
   no spelling is a *dynamic* width or precision (`{v:>{n}}`): both are literals,

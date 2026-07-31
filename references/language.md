@@ -106,14 +106,33 @@ ending in `return` has type `!` (never), which unifies with anything.
   trait: it is a free, import-less, universal primitive, and routing it through
   an `Eq` would make the commonest operation depend on an import.
 - Logic: keywords `and`, `or` (short-circuit), `not`. There is no `&&`/`||`.
-- **There are no bitwise operators at all** — no `&`, `|`, `^`, `<<` or `>>`.
-  Two of those spellings are already taken (`|` opens a closure, `^` is the
-  centre-align token in a format spec) and the rest were never added. The
-  consequence is larger than it looks: any operation defined in terms of bits
-  is not merely awkward but *unwritable* in ducktape, which is why hashing
-  reaches C for its mixing (`std::hash`) and why a table indexes with `%`
-  rather than a mask (`std::map`). Division by a power of two is the available
-  stand-in for a right shift.
+- Bitwise `& | ^ << >> >>>` and unary `~`, **`Int` only**. Unlike `+` and `<`,
+  a non-Int operand is not routed through a trait — there is no `BitAnd` to
+  implement, because a bit pattern is not an abstraction a type supplies its own
+  version of. `Float` is refused for the reason it has no `impl Hash`: its bits
+  are not what its value means, and there is no reinterpreting cast to ask for
+  them.
+  - **`>>` propagates the sign, `>>>` shifts in zeros.** `Int` is signed and
+    there is no unsigned type, so the two shifts are spellings rather than
+    types: `-8 >> 1` is `-4` and stays division by two, `-8 >>> 1` is a large
+    positive. Bit-twiddling wants `>>>`; halving wants `>>`.
+  - **A shift count outside `0..63` is a runtime error**, not a count masked
+    into range. C leaves it undefined and Java masks it, so `x << 64` there is
+    `x`; an out-of-range index already reports here rather than guessing.
+  - **`<<`, `>>` and `>>>` are runs of adjacent angle brackets, not tokens.**
+    The scanner cannot fuse them, because a nested generic closes with a run of
+    `>` (`HashMap<String, Option<Int>>`); the parser fuses them instead, and
+    requires that no whitespace separate them. `a > > b` is therefore two
+    comparisons and `a >> b` is a shift — the one place in the grammar where
+    whitespace changes a parse.
+  - **Precedence is Rust's, not C's**: `>>`/`<<`, then `&`, then `^`, then `|`,
+    all binding *tighter* than comparison. So `a & b == c` is `(a & b) == c`
+    rather than C's `a & (b == c)`. Shifts bind looser than `+`, which is the
+    half of C's ordering worth keeping.
+  - They are the only binary operators whose operand type is known before the
+    operands are, so they **drive** inference instead of merely checking it:
+    `|x| x | 1` solves `x` where `|x| x + 1` cannot (`+` might be Int, Float,
+    String, or a call to `Add`).
 - `Int` arithmetic **wraps** silently on overflow, two's complement
   (`4611686018427387904 * 4` is `0`). There is no checked or saturating form.
 - `%` keeps the **sign of its left operand**: `(0 - 17) % 5` is `-2`, not `3`.
@@ -1997,13 +2016,19 @@ impl Hash for Point {
 `write_bool`, `write_char` and `finish`; `hash_of(v)` is the whole of a hash in
 one call, and is what a caller that is not itself an impl wants.
 
-- **`hash` writes into a `Hasher` rather than returning an Int**, and that is
-  forced by the language rather than borrowed from Rust. With no bitwise
-  operator (see "Expressions") a mixing function cannot be written in ducktape
-  at all; the one an implementor *could* write is `h * 31 + x`, which is the
-  weak one. Writing into an accumulator moves the mixing into a single object
-  that reaches C for it, so an impl only ever says *which parts of me matter*.
-  `Hasher` is to `Hash` what `StringBuf` is to building text.
+- **`hash` writes into a `Hasher` rather than returning an Int**, so an impl
+  only ever says *which parts of me matter*. This was originally forced: before
+  milestone 65 there were no bitwise operators, so a mixing function could not
+  be written in ducktape at all and the one an implementor *could* write was
+  `h * 31 + x`, the weak one. The operators exist now and
+  `tests/run/bitwise_mixer.dt` writes `mix` out in ducktape to prove it, but the
+  shape is kept: naming fields and combining nothing is the better interface
+  either way, and one mixer beats one per implementor. `Hasher` is to `Hash`
+  what `StringBuf` is to building text.
+- **The two natives are now an optimisation rather than a necessity.** `mix` is
+  six operations of pure arithmetic with no callback, which milestone 64's cost
+  model identifies as the shape that pays to move into C; `hash_string` reads a
+  hash the heap already computed.
 - **A `Hasher` is passed, not returned.** A struct is a heap object behind a
   handle, so a callee assigning to `self.state` assigns to the caller's hasher —
   the same reason `xs.push(v)` needs no way to spell "by reference".
@@ -2099,7 +2124,9 @@ s.contains(4); s.remove(4); s.to_array();
 | an array iterator detached from the array it walks | `xs.iter()` holds the array and snapshots nothing, so a `push`/`pop` mid-walk is visible (never out of bounds — see "Sources"). `xs.iter().collect()` is the copy |
 | a heterogeneous operator (`V2 * Float`, `Matrix * Vec`) | the `std::ops` traits are homogeneous (`other: Self`, no `Output`): an operator would have to select an impl by its *right* operand, which only the written `Meters::from(x)` / `Into::<U>::into(x)` forms can do. A mixed pair is an argument mismatch on the rewritten call |
 | custom `==` (an `Eq` trait) | equality stays structural and import-less for every type; only ordering and arithmetic are traits. `std::map` was the consumer this was waiting on and did not need it: a hash map resolves collisions with the structural `==` on a `K` bounded only by `Hash` |
-| bitwise operators (`&`, `\|`, `^`, `<<`, `>>`) | there are none, so anything defined in terms of bits cannot be written in ducktape — `std::hash` reaches C for its mixing, and `std::map` indexes with `%` rather than a mask. Divide by a power of two for a right shift |
+| a bitwise operator on a non-`Int` | refused, with no trait to appeal to: there is no `BitAnd` the way there is an `Add`, so `1.5 & 2` is a type error rather than a call. A `Float`'s bits have no spelling at all — there is no reinterpreting cast |
+| compound bitwise assignment (`&=`, `\|=`, `<<=`) | not parsed, matching `%=`, which does not exist either; write `x = x & y`. `+=`, `-=`, `*=`, `/=` are the whole set |
+| unsigned integers | there is one integer type, signed `Int`. `>>>` is what stands in for an unsigned shift; a value with the top bit set prints as negative even when it is being used as a bit pattern |
 | checked or saturating integer arithmetic | `Int` wraps silently, two's complement; `%` keeps the sign of its left operand, so `(0 - 17) % 5` is `-2` |
 | hashing a `Float`, and so a `Float` map key | no `impl Hash for Float`: `NaN != NaN` makes such a key unfindable in a table that compares with `==`, and the only Int a Float reaches is a truncating `as`. Wrap one in a struct and say what equality means |
 | an `entry`-style API on a map (`or_insert`, in-place update) | `get` then `insert`, which probes twice. Nothing can hold a slot open between the two |

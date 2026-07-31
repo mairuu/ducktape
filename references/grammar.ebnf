@@ -161,10 +161,24 @@ range          = or ( ( ".." | "..=" ) or )? ;         (* Int-only ranges *)
 or             = and ( "or" and )* ;
 and            = equality ( "and" equality )* ;
 equality       = comparison ( ( "==" | "!=" ) comparison )* ;
-comparison     = addition ( ( "<" | "<=" | ">" | ">=" ) addition )* ;
+comparison     = bitor ( ( "<" | "<=" | ">" | ">=" ) bitor )* ;
+bitor          = bitxor ( "|" bitxor )* ;
+bitxor         = bitand ( "^" bitand )* ;
+bitand         = shift ( "&" shift )* ;
+shift          = addition ( ( "<<" | ">>" | ">>>" ) addition )* ;
+                 (* Int-only, like every bitwise operator here. The bitwise
+                    levels sit *above* comparison, which is Rust's ordering:
+                    `a & b == c` is `(a & b) == c`, not C's `a & (b == c)`.
+
+                    "<<", ">>" and ">>>" are **not tokens**. A nested generic
+                    closes with a run of ">" (`Map<K, Vec<V>>`) that `type`
+                    consumes one at a time, so the scanner emits single angle
+                    brackets and this rule fuses adjacent ones, requiring that
+                    no whitespace separate them — `a > > b` is two comparisons.
+                    ">>>" is tried before ">>". *)
 addition       = multiply ( ( "+" | "-" ) multiply )* ;
 multiply       = unary ( ( "*" | "/" | "%" ) unary )* ;
-unary          = ( "not" | "-" ) unary | postfix ;
+unary          = ( "not" | "-" | "~" ) unary | postfix ;
 postfix        = primary postfixOp* ;
 postfixOp      = "(" ( expr ( "," expr )* )? ")"        (* call *)
                | "." IDENT ( "<" type ( "," type )* ">" )?

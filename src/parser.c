@@ -549,6 +549,10 @@ static Expr *parse_or(Parser *p);
 static Expr *parse_and(Parser *p);
 static Expr *parse_equality(Parser *p);
 static Expr *parse_comparison(Parser *p);
+static Expr *parse_bitor(Parser *p);
+static Expr *parse_bitxor(Parser *p);
+static Expr *parse_bitand(Parser *p);
+static Expr *parse_shift(Parser *p);
 static Expr *parse_addition(Parser *p);
 static Expr *parse_multiply(Parser *p);
 static Expr *parse_unary(Parser *p);
@@ -650,7 +654,102 @@ static Expr *parse_equality(Parser *p) {
 static Expr *parse_comparison(Parser *p) {
   static const TokenType ops[] = {TOKEN_LT, TOKEN_LTEQ, TOKEN_GT, TOKEN_GTEQ,
                                   0};
-  return parse_binary_left(p, parse_addition, ops);
+  return parse_binary_left(p, parse_bitor, ops);
+}
+
+// ── the bitwise levels
+// ────────────────────────────────────────────────────────
+//
+// `|`, then `^`, then `&`, then the shifts, sitting between comparison and
+// addition. That is Rust's ordering rather than C's, and the difference is the
+// one that matters: C puts `&` *below* `==`, so `a & b == c` means
+// `a & (b == c)` — the classic trap that has needed parentheses in C for fifty
+// years. Here comparison is lower than every bitwise operator, so it reads the
+// way it looks. Shifts bind tighter than `&` and looser than `+`, so
+// `a + b << c` is `(a + b) << c`; that half *is* C's ordering and is the one
+// part of it worth keeping, since a shift is a scaling step in the arithmetic
+// around it.
+static Expr *parse_bitor(Parser *p) {
+  static const TokenType ops[] = {TOKEN_PIPE, 0};
+  return parse_binary_left(p, parse_bitxor, ops);
+}
+
+static Expr *parse_bitxor(Parser *p) {
+  static const TokenType ops[] = {TOKEN_CARET, 0};
+  return parse_binary_left(p, parse_bitand, ops);
+}
+
+static Expr *parse_bitand(Parser *p) {
+  static const TokenType ops[] = {TOKEN_AMP, 0};
+  return parse_binary_left(p, parse_shift, ops);
+}
+
+// Whether the token at `i` is followed immediately by the next one, with no
+// whitespace between. `col` is the column a token starts at and `lexeme.len`
+// is how wide it is, so adjacency is arithmetic.
+static bool tok_touches_next(const Parser *p, int i) {
+  if (i + 1 >= p->count) {
+    return false;
+  }
+  const Token *a = &p->tokens[i];
+  const Token *b = &p->tokens[i + 1];
+  return a->line == b->line && b->col == a->col + a->lexeme.len;
+}
+
+// Does a run of `n` copies of `type` start here, each touching the next?
+static bool run_of(const Parser *p, TokenType type, int n) {
+  for (int i = 0; i < n; i++) {
+    if (p->current + i >= p->count || p->tokens[p->current + i].type != type) {
+      return false;
+    }
+    if (i + 1 < n && !tok_touches_next(p, p->current + i)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// `<<`, `>>` and `>>>` are runs of adjacent angle brackets rather than tokens
+// of their own. The scanner cannot fuse them: a nested generic closes with a
+// run of `>` (`Map<K, Vec<V>>`), and `parse_type` consumes those one at a time,
+// so a `>>` token would break every type that nests. Fusing here instead costs
+// one adjacency test and leaves types untouched — and because this level sits
+// *below* comparison, the run is claimed before `parse_comparison` ever sees a
+// `>` to read as an operator.
+//
+// The adjacency test is what keeps `a > > b` from being a shift, and it is the
+// only place in the grammar where whitespace changes a parse.
+static Expr *parse_shift(Parser *p) {
+  Expr *lhs = parse_addition(p);
+  while (true) {
+    TokenType op;
+    int width;
+    // `>>>` before `>>`: the longer run has to win, or every unsigned shift
+    // would parse as a signed one followed by a stray `>`.
+    if (run_of(p, TOKEN_GT, 3)) {
+      op = TOKEN_USHR;
+      width = 3;
+    } else if (run_of(p, TOKEN_GT, 2)) {
+      op = TOKEN_SHR;
+      width = 2;
+    } else if (run_of(p, TOKEN_LT, 2)) {
+      op = TOKEN_SHL;
+      width = 2;
+    } else {
+      break;
+    }
+
+    Span start = current_tok_span(p);
+    p->current += width;
+    Expr *rhs = parse_addition(p);
+    Span span = span_merge(span_merge(lhs->span, start), rhs->span);
+    Expr *expr = ast_expr(EXPR_BINARY, span, p->al);
+    expr->as.binary.left = lhs;
+    expr->as.binary.right = rhs;
+    expr->as.binary.op = op;
+    lhs = expr;
+  }
+  return lhs;
 }
 
 static Expr *parse_addition(Parser *p) {
@@ -664,7 +763,8 @@ static Expr *parse_multiply(Parser *p) {
 }
 
 static Expr *parse_unary(Parser *p) {
-  if (match_tok(p, TOKEN_NOT) || match_tok(p, TOKEN_MINUS)) {
+  if (match_tok(p, TOKEN_NOT) || match_tok(p, TOKEN_MINUS) ||
+      match_tok(p, TOKEN_TILDE)) {
     Token *op = previous_tok(p);
     Expr *operand = parse_unary(p);
     Span span = span_merge(token_span(op), operand->span);
@@ -690,8 +790,11 @@ static Expr *parse_unary(Parser *p) {
 // A token scan rather than a speculative parse, for two reasons: it costs no
 // backtracking of the parser's own state, and — the one that matters — it emits
 // no diagnostics for the reading it goes on to reject. Every `>` is its own
-// token (there is no shift operator for one to fuse into), so the angle depth
-// is exact. The bracket depths are tracked because a type argument may
+// token — `>>` and `>>>` are fused out of adjacent ones by `parse_shift` rather
+// than produced by the scanner, precisely so that scans like this one and
+// `parse_type`'s run of closing brackets never have to take a shift back apart
+// — so the angle depth is exact. The bracket depths are tracked because a type
+// argument may
 // legitimately contain `[Int]` or `(A, B)`; a closer arriving at depth zero
 // belongs to whatever encloses this expression and means the `<` was a
 // comparison.

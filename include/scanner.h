@@ -81,9 +81,21 @@ typedef enum {
   TOKEN_GT,
   TOKEN_GTEQ,
   TOKEN_QUESTION, // ?
-  TOKEN_PIPE,     // |  (closure parameter delimiter)
+  TOKEN_PIPE,     // |  (closure parameter delimiter, and bitwise or)
   TOKEN_AT,       // @  (attribute introducer)
-  TOKEN_CARET,    // ^  (centre alignment in an interpolation format spec)
+  TOKEN_CARET,    // ^  (bitwise xor; centre alignment in a format spec)
+  TOKEN_AMP,      // &  (bitwise and)
+  TOKEN_TILDE,    // ~  (bitwise not)
+
+  // The shifts are **synthesised by the parser and never produced by the
+  // scanner**. `>` has to stay its own token because a nested generic closes
+  // with a run of them (`Map<K, Vec<V>>`), and a scanner that fused `>>` would
+  // break every such type. So the scanner emits single angle brackets and
+  // `parse_shift` fuses adjacent ones, checking that no whitespace separates
+  // them; these three names exist only to label the resulting AST node.
+  TOKEN_SHL,  // <<
+  TOKEN_SHR,  // >>   arithmetic: the sign bit is propagated
+  TOKEN_USHR, // >>>  logical: zeros are shifted in
 
   // control
   TOKEN_EOF,

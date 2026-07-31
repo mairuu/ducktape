@@ -213,6 +213,9 @@ pub fun process_data<T>(data: T) -> Result<Int, String> {
     var logic = true and false or not false;
     var cmp = (5 >= 4) == (3 != 2) and (1 < 2) and (3 <= 3);
     var math = -5 + 10 - 2 * 3 / 1 % 2;
+    var bits = ~(1 << 4) & 255 | 3 ^ 9;
+    var signed_shift = -16 >> 2;
+    var unsigned_shift = -16 >>> 2;
 
     var r1 = 1..10;
     var r2 = 0..=100;

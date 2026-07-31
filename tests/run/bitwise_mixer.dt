@@ -1,0 +1,97 @@
+# The proof that the gap milestone 63 recorded is closed.
+#
+# `std::hash`'s mixing lives in C, and the reason given at the time was not
+# speed but *expressibility*: with no bitwise operator in the language, a hash
+# function could not be written in ducktape at all. This file writes that exact
+# function — `hash_mix` out of `src/native.c`, constant for constant — and
+# checks it agrees with the native on every input tried.
+#
+# It reaches the native through the public API rather than by calling it:
+# `hash_of(n)` on an Int is `mix(0, n)`, and a `Hasher` written to twice is
+# `mix(mix(0, a), b)`. So nothing here depends on `mix` being visible, and the
+# test would still hold if std rearranged which of its functions is native.
+#
+# The native **stays** native. What changed is that it is now a choice — one
+# C call against six interpreted operations per round — rather than the only
+# option. Milestone 64's cost model is what makes that choice the right one.
+#> agrees on 0..999: true
+#> agrees on the awkward ones: true
+#> two writes agree: true
+#> shifts: 4 -4 9223372036854775804 255
+use std::io::print;
+use std::hash::{Hasher, hash_of};
+use std::array;
+
+# splitmix64's multiplier, 0xff51afd7ed558ccd. There are no hex literals, so it
+# is written as the signed Int holding that bit pattern — which is negative,
+# since the top bit is set. That is not a workaround: the value is a *pattern*
+# rather than a magnitude, and every operation below treats it as one.
+fun splitmix_const() -> Int {
+    return 0 - 49064778989728563;
+}
+
+# FNV-1a's 64-bit prime, 0x100000001b3. Small enough to be positive.
+fun fnv_prime() -> Int {
+    return 1099511628211;
+}
+
+# `n_hash_mix` from src/native.c, transliterated. The multiplies overflow by
+# design and the language promises they wrap; the shifts are `>>>` rather than
+# `>>` because C is shifting a `uint64_t`, so zeros come in and not the sign.
+# Getting that one character wrong is the whole difference between this and a
+# function that agrees on positives and diverges on negatives — which is why
+# the checks below deliberately include values with the top bit set.
+fun mix(state: Int, value: Int) -> Int {
+    var v = value * splitmix_const();
+    v = v ^ (v >>> 33);
+    var h = state ^ v;
+    h = h * fnv_prime();
+    h = h ^ (h >>> 29);
+    return h;
+}
+
+fun main() {
+    # `hash_of` on an Int is one round from a zero state
+    var ok = true;
+    var i = 0;
+    while i < 1000 {
+        if mix(0, i) != hash_of(i) {
+            ok = false;
+        }
+        i += 1;
+    }
+    print("agrees on 0..999: {ok}");
+
+    # the values where a wrong shift or a non-wrapping multiply would show:
+    # negatives, the extremes, and the constant itself
+    var awkward: [Int] = [
+        0 - 1,
+        0 - 9223372036854775807 - 1,
+        9223372036854775807,
+        0 - 49064778989728563,
+        1099511628211,
+        0 - 2,
+        4294967296,
+    ];
+    var awkward_ok = true;
+    for n in awkward {
+        if mix(0, n) != hash_of(n) {
+            awkward_ok = false;
+        }
+    }
+    print("agrees on the awkward ones: {awkward_ok}");
+
+    # and that the accumulation composes the same way: a Hasher written to
+    # twice is the mixer applied twice, state threaded through
+    var h = Hasher::new();
+    h.write_int(7);
+    h.write_int(0 - 11);
+    print("two writes agree: {h.finish() == mix(mix(0, 7), 0 - 11)}");
+
+    # the operators themselves, at the boundaries that distinguish them
+    var a = 8 >> 1;
+    var b = (0 - 8) >> 1;
+    var c = (0 - 8) >>> 1;
+    var d = ~(~0 << 8);
+    print("shifts: {a} {b} {c} {d}");
+}

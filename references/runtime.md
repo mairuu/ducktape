@@ -1112,11 +1112,15 @@ than a wrong call later, which is why the image needs no separate registry
 hash. An `@intrinsic` never appears in an image at all — its opcode is already
 in the emitted code.
 
-**`hash_mix` / `hash_string`** (milestone 63) are the tier's clearest case, in
-that what puts them here is not cost but *expressibility*. The language has no
-bitwise operator at all — no `^`, no `&`, no shift — so a mixing function is not
-slow to write in ducktape, it cannot be written. `hash_mix` folds one Int into a
-running state: a splitmix64 finalisation of the incoming value first, so that
+**`hash_mix` / `hash_string`** (milestone 63) were the tier's clearest case
+while what put them here was *expressibility* rather than cost: the language had
+no bitwise operator at all, so a mixing function was not slow to write in
+ducktape, it could not be written. **Milestone 65 closed that**, and
+`tests/run/bitwise_mixer.dt` now writes `hash_mix` out in ducktape constant for
+constant and checks the two agree. They stay in C as an optimisation: `mix` is
+six operations of pure arithmetic with no callback, the shape the cost model
+below says to move. Keeping the ducktape twin under test is what stops that
+from being a black box. `hash_mix` folds one Int into a running state: a splitmix64 finalisation of the incoming value first, so that
 the low-entropy keys a program actually uses (0, 1, 2) still spread across all
 64 bits, then FNV-1a's prime to carry the accumulation and a last shift-xor to
 move the high bits down where `%` will read them. Every multiply relies on
