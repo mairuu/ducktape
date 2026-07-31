@@ -51,15 +51,32 @@ Notables:
   `parse_block`.
 - Error recovery: `error_at` sets panic mode; `sync_to_stmt`/`sync_to_decl`
   skip to a boundary; unparseable nodes become `*_POISON` kinds.
-- **Most list buffers are fixed at 16 and report "too many ..."** — arguments,
-  match arms, struct fields, enum variants, tuple elements, bounds. Three are
-  grown from the arena instead, and the rule for which is whether a cap could
-  ever refuse a program worth writing: a block's statements, an impl's items
-  (milestone 72, once `HashMap` wanted a 17th method), and a module's
-  declarations. The last of those had been a 1024-entry stack array guarded by
-  an `assert` — which the release build's `NDEBUG` deleted, so the 1025th
-  declaration in a file wrote past it and the compiler took SIGSEGV. The
-  remaining 16s are a wart, not a design (`roadmap.md`).
+- **Every list buffer grows; none of them caps** (milestone 73). One facility,
+  `PLIST`/`PLIST_GROW`/`PLIST_PUSH`/`PLIST_TAKE` at the top of `parser.c`,
+  backs all of them: arguments, match arms, struct fields, enum variants,
+  tuple elements, bounds, path segments, trait items, interpolation segments,
+  a block's statements, an impl's items, a module's declarations. A list
+  accumulates into a zeroed stack buffer and *spills* to the arena when that
+  fills; `PLIST_TAKE` right-sizes it into the node.
+
+  The stack buffer is a small-size optimisation, not a ceiling, and it stays
+  for a reason particular to this allocator: `arena_realloc_fn` bump-allocates
+  a fresh block and abandons the old, so an always-arena list would cost ~2n
+  doubling plus n for the right-sized copy where the stack version costs n.
+
+  Before this, twenty-odd sites each carried their own cap — 16 for most, 8
+  for bounds and path segments, 64 for a trait's items — and each reported
+  "too many ...", i.e. refused a program the grammar accepts. Two were worse
+  than a refusal: a module's declarations were a 1024-entry array guarded by
+  an `assert`, which the release build's `NDEBUG` deleted (milestone 72, fixed
+  there), and **a method call's arguments were a `tmp[64]` with no check at
+  all** — `obj.m(a1, ..., a65)` wrote past it and smashed the stack, caught
+  here only by the toolchain's default stack protector (milestone 73).
+
+  `MAX_ASSOC_BINDINGS` survives as an inline size only. As a *limit* it was
+  answering a question the parser cannot answer: whether a `dyn Trait<..>`
+  binding list is total is decided against the trait's own associated types,
+  which `resolve_dyn_type` does by name.
 
 AST (`include/ast.h`): `Decl`/`Stmt`/`Expr`/`Pattern`/`TypeNode` tagged
 unions, plus semantic def tables (`FunDef`, `StructDef`, `EnumDef`,

@@ -11,10 +11,66 @@
 #include <string.h>
 #include <threads.h>
 
-// how many associated types one `dyn Trait<..>` may bind. A trait is free to
-// declare more (its item cap is 64) — it just cannot then be a trait object,
-// which is reported here rather than as an incomplete binding list, since the
-// list is required to be total.
+// ── growable lists ───────────────────────────────────────────────────────────
+//
+// Every list this parser builds has one shape: accumulate an unknown number of
+// items, then hand them to an AST node sized to exactly what arrived. Each was
+// a fixed stack array with a cap and a "too many ..." diagnostic behind it, and
+// a cap on how many arguments a call may pass, or fields a struct may declare,
+// can only ever refuse a program that is otherwise correct. The grammar sets no
+// such limit and neither does anything downstream, so the number was never a
+// rule about the language — it was the size of a buffer, showing through.
+//
+// The stack buffer stays, because it was never the wrong part. An arena does
+// not reuse: `arena_realloc_fn` bump-allocates a fresh block and abandons the
+// old one, so a list that grew from the arena from the start would cost ~2n
+// while doubling plus another n for the right-sized copy, where the stack
+// version costs exactly n. The buffer is now a small-size optimisation that
+// *spills* rather than a ceiling that reports: the common case allocates
+// exactly what the node keeps, and the uncommon case merely allocates.
+//
+// The inline buffer is zeroed and so is every spilled extension, so a field no
+// site happens to write (a `span` on an item kind that has none) reads as zero
+// instead of as whatever the stack held.
+#define PLIST(T, name, inline_cap)                                             \
+  T name##_buf[inline_cap] = {0};                                              \
+  T *name = name##_buf;                                                        \
+  int name##_count = 0;                                                        \
+  int name##_cap = (inline_cap)
+
+// room for one more item, spilling to the arena when the inline buffer is full
+#define PLIST_GROW(p, name)                                                    \
+  do {                                                                         \
+    if ((name##_count) == (name##_cap)) {                                      \
+      int plist_cap = (name##_cap) * 2;                                        \
+      size_t plist_used = sizeof(*(name)) * (size_t)(name##_count);            \
+      void *plist_fresh =                                                      \
+          al_alloc((p)->al, sizeof(*(name)) * (size_t)plist_cap);              \
+      memcpy(plist_fresh, (name), plist_used);                                 \
+      memset((char *)plist_fresh + plist_used, 0,                              \
+             sizeof(*(name)) * (size_t)plist_cap - plist_used);                \
+      (name) = plist_fresh;                                                    \
+      (name##_cap) = plist_cap;                                                \
+    }                                                                          \
+  } while (0)
+
+#define PLIST_PUSH(p, name, value)                                             \
+  do {                                                                         \
+    PLIST_GROW(p, name);                                                       \
+    (name)[(name##_count)++] = (value);                                        \
+  } while (0)
+
+// the finished list, in the arena, sized to what it holds
+#define PLIST_TAKE(p, name)                                                    \
+  memcpy(al_alloc((p)->al, sizeof(*(name)) * (size_t)(name##_count)), (name),  \
+         sizeof(*(name)) * (size_t)(name##_count))
+
+// how many arguments and associated-type bindings one `dyn Trait<..>` is
+// expected to carry — an inline size, not a limit. It used to be a limit, and
+// the diagnostic behind it was answering a question the parser cannot answer:
+// whether a binding list is total is decided against the *trait's* associated
+// types, which resolve_dyn_type does by name, reporting the unknown ones and
+// the duplicated ones. A trait with nine associated types is not a parse error.
 #define MAX_ASSOC_BINDINGS 8
 
 // temp helpers
@@ -202,8 +258,8 @@ static bool parse_path(Parser *p, PathParseMode mode, Path *out);
 // The `<..>` after a `dyn Trait`: the trait's own type arguments, then its
 // associated-type bindings (`<Int, Item = String>`). Writes each list into its
 // out-parameter and returns false on a parse error.
-static bool parse_dyn_args(Parser *p, TypeNode **out_args, int *out_arg_count,
-                           AssocBindingNode *out_bindings,
+static bool parse_dyn_args(Parser *p, TypeNode ***out_args, int *out_arg_count,
+                           AssocBindingNode **out_bindings,
                            int *out_binding_count);
 
 // a `var` binding is a pattern; the checker rejects the refutable ones.
@@ -221,22 +277,16 @@ static TypeNode *parse_type(Parser *p) {
     }
 
     // tuple type
-    TypeNode *elem_types[16];
-    int elem_count = 0;
+    PLIST(TypeNode *, elem_types, 8);
     bool had_error = false;
 
     do {
-      if (elem_count >= 16) {
-        error_at(p, current_tok_span(p), "too many types in tuple");
-        had_error = true;
-        break;
-      }
       TypeNode *ty = parse_type(p);
       if (ty->kind == TYNODE_POISON) {
         had_error = true;
         break;
       }
-      elem_types[elem_count++] = ty;
+      PLIST_PUSH(p, elem_types, ty);
     } while (match_tok(p, TOKEN_COMMA));
 
     if (had_error) {
@@ -247,40 +297,32 @@ static TypeNode *parse_type(Parser *p) {
       return ast_type_node(TYNODE_POISON, current_tok_span(p), p->al);
     }
 
-    if (elem_count == 1) {
+    if (elem_types_count == 1) {
       return elem_types[0];
     }
 
     base = ast_type_node(
         TYNODE_TUPLE, span_merge(token_span(peek_tok(p)), previous_tok_span(p)),
         p->al);
-    base->as.tuple.elems = al_alloc(p->al, sizeof(TypeNode *) * elem_count);
-    memcpy(base->as.tuple.elems, elem_types, sizeof(TypeNode *) * elem_count);
-    base->as.tuple.count = elem_count;
+    base->as.tuple.elems = PLIST_TAKE(p, elem_types);
+    base->as.tuple.count = elem_types_count;
   }
 
   if (match_tok(p, TOKEN_FUN)) {
     Token start = *previous_tok(p);
     consume_tok(p, TOKEN_LPAREN, "expected '(' after 'fun' in type");
 
-    TypeNode *param_types[16];
-    int param_count = 0;
+    PLIST(TypeNode *, param_types, 8);
     bool had_error = false;
 
     if (!check_tok(p, TOKEN_RPAREN)) {
       do {
-        if (param_count >= 16) {
-          error_at(p, current_tok_span(p),
-                   "too many parameters in function type");
-          had_error = true;
-          break;
-        }
         TypeNode *ty = parse_type(p);
         if (ty->kind == TYNODE_POISON) {
           had_error = true;
           break;
         }
-        param_types[param_count++] = ty;
+        PLIST_PUSH(p, param_types, ty);
       } while (match_tok(p, TOKEN_COMMA));
     }
 
@@ -310,11 +352,8 @@ static TypeNode *parse_type(Parser *p) {
                          span_merge(token_span(&start), previous_tok_span(p)),
                          p->al);
 
-    base->as.fun.param_count = param_count;
-    base->as.fun.param_types =
-        al_alloc(p->al, sizeof(TypeNode *) * param_count);
-    memcpy(base->as.fun.param_types, param_types,
-           sizeof(TypeNode *) * param_count);
+    base->as.fun.param_count = param_types_count;
+    base->as.fun.param_types = PLIST_TAKE(p, param_types);
     base->as.fun.return_type = return_type;
   }
 
@@ -357,11 +396,12 @@ static TypeNode *parse_type(Parser *p) {
       return ast_type_node(TYNODE_POISON, current_tok_span(p), p->al);
     }
 
-    TypeNode *type_args[MAX_ASSOC_BINDINGS];
-    AssocBindingNode bindings[MAX_ASSOC_BINDINGS];
+    TypeNode **type_args = NULL;
+    AssocBindingNode *bindings = NULL;
     int type_arg_count = 0, binding_count = 0;
-    if (check_tok(p, TOKEN_LT) && !parse_dyn_args(p, type_args, &type_arg_count,
-                                                  bindings, &binding_count)) {
+    if (check_tok(p, TOKEN_LT) &&
+        !parse_dyn_args(p, &type_args, &type_arg_count, &bindings,
+                        &binding_count)) {
       return ast_type_node(TYNODE_POISON, current_tok_span(p), p->al);
     }
 
@@ -369,15 +409,9 @@ static TypeNode *parse_type(Parser *p) {
                          span_merge(token_span(&start), previous_tok_span(p)),
                          p->al);
     base->as.dyn.path = path;
-    base->as.dyn.type_args =
-        al_alloc(p->al, sizeof(TypeNode *) * type_arg_count);
-    memcpy(base->as.dyn.type_args, type_args,
-           sizeof(TypeNode *) * type_arg_count);
+    base->as.dyn.type_args = type_args;
     base->as.dyn.type_arg_count = type_arg_count;
-    base->as.dyn.bindings =
-        al_alloc(p->al, sizeof(AssocBindingNode) * binding_count);
-    memcpy(base->as.dyn.bindings, bindings,
-           sizeof(AssocBindingNode) * binding_count);
+    base->as.dyn.bindings = bindings;
     base->as.dyn.binding_count = binding_count;
   }
 
@@ -419,22 +453,17 @@ static TypeNode *parse_type(Parser *p) {
   return ast_type_node(TYNODE_POISON, current_tok_span(p), p->al);
 }
 
-static bool parse_dyn_args(Parser *p, TypeNode **out_args, int *out_arg_count,
-                           AssocBindingNode *out_bindings,
+static bool parse_dyn_args(Parser *p, TypeNode ***out_args, int *out_arg_count,
+                           AssocBindingNode **out_bindings,
                            int *out_binding_count) {
   if (!consume_tok(p, TOKEN_LT, "expected '<' after the trait's name")) {
     return false;
   }
 
-  *out_arg_count = 0;
-  *out_binding_count = 0;
-  do {
-    if (*out_arg_count >= MAX_ASSOC_BINDINGS ||
-        *out_binding_count >= MAX_ASSOC_BINDINGS) {
-      error_at(p, current_tok_span(p), "too many type arguments");
-      return false;
-    }
+  PLIST(TypeNode *, args, MAX_ASSOC_BINDINGS);
+  PLIST(AssocBindingNode, bindings, MAX_ASSOC_BINDINGS);
 
+  do {
     // an entry is a binding when it is `Name =`, and a type argument
     // otherwise. Two tokens of lookahead decide it, and nothing else has to:
     // a type argument may be any type, including a bare name.
@@ -447,18 +476,20 @@ static bool parse_dyn_args(Parser *p, TypeNode **out_args, int *out_arg_count,
       if (ty->kind == TYNODE_POISON) {
         return false;
       }
-      out_bindings[(*out_binding_count)++] = (AssocBindingNode){
-          .name = name.lexeme,
-          .type = ty,
-          .span = span_merge(token_span(&name), previous_tok_span(p)),
-      };
+      PLIST_PUSH(
+          p, bindings,
+          ((AssocBindingNode){
+              .name = name.lexeme,
+              .type = ty,
+              .span = span_merge(token_span(&name), previous_tok_span(p)),
+          }));
       continue;
     }
 
     // a type argument after a binding would leave the two lists interleaved,
     // and the trait's parameters are positional — so order is not a style
     // question here.
-    if (*out_binding_count > 0) {
+    if (bindings_count > 0) {
       error_at(p, current_tok_span(p),
                "a trait's type arguments come before its associated-type "
                "bindings, as in 'dyn Trait<Int, Item = String>'");
@@ -469,38 +500,39 @@ static bool parse_dyn_args(Parser *p, TypeNode **out_args, int *out_arg_count,
     if (ty->kind == TYNODE_POISON) {
       return false;
     }
-    out_args[(*out_arg_count)++] = ty;
+    PLIST_PUSH(p, args, ty);
   } while (match_tok(p, TOKEN_COMMA));
 
   if (!consume_tok(p, TOKEN_GT, "expected '>' after the trait's arguments")) {
     return false;
   }
+
+  *out_args = PLIST_TAKE(p, args);
+  *out_arg_count = args_count;
+  *out_bindings = PLIST_TAKE(p, bindings);
+  *out_binding_count = bindings_count;
   return true;
 }
 
 static int parse_type_args(Parser *p, TypeNode ***out_args);
 
 static bool parse_path(Parser *p, PathParseMode mode, Path *out) {
-  PathSegment segments[8];
-  int segment_count = 0;
+  PLIST(PathSegment, segments, 8);
   Token *start_tok = current_tok(p);
 
   if (check_tok(p, TOKEN_IDENT) || check_tok(p, TOKEN_SELF_TYPE)) {
     do {
-      if (segment_count >= 8) {
-        error_at(p, current_tok_span(p), "too many segments in path");
-        return false;
-      }
       if (mode == PATH_USE && check_tok(p, TOKEN_LBRACE)) {
         break;
       }
       // 'Self' may only lead a path; later segments must be plain idents.
-      if (segment_count == 0 && check_tok(p, TOKEN_SELF_TYPE)) {
+      if (segments_count == 0 && check_tok(p, TOKEN_SELF_TYPE)) {
         advance_tok(p);
       } else if (!consume_tok(p, TOKEN_IDENT, "expected identifier in path")) {
         return false;
       }
-      PathSegment *segment = &segments[segment_count++];
+      PLIST_GROW(p, segments);
+      PathSegment *segment = &segments[segments_count++];
       *segment = (PathSegment){
           .name = previous_tok(p)->lexeme,
           .type_arg_count = 0,
@@ -535,9 +567,8 @@ static bool parse_path(Parser *p, PathParseMode mode, Path *out) {
   }
 
   assert(out);
-  out->segments = al_alloc(p->al, sizeof(PathSegment) * segment_count);
-  memcpy(out->segments, segments, sizeof(PathSegment) * segment_count);
-  out->count = segment_count;
+  out->segments = PLIST_TAKE(p, segments);
+  out->count = segments_count;
   out->span = span_merge(token_span(start_tok), previous_tok_span(p));
 
   return true;
@@ -780,25 +811,18 @@ static Expr *parse_postfix(Parser *p) {
   Expr *base = parse_primary(p);
   while (true) {
     if (match_tok(p, TOKEN_LPAREN)) {
-      Expr *args[16];
-      int argc = 0;
+      PLIST(Expr *, args, 8);
       if (!check_tok(p, TOKEN_RPAREN)) {
         do {
-          if (argc >= 16) {
-            error_at(p, current_tok_span(p), "too many arguments");
-            break;
-          }
-          args[argc++] = parse_expr(p);
+          PLIST_PUSH(p, args, parse_expr(p));
         } while (match_tok(p, TOKEN_COMMA));
       }
       consume_tok(p, TOKEN_RPAREN, "expected ')' after arguments");
-      Expr **arg_array = al_alloc(p->al, sizeof(Expr *) * argc);
-      memcpy(arg_array, args, sizeof(Expr *) * argc);
       Span span = span_merge(base->span, previous_tok_span(p));
       Expr *expr = ast_expr(EXPR_CALL, span, p->al);
       expr->as.call.callee = base;
-      expr->as.call.args = arg_array;
-      expr->as.call.arg_count = argc;
+      expr->as.call.args = PLIST_TAKE(p, args);
+      expr->as.call.arg_count = args_count;
       base = expr;
     } else if (match_tok(p, TOKEN_DOT)) {
       if (match_tok(p, TOKEN_IDENT)) {
@@ -831,16 +855,18 @@ static Expr *parse_postfix(Parser *p) {
 
         if (match_tok(p, TOKEN_LPAREN)) {
           // method call: obj.method(args)
-          Expr **args = NULL;
-          int argc = 0;
+          //
+          // This list is the one that had no check at all — a bare `tmp[64]`
+          // written through by `tmp[argc++]`, so the 65th argument corrupted
+          // the stack rather than reporting anything. Every sibling list in
+          // this file at least refused; this one did not, and the distro's
+          // stack protector was all that stood between it and the return
+          // address.
+          PLIST(Expr *, args, 8);
           if (!check_tok(p, TOKEN_RPAREN)) {
-            Expr *tmp[64];
-            argc = 0;
             do {
-              tmp[argc++] = parse_expr(p);
+              PLIST_PUSH(p, args, parse_expr(p));
             } while (match_tok(p, TOKEN_COMMA) && !check_tok(p, TOKEN_RPAREN));
-            args = al_alloc(p->al, sizeof(Expr *) * argc);
-            memcpy(args, tmp, sizeof(Expr *) * argc);
           }
           consume_tok(p, TOKEN_RPAREN, "expected ')' after arguments");
           Expr *expr =
@@ -849,8 +875,8 @@ static Expr *parse_postfix(Parser *p) {
 
           expr->as.method_call.object = base;
           expr->as.method_call.method_name = name.lexeme;
-          expr->as.method_call.args = args;
-          expr->as.method_call.arg_count = argc;
+          expr->as.method_call.args = PLIST_TAKE(p, args);
+          expr->as.method_call.arg_count = args_count;
           expr->as.method_call.type_args = type_args;
           expr->as.method_call.type_arg_count = type_arg_count;
           expr->as.method_call.resolved_method = NULL;
@@ -928,24 +954,9 @@ static Expr *parse_block(Parser *p) {
   };
   Span start_span = previous_tok_span(p);
 
-  // grown rather than fixed: a block's length is bounded by nothing but the
-  // source, so a cap here could only ever be an abort on a valid program.
-  Stmt **tmp_stmts = NULL;
-  int stmt_count = 0;
-  int stmt_cap = 0;
+  PLIST(Stmt *, stmts, 8);
   Expr *tail = NULL;
   bool block_had_error = false;
-
-#define PUSH_STMT(s)                                                           \
-  do {                                                                         \
-    if (stmt_count == stmt_cap) {                                              \
-      int new_cap = stmt_cap == 0 ? 8 : stmt_cap * 2;                          \
-      tmp_stmts = al_realloc(p->al, tmp_stmts, sizeof(Stmt *) * stmt_cap,      \
-                             sizeof(Stmt *) * new_cap);                        \
-      stmt_cap = new_cap;                                                      \
-    }                                                                          \
-    tmp_stmts[stmt_count++] = (s);                                             \
-  } while (0)
 
   while (!check_tok(p, TOKEN_RBRACE) && !is_at_end(p)) {
     if (tail) {
@@ -964,7 +975,7 @@ static Expr *parse_block(Parser *p) {
         // a value-bearing block expression just before `}` is the tail
         tail = stmt->as.expr_stmt.expr;
       } else {
-        PUSH_STMT(stmt);
+        PLIST_PUSH(p, stmts, stmt);
       }
     } else {
       Expr *expr = parse_expr(p);
@@ -974,7 +985,7 @@ static Expr *parse_block(Parser *p) {
       } else if (match_tok(p, TOKEN_SEMICOLON)) {
         Stmt *stmt = ast_stmt(STMT_EXPR, expr->span, p->al);
         stmt->as.expr_stmt.expr = expr;
-        PUSH_STMT(stmt);
+        PLIST_PUSH(p, stmts, stmt);
       } else {
         tail = expr;
       }
@@ -996,20 +1007,14 @@ static Expr *parse_block(Parser *p) {
 
   Expr *expr =
       ast_expr(EXPR_BLOCK, span_merge(start_span, previous_tok_span(p)), p->al);
-  if (stmt_count > 0) {
-    // right-size: the grown buffer is up to twice what the block needs
-    expr->as.block.stmts = al_alloc(p->al, sizeof(Stmt *) * stmt_count);
-    memcpy(expr->as.block.stmts, tmp_stmts, sizeof(Stmt *) * stmt_count);
-  }
-  expr->as.block.stmt_count = stmt_count;
+  expr->as.block.stmts = PLIST_TAKE(p, stmts);
+  expr->as.block.stmt_count = stmts_count;
   expr->as.block.tail_expr = tail;
   return expr;
-#undef PUSH_STMT
 }
 
 static int parse_type_args(Parser *p, TypeNode ***out_args) {
-  TypeNode *args[16];
-  int count = 0;
+  PLIST(TypeNode *, args, 8);
   bool had_error = false;
 
   if (!consume_tok(p, TOKEN_LT, "expected '<' before type arguments")) {
@@ -1025,17 +1030,12 @@ static int parse_type_args(Parser *p, TypeNode ***out_args) {
     had_error = true;
   } else {
     do {
-      if (count >= 16) {
-        error_at(p, current_tok_span(p), "too many type arguments");
-        had_error = true;
-        break;
-      }
       TypeNode *ty = parse_type(p);
       if (ty->kind == TYNODE_POISON) {
         had_error = true;
         break;
       }
-      args[count++] = ty;
+      PLIST_PUSH(p, args, ty);
     } while (match_tok(p, TOKEN_COMMA));
 
     if (!consume_tok(p, TOKEN_GT, "expected '>' after type arguments")) {
@@ -1047,9 +1047,8 @@ static int parse_type_args(Parser *p, TypeNode ***out_args) {
     return 0;
   }
 
-  *out_args = al_alloc(p->al, sizeof(TypeNode *) * count);
-  memcpy(*out_args, args, sizeof(TypeNode *) * count);
-  return count;
+  *out_args = PLIST_TAKE(p, args);
+  return args_count;
 }
 
 // The `<..>` after a trait's name is the same bracket in a bound as in a
@@ -1079,20 +1078,18 @@ static bool parse_trait_ref(Parser *p, TraitRef *out) {
     advance_tok(p);
   }
   if (check_tok(p, TOKEN_LT) && out->path.count > 0) {
-    TypeNode *type_args[MAX_ASSOC_BINDINGS];
-    AssocBindingNode bindings[MAX_ASSOC_BINDINGS];
+    TypeNode **type_args = NULL;
+    AssocBindingNode *bindings = NULL;
     int type_arg_count = 0, binding_count = 0;
-    if (!parse_dyn_args(p, type_args, &type_arg_count, bindings,
+    if (!parse_dyn_args(p, &type_args, &type_arg_count, &bindings,
                         &binding_count)) {
       return false;
     }
     PathSegment *last = &out->path.segments[out->path.count - 1];
-    last->type_args = al_alloc(p->al, sizeof(TypeNode *) * type_arg_count);
-    memcpy(last->type_args, type_args, sizeof(TypeNode *) * type_arg_count);
+    last->type_args = type_args;
     last->type_arg_count = type_arg_count;
 
-    out->bindings = al_alloc(p->al, sizeof(AssocBindingNode) * binding_count);
-    memcpy(out->bindings, bindings, sizeof(AssocBindingNode) * binding_count);
+    out->bindings = bindings;
     out->binding_count = binding_count;
   }
 
@@ -1121,9 +1118,8 @@ static bool parse_bound_lhs(Parser *p, WhereLhs *out, bool allow_self) {
   Span start = previous_tok_span(p);
   bool had_error = false;
 
-  StringView segments[4];
-  int segment_count = 1;
-  segments[0] = previous_tok(p)->lexeme;
+  PLIST(StringView, segments, 4);
+  PLIST_PUSH(p, segments, previous_tok(p)->lexeme);
 
   if (check_tok(p, TOKEN_DOT)) {
     do {
@@ -1138,21 +1134,14 @@ static bool parse_bound_lhs(Parser *p, WhereLhs *out, bool allow_self) {
         had_error = true;
         break;
       }
-      if (segment_count >= 4) {
-        error_at(p, current_tok_span(p),
-                 "too many segments in type parameter path in where clause");
-        had_error = true;
-        break;
-      }
-      segments[segment_count++] = previous_tok(p)->lexeme;
+      PLIST_PUSH(p, segments, previous_tok(p)->lexeme);
     } while (check_tok(p, TOKEN_DOT));
   }
   if (had_error) {
     return false;
   }
-  out->segment_count = segment_count;
-  out->segments = al_alloc(p->al, sizeof(StringView) * segment_count);
-  memcpy(out->segments, segments, sizeof(StringView) * segment_count);
+  out->segment_count = segments_count;
+  out->segments = PLIST_TAKE(p, segments);
   // the whole path, so a diagnostic about `T.Item` underlines both segments.
   // Until milestone 52 nothing reachable read this span, so it went unset.
   out->span = span_merge(start, previous_tok_span(p));
@@ -1160,26 +1149,20 @@ static bool parse_bound_lhs(Parser *p, WhereLhs *out, bool allow_self) {
 }
 
 static bool parse_trait_bound(Parser *p, TraitBound *out) {
-  TraitRef refs[8];
-  int ref_count = 0;
+  PLIST(TraitRef, refs, 4);
   bool had_error = false;
 
   do {
-    if (ref_count >= 8) {
-      error_at(p, current_tok_span(p), "too many trait bounds");
-      had_error = true;
-      break;
-    }
-    had_error = had_error || !parse_trait_ref(p, &refs[ref_count++]);
+    PLIST_GROW(p, refs);
+    had_error = had_error || !parse_trait_ref(p, &refs[refs_count++]);
   } while (!had_error && match_tok(p, TOKEN_PLUS));
 
   if (had_error) {
     return false;
   }
 
-  out->ref_count = ref_count;
-  out->refs = al_alloc(p->al, sizeof(TraitRef) * ref_count);
-  memcpy(out->refs, refs, sizeof(TraitRef) * ref_count);
+  out->ref_count = refs_count;
+  out->refs = PLIST_TAKE(p, refs);
   return !had_error;
 }
 
@@ -1190,21 +1173,16 @@ static bool parse_where_clause(Parser *p, WhereClause **out, bool allow_self) {
 
   Token where_tok = *previous_tok(p);
 
-  WherePred preds[8];
-  int pred_count = 0;
+  PLIST(WherePred, preds, 4);
   bool had_error = false;
 
   do {
     if (check_tok(p, TOKEN_LBRACE)) {
       break;
     }
-    if (pred_count >= 8) {
-      error_at(p, current_tok_span(p), "too many predicates in where clause");
-      had_error = true;
-      break;
-    }
 
-    WherePred *pred = &preds[pred_count++];
+    PLIST_GROW(p, preds);
+    WherePred *pred = &preds[preds_count++];
     had_error = had_error || !parse_bound_lhs(p, &pred->lhs, allow_self);
     if (had_error) {
       break;
@@ -1228,9 +1206,8 @@ static bool parse_where_clause(Parser *p, WhereClause **out, bool allow_self) {
   }
 
   *out = al_alloc(p->al, sizeof(WhereClause));
-  (*out)->pred_count = pred_count;
-  (*out)->preds = al_alloc(p->al, sizeof(WherePred) * pred_count);
-  memcpy((*out)->preds, preds, sizeof(WherePred) * pred_count);
+  (*out)->pred_count = preds_count;
+  (*out)->preds = PLIST_TAKE(p, preds);
 
   (*out)->span = span_merge(token_span(&where_tok), current_tok_span(p));
 
@@ -1241,24 +1218,18 @@ static int parse_type_params(Parser *p, TypeParamNode **out) {
   if (!consume_tok(p, TOKEN_LT, "expected '<'"))
     return -1;
 
-  TypeParamNode tmp[8];
-  int count = 0;
+  PLIST(TypeParamNode, params, 4);
   bool had_error = false;
 
   do {
-    if (count >= 8) {
-      error_at(p, current_tok_span(p), "too many type parameters");
-      had_error = true;
-      break;
-    }
-
     if (!consume_tok(p, TOKEN_IDENT, "expected type parameter name")) {
       had_error = true;
       break;
     }
 
     Token name_tok = *previous_tok(p);
-    TypeParamNode *param = &tmp[count++];
+    PLIST_GROW(p, params);
+    TypeParamNode *param = &params[params_count++];
     param->name = name_tok.lexeme;
     // param->span = token_span(&name_tok);
 
@@ -1281,9 +1252,8 @@ static int parse_type_params(Parser *p, TypeParamNode **out) {
     return -1;
   }
 
-  *out = al_alloc(p->al, sizeof(TypeParamNode) * count);
-  memcpy(*out, tmp, sizeof(TypeParamNode) * count);
-  return count;
+  *out = PLIST_TAKE(p, params);
+  return params_count;
 }
 
 static void sync_to_fun_body(Parser *p) {
@@ -1330,33 +1300,28 @@ static ClosureParam parse_closure_param(Parser *p) {
   return param;
 }
 
-static bool parse_closure_param_list(Parser *p, ClosureParam *out, int *count,
-                                     int max) {
-  *count = 0;
+static bool parse_closure_param_list(Parser *p, ClosureParam **out,
+                                     int *count) {
+  PLIST(ClosureParam, params, 8);
   bool had_error = false;
 
-  if (check_tok(p, TOKEN_PIPE))
-    return true;
+  if (!check_tok(p, TOKEN_PIPE)) {
+    do {
+      if (check_tok(p, TOKEN_PIPE))
+        break;
 
-  do {
-    if (check_tok(p, TOKEN_PIPE))
-      break;
+      ClosureParam param = parse_closure_param(p);
+      if (param.name.len == 0 && !param.is_self) {
+        had_error = true;
+        break;
+      }
+      PLIST_PUSH(p, params, param);
 
-    if (*count >= max) {
-      error_at(p, current_tok_span(p), "too many parameters");
-      had_error = true;
-      break;
-    }
+    } while (match_tok(p, TOKEN_COMMA));
+  }
 
-    ClosureParam param = parse_closure_param(p);
-    if (param.name.len == 0 && !param.is_self) {
-      had_error = true;
-      break;
-    }
-    out[(*count)++] = param;
-
-  } while (match_tok(p, TOKEN_COMMA));
-
+  *out = PLIST_TAKE(p, params);
+  *count = params_count;
   return !had_error;
 }
 
@@ -1365,14 +1330,12 @@ static Expr *parse_closure(Parser *p) {
   Token start = *previous_tok(p);
   bool had_error = false;
 
-  ClosureParam params[16];
+  ClosureParam *params = NULL;
   int param_count = 0;
 
-  if (!check_tok(p, TOKEN_PIPE)) {
-    if (!parse_closure_param_list(p, params, &param_count, 16)) {
-      had_error = true;
-      sync_to_fun_body(p);
-    }
+  if (!parse_closure_param_list(p, &params, &param_count)) {
+    had_error = true;
+    sync_to_fun_body(p);
   }
 
   if (!consume_tok(p, TOKEN_PIPE, "expected '|' after closure parameters")) {
@@ -1411,8 +1374,7 @@ static Expr *parse_closure(Parser *p) {
       ast_expr(EXPR_CLOSURE,
                span_merge(token_span(&start), previous_tok_span(p)), p->al);
   ExprClosure *closure = &expr->as.closure;
-  closure->params = al_alloc(p->al, sizeof(ClosureParam) * param_count);
-  memcpy(closure->params, params, sizeof(ClosureParam) * param_count);
+  closure->params = params;
   closure->param_count = param_count;
   closure->return_type_annotation = return_type;
   closure->body = body;
@@ -1440,17 +1402,11 @@ static Pattern *parse_pattern(Parser *p) {
 
     if (match_tok(p, TOKEN_LPAREN)) {
       // variant pattern: Enum::Variant(...) or Enum::Variant
-      Pattern *subpats[16];
-      int subpat_count = 0;
+      PLIST(Pattern *, subpats, 8);
       bool had_error = false;
 
       do {
         if (check_tok(p, TOKEN_RPAREN)) {
-          break;
-        }
-        if (subpat_count >= 16) {
-          error_at(p, current_tok_span(p), "too many subpatterns");
-          had_error = true;
           break;
         }
         Pattern *subpat = parse_pattern(p);
@@ -1458,7 +1414,7 @@ static Pattern *parse_pattern(Parser *p) {
           had_error = true;
           break;
         }
-        subpats[subpat_count++] = subpat;
+        PLIST_PUSH(p, subpats, subpat);
       } while (match_tok(p, TOKEN_COMMA));
 
       if (!consume_tok(p, TOKEN_RPAREN, "expected ')' after tuple pattern")) {
@@ -1470,28 +1426,22 @@ static Pattern *parse_pattern(Parser *p) {
         pattern.span = span_merge(start_span, previous_tok_span(p));
         pattern.as.variant.path = path;
         pattern.as.variant.fields =
-            al_alloc_zero(p->al, sizeof(FieldPat) * subpat_count);
-        for (int i = 0; i < subpat_count; i++) {
+            al_alloc_zero(p->al, sizeof(FieldPat) * subpats_count);
+        for (int i = 0; i < subpats_count; i++) {
           pattern.as.variant.fields[i].sub_pattern = subpats[i];
           pattern.as.variant.fields[i].ident.index = i;
         }
-        pattern.as.variant.field_count = subpat_count;
+        pattern.as.variant.field_count = subpats_count;
       } else {
         return NULL;
       }
     } else if (match_tok(p, TOKEN_LBRACE)) {
       // struct pattern: Struct { field: pat, ... }
-      FieldPat fields[16];
-      int field_count = 0;
+      PLIST(FieldPat, fields, 8);
       bool had_error = false;
 
       do {
         if (check_tok(p, TOKEN_RBRACE)) {
-          break;
-        }
-        if (field_count >= 16) {
-          error_at(p, current_tok_span(p), "too many fields in struct pattern");
-          had_error = true;
           break;
         }
         if (!consume_tok(p, TOKEN_IDENT,
@@ -1502,22 +1452,19 @@ static Pattern *parse_pattern(Parser *p) {
         Span field_span = token_span(previous_tok(p));
         StringView field_name = previous_tok(p)->lexeme;
 
+        Pattern *field_pat = NULL;
         if (match_tok(p, TOKEN_COLON)) {
-          Pattern *field_pat = parse_pattern(p);
+          field_pat = parse_pattern(p);
           if (!field_pat) {
             had_error = true;
             break;
           }
-          fields[field_count].ident.name = field_name;
-          fields[field_count].sub_pattern = field_pat;
-          fields[field_count].span = field_span;
-          field_count++;
-        } else {
-          fields[field_count].ident.name = field_name;
-          fields[field_count].sub_pattern = NULL;
-          fields[field_count].span = field_span;
-          field_count++;
         }
+        PLIST_GROW(p, fields);
+        fields[fields_count].ident.name = field_name;
+        fields[fields_count].sub_pattern = field_pat;
+        fields[fields_count].span = field_span;
+        fields_count++;
       } while (match_tok(p, TOKEN_COMMA));
 
       if (!consume_tok(p, TOKEN_RBRACE, "expected '}' after struct pattern")) {
@@ -1527,10 +1474,8 @@ static Pattern *parse_pattern(Parser *p) {
       if (!had_error) {
         pattern.kind = PAT_STRUCT;
         pattern.span = span_merge(start_span, previous_tok_span(p));
-        pattern.as.struc.fields =
-            al_alloc(p->al, sizeof(FieldPat) * field_count);
-        memcpy(pattern.as.struc.fields, fields, sizeof(FieldPat) * field_count);
-        pattern.as.struc.field_count = field_count;
+        pattern.as.struc.fields = PLIST_TAKE(p, fields);
+        pattern.as.struc.field_count = fields_count;
         pattern.as.struc.path = path;
       } else {
         return NULL;
@@ -1546,23 +1491,17 @@ static Pattern *parse_pattern(Parser *p) {
       pattern.as.variant.path = path;
     }
   } else if (match_tok(p, TOKEN_LPAREN)) {
-    Pattern *subpats[16];
-    int subpat_count = 0;
+    PLIST(Pattern *, subpats, 8);
     bool had_error = false;
 
     if (!check_tok(p, TOKEN_RPAREN)) {
       do {
-        if (subpat_count >= 16) {
-          error_at(p, current_tok_span(p), "too many subpatterns");
-          had_error = true;
-          break;
-        }
         Pattern *subpat = parse_pattern(p);
         if (!subpat) {
           had_error = true;
           break;
         }
-        subpats[subpat_count++] = subpat;
+        PLIST_PUSH(p, subpats, subpat);
       } while (match_tok(p, TOKEN_COMMA));
     }
 
@@ -1573,10 +1512,8 @@ static Pattern *parse_pattern(Parser *p) {
     if (!had_error) {
       pattern.kind = PAT_TUPLE;
       pattern.span = span_merge(start_span, previous_tok_span(p));
-      pattern.as.tuple.elems =
-          al_alloc(p->al, sizeof(Pattern *) * subpat_count);
-      memcpy(pattern.as.tuple.elems, subpats, sizeof(Pattern *) * subpat_count);
-      pattern.as.tuple.count = subpat_count;
+      pattern.as.tuple.elems = PLIST_TAKE(p, subpats);
+      pattern.as.tuple.count = subpats_count;
     } else {
       return NULL;
     }
@@ -1626,8 +1563,7 @@ static Expr *parse_match(Parser *p) {
     had_error = true;
   }
 
-  MatchArm tmp_arms[16];
-  int arm_count = 0;
+  PLIST(MatchArm, arms, 8);
 
   do {
     Span arm_start_span = current_tok_span(p);
@@ -1635,14 +1571,8 @@ static Expr *parse_match(Parser *p) {
       break;
     }
 
-    if (arm_count >= 16) {
-      error_at(p, current_tok_span(p), "too many match arms");
-      had_error = true;
-      sync_to_next_arm(p);
-      continue;
-    }
-
-    MatchArm *arm = &tmp_arms[arm_count++];
+    PLIST_GROW(p, arms);
+    MatchArm *arm = &arms[arms_count++];
     arm->pattern = parse_pattern(p);
     if (!arm->pattern) {
       had_error = true;
@@ -1689,9 +1619,8 @@ static Expr *parse_match(Parser *p) {
   Expr *expr = ast_expr(
       EXPR_MATCH, span_merge(token_span(&tok), current_tok_span(p)), p->al);
   expr->as.match.subject = value;
-  expr->as.match.arms = al_alloc(p->al, sizeof(MatchArm) * arm_count);
-  memcpy(expr->as.match.arms, tmp_arms, sizeof(MatchArm) * arm_count);
-  expr->as.match.arm_count = arm_count;
+  expr->as.match.arms = PLIST_TAKE(p, arms);
+  expr->as.match.arm_count = arms_count;
   expr->as.match.enforce_exhaustiveness = true;
   return expr;
 }
@@ -1834,8 +1763,12 @@ static Expr *parse_primary(Parser *p) {
   }
 
   if (match_tok(p, TOKEN_INTERPOLATION)) {
-    InterpolSeg segs[16] = {0};
-    int seg_count = 2;
+    // an interpolation contributes up to two segments (the text before it and
+    // the value), so the old 16 was really a limit of seven or eight `{}` in
+    // one string — the tightest of the caps this milestone lifts, and the one
+    // a person writing a message hits first.
+    PLIST(InterpolSeg, segs, 8);
+    segs_count = 2;
 
     segs[0].kind = ISEG_TEXT;
     segs[0].text =
@@ -1855,17 +1788,13 @@ static Expr *parse_primary(Parser *p) {
     while (check_tok(p, TOKEN_STRING) || check_tok(p, TOKEN_INTERPOLATION)) {
       // terminal segment
       if (match_tok(p, TOKEN_STRING)) {
-        if (seg_count >= 16) {
-          error_at(p, current_tok_span(p),
-                   "too many segments in interpolated string");
-          return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
-        }
         if (previous_tok(p)->lexeme.len > 2) {
-          segs[seg_count].kind = ISEG_TEXT;
-          segs[seg_count].text =
+          PLIST_GROW(p, segs);
+          segs[segs_count].kind = ISEG_TEXT;
+          segs[segs_count].text =
               (StringView){.len = previous_tok(p)->lexeme.len - 2,
                            .chars = previous_tok(p)->lexeme.chars + 1};
-          seg_count++;
+          segs_count++;
         }
         break;
       }
@@ -1878,16 +1807,12 @@ static Expr *parse_primary(Parser *p) {
 
       // text between the previous `}` and this `{`
       if (previous_tok(p)->lexeme.len > 2) {
-        if (seg_count >= 16) {
-          error_at(p, current_tok_span(p),
-                   "too many segments in interpolated string");
-          return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
-        }
-        segs[seg_count].kind = ISEG_TEXT;
-        segs[seg_count].text =
+        PLIST_GROW(p, segs);
+        segs[segs_count].kind = ISEG_TEXT;
+        segs[segs_count].text =
             (StringView){.len = previous_tok(p)->lexeme.len - 2,
                          .chars = previous_tok(p)->lexeme.chars + 1};
-        seg_count++;
+        segs_count++;
       }
 
       Expr *expr = parse_expr(p);
@@ -1895,25 +1820,19 @@ static Expr *parse_primary(Parser *p) {
         return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
       }
 
-      if (seg_count >= 16) {
-        error_at(p, current_tok_span(p),
-                 "too many segments in interpolated string");
-        return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
-      }
-      segs[seg_count].kind = ISEG_EXPR;
-      segs[seg_count].expr = expr;
+      PLIST_GROW(p, segs);
+      segs[segs_count].kind = ISEG_EXPR;
+      segs[segs_count].expr = expr;
       if (check_tok(p, TOKEN_COLON) &&
-          !parse_format_spec(p, &segs[seg_count].spec)) {
+          !parse_format_spec(p, &segs[segs_count].spec)) {
         return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
       }
-      seg_count++;
+      segs_count++;
     }
 
     Expr *expr = ast_expr(EXPR_INTERPOLATED, token_span(t), p->al);
-    expr->as.interpolated.segs =
-        al_alloc(p->al, sizeof(InterpolSeg) * seg_count);
-    memcpy(expr->as.interpolated.segs, segs, sizeof(InterpolSeg) * seg_count);
-    expr->as.interpolated.seg_count = seg_count;
+    expr->as.interpolated.segs = PLIST_TAKE(p, segs);
+    expr->as.interpolated.seg_count = segs_count;
     return expr;
   }
 
@@ -1934,17 +1853,12 @@ static Expr *parse_primary(Parser *p) {
     // c-style init
     if (p->allow_struct_init && match_tok(p, TOKEN_LBRACE)) {
 
-      FieldInit fields[16];
-      int field_count = 0;
+      PLIST(FieldInit, fields, 8);
 
       if (!check_tok(p, TOKEN_RBRACE)) {
         do {
           if (check_tok(p, TOKEN_RBRACE)) {
             break;
-          }
-          if (field_count >= 16) {
-            error_at(p, current_tok_span(p), "too many fields in struct init");
-            return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
           }
           if (!consume_tok(p, TOKEN_IDENT, "expected field name")) {
             return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
@@ -1961,11 +1875,12 @@ static Expr *parse_primary(Parser *p) {
             return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
           }
 
-          fields[field_count].ident.name = field_name;
-          fields[field_count].value = field_value;
-          fields[field_count].span =
+          PLIST_GROW(p, fields);
+          fields[fields_count].ident.name = field_name;
+          fields[fields_count].value = field_value;
+          fields[fields_count].span =
               span_merge(token_span(field_tok), field_value->span);
-          field_count++;
+          fields_count++;
         } while (match_tok(p, TOKEN_COMMA));
       }
 
@@ -1979,11 +1894,8 @@ static Expr *parse_primary(Parser *p) {
                    span_merge(token_span(t), previous_tok_span(p)), p->al);
       expr->as.struct_init.path = path;
       span_merge(token_span(t), previous_tok_span(p));
-      expr->as.struct_init.field_count = field_count;
-      expr->as.struct_init.fields =
-          al_alloc(p->al, sizeof(expr->as.struct_init.fields[0]) * field_count);
-      memcpy(expr->as.struct_init.fields, fields,
-             sizeof(expr->as.struct_init.fields[0]) * field_count);
+      expr->as.struct_init.field_count = fields_count;
+      expr->as.struct_init.fields = PLIST_TAKE(p, fields);
       return expr;
     }
 
@@ -2002,8 +1914,7 @@ static Expr *parse_primary(Parser *p) {
                       p->al);
     }
 
-    Expr *elem_exprs[16];
-    int elem_count = 0;
+    PLIST(Expr *, elem_exprs, 8);
     bool had_error = false;
     bool force_tuple = false;
     bool old_allow_struct_init = p->allow_struct_init;
@@ -2011,11 +1922,6 @@ static Expr *parse_primary(Parser *p) {
 
     if (!check_tok(p, TOKEN_RPAREN)) {
       do {
-        if (elem_count >= 16) {
-          error_at(p, current_tok_span(p), "too many elements in tuple");
-          had_error = true;
-          break;
-        }
         if (check_tok(p, TOKEN_RPAREN)) {
           force_tuple = true;
           break;
@@ -2025,7 +1931,7 @@ static Expr *parse_primary(Parser *p) {
           had_error = true;
           break;
         }
-        elem_exprs[elem_count++] = e;
+        PLIST_PUSH(p, elem_exprs, e);
       } while (match_tok(p, TOKEN_COMMA));
     }
 
@@ -2040,16 +1946,15 @@ static Expr *parse_primary(Parser *p) {
                       p->al);
     }
 
-    if (elem_count == 1 && !force_tuple) {
+    if (elem_exprs_count == 1 && !force_tuple) {
       // just a grouping
       return elem_exprs[0];
     }
 
     Expr *expr = ast_expr(EXPR_TUPLE,
                           span_merge(start_span, previous_tok_span(p)), p->al);
-    expr->as.tuple.elems = al_alloc(p->al, sizeof(Expr *) * elem_count);
-    memcpy(expr->as.tuple.elems, elem_exprs, sizeof(Expr *) * elem_count);
-    expr->as.tuple.count = elem_count;
+    expr->as.tuple.elems = PLIST_TAKE(p, elem_exprs);
+    expr->as.tuple.count = elem_exprs_count;
     return expr;
   }
 
@@ -2062,8 +1967,9 @@ static Expr *parse_primary(Parser *p) {
   if (match_tok(p, TOKEN_LBRACKET)) {
     Span start_span = previous_tok_span(p);
 
-    Expr *elem_exprs[16];
-    int elem_count = 0;
+    // 16 elements was the cap a literal array of data hit first, and it is the
+    // one with no workaround short of `push` in a loop.
+    PLIST(Expr *, elem_exprs, 8);
     bool had_error = false;
     bool old_allow_struct_init = p->allow_struct_init;
     p->allow_struct_init = true;
@@ -2073,17 +1979,12 @@ static Expr *parse_primary(Parser *p) {
         if (check_tok(p, TOKEN_RBRACKET)) {
           break; // trailing comma
         }
-        if (elem_count >= 16) {
-          error_at(p, current_tok_span(p), "too many elements in array");
-          had_error = true;
-          break;
-        }
         Expr *e = parse_expr(p);
         if (e->kind == EXPR_POISON) {
           had_error = true;
           break;
         }
-        elem_exprs[elem_count++] = e;
+        PLIST_PUSH(p, elem_exprs, e);
       } while (match_tok(p, TOKEN_COMMA));
     }
 
@@ -2100,9 +2001,8 @@ static Expr *parse_primary(Parser *p) {
 
     Expr *expr = ast_expr(EXPR_ARRAY,
                           span_merge(start_span, previous_tok_span(p)), p->al);
-    expr->as.array.elems = al_alloc(p->al, sizeof(Expr *) * elem_count);
-    memcpy(expr->as.array.elems, elem_exprs, sizeof(Expr *) * elem_count);
-    expr->as.array.count = elem_count;
+    expr->as.array.elems = PLIST_TAKE(p, elem_exprs);
+    expr->as.array.count = elem_exprs_count;
     return expr;
   }
 
@@ -2421,35 +2321,29 @@ static ParamDeclNode parse_param(Parser *p) {
   return param;
 }
 
-static bool parse_param_list(Parser *p, ParamDeclNode *out, int *count,
-                             int max) {
-  *count = 0;
+static bool parse_param_list(Parser *p, ParamDeclNode **out, int *count) {
+  PLIST(ParamDeclNode, params, 8);
   bool had_error = false;
 
   // empty param list
-  if (check_tok(p, TOKEN_RPAREN))
-    return true;
+  if (!check_tok(p, TOKEN_RPAREN)) {
+    do {
+      // trailing comma: fun f(a: Int, b: Int,) — stop before ')'
+      if (check_tok(p, TOKEN_RPAREN))
+        break;
 
-  do {
-    // trailing comma: fun f(a: Int, b: Int,) — stop before ')'
-    if (check_tok(p, TOKEN_RPAREN))
-      break;
+      ParamDeclNode param = parse_param(p);
+      if (param.type_annotation == NULL && !param.is_self) {
+        had_error = true;
+        break; // can't trust param list structure anymore
+      }
+      PLIST_PUSH(p, params, param);
 
-    if (*count >= max) {
-      error_at(p, current_tok_span(p), "too many parameters");
-      had_error = true;
-      break;
-    }
+    } while (match_tok(p, TOKEN_COMMA));
+  }
 
-    ParamDeclNode param = parse_param(p);
-    if (param.type_annotation == NULL && !param.is_self) {
-      had_error = true;
-      break; // can't trust param list structure anymore
-    }
-    out[(*count)++] = param;
-
-  } while (match_tok(p, TOKEN_COMMA));
-
+  *out = PLIST_TAKE(p, params);
+  *count = params_count;
   return !had_error;
 }
 
@@ -2526,14 +2420,12 @@ static Decl *parse_fun_decl(Parser *p, bool is_pub, AttrNode attr) {
     sync_to_fun_body(p);
   }
 
-  ParamDeclNode params[16];
+  ParamDeclNode *params = NULL;
   int param_count = 0;
 
-  if (!check_tok(p, TOKEN_RPAREN)) {
-    if (!parse_param_list(p, params, &param_count, 16)) {
-      had_error = true;
-      sync_to_fun_body(p);
-    }
+  if (!parse_param_list(p, &params, &param_count)) {
+    had_error = true;
+    sync_to_fun_body(p);
   }
 
   if (!consume_tok(p, TOKEN_RPAREN, "expected ')'")) {
@@ -2601,14 +2493,13 @@ static Decl *parse_fun_decl(Parser *p, bool is_pub, AttrNode attr) {
       .return_type = return_type,
       .body = body,
       .param_count = param_count,
-      .params = al_alloc(p->al, sizeof(ParamDeclNode) * param_count),
+      .params = params,
       .where_clause = where_clause,
       .shorthand = body != NULL && body->kind != EXPR_BLOCK,
       .attr = attr,
       .type_param_count = type_param_count,
       .type_params = type_params,
   };
-  memcpy(decl->as.fun_decl.params, params, sizeof(ParamDeclNode) * param_count);
 
   return decl;
 }
@@ -2618,8 +2509,7 @@ static Decl *parse_fun_decl(Parser *p, bool is_pub, AttrNode attr) {
 // as its enum), so a `pub` there is rejected rather than silently ignored.
 static bool parse_field_decl(Parser *p, FieldDeclNode **out, int *out_count,
                              bool *out_is_tuple, bool allow_pub) {
-  FieldDeclNode fields[16];
-  int field_count = 0;
+  PLIST(FieldDeclNode, fields, 8);
   bool is_tuple_fields = false;
   bool had_error = false;
 
@@ -2628,12 +2518,6 @@ static bool parse_field_decl(Parser *p, FieldDeclNode **out, int *out_count,
       do {
         if (check_tok(p, TOKEN_RBRACE)) {
           break; // trailing comma
-        }
-
-        if (field_count >= 16) {
-          error_at(p, current_tok_span(p), "too many fields in struct");
-          had_error = true;
-          break;
         }
 
         bool field_pub = match_tok(p, TOKEN_PUB);
@@ -2661,11 +2545,12 @@ static bool parse_field_decl(Parser *p, FieldDeclNode **out, int *out_count,
           break;
         }
 
-        fields[field_count].ident.name = name_tok.lexeme;
-        fields[field_count].type_annotation = ty;
-        fields[field_count].is_pub = field_pub;
-        fields[field_count].span = span_merge(token_span(&name_tok), ty->span);
-        field_count++;
+        PLIST_GROW(p, fields);
+        fields[fields_count].ident.name = name_tok.lexeme;
+        fields[fields_count].type_annotation = ty;
+        fields[fields_count].is_pub = field_pub;
+        fields[fields_count].span = span_merge(token_span(&name_tok), ty->span);
+        fields_count++;
       } while (match_tok(p, TOKEN_COMMA));
     }
 
@@ -2684,12 +2569,6 @@ static bool parse_field_decl(Parser *p, FieldDeclNode **out, int *out_count,
 
     if (!check_tok(p, TOKEN_RPAREN)) {
       do {
-        if (field_count >= 16) {
-          error_at(p, current_tok_span(p), "too many fields in struct");
-          had_error = true;
-          break;
-        }
-
         bool field_pub = match_tok(p, TOKEN_PUB);
         if (field_pub && !allow_pub) {
           error_at(p, previous_tok_span(p),
@@ -2704,11 +2583,12 @@ static bool parse_field_decl(Parser *p, FieldDeclNode **out, int *out_count,
           break;
         }
 
-        fields[field_count].ident.index = field_count;
-        fields[field_count].type_annotation = ty;
-        fields[field_count].is_pub = field_pub;
-        fields[field_count].span = ty->span;
-        field_count++;
+        PLIST_GROW(p, fields);
+        fields[fields_count].ident.index = fields_count;
+        fields[fields_count].type_annotation = ty;
+        fields[fields_count].is_pub = field_pub;
+        fields[fields_count].span = ty->span;
+        fields_count++;
       } while (match_tok(p, TOKEN_COMMA));
     }
 
@@ -2735,10 +2615,9 @@ static bool parse_field_decl(Parser *p, FieldDeclNode **out, int *out_count,
   assert(out);
   assert(out_count);
   assert(out_is_tuple);
-  *out = al_alloc(p->al, sizeof(FieldDeclNode) * field_count);
-  memcpy(*out, fields, sizeof(FieldDeclNode) * field_count);
+  *out = PLIST_TAKE(p, fields);
   *out_is_tuple = is_tuple_fields;
-  *out_count = field_count;
+  *out_count = fields_count;
   return true;
 }
 
@@ -2850,18 +2729,11 @@ static Decl *parse_enum_decl(Parser *p, bool is_pub) {
     }
   }
 
-  VariantDeclNode variants[16];
-  int variant_count = 0;
+  PLIST(VariantDeclNode, variants, 8);
 
   if (match_tok(p, TOKEN_LBRACE)) {
     if (!check_tok(p, TOKEN_RBRACE)) {
       do {
-        if (variant_count >= 16) {
-          error_at(p, current_tok_span(p), "too many variants in enum");
-          had_error = true;
-          break;
-        }
-
         if (check_tok(p, TOKEN_RBRACE)) {
           break; // trailing comma
         }
@@ -2883,13 +2755,15 @@ static Decl *parse_enum_decl(Parser *p, bool is_pub) {
           break;
         }
 
-        variants[variant_count++] = (VariantDeclNode){
-            .name = name_tok.lexeme,
-            .fields = fields,
-            .field_count = field_count,
-            .is_tuple = is_tuple,
-            .span = span_merge(token_span(&name_tok), previous_tok_span(p)),
-        };
+        PLIST_PUSH(
+            p, variants,
+            ((VariantDeclNode){
+                .name = name_tok.lexeme,
+                .fields = fields,
+                .field_count = field_count,
+                .is_tuple = is_tuple,
+                .span = span_merge(token_span(&name_tok), previous_tok_span(p)),
+            }));
       } while (match_tok(p, TOKEN_COMMA));
     }
 
@@ -2913,11 +2787,8 @@ static Decl *parse_enum_decl(Parser *p, bool is_pub) {
   enum_decl->name = name_sv;
   enum_decl->type_param_count = type_param_count;
   enum_decl->type_params = type_params;
-  enum_decl->variants =
-      al_alloc(p->al, sizeof(VariantDeclNode) * variant_count);
-  memcpy(enum_decl->variants, variants,
-         sizeof(VariantDeclNode) * variant_count);
-  enum_decl->variant_count = variant_count;
+  enum_decl->variants = PLIST_TAKE(p, variants);
+  enum_decl->variant_count = variants_count;
   return decl;
 }
 
@@ -2937,8 +2808,7 @@ static Decl *parse_use_decl(Parser *p) {
   }
 
   if (match_tok(p, TOKEN_LBRACE)) {
-    UseAlias aliases[8];
-    int alias_count = 0;
+    PLIST(UseAlias, aliases, 8);
 
     // glob import: use foo::{...}
     if (!check_tok(p, TOKEN_RBRACE)) {
@@ -2946,26 +2816,23 @@ static Decl *parse_use_decl(Parser *p) {
         if (match_tok(p, TOKEN_COMMA)) {
           break;
         }
-        if (alias_count >= 8) {
-          error_at(p, current_tok_span(p), "too many items in use glob");
-          return ast_decl(DECL_POISON, token_span(&use_tok), p->al);
-        }
         if (!consume_tok(p, TOKEN_IDENT, "expected identifier in use glob")) {
           return ast_decl(DECL_POISON, token_span(&use_tok), p->al);
         }
-        aliases[alias_count].name = previous_tok(p)->lexeme;
+        PLIST_GROW(p, aliases);
+        aliases[aliases_count].name = previous_tok(p)->lexeme;
         Span item_span = previous_tok_span(p);
         if (match_tok(p, TOKEN_AS)) {
           if (!consume_tok(p, TOKEN_IDENT, "expected identifier after 'as'")) {
             return ast_decl(DECL_POISON, token_span(&use_tok), p->al);
           }
-          aliases[alias_count].alias = previous_tok(p)->lexeme;
+          aliases[aliases_count].alias = previous_tok(p)->lexeme;
           item_span = span_merge(item_span, previous_tok_span(p));
         } else {
-          aliases[alias_count].alias = aliases[alias_count].name;
+          aliases[aliases_count].alias = aliases[aliases_count].name;
         }
-        aliases[alias_count].span = item_span;
-        alias_count++;
+        aliases[aliases_count].span = item_span;
+        aliases_count++;
       } while (match_tok(p, TOKEN_COMMA));
     }
 
@@ -2973,9 +2840,8 @@ static Decl *parse_use_decl(Parser *p) {
       return ast_decl(DECL_POISON, token_span(&use_tok), p->al);
     }
 
-    target.aliases = al_alloc(p->al, sizeof(UseAlias) * alias_count);
-    memcpy(target.aliases, aliases, sizeof(UseAlias) * alias_count);
-    target.count = alias_count;
+    target.aliases = PLIST_TAKE(p, aliases);
+    target.count = aliases_count;
   } else {
     // Bare form (`use a::b;`). The trailing name stays on `path`: it may be an
     // item of module `a` or the module `a::b` itself, and only file existence
@@ -3042,12 +2908,11 @@ static Decl *parse_trait_decl(Parser *p, bool is_pub) {
     return ast_decl(DECL_POISON, token_span(&trait_tok), p->al);
   }
 
-  // zeroed: an associated-type item fills in only kind/name/span, so every
-  // method-only field has to start NULL rather than hold whatever the stack
-  // had — nothing reads them for an assoc item, but nothing should have to
-  // know that.
-  TraitItemNode items[64] = {0};
-  int item_count = 0;
+  // PLIST zeroes, which this relies on: an associated-type item fills in only
+  // kind/name/span, so every method-only field has to start NULL rather than
+  // hold whatever the stack had — nothing reads them for an assoc item, but
+  // nothing should have to know that.
+  PLIST(TraitItemNode, items, 16);
   bool had_error = false;
 
   if (!consume_tok(p, TOKEN_LBRACE, "expected '{' after trait name")) {
@@ -3056,11 +2921,7 @@ static Decl *parse_trait_decl(Parser *p, bool is_pub) {
 
   if (!check_tok(p, TOKEN_RBRACE)) {
     do {
-      if (item_count >= 64) {
-        error_at(p, current_tok_span(p), "too many items in trait");
-        had_error = true;
-        break;
-      }
+      PLIST_GROW(p, items);
 
       if (match_tok(p, TOKEN_TYPE)) {
         Span start_span = previous_tok_span(p);
@@ -3077,10 +2938,10 @@ static Decl *parse_trait_decl(Parser *p, bool is_pub) {
           had_error = true;
         }
 
-        items[item_count].kind = TRAIT_ITEM_ASSOC_TYPE;
-        items[item_count].name = assoc_type_name;
-        items[item_count].span = span_merge(start_span, previous_tok_span(p));
-        item_count++;
+        items[items_count].kind = TRAIT_ITEM_ASSOC_TYPE;
+        items[items_count].name = assoc_type_name;
+        items[items_count].span = span_merge(start_span, previous_tok_span(p));
+        items_count++;
       } else if (match_tok(p, TOKEN_FUN)) {
         Token fun_tok = *previous_tok(p);
 
@@ -3105,14 +2966,12 @@ static Decl *parse_trait_decl(Parser *p, bool is_pub) {
           sync_to_fun_body(p);
         }
 
-        ParamDeclNode params[64];
+        ParamDeclNode *params = NULL;
         int param_count = 0;
 
-        if (!check_tok(p, TOKEN_RPAREN)) {
-          if (!parse_param_list(p, params, &param_count, 64)) {
-            had_error = true;
-            sync_to_fun_body(p);
-          }
+        if (!parse_param_list(p, &params, &param_count)) {
+          had_error = true;
+          sync_to_fun_body(p);
         }
 
         if (!consume_tok(p, TOKEN_RPAREN, "expected ')'")) {
@@ -3162,21 +3021,18 @@ static Decl *parse_trait_decl(Parser *p, bool is_pub) {
           }
         }
         if (!had_error) {
-          items[item_count].kind = TRAIT_ITEM_METHOD;
-          items[item_count].name = name_sv;
-          items[item_count].span =
+          items[items_count].kind = TRAIT_ITEM_METHOD;
+          items[items_count].name = name_sv;
+          items[items_count].span =
               span_merge(token_span(&fun_tok), previous_tok_span(p));
-          items[item_count].type_param_count = type_param_count;
-          items[item_count].type_params = type_params;
-          items[item_count].param_count = param_count;
-          items[item_count].params =
-              al_alloc(p->al, sizeof(ParamDeclNode) * param_count);
-          memcpy(items[item_count].params, params,
-                 sizeof(ParamDeclNode) * param_count);
-          items[item_count].return_type = return_type;
-          items[item_count].where_clause = where_clause;
-          items[item_count].default_body = body;
-          item_count++;
+          items[items_count].type_param_count = type_param_count;
+          items[items_count].type_params = type_params;
+          items[items_count].param_count = param_count;
+          items[items_count].params = params;
+          items[items_count].return_type = return_type;
+          items[items_count].where_clause = where_clause;
+          items[items_count].default_body = body;
+          items_count++;
         }
       } else {
         advance_tok(p);
@@ -3203,9 +3059,8 @@ static Decl *parse_trait_decl(Parser *p, bool is_pub) {
   trait_decl->type_params = type_params;
   trait_decl->type_param_count = type_param_count;
   trait_decl->supers = supers;
-  trait_decl->items = al_alloc(p->al, sizeof(TraitItemNode) * item_count);
-  memcpy(trait_decl->items, items, sizeof(TraitItemNode) * item_count);
-  trait_decl->item_count = item_count;
+  trait_decl->items = PLIST_TAKE(p, items);
+  trait_decl->item_count = items_count;
   return decl;
 }
 
@@ -3239,23 +3094,7 @@ static Decl *parse_impl_decl(Parser *p, bool is_pub) {
     }
   }
 
-  // grown rather than fixed, for the reason a block's statement list is: the
-  // number of methods a type wants is bounded by nothing but the source, so a
-  // cap could only ever be an abort on a valid program. It was 16, and
-  // `std::map`'s `HashMap` reached it by gaining a third capacity method.
-  ImplItemNode *items = NULL;
-  int item_count = 0;
-  int item_cap = 0;
-
-#define RESERVE_ITEM()                                                         \
-  do {                                                                         \
-    if (item_count == item_cap) {                                              \
-      int new_cap = item_cap == 0 ? 8 : item_cap * 2;                          \
-      items = al_realloc(p->al, items, sizeof(ImplItemNode) * item_cap,        \
-                         sizeof(ImplItemNode) * new_cap);                      \
-      item_cap = new_cap;                                                      \
-    }                                                                          \
-  } while (0)
+  PLIST(ImplItemNode, items, 16);
 
   WhereClause *where_clause = NULL;
   if (check_tok(p, TOKEN_WHERE)) {
@@ -3295,12 +3134,12 @@ static Decl *parse_impl_decl(Parser *p, bool is_pub) {
           had_error = true;
         }
 
-        RESERVE_ITEM();
-        items[item_count].kind = IMPL_ITEM_ASSOC_TYPE;
-        items[item_count].name = assoc_type_name;
-        items[item_count].assoc_type = ty;
-        items[item_count].span = span_merge(start_span, ty->span);
-        item_count++;
+        PLIST_GROW(p, items);
+        items[items_count].kind = IMPL_ITEM_ASSOC_TYPE;
+        items[items_count].name = assoc_type_name;
+        items[items_count].assoc_type = ty;
+        items[items_count].span = span_merge(start_span, ty->span);
+        items_count++;
       } else if (check_tok(p, TOKEN_AT) || check_tok(p, TOKEN_FUN)) {
         // a method may carry `@native`/`@intrinsic` just like a top-level fun:
         // the attribute *is* its body, so a primitive's operation can be
@@ -3325,12 +3164,12 @@ static Decl *parse_impl_decl(Parser *p, bool is_pub) {
         if (fun_decl->kind == DECL_POISON) {
           had_error = true;
         } else {
-          RESERVE_ITEM();
-          items[item_count].kind = IMPL_ITEM_METHOD;
-          items[item_count].name = fun_decl->as.fun_decl.name;
-          items[item_count].fun_decl = fun_decl;
-          items[item_count].span = fun_decl->span;
-          item_count++;
+          PLIST_GROW(p, items);
+          items[items_count].kind = IMPL_ITEM_METHOD;
+          items[items_count].name = fun_decl->as.fun_decl.name;
+          items[items_count].fun_decl = fun_decl;
+          items[items_count].span = fun_decl->span;
+          items_count++;
         }
       } else {
         advance_tok(p);
@@ -3359,14 +3198,9 @@ static Decl *parse_impl_decl(Parser *p, bool is_pub) {
   impl_decl->type_params = type_params;
   impl_decl->type_param_count = type_param_count;
   impl_decl->where_clause = where_clause;
-  // right-size: the grown buffer is up to twice what the impl needs
-  impl_decl->items = al_alloc(p->al, sizeof(ImplItemNode) * item_count);
-  if (item_count > 0) {
-    memcpy(impl_decl->items, items, sizeof(ImplItemNode) * item_count);
-  }
-  impl_decl->item_count = item_count;
+  impl_decl->items = PLIST_TAKE(p, items);
+  impl_decl->item_count = items_count;
   return decl;
-#undef RESERVE_ITEM
 }
 
 static Decl *parse_decl(Parser *p) {
@@ -3463,34 +3297,22 @@ void parser_init(Parser *p, Token *tokens, int count, Allocator *al,
 }
 
 Program *parser_parse(Parser *p) {
-  // grown, like a block's statements and an impl's items. This was a 1024-entry
-  // stack array guarded by an `assert`, and an assert is not a guard: the
-  // release build defines NDEBUG, so a module with a 1025th declaration wrote
-  // past the array and took the compiler down with SIGSEGV rather than a
-  // diagnostic. A cap on how much a file may contain has no defensible value
-  // anyway, so this grows instead of reporting.
-  Decl **decls = NULL;
-  int count = 0;
-  int cap = 0;
+  // this was a 1024-entry stack array guarded by an `assert`, and an assert is
+  // not a guard: the release build defines NDEBUG, so a module with a 1025th
+  // declaration wrote past the array and took the compiler down with SIGSEGV
+  // rather than a diagnostic. A cap on how much a file may contain has no
+  // defensible value anyway, so it grows instead of reporting.
+  PLIST(Decl *, decls, 64);
 
   while (!is_at_end(p)) {
     Decl *decl = parse_decl(p);
     assert(decl && "declaration should not be NULL");
-    if (count == cap) {
-      int new_cap = cap == 0 ? 64 : cap * 2;
-      decls = al_realloc(p->al, decls, sizeof(Decl *) * cap,
-                         sizeof(Decl *) * new_cap);
-      cap = new_cap;
-    }
-    decls[count++] = decl;
+    PLIST_PUSH(p, decls, decl);
   }
 
   Program *prog = al_alloc_for(p->al, Program);
-  prog->decls = al_alloc(p->al, sizeof(Decl *) * count);
-  prog->decl_count = count;
-  if (count > 0) {
-    memcpy(prog->decls, decls, sizeof(Decl *) * count);
-  }
+  prog->decls = PLIST_TAKE(p, decls);
+  prog->decl_count = decls_count;
 
   return prog;
 }

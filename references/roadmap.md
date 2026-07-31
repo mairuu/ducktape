@@ -3882,6 +3882,50 @@
     `tests/run/map_with_capacity.dt`. Restoring either parser cap fails
     `wide_decls.dt`, the impl one also taking `std/map.dt` itself down with it,
     which is the version that cannot ship silently.
+- **Every parser list grows (milestone 73)** — the ~20 fixed buffers milestone
+  72 recorded as a wart, lifted together onto one facility. `PLIST` /
+  `PLIST_GROW` / `PLIST_PUSH` / `PLIST_TAKE` at the top of `parser.c` back all
+  of them, and `parser.c` no longer contains the string "too many". Net −178
+  lines, because a cap check and a hand-written right-size copy disappear at
+  every site.
+  - **The number was never a rule about the language.** The grammar sets no
+    limit on arguments, match arms, struct fields or enum variants, and nothing
+    downstream does either — so each cap was the size of a buffer showing
+    through as a diagnostic, and every one of them refused a program the
+    language accepts. 16 match arms is not a lot; 16 struct fields is less.
+  - **BUG FOUND, and it is the milestone: a method call's arguments had no
+    bounds check at all.** `parse_postfix` wrote `tmp[argc++]` into a bare
+    `Expr *tmp[64]` with nothing testing `argc`. `obj.m(a1, ..., a65)` is
+    ordinary source and it corrupted the stack — confirmed at exit 134, and
+    only because the toolchain defaults to `-fstack-protector-strong`; the
+    Makefile asks for no such thing. Every sibling list at least *refused*.
+    This is milestone 72's finding one list over, with the guard not deleted by
+    `NDEBUG` but never written.
+  - **The stack buffer stays, and that is the design choice.** An arena does
+    not reuse — `arena_realloc_fn` bump-allocates and abandons — so a list that
+    grew from the arena from the start would cost ~2n doubling plus n for the
+    right-sized copy, where a stack array costs n. `PLIST` keeps the array as a
+    small-size optimisation that *spills* instead of erroring, so the common
+    case allocates exactly what the AST node keeps and nothing regresses. It
+    also zeroes, inline buffer and spilled extension alike, which two sites
+    (a trait's items, an interpolation's segments) had been asking for by hand.
+  - **`MAX_ASSOC_BINDINGS` stopped being a limit and stayed as a size.** As a
+    limit it answered a question the parser cannot answer: whether a
+    `dyn Trait<..>` binding list is total is decided against the *trait's*
+    associated types, which `resolve_dyn_type` already does by name — reporting
+    the unknown ones and the duplicated ones. A trait with nine associated
+    types is not a parse error.
+  - **Out of scope, deliberately: sema's `MAX_BOUNDS` (16).** That one bounds a
+    real array (`entry->bounds` is allocated at `MAX_BOUNDS`) and carries its
+    own diagnostic, so it is a different wart with a different fix.
+  - **Sabotaged six ways.** Making `PLIST_GROW` assert instead of grow fails
+    **285** tests — growth is not a rare path, `std` itself drives it on every
+    build. Reinstating the method-call 64, the trait-item 64, the type-parameter
+    8, the array-literal 16 and the `MAX_ASSOC_BINDINGS` 8 each fails **exactly
+    one** test, and the right one: the method-call and array caps
+    `tests/run/wide_lists.dt`, the other three `tests/pass/wide_syntax.dt`.
+  - Also verified under `BUILD=release`, since the last bug in this family was
+    invisible in a debug build.
 
 ## Next (in recommended order)
 
@@ -4055,18 +4099,16 @@ via `Module.decl_base`) and is not part of the main line.
   and then, usually, an undefined variable for the type name — two diagnostics
   for one mistake. A note on the first names the turbofish, which is as far as
   the field-access site can see.
-- **most of the parser's list buffers are fixed at 16** — arguments, type
-  arguments, match arms, struct fields and initialisers, enum variants, tuple
-  elements, closure parameters, trait bounds, where-predicates, subpatterns,
-  path segments, trait items, interpolation segments. Each reports "too many
-  ...", so it is an abort on a valid program rather than anything unsafe, but 16
-  match arms or 16 struct fields is not a lot, and nothing about the numbers was
-  chosen. Milestone 72 grew three of them — a block's statements were already
-  grown, an impl's items and a module's declarations became so — and found a
-  segfault behind the third, so the rest are a wart with a known shape and a
-  known fix (the `PUSH`/`RESERVE` macro in `parse_block`). The cheap ones to do
-  first are the ones a real program hits: match arms, struct fields, enum
-  variants
+- ~~most of the parser's list buffers are fixed at 16~~ — **closed by milestone
+  73**, which took the fix this entry had already named: the `PUSH`/`RESERVE`
+  macro from `parse_block`, generalised into one `PLIST` facility and applied to
+  every list in the file. Nothing in `parser.c` reports "too many ..." any
+  more. What the entry got wrong was calling the family "not unsafe": **a method
+  call's arguments were a `tmp[64]` with no bounds check at all**, so the
+  65th argument was memory corruption rather than a diagnostic — the same shape
+  as milestone 72's `NDEBUG`-deleted assert, one list over and with no guard to
+  delete. The remaining caps of this kind are in **sema**, not the parser:
+  `MAX_BOUNDS` (16) bounds a real array and has its own diagnostic
 - ~~no bitwise operators at all~~ — **closed by milestone 65.** What is left of
   it is small and none of it blocks anything: there are no compound bitwise
   assignments (`&=`, `<<=`), matching the fact that `%=` does not exist either;
