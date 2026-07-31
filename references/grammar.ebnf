@@ -90,9 +90,17 @@ implItem       = "type" IDENT "=" type ";"
                     language.md "Native functions" *)
 
 typeParams     = "<" typeParam ( "," typeParam )* ">" ;
-typeParam      = IDENT ( ":" traitBound )? ;
-                 (* a bound may name an earlier parameter of the same list:
-                    <T, U: Into<T>> *)
+typeParam      = IDENT ( ":" traitBound )? ( "=" type )? ;
+                 (* a bound may name an earlier parameter of the same list
+                    (<T, U: Into<T>>), or the parameter it is itself bounding
+                    (<T: Add<T>>).
+                    The "=" default is accepted here for every declaration and
+                    rejected in sema for all but a *trait*: only a trait is
+                    named with arguments after it is declared, so only there is
+                    there a place for a default to be read. Defaults must be a
+                    suffix of the list, and `Self` in one means the type the
+                    trait is being applied to — the impl's self type at an impl
+                    head, the bounded parameter at a bound *)
 whereClause    = "where" wherePred ( "," wherePred )* ;
 wherePred      = ( IDENT | "Self" ) ( "." IDENT )? ":" traitBound ;
                  (* the left side is a type *parameter* of the enclosing

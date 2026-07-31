@@ -422,6 +422,13 @@ struct TraitDef {
   Type **type_params;
   int type_param_count;
 
+  // Parallel to `type_params`: the type a reference that omits an argument
+  // gets, or NULL where the argument is required (milestone 75). Kept as
+  // unresolved AST, because `Self` in a default means *the type the trait is
+  // being applied to* — the impl's self type at an impl head, the bounded
+  // parameter at a bound — so there is no one type to resolve it to once.
+  TypeNode **type_param_defaults;
+
   // `trait DoubleEnded: Iterator` — the *direct* supers, as written. The
   // obligation an `impl` of this trait discharges (see
   // tc_check_impl_conformance); what a *bound* on it offers is `flat`.
@@ -833,6 +840,11 @@ typedef struct {
   StringView name;
   TraitBound
       inline_bound; // refs == NULL / ref_count == 0 means no inline bound
+  // `<Rhs = Self>` — the type a reference that omits this argument gets
+  // instead. NULL means the argument is required. Traits only (milestone 75):
+  // a default is what lets `Add` gain an `Rhs` parameter without every
+  // existing `T: Add` and `impl Add for Int` having to name it.
+  TypeNode *default_type;
   Span span;
 } TypeParamNode;
 

@@ -23,47 +23,72 @@
 #
 # ── the shape of the traits ──────────────────────────────────────────────────
 #
-# Each trait is homogeneous — `fun add(self, other: Self) -> Self` — where Rust
-# writes `Add<Rhs = Self>` with an associated `Output`. That is not a
-# simplification for its own sake: a generic trait's parameters are never
-# *inferred* at the place the trait is named (an impl head, a bound and a `dyn`
-# each write them out), so `Vec2 * Float` would need the operator to pick an
-# impl by its right operand — selection by argument type, which exists only
-# through the written `Meters::from(x)` / `Into::<U>::into(x)` spellings, and
-# an operator has neither. Homogeneous is the shape the language can actually
-# check today; a heterogeneous one would type-check its impls and then fail to
-# select them.
+# `fun add(self, other: Rhs) -> Self`, where `Rhs` defaults to `Self`
+# (milestone 75). The five binary operators are heterogeneous; `Neg`, which has
+# no right operand, has no parameter.
 #
-# `other: Self` also means none of these is object-safe, so they are bounds and
-# never a `dyn Add` — the same position `Ord` is in, and the same rule working
-# as designed: object safety is demanded only where `dyn` is written.
+# Until milestone 75 they were homogeneous, and the note here said a
+# heterogeneous one "would type-check its impls and then fail to select them" —
+# a generic trait's parameters are never *inferred* where the trait is named,
+# and an operator has neither of the written spellings (`Meters::from(x)`,
+# `Into::<U>::into(x)`) that selection by argument type had. That diagnosis was
+# right and the conclusion was wrong: an operator does not need to *infer* the
+# argument, because it has both operand types in hand and can simply write it
+# down. `v * 2.0` asks for `Mul<Float>`, `v * w` for `Mul<V2>`, and coherence
+# has allowed both impls to stand since milestone 28.
+#
+# ── why the default is load-bearing ──────────────────────────────────────────
+#
+# `Rhs = Self` is not a convenience. Without it every existing use would have to
+# name the argument, and at a bound that argument is the bounded parameter
+# itself — `T: Add<T>` — which is a bound naming its own subject. Milestone 75
+# made that expressible too (see references/architecture.md), and the default is
+# what saves every `T: Add` and `impl Add for Int` in this file and elsewhere
+# from being rewritten. Nothing in `std` moved.
+#
+# ── why there is no `Output` ─────────────────────────────────────────────────
+#
+# Rust's `Add` also carries an associated `Output`; ours returns `Self`, so
+# `V2 * Float` is a `V2` and a dot product `V2 * V2 -> Float` has no spelling.
+# The reason is the mirror of the one above. A generic use would need
+# `T: Add<Output = T>`, an equality binding naming its own subject — and while a
+# *bound* may now do that, the binding is discharged by rewriting the projection
+# to the type it names, so `sum`'s accumulator would be pinned by a promise the
+# caller makes rather than by the impl. Adding `Output` would break every
+# generic use of these traits before it enabled one, so it stays a wart in
+# references/roadmap.md rather than a half-built feature here.
+#
+# `other: Rhs` still means none of these is object-safe once `Rhs` takes its
+# default, so they are bounds and never a `dyn Add` — the same position `Ord`
+# is in, and the same rule working as designed: object safety is demanded only
+# where `dyn` is written.
 
 @lang("add")
-pub trait Add {
-    fun add(self, other: Self) -> Self;
+pub trait Add<Rhs = Self> {
+    fun add(self, other: Rhs) -> Self;
 }
 
 @lang("sub")
-pub trait Sub {
-    fun sub(self, other: Self) -> Self;
+pub trait Sub<Rhs = Self> {
+    fun sub(self, other: Rhs) -> Self;
 }
 
 @lang("mul")
-pub trait Mul {
-    fun mul(self, other: Self) -> Self;
+pub trait Mul<Rhs = Self> {
+    fun mul(self, other: Rhs) -> Self;
 }
 
 @lang("div")
-pub trait Div {
-    fun div(self, other: Self) -> Self;
+pub trait Div<Rhs = Self> {
+    fun div(self, other: Rhs) -> Self;
 }
 
 # `%`. Named for the operation rather than the operator, and "remainder" rather
 # than "modulo" because that is what the VM computes: the sign follows the
 # dividend (C's `%` on Int, `fmod` on Float), so `-7 % 3` is -1 and not 2.
 @lang("rem")
-pub trait Rem {
-    fun rem(self, other: Self) -> Self;
+pub trait Rem<Rhs = Self> {
+    fun rem(self, other: Rhs) -> Self;
 }
 
 # Unary `-`. The only one with no right operand, so it is the only one whose

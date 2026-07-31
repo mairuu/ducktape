@@ -1,0 +1,10 @@
+#! expect: a defaulted parameter must come last
+# A reference supplies its arguments left to right, so a required parameter
+# after a defaulted one could never be reached: `Pair<Int>` would have to mean
+# "the second one", and nothing says so. Reported at the declaration rather
+# than at the first reference, since the declaration is what is wrong.
+trait Pair<A = Int, B> {
+    fun pair(self, a: A, b: B) -> Int;
+}
+
+fun main() {}

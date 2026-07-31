@@ -201,7 +201,9 @@ ending in `return` has type `!` (never), which unifies with anything.
   `self` parameter qualifies this way (an associated function has no receiver to
   choose by), the impl must *define* the method (a defaulted one is reached by
   the receiver call), and the receiver must have a known concrete type
-  (`tests/run/trait_qualified_call.dt`).
+  (`tests/run/trait_qualified_call.dt`). As of milestone 75 the bare `c.into()`
+  reads its *arguments* too where the candidates disagree about them, so the
+  qualified form is needed only when they agree — see "Generic traits".
 - Method calls: `p.draw()`, `p.x`, tuple access `t.0`. A method an impl
   omitted but whose trait gives a default body is inherited: the call checks
   against the trait's signature, projected into the impl's terms, and runs a
@@ -444,14 +446,72 @@ several times as long as the arguments differ — `Celsius` above is two impls,
 not a conflict.
 
 That makes a *bare* method call the one place the receiver alone cannot
-decide: `c.into()` has two bodies to choose from. The expected type breaks the
-tie (`var f: Fahrenheit = c.into()`), and a call through a bound never needs
-it, since the bound names the reference. With neither, the first matching impl
-wins. That fallback survives only because the name is one the *trait* declares:
-an **inherent** name may be declared once per type, so nothing else can reach
-this state (see "Impl blocks" below).
+decide: `c.into()` has two bodies to choose from. Three things break the tie,
+in this order:
 
-See `tests/run/generic_trait.dt`.
+1. **The arguments**, when the candidates disagree about what they take:
+   `v.scale(10)` and `v.scale(w)` reach `Scale<Int>` and `Scale<V2>`. This is
+   the same selector a qualified `Steps::from(v)` uses (see "Selection by
+   argument type"), and it runs only when the candidate signatures differ in
+   their *parameters* — two that take the same arguments cannot be told apart
+   by them.
+2. **The expected type**, when they do not: `var f: Fahrenheit = c.into()`,
+   where both candidates take `(Celsius)` and differ only in what they return.
+3. **A bound**, which never needs either, since it names the reference.
+
+With none of the three, the first matching impl wins. That fallback survives
+only because the name is one the *trait* declares: an **inherent** name may be
+declared once per type, so nothing else can reach this state (see "Impl
+blocks" below).
+
+An argument no candidate accepts is a failure of *selection*, and says so —
+`no implementation of 'scale' for 'V2' takes arguments (V2, Bool)`, with a note
+naming each candidate and what it does take
+(`tests/fail/method_arg_select_none.dt`).
+
+See `tests/run/generic_trait.dt`, `tests/run/method_arg_select.dt`.
+
+#### Default type parameters
+
+A trait's type parameter may declare a default, which a reference that omits
+the argument gets instead:
+
+```
+trait Scale<K = Self> {
+    fun scale(self, k: K) -> Self;
+}
+
+impl Scale      for V2 { fun scale(self, k: V2)  -> V2 { .. } }  # Scale<V2>
+impl Scale<Int> for V2 { fun scale(self, k: Int) -> V2 { .. } }
+
+fun square<T: Scale>(v: T) -> T { v.scale(v) }                   # T: Scale<T>
+```
+
+`Self` in a default means **the type the trait is being applied to** — the
+impl's self type at an impl head, the parameter being bounded at a bound. So
+the default is not resolved once at the declaration; it is read at each use,
+which is also why it is the only place a trait's argument is not written out.
+
+Defaults are a **trait**-only feature (`tests/fail/type_param_default_not_trait.dt`):
+a struct's or a function's type parameters are solved from the values, so a
+default there would be a second answer to a question inference already has.
+They must be a **suffix** of the parameter list
+(`tests/fail/type_param_default_order.dt`), because a reference supplies its
+arguments left to right and a required parameter after a defaulted one could
+never be reached.
+
+See `tests/run/trait_param_default.dt`. `std::ops` is what spends this: the
+five binary operator traits take `Rhs = Self`.
+
+#### A bound may name its own subject
+
+`fun square<T: Scale<T>>(v: T)` — the bound's argument is the parameter being
+bounded, and the `where` spelling (`where T: Scale<T, Out = T>`) says the same.
+This is what a defaulted `Rhs = Self` expands to at a bound, so the language
+had to be able to say it before the default could mean anything.
+
+See `tests/run/self_referential_bound.dt`, and `architecture.md` for why this
+is not the interning cycle it looks like.
 - Generic code runs: each generic function, method and impl is compiled once
   per distinct tuple of type arguments, discovered from its call sites
   (`runtime.md` "Monomorphisation"). A generic definition nobody calls is
@@ -1311,6 +1371,12 @@ what it could not satisfy and lists what each candidate takes
 argument has to type on its own to do the choosing, so a value that would itself
 need the impl chosen first — `Steps::from(None)` — cannot be disambiguated.
 
+Milestone 75 gave the same selector to the **receiver** spelling, which is what
+a heterogeneous operator needed (`a * b` desugars to `a.mul(b)`): `v.scale(10)`
+and `v.scale(w)` reach `Scale<Int>` and `Scale<V2>`. It runs only where the
+candidates disagree about their arguments, so the return-type hint still
+decides for `c.into()` (`tests/run/method_arg_select.dt`).
+
 The receiver-side mirror is a **trait-qualified call** (milestone 31): where the
 expected type is unavailable or a type goes `Into` several ways, name the trait
 and the receiver settles the rest. `Into::<Fahrenheit>::into(c)` and
@@ -1462,12 +1528,12 @@ the width and precision are literals.
 ### `std::ops`
 
 ```
-pub trait Add { fun add(self, other: Self) -> Self; }   # +
-pub trait Sub { fun sub(self, other: Self) -> Self; }   # -
-pub trait Mul { fun mul(self, other: Self) -> Self; }   # *
-pub trait Div { fun div(self, other: Self) -> Self; }   # /
-pub trait Rem { fun rem(self, other: Self) -> Self; }   # %
-pub trait Neg { fun neg(self) -> Self; }                # unary -
+pub trait Add<Rhs = Self> { fun add(self, other: Rhs) -> Self; }   # +
+pub trait Sub<Rhs = Self> { fun sub(self, other: Rhs) -> Self; }   # -
+pub trait Mul<Rhs = Self> { fun mul(self, other: Rhs) -> Self; }   # *
+pub trait Div<Rhs = Self> { fun div(self, other: Rhs) -> Self; }   # /
+pub trait Rem<Rhs = Self> { fun rem(self, other: Rhs) -> Self; }   # %
+pub trait Neg             { fun neg(self) -> Self; }               # unary -
 ```
 
 What `std::cmp` is to `<`, this is to `+`: a trait decides what the operator
@@ -1500,15 +1566,37 @@ Three things are worth knowing about the shape:
   bounded `T: Add` can instantiate at a primitive, and each of their bodies is
   the built-in path (`return self + other;` on two Ints is the opcode, so it
   does not call itself).
-- **They are homogeneous**, `Self` on both sides. There is no `Rhs` parameter
-  and no `Output` associated type, so `V2 * Float` has no spelling: the operator
-  would have to select an impl by its right operand, and selection by argument
-  type exists only through the written `Meters::from(x)` / `Into::<U>::into(x)`
-  forms. A mixed `Cents + Int` is reported as an argument mismatch on the
-  rewritten call.
-- **None is object-safe** (`other: Self`, and `-> Self` for `Neg`), so they are
-  bounds and never a `dyn Add` — the position `Ord` is in, and the same rule:
-  object safety is demanded only where `dyn` is written.
+- **The right operand may differ from the left**, and picks the impl:
+
+  ```
+  impl Mul        for V2 { fun mul(self, k: V2)    -> V2 { .. } }  # Mul<V2>
+  impl Mul<Float> for V2 { fun mul(self, k: Float) -> V2 { .. } }
+
+  var a = v * w;     # Mul<V2>
+  var b = v * 2.0;   # Mul<Float>
+  ```
+
+  The operator has both operand types in hand, so the argument a trait
+  reference is never allowed to *infer* is one the rewrite simply writes down:
+  `v * 2.0` asks whether `V2` implements `Mul<Float>`. `Rhs` defaults to `Self`,
+  so a bare `Mul` still means `Mul<V2>` and every homogeneous impl and `T: Add`
+  bound reads exactly as before. `Neg` has no right operand and no parameter.
+  A pair no impl heads says so — `cannot apply '*' to 'V2' and 'String': 'V2'
+  does not implement 'Mul<String>'` (`tests/fail/ops_rhs_mismatch.dt`), and an
+  operand inference has not solved is reported as the failure to *choose* that
+  it is (`tests/fail/ops_rhs_unsolved.dt`). See
+  `tests/run/ops_heterogeneous.dt`.
+- **The result is always `Self`.** There is no `Output` associated type, so
+  `V2 * Float` is a `V2` and a dot product `V2 * V2 -> Float` has no spelling.
+  An operator returns its left operand's type — the same reading that lets the
+  `Ord` rewrite leave `a.cmp(b) < 0` a numeric comparison. `Output` is a wart in
+  `roadmap.md` rather than an omission: a generic use would need
+  `T: Add<Output = T>`, and that binding pins the result from the *caller's*
+  side rather than the impl's.
+- **None is object-safe** (`other: Rhs` once `Rhs` takes its default, and
+  `-> Self` throughout), so they are bounds and never a `dyn Add` — the position
+  `Ord` is in, and the same rule: object safety is demanded only where `dyn` is
+  written.
 
 All six are preluded, so `impl Add for Point` and a `T: Add` bound need no
 `use`. As with `Display` and `Ord`, that also means the impls for the primitives
@@ -2272,7 +2360,7 @@ HashSet::with_capacity(n); s.capacity(); s.reserve(n);   # forwarded, all three
 | an impl of a supertrait derived from something *other than* the sub's own block or the super's defaults | nothing else is a source. A super's required method that the block does not write is not searched for among the type's inherent methods, and no blanket impl is consulted — the obligation is discharged from what the impl says, or reported |
 | an array or a range that *is* an `Iterator` | neither implements the trait; `xs.iter()` / `(0..n).iter()` are the seeds, and `for x in xs` keeps its own desugaring rather than routing through them |
 | an array iterator detached from the array it walks | `xs.iter()` holds the array and snapshots nothing, so a `push`/`pop` mid-walk is visible (never out of bounds — see "Sources"). `xs.iter().collect()` is the copy |
-| a heterogeneous operator (`V2 * Float`, `Matrix * Vec`) | the `std::ops` traits are homogeneous (`other: Self`, no `Output`): an operator would have to select an impl by its *right* operand, which only the written `Meters::from(x)` / `Into::<U>::into(x)` forms can do. A mixed pair is an argument mismatch on the rewritten call |
+| an operator whose *result* differs from its left operand (a dot product `V2 * V2 -> Float`) | `V2 * Float` works as of milestone 75, but the traits return `Self` — there is no `Output` associated type, because a generic use would need `T: Add<Output = T>`, which pins the result from the caller's side rather than the impl's |
 | custom `==` (an `Eq` trait) | equality stays structural and import-less for every type; only ordering and arithmetic are traits. `std::map` was the consumer this was waiting on and did not need it: a hash map resolves collisions with the structural `==` on a `K` bounded only by `Hash` |
 | a bitwise operator on a non-`Int` | refused, with no trait to appeal to: there is no `BitAnd` the way there is an `Add`, so `1.5 & 2` is a type error rather than a call. A `Float`'s bits have no spelling at all — there is no reinterpreting cast |
 | compound bitwise assignment (`&=`, `\|=`, `<<=`) | not parsed, matching `%=`, which does not exist either; write `x = x & y`. `+=`, `-=`, `*=`, `/=` are the whole set |

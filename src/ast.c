@@ -536,13 +536,24 @@ Type *ty_assoc(Type *base, StringView assoc_name, TraitDef *trait,
   //
   // One hop suffices and cannot cycle: the type stored in `equals` was itself
   // built through this constructor, so it is already collapsed, and a bound may
-  // only name a type parameter declared *earlier* in the same list.
+  // name only a type parameter declared earlier in the same list — or, since
+  // milestone 75, the subject itself.
   if (base->kind == TY_GENERIC) {
     for (int i = 0; i < base->as.generic.assoc_bound_count; i++) {
       const AssocBound *ab = &base->as.generic.assoc_bounds[i];
-      if (ab->equals != NULL && sv_equal(ab->name, assoc_name)) {
-        return ab->equals;
+      if (ab->equals == NULL || !sv_equal(ab->name, assoc_name)) {
+        continue;
       }
+      // `T: Iter<Out = T>` binds the projection to the parameter itself, and
+      // what sits in `equals` is the bound-less placeholder the parameter was
+      // resolved against (see resolve_type_params). Same name is same
+      // parameter, so hand back the spelling the caller already has — which is
+      // the bounded one, and the only one its body will compare against.
+      if (ab->equals->kind == TY_GENERIC &&
+          sv_equal(ab->equals->as.generic.name, base->as.generic.name)) {
+        return base;
+      }
+      return ab->equals;
     }
   }
 

@@ -1,0 +1,58 @@
+# Milestone 75 — a bound may name its own subject: `T: Add<T>`.
+#
+# This is what a defaulted `Rhs = Self` expands to at a bound, so the language
+# had to be able to say it before the default could mean anything. It looks like
+# it should not be representable: a TY_GENERIC is interned on its *bounds*, so
+# `T` bounded by `Scale<T>` is a type that contains itself.
+#
+# It is not a cycle, because the parameter is defined in scope bound-less before
+# its own bounds resolve, and the occurrence inside the bound is that
+# placeholder. The two nodes carry the same name, and a name is all a
+# substitution matches a type parameter on — so at every instantiation they
+# rewrite together and the stratification is invisible. Only inside the
+# declaration's own body, where the parameter stays abstract and pointer
+# identity is the whole test, do they have to be collapsed again.
+
+#> 4
+#> 9
+#> 10
+#> 8
+
+use std::io::print;
+
+trait Scale<K> {
+    type Out;
+    fun scale(self, k: K) -> Self.Out;
+}
+
+struct V2 { x: Int, y: Int }
+
+impl Scale<V2> for V2 {
+    type Out = V2;
+    fun scale(self, k: V2) -> V2 { return V2 { x: self.x * k.x, y: self.y * k.y }; }
+}
+
+impl Scale<Int> for V2 {
+    type Out = Int;
+    fun scale(self, k: Int) -> Int { return self.x * k; }
+}
+
+# the subject in the trait's *argument* position.
+fun square<T: Scale<T>>(v: T) -> T.Out { return v.scale(v); }
+
+# and in an equality binding, which is the other half of the same stratification
+# — `T.Out` is discharged to the parameter itself, so the return type is `T`.
+fun square_out<T: Scale<T, Out = T>>(v: T) -> T { return v.scale(v); }
+
+# the `where` spelling of the same predicate.
+fun cube<T>(v: T) -> T where T: Scale<T, Out = T> {
+    return v.scale(v).scale(v);
+}
+
+fun main() {
+    var v = V2 { x: 2, y: 3 };
+    print(square(v).x);      # 4
+    print(square_out(v).y);  # 9
+    print(v.scale(5));       # Scale<Int>, Out = Int -> 10
+    print(cube(v).x);        # 8
+}

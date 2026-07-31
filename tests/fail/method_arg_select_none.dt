@@ -1,0 +1,23 @@
+#! expect: no implementation of 'scale' for 'V2' takes arguments (V2, Bool)
+# When several impls of one generic trait disagree about the arguments they
+# take, the arguments are what chooses — so an argument no impl accepts is a
+# failure of *selection*, and the message names what was on offer instead of
+# type-checking against whichever impl happens to be registered first.
+trait Scale<K> {
+    fun scale(self, k: K) -> Self;
+}
+
+struct V2 { x: Int, y: Int }
+
+impl Scale<Int> for V2 {
+    fun scale(self, k: Int) -> V2 { return V2 { x: self.x * k, y: self.y * k }; }
+}
+
+impl Scale<V2> for V2 {
+    fun scale(self, k: V2) -> V2 { return V2 { x: self.x * k.x, y: self.y * k.y }; }
+}
+
+fun main() {
+    var v = V2 { x: 2, y: 3 };
+    var w = v.scale(true);
+}

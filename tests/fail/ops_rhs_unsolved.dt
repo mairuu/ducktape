@@ -1,0 +1,16 @@
+#! expect: cannot infer the type of the right operand of '*'
+# Milestone 75 made the right operand decisive: it is what picks the impl among
+# several `Mul`s for one self type. So an operand inference has not solved is a
+# failure to *choose*, reported as one — before, only the left operand could
+# fail this way, because only it decided whether a trait was consulted at all.
+use std::ops::Mul;
+
+struct V2 { x: Float, y: Float }
+
+impl Mul<Float> for V2 {
+    fun mul(self, k: Float) -> V2 { return V2 { x: self.x * k, y: self.y * k }; }
+}
+
+fun main() {
+    var h = |v: V2, k| v * k;
+}

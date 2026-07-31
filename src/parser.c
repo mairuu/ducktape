@@ -1238,6 +1238,15 @@ static int parse_type_params(Parser *p, TypeParamNode **out) {
     } else {
       param->inline_bound = (TraitBound){.ref_count = 0, .refs = NULL};
     }
+    // `<Rhs = Self>` — after the bounds, so `<T: Ord = Int>` reads the way it
+    // is written. Accepted here for every declaration and rejected in sema for
+    // all but a trait, which is where the position is known rather than the
+    // syntax.
+    param->default_type = NULL;
+    if (!had_error && match_tok(p, TOKEN_EQ)) {
+      param->default_type = parse_type(p);
+      had_error = had_error || param->default_type == NULL;
+    }
     param->span = span_merge(token_span(&name_tok), current_tok_span(p));
   } while (!had_error && match_tok(p, TOKEN_COMMA));
 

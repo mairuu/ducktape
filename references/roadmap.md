@@ -2930,6 +2930,11 @@
     `Meters::from(x)` / `Into::<U>::into(x)` spellings. An operator has neither,
     so a heterogeneous impl would type-check and then fail to be selected. The
     honest shape is the one the language can check.
+    **Superseded by milestone 75**, which found the "forced" in this paragraph
+    to be an inference argument standing in for a knowledge one: the operator
+    has both operand types and writes the argument down rather than inferring
+    it. The traits now take `Rhs = Self`. What survives is the sentence about
+    `Output`, which really is blocked.
 
   The payoff is `it.sum()` and `it.product()`, which fall straight out of
   milestone 53: `where Self.Item: Add` is the same clause `max` needed, one
@@ -3997,6 +4002,90 @@
   - **Left open:** the one-block spelling and a separate super impl cannot be
     mixed for the same name, which is the price of "a written impl always wins".
 
+- **A heterogeneous operator (milestone 75)** — `V2 * Float`. The five binary
+  `std::ops` traits take an `Rhs` parameter defaulting to `Self`, a receiver
+  method call is disambiguated by its arguments, and a bound may name its own
+  subject. Design: `language.md` "Generic traits" → "Default type parameters"
+  and "`std::ops`", `architecture.md` "Selection by argument type" → "The
+  receiver spelling" and "Generic traits" → "Default type parameters".
+
+  - **The wart had the diagnosis right and the conclusion wrong.** It said a
+    heterogeneous operator "would need the operator to select an impl by its
+    *right* operand, and selection by argument type exists only through the
+    written `Meters::from(x)` / `Into::<U>::into(x)` forms" — and it said,
+    correctly, that an `Output` alone would not help because it is `Rhs` that
+    cannot be *inferred* where the trait is named. All true, and it does not
+    follow: **an operator never has to infer the argument, because it has both
+    operand types in hand and can write it down.** `ops_trait_ref` builds
+    `Mul<Float>` for `v * 2.0`. The three-year-old-looking obstacle was a
+    sentence about inference standing in for a fact about knowledge.
+  - **THE FINDING: the default is load-bearing, not sugar.** Without it every
+    use has to name the argument, and at a bound that argument is the bounded
+    parameter — `T: Add<T>`, a bound naming its own subject, which the language
+    could not say. `Add<Self>` is not an escape either: `Self` is not in scope in
+    a free function. So `Rhs = Self` is what makes the migration *zero* — every
+    `impl Add for Int`, every `T: Add`, every `where Self.Item: Add` in `std`
+    is byte-identical — and it is also the thing that forced the self-reference
+    to be implemented, since a default at a bound expands to exactly it.
+  - **A self-referential bound looks like an interning cycle and is not.** A
+    `TY_GENERIC` is interned on its *bounds*, so `T` bounded by `Add<T>` appears
+    to contain itself. The escape is one line of `subst_apply`: **a `TY_GENERIC`
+    is matched by name**, never by pointer. Defining the parameter bound-less
+    before resolving its own bounds makes the inner occurrence a *second*
+    interned node with the same name, and every instantiation rewrites both, so
+    the stratification is invisible everywhere except inside the declaration's
+    own body — where three readers collapse it again through one `bounds_rebound`
+    helper. This is now a general feature (`tests/run/self_referential_bound.dt`),
+    not a private spelling.
+  - **`Output` is genuinely blocked, and that is the same finding twice.**
+    A generic use would need `T: Add<Output = T>` — an equality binding naming
+    its own subject. The binding is *writable* now, but `ty_assoc` discharges it
+    by rewriting the projection to the type the binding named, so the result
+    would be pinned by a promise the caller makes rather than by what the impl
+    bound it to. Adding `Output` would break every generic use of these traits
+    before it enabled one, so the result stays `Self` and the dot product
+    `V2 * V2 -> Float` stays unspellable. Recorded below as the wart's remainder.
+  - **The receiver-side selector is milestone 30's, unchanged; the work was the
+    guard.** `impl_index_assoc_select` needed nothing — a method's signature
+    carries `self`, so the receiver is matched as an ordinary parameter. What is
+    new is `assoc_candidates_differ_in_args`, and its question is *not* "is there
+    more than one candidate": it is whether they disagree about the arguments
+    they take. Running selection where they agree reports an ambiguity in place
+    of an answer — `Into<Fahrenheit>` and `Into<String>` both take `(Celsius)`
+    and are settled by the return-type hint, and a milestone 74 derived impl
+    shares the written one's `MethodDef` outright. **Comparing the return type
+    too puts the first case straight back**, which is why `sigs_take_same_args`
+    stops at the parameters; caught by `generic_trait.dt`, which had passed
+    through three earlier versions of the guard.
+  - **The arguments are resolved once.** `resolve_method_call_typed` pre-resolves
+    them hint-free for selection and hands the same types to the argument check
+    below, rather than resolving them again — which would re-report a bad
+    argument and re-queue every instantiation inside it.
+  - **Two messages got better as a side effect.** A mixed pair is now
+    `'Cents' does not implement 'Add<Int>'` rather than
+    `expected 'Cents' but got 'Int'` on the rewritten call — the wart's own
+    complaint that the message "describes the desugaring rather than the
+    mistake". And an unsolved *right* operand became its own diagnostic, since
+    it is now what chooses.
+  - **Sabotaged twelve ways.** Removing the bound-less placeholder fails 5
+    (including `ops_operators` and `iter_sum`, which never mention a default);
+    neutering `generic_bounds_rebound` fails 4 and `assoc_bounds_rebound` fails
+    most of the suite (std's `sum`/`product` drive it); not filling defaults, and
+    `ops_trait_ref` ignoring the right operand, each fail most of the suite;
+    deleting the receiver-side selection fails 5; the guard always firing fails
+    4 (`generic_trait` and both `supertrait_derived`); comparing the return type
+    fails 2. The remaining four fail **exactly one test each**: the
+    defaulted-must-come-last check, the trait-only check, and the unsolved-rhs
+    diagnostic each at exit 0, and `ty_assoc`'s self-collapse with the wrong
+    error. Clean under `make sanitize` and `BUILD=release`.
+  - **Left open:** no `Output` (above); a default is trait-only, so nothing
+    else in the language has one; and `sigs_take_same_args` compares parameter
+    types by pointer, which is exact rather than up to the impl's substitution —
+    two candidates whose parameters differ only through their own impl
+    parameters would be told apart when they should not be. No such pair exists
+    in `std` or the suite, and the failure mode is a reported ambiguity rather
+    than a wrong choice.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -4006,6 +4095,14 @@ Nothing on the main line is *blocked*: every construct the checker accepts in
 `tests/pass/in_fixed.dt` now also runs. The list below is what the "known
 warts" section would promote first, in the order that pays off soonest — pick
 by appetite rather than by necessity.
+
+(**A heterogeneous operator** was the largest open design question and is now
+milestone 75: `V2 * Float`. What it needed from the language was two things
+neither of which was about operators — a trait type parameter with a default,
+and a bound that may name its own subject — plus milestone 30's argument-driven
+selection at the *receiver* spelling. What is left of it is an `Output`
+associated type, which is blocked on the same "an equality is compared, never
+unified" limit this list already records.)
 
 1. **Growing std on top of the natives** — the mechanism landed in milestone
    16 with a deliberately small registry, and the pieces with a design question
@@ -4196,14 +4293,27 @@ via `Module.decl_base`) and is not part of the main line.
   correct there only because a primitive receiver takes the built-in path —
   the asymmetry is invisible from the source. A cycle check would have to run
   where the impl is written, not where it is called
-- an operator is homogeneous, so `V2 * Float` has no spelling: the `std::ops`
-  traits take `other: Self` and return `Self`, because a heterogeneous one would
-  need the operator to select an impl by its *right* operand and selection by
-  argument type exists only through the written `Meters::from(x)` /
-  `Into::<U>::into(x)` forms. Adding an `Output` associated type alone would not
-  help — it is the `Rhs` parameter that cannot be inferred where the trait is
-  named. A mixed pair is reported as an argument mismatch on the rewritten call,
-  which describes the desugaring rather than the mistake
+- ~~an operator is homogeneous, so `V2 * Float` has no spelling~~ — **closed by
+  milestone 75.** The entry named the blocker correctly (the operator must
+  select by its *right* operand) and drew the wrong conclusion from it: it read
+  "a trait's parameters are never inferred where it is named" as "the operator
+  cannot supply one", when an operator has both operand types in hand and can
+  simply write the argument down. It was also right that `Output` alone would
+  not help, and that half is what survives.
+
+  **What is left of it: the result is always `Self`.** There is no `Output`
+  associated type, so `V2 * Float -> V2` works but a dot product
+  `V2 * V2 -> Float` has no spelling, and neither does an operator whose left
+  operand is the primitive (`2.0 * v` would need `impl Mul<V2> for Float`, which
+  can only return `Float`). Adding `Output` needs a generic use to be able to
+  say `T: Add<Output = T>`; that binding is *writable* as of this milestone, but
+  `ty_assoc` discharges an equality binding by rewriting the projection to the
+  type it named, so a reduce's accumulator would be pinned by the caller's
+  promise rather than by what the impl bound — which breaks every existing
+  generic use of these traits before it enables one. What would reopen it is a
+  way for a binding to be *checked* against the impl instead of substituted for
+  it, which is the same "an equality is compared, never unified" limit the
+  associated-type-bound family already records under item 1.
 - ~~two inherent impls giving one type the same method name collide silently~~ —
   **closed by milestone 68**, which took the fix this entry had already named: a
   diagnostic where the second impl is written, not a resolution rule. What

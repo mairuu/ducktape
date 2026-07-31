@@ -471,6 +471,38 @@ The resolved node is then indistinguishable from an ordinary associated call —
 a concrete `resolved_fun` and the impl's substitution as its instance — so
 codegen needs no new case.
 
+#### The receiver spelling (milestone 75)
+
+The same selector now also runs for `v.scale(10)`, and it had to: `a * b`
+desugars to `a.mul(b)`, so a heterogeneous operator is a *receiver* call, and
+the receiver spelling still had the pre-milestone-30 behaviour — the first
+registered impl won and every other argument was an "expected 'Int' but got
+'V2'" against it.
+
+`resolve_method_call_typed` has no ordering obstacle to work around, because it
+already holds the receiver's type: it pre-resolves the arguments hint-free into
+`selected_args` (the receiver first, since a method's signature carries `self`
+as an ordinary parameter), calls `impl_index_assoc_select`, and then hands the
+*same* types to the argument-checking loop below rather than resolving them a
+second time — which would re-report a bad argument and re-queue every
+instantiation inside it.
+
+The interesting part is the **guard**, and it is a different question from "is
+there more than one candidate". `assoc_candidates_differ_in_args` asks whether
+the candidates disagree about the arguments they *take*, comparing parameter
+lists only:
+
+- `Into<Fahrenheit>` and `Into<String>` for `Celsius` both take `(Celsius)` and
+  differ in their return type. The return-type tie-break is what settles them,
+  and running argument selection would report an ambiguity instead.
+- A supertrait-derived impl (milestone 74) shares the written impl's `MethodDef`
+  outright, so its signature is the same pointer.
+
+Comparing the *return* type as well would put both of those back — the first
+directly, and it is why `sigs_take_same_args` stops at the parameters. So the
+rule is: arguments decide only where arguments can decide, and every older
+tie-break keeps the cases it already had.
+
 ### Trait-qualified calls
 
 `Steps::from(v)` above reads the *argument* to pick among several impls, because
@@ -721,17 +753,38 @@ Three details are the design:
   level down, or the missing impl with its unimported-impl / blocking-bound
   notes) instead of degrading to "no method named 'add'", and an unrelated
   inherent `add` cannot silently become what `+` means.
-- **The traits are homogeneous** (`fun add(self, other: Self) -> Self`) where
-  Rust writes `Add<Rhs = Self>` with an associated `Output`. That is forced, not
-  chosen: a generic trait's parameters are never *inferred* where the trait is
-  named, so a heterogeneous `V2 * Float` would need the operator to select an
-  impl by its right operand — selection by argument type, which exists only
-  through the written `Meters::from(x)` / `Into::<U>::into(x)` spellings, and an
-  operator has neither. A mixed `Cents + Int` is therefore reported by the
-  ordinary argument check on the rewritten call.
+- **The right operand picks the impl** (milestone 75). The five binary traits
+  take `Rhs` with a default of `Self` (`fun add(self, other: Rhs) -> Self`);
+  `Neg` has no right operand and no parameter. `ops_trait_ref` builds the
+  reference the gate asks about — `ty_trait(trait, &rhs_ty, 1)`, so `v * 2.0`
+  asks for `Mul<Float>` and `v * w` for `Mul<V2>` — and the *call* it rewrites
+  to then reaches the matching impl through the receiver-side argument selection
+  described under "Selection by argument type".
 
-Since `other: Self` (and, for `Neg`, `-> Self`) is an object-safety violation,
-none of the six can be a `dyn`; they are bounds, the position `Ord` is in.
+  What made this possible was noticing that the obstacle was misstated. The old
+  note here said a generic trait's parameters are never *inferred* where the
+  trait is named, so an operator could not select by its right operand. True,
+  and beside the point: an operator has both operand types in hand, so it does
+  not need to infer the argument — it writes it down. The default is what keeps
+  the change free: `impl Add for Int` and `fun twice<T: Add>` still mean
+  `Add<Int>` and `Add<T>`, so nothing in `std` moved.
+
+  Two consequences. A still-unsolved *right* operand is now its own failure —
+  it is what chooses, so there is nothing to choose with — reported separately
+  from the left one's. And a mixed pair no impl heads is a selection failure
+  naming the reference (`'Cents' does not implement 'Add<Int>'`) rather than an
+  argument mismatch on the rewritten call, which was the old message's cost:
+  it described the desugaring instead of the mistake.
+- **The result is `Self`, with no `Output`.** A generic use would need
+  `T: Add<Output = T>` — an equality binding naming its own subject, which is
+  writable as of milestone 75 but discharges the projection to the type the
+  *caller* named rather than to what the impl bound it to, so `sum`'s
+  accumulator would be pinned from the wrong side. Kept as a wart rather than
+  built halfway; see `roadmap.md`.
+
+Since `other: Rhs` takes `Self` by default (and, for `Neg`, `-> Self`) these are
+still object-safety violations, so none of the six can be a `dyn`; they are
+bounds, the position `Ord` is in.
 
 ### Lang items
 
@@ -1095,6 +1148,62 @@ had to decide something new:
   two arguments, and that is reported rather than guessed. The recorded
   `Expr.coerce_dyn` is therefore queued like `inst` and rewritten by
   `cctx_solve_insts` once inference settles.
+
+#### Default type parameters, and a bound that names its own subject
+
+Milestone 75 let a trait's parameter carry a default (`trait Add<Rhs = Self>`),
+which is what made the operator traits heterogeneous without moving a line of
+`std`. Two pieces, and the second is the interesting one.
+
+**The default is stored unresolved.** `TraitDef.type_param_defaults` holds
+`TypeNode *`s parallel to `type_params`, because `Self` in a default means *the
+type the trait is being applied to* — there is no one type to resolve it to
+once. `trait_ref_resolve` gained a `subject` parameter: it fills the tail of the
+argument list from the defaults, resolving each in a scope where `Self` is
+`subject`. Passing NULL leaves `Self` to the ambient scope, which is right
+exactly where the position already defines it — an impl head, a trait's own body
+— and gives "unknown type: Self" where nothing does. `resolve_bound_refs` threads
+the subject: the parameter for an inline or `where T:` bound, the projection for
+a `where T.Item:` one, the trait's `Self` for a supertrait. The defaults must be
+a suffix of the list, checked once at `declare_trait_decl`, which keeps
+`trait_ref_resolve` a count. And each default node's `resolved` cache is cleared
+after use, since one written default is read against many subjects.
+
+**At a bound the subject is the parameter itself**, so `T: Add` denotes
+`Add<T>` — a bound naming its own subject, which the language could not
+previously say (`fun f<T: Scale<T>>` was "unknown type: T"). It reads like a
+cycle rather than a scoping bug: a `TY_GENERIC` is interned on its *bounds*, so
+`T` bounded by `Add<T>` is a type that contains itself.
+
+It is not a cycle, and the reason is one line of `subst_apply`: **a `TY_GENERIC`
+is matched by name.** `resolve_type_params` defines each parameter in scope
+bound-less *before* resolving its own bounds, so the occurrence inside the bound
+is a placeholder — a second interned node with the same name and no bounds. The
+representation stratifies instead of looping, and because a substitution binds
+the *name* `T`, both nodes rewrite together at every instantiation. The
+stratification is therefore invisible to the whole pipeline except in one place:
+inside the declaration's own body, where the parameter stays abstract and
+pointer identity is the entire test.
+
+Three readers collapse the two spellings again, all through `bounds_rebound`,
+which applies the one-entry substitution `T := T`:
+
+- `generic_bounds_rebound` — `resolve_method_call_typed`, so `v + v` inside
+  `fun twice<T: Add>` sees `add`'s parameter as the bounded `T`.
+- the same, in `impl_index_implements`, so asking whether `T` satisfies `Add<T>`
+  compares like with like.
+- `assoc_bounds_rebound` — the projection form, for the bounds a
+  `where T.Item: Add` put on `T.Item`. A trait method's `where Self.Item: Add`
+  is the same shape one level up, which is why the subject recorded there is a
+  projection off `trait_self_param(trait, NULL, 0)` — the bounds-only `Self`,
+  because the real one carries the very assoc bounds the loop is still building.
+
+`ty_assoc` handles the equality-binding half directly: `T: Scale<Out = T>`
+discharges `T.Out` to the placeholder, so the constructor hands back the `base`
+it was given whenever the bound-to type is a generic of the same name.
+
+This is a general language feature, not a private spelling — `T: Add<T>` and
+`where T: Scale<T, Out = T>` are writable (`tests/run/self_referential_bound.dt`).
 
 ### Calls through a trait bound
 

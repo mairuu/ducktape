@@ -1,0 +1,65 @@
+# Milestone 75 — a trait's type parameter may declare a default, and `Self` is
+# nameable in one. This is the mechanism `std::ops` spends; here it stands on
+# its own, over a trait that has nothing to do with an operator.
+#
+# `Self` in a default means *the type the trait is being applied to*, and that
+# is why the default is carried as unresolved AST rather than resolved once at
+# the declaration: at an impl head it is the impl's self type, at a bound it is
+# the parameter being bounded. Two positions, two answers, one written form.
+
+#> 4
+#> 20
+#> 9
+#> 6
+#> ab
+
+use std::io::print;
+
+trait Scale<K = Self> {
+    fun scale(self, k: K) -> Self;
+}
+
+struct V2 { x: Int, y: Int }
+
+# no argument: `Self` is `V2`, so this is `impl Scale<V2> for V2`.
+impl Scale for V2 {
+    fun scale(self, k: V2) -> V2 { return V2 { x: self.x * k.x, y: self.y * k.y }; }
+}
+
+# and the argument written out, for the same type.
+impl Scale<Int> for V2 {
+    fun scale(self, k: Int) -> V2 { return V2 { x: self.x * k, y: self.y * k }; }
+}
+
+# A bound with no argument is the default too, and there `Self` is `T` — which
+# a bound could not have said before this milestone, since a parameter was not
+# in scope while its own bounds resolved. So the default is not sugar over a
+# spelling that already worked; the spelling it expands to is new as well.
+fun square<T: Scale>(v: T) -> T { return v.scale(v); }
+
+# the expansion, written by hand.
+fun square_explicit<T: Scale<T>>(v: T) -> T { return v.scale(v); }
+
+# a default may be a concrete type rather than `Self`.
+trait Joined<Sep = String> {
+    fun joined(self, sep: Sep) -> String;
+}
+
+struct Pair { a: String, b: String }
+
+impl Joined for Pair {
+    fun joined(self, sep: String) -> String { return "{self.a}{sep}{self.b}"; }
+}
+
+fun main() {
+    var v = V2 { x: 2, y: 3 };
+
+    print(square(v).x);          # Scale<V2>  -> 4
+    print(v.scale(10).x);        # Scale<Int> -> 20
+    print(square_explicit(v).y); # Scale<V2>  -> 9
+
+    var w = V2 { x: 3, y: 4 };
+    print(v.scale(w).x);         # Scale<V2>  -> 6
+
+    print(Pair { a: "a", b: "b" }.joined(""));
+}
