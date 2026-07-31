@@ -1,0 +1,20 @@
+#! expect: expected at least one type argument between '<' and '>'
+# `::<>` names nothing. The bracket is consumed before the complaint is filed:
+# leaving the `>` behind handed it back to the expression grammar as an
+# operator, and the error that eventually arrived was about a token several
+# further on. One spelling of the mistake, one diagnostic, on the brackets that
+# are the mistake.
+struct H {
+    n: Int,
+}
+
+impl H {
+    fun width(self) -> Int {
+        return self.n;
+    }
+}
+
+fun main() {
+    var h = H { n: 1 };
+    var x = h.width::<>();
+}

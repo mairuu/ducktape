@@ -3788,6 +3788,54 @@
     parameter. It is inherited rather than caused — a struct's `P::new` in a
     pattern has always done the same — and is recorded in the warts list.
 
+- **The turbofish for a method call's type arguments (milestone 71)** —
+  `it.fold::<Int>(0, f)` replaces the bare `it.fold<Int>(0, f)`, matching the
+  `::<..>` an expression path has always required. The lookahead that used to
+  tell the two readings apart is deleted, so a `<` after a field or method
+  access is unconditionally the less-than operator. Design: `architecture.md`
+  under `parse_path(mode)`; the grammar's `postfixOp`.
+  - **The ambiguity was never worth a heuristic, because half the language had
+    already paid the turbofish.** `PATH_EXPR` required `::<..>` from the start
+    and `PATH_TYPE` accepts both — the bare spelling survived only in
+    `parse_postfix`, which is the one place a `<` has a live operator reading
+    to compete with. Milestone 63 answered that competition by scanning ahead
+    for the matching `>` and asking whether a `(` followed; making the two
+    spellings agree answers it before either side is parsed and costs no scan.
+  - **The change is smaller than the wart it closes.** Sixty lines of token
+    scanning deleted, the branch rewritten to call `parse_type_args` (which the
+    path already used, so the stack array and its `memcpy` went too), and
+    `a.b < c > (d)` — the one shape that satisfied the lookahead's test without
+    meaning it — became two comparisons.
+  - **Migration cost, measured rather than assumed: one test.** Nothing in
+    `std/` spelled a method's type arguments at all, so the suite's only user
+    of the bare form was `tests/run/method_type_args.dt`, whose whole subject
+    was the ambiguity. It survives as the milestone's own test, rewritten
+    around the `::` instead of around the lookahead.
+  - **The retired spelling needed a diagnostic, or the parse wart just became a
+    message wart.** `h.pick<Int>(7, 9)` now dies as "unknown field 'pick'",
+    which describes the lookup and not the mistake. `note_field_is_method`
+    scans the impl index and adds a note whenever a failed field name *is* an
+    applicable method — legitimate because the language has no method values,
+    so the two namespaces never overlap and a field miss is worth re-asking as
+    a method. It also catches a method mentioned without calling it, which is
+    the older and commoner form of the same confusion.
+  - **BUG FOUND WHILE PASSING THROUGH: `parse_type_args` never consumed the
+    `>` of an empty list.** `P::<>::new()` checked for `TOKEN_GT`, skipped the
+    body, and handed the bracket back to the expression grammar as an operator
+    — so the complaint arrived at the `::` two tokens later as "expected
+    expression". Latent since the turbofish existed and unreachable from the
+    method-call site, which had its own empty-list check; routing that site
+    through the shared function is what made it matter.
+    `tests/fail/turbofish_empty.dt`.
+  - **Sabotaged four ways.** Restoring the lookahead alongside the turbofish
+    fails exactly two tests: `tests/fail/method_type_args_bare.dt` **at exit
+    0**, and `tests/fail/chained_compare_not_type_args.dt` with the old
+    reading's message ("no method named 'n'") in place of the comparison's.
+    Accepting a bare `<` with *no* lookahead fails 281 — the pre-milestone-63
+    state, and the measure of what that scan was holding up. Dropping the note
+    fails exactly `method_type_args_bare.dt`; reverting the empty-list fix
+    fails exactly `turbofish_empty.dt`.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -3952,13 +4000,14 @@ via `Module.decl_base`) and is not part of the main line.
   nothing goes on to solve. A struct has always done exactly this
   (`P::new` in a pattern), so the enum now matches it — but two diagnostics
   for one mistake is still one too many.
-- **`a.b < c > (d)` reads as a type application, not two comparisons.** A `<`
-  after a field or method access is ambiguous — type arguments are spelled bare,
-  with no turbofish — and milestone 63's fix disambiguates by scanning for the
-  matching `>` and asking whether a `(` follows it, since type arguments are
-  only legal immediately before their call. That one shape satisfies the test
-  without meaning it. Parenthesising the left comparison is the workaround, and
-  a turbofish spelling would be the real fix.
+- ~~`a.b < c > (d)` reads as a type application, not two comparisons~~ —
+  **closed by milestone 71**, which took the fix this entry had already named:
+  the turbofish, not a better heuristic. What is left of it is the cost of
+  retiring a spelling rather than any ambiguity: the bare
+  `it.fold<Int>(0, f)` parses as comparisons, so it reports an unknown *field*
+  and then, usually, an undefined variable for the type name — two diagnostics
+  for one mistake. A note on the first names the turbofish, which is as far as
+  the field-access site can see.
 - ~~no bitwise operators at all~~ — **closed by milestone 65.** What is left of
   it is small and none of it blocks anything: there are no compound bitwise
   assignments (`&=`, `<<=`), matching the fact that `%=` does not exist either;

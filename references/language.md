@@ -209,6 +209,17 @@ ending in `return` has type `!` (never), which unifies with anything.
   is a type parameter bounded by the trait — usable in annotations, argument
   and return position — so calls on `self` see exactly the trait's own
   methods, whichever impl ends up inheriting it.
+- A method call's own type arguments take the **turbofish**, the same `::<..>`
+  an expression path requires: `it.fold::<Int>(0, f)`,
+  `lo.pick::<[Int]>(xs, xs)` (`tests/run/method_type_args.dt`). They are legal
+  only immediately before the `(` of the call they belong to. The `::` is what
+  makes them unambiguous — without it a `<` after a field or method access
+  could open a type-argument list or be the less-than operator, and nothing at
+  the `<` itself says which. So a bare `<` there is **always** the operator:
+  `self.n < xs.len()` compares, and `h.pick<Int>(7, 9)` is not a call at all
+  but a comparison against the field `pick`, reported as an unknown field with
+  a note naming the turbofish. Type *positions* are unaffected — a type is
+  never an expression, so `Point<Int>` stays bare there.
 - Trait bounds on type parameters are written inline (`fun f<T: A + B>(..)`),
   in a `where` clause (`fun f<T>(..) -> R where T: B`), or both — they merge.
   A bound must name a trait. Bounds are *enforced*: instantiating a bounded
@@ -2197,7 +2208,7 @@ s.contains(4); s.remove(4); s.to_array();
 | hashing a `Float`, and so a `Float` map key | no `impl Hash for Float`: `NaN != NaN` makes such a key unfindable in a table that compares with `==`, and the only Int a Float reaches is a truncating `as`. Wrap one in a struct and say what equality means |
 | an `entry`-style API on a map (`or_insert`, in-place update) | `get` then `insert`, which probes twice. Nothing can hold a slot open between the two |
 | `Display` for a `HashMap` / `HashSet` | none ships; iteration order is unspecified, so a rendering would have to sort and the key would need `Ord` on top of `Hash`. `m.keys()` and `m.values()` are the arrays |
-| `a.b < c > (d)` read as a comparison | it is read as a type application. A `<` after a field or method access is disambiguated by looking ahead for the matching `>` and asking whether a `(` follows, since type arguments are only legal immediately before their call; this is the one shape that satisfies that test without meaning it. Parenthesise the left comparison |
+| bare type arguments on a method call (`it.fold<Int>(0, f)`) | the turbofish is required: `it.fold::<Int>(0, f)`. The bare form parses as comparisons, so it is reported as an unknown *field* plus, usually, an undefined variable for the type name — two diagnostics for one mistake. A note on the first names the turbofish |
 | an impl overriding a defaulted method restating its `where` | conformance compares signatures, which carry no bounds, so an override may quietly add or drop one; the trait's own clause is still discharged at every call through the trait |
 | `mod` declarations | no such keyword; `use` is what pulls a file in |
 | glob imports (`use a::*`) | not parsed; name each item, or bind the module (`use a;`) and qualify |

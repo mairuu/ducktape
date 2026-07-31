@@ -1,0 +1,25 @@
+#! expect: 'pick' is a method: call it as '.pick(..)'
+# The bare spelling `h.pick<Int>(7, 9)` is no longer a type application: the
+# `<` after a field or method access is unconditionally the less-than operator,
+# so this reads as `(h.pick) < Int > (7, 9)` and dies on the field.
+#
+# "unknown field 'pick'" is true and useless on its own — the language has no
+# method values, so the two namespaces never overlap and a name that misses as
+# a field is worth checking as a method. The note carries the migration.
+struct H {
+    n: Int,
+}
+
+impl H {
+    fun pick<T>(self, a: T, b: T) -> T {
+        return a;
+    }
+}
+
+fun main() {
+    var v = h_of().pick<Int>(7, 9);
+}
+
+fun h_of() -> H {
+    return H { n: 0 };
+}

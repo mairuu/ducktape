@@ -181,14 +181,14 @@ multiply       = unary ( ( "*" | "/" | "%" ) unary )* ;
 unary          = ( "not" | "-" | "~" ) unary | postfix ;
 postfix        = primary postfixOp* ;
 postfixOp      = "(" ( expr ( "," expr )* )? ")"        (* call *)
-               | "." IDENT ( "<" type ( "," type )* ">" )?
+               | "." IDENT ( "::" "<" type ( "," type )* ">" )?
                  ( "(" ( expr ( "," expr )* )? ")" )?   (* method / field *)
-                 (* the type-argument list is ambiguous with `comparison`:
-                    `a.b < c` could open one. Type arguments are only legal
-                    immediately before their call, so the parser scans ahead
-                    for the matching ">" and takes this branch only if a "("
-                    follows it; otherwise the "<" is the operator. The one
-                    shape that fools it is `a.b < c > (d)`. *)
+                 (* the turbofish is required, matching `pathSegE`: a bare
+                    "<" here would be ambiguous with `comparison`, since
+                    `a.b < c` could open a type-argument list. The "::" says
+                    which before either side is parsed, so a "<" after a
+                    field or method access is always the operator and
+                    `a.b < c > (d)` is two comparisons. *)
                | "." INT                                (* tuple access *)
                | "[" expr "]"                           (* index *)
                | "as" type                              (* cast *)

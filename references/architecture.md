@@ -39,7 +39,12 @@ Notables:
 - `parse_type` — `()`, tuples, `fun(..) -> R`, `[T]`, `dyn Trait`, `Self`,
   named paths, and `.Assoc` postfix chains.
 - `parse_path(mode)` — expression paths require turbofish (`::<T>`) for type
-  args; type paths accept plain `<T>`.
+  args; type paths accept plain `<T>`. A method call's type arguments
+  (`it.fold::<Int>(0, f)`) take the turbofish for the same reason and are read
+  by the same `parse_type_args`, in `parse_postfix` rather than in the path.
+  That is what keeps a `<` after a field or method access unambiguous: the
+  `::` decides between a type-argument list and the less-than operator before
+  either side is parsed, so no lookahead is needed and none is done.
 - `p->allow_struct_init` disambiguates `Point { .. }` from a block in `if`/
   `match`/`while` headers. It is cleared for the *header only* — inside the
   body the `{` is unambiguous again, so it must be restored before

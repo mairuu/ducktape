@@ -1,12 +1,12 @@
-# The two readings of a `<` after `obj.name`.
+# A method call's type arguments, and the `<` that is not one.
 #
-# `it.pick<Int>(a, b)` applies a type argument; `self.n < xs.len()` compares.
-# Nothing at the `<` itself says which, and the language has no turbofish to
-# force the issue, so the parser looks ahead for the matching `>` and asks
-# whether a `(` follows it. Before that lookahead existed, *every* `<` after a
-# field or method access was read as opening type arguments, so `self.at < n`
-# did not parse at all — which is why the comparison cases below are the real
-# subject here and the applications are the thing they must not break.
+# `it.pick::<Int>(a, b)` applies a type argument; `self.n < xs.len()` compares.
+# The turbofish is what settles the two, and it settles them at the `::` —
+# before either side is parsed. The bare spelling `it.pick<Int>(a, b)` used to
+# be the application, which left the `<` after a field or method access
+# genuinely ambiguous: the parser had to scan ahead for the matching `>` and ask
+# whether a `(` followed it. That lookahead is gone, so every case below is
+# decided by the token in front of the bracket.
 #> 7
 #> 9
 #> 7
@@ -40,17 +40,17 @@ fun main() {
     var xs = [3, 1, 2];
 
     # a type argument, written out and inferred
-    print("{lo.pick<Int>(7, 9)}");
-    print("{hi.pick<Int>(7, 9)}");
+    print("{lo.pick::<Int>(7, 9)}");
+    print("{hi.pick::<Int>(7, 9)}");
     print("{lo.pick(7, 9)}");
 
     # the comparison reading: a field, then a call, then a literal
     print("{lo.n < xs.len()}");
     print("{hi.n < xs.len()}");
-    print("{lo.pick<[Int]>(xs, xs).len()}");
+    print("{lo.pick::<[Int]>(xs, xs).len()}");
 
     # a `<` after a *method* call rather than a field, and one whose right side
-    # starts with an identifier — the shape that most looks like a type list
+    # starts with an identifier — the shape that most looked like a type list
     var n = 2;
     if hi.width() < 4 {
         print("{n}");

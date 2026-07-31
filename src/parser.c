@@ -776,75 +776,6 @@ static Expr *parse_unary(Parser *p) {
   return parse_postfix(p);
 }
 
-// After `obj.name`, a `<` has two readings and the grammar settles neither at
-// the `<` itself: it opens a method call's type arguments (`it.fold<Int>(0,f)`)
-// or it is the less-than operator (`self.at < n`). Rust forces the choice with
-// the turbofish; ducktape spells type application bare, so the parser has to
-// look.
-//
-// What tells them apart is what follows the *matching* `>`: type arguments are
-// only ever legal immediately before the `(` of the call they belong to, which
-// is a rule the code below already relied on to reject stray ones. So this
-// scans ahead for that `>` and reports whether a `(` sits after it.
-//
-// A token scan rather than a speculative parse, for two reasons: it costs no
-// backtracking of the parser's own state, and — the one that matters — it emits
-// no diagnostics for the reading it goes on to reject. Every `>` is its own
-// token — `>>` and `>>>` are fused out of adjacent ones by `parse_shift` rather
-// than produced by the scanner, precisely so that scans like this one and
-// `parse_type`'s run of closing brackets never have to take a shift back apart
-// — so the angle depth is exact. The bracket depths are tracked because a type
-// argument may
-// legitimately contain `[Int]` or `(A, B)`; a closer arriving at depth zero
-// belongs to whatever encloses this expression and means the `<` was a
-// comparison.
-//
-// The residual ambiguity is `a.b < c > (d)`, which reads as a type application.
-// That is the same corner the turbofish exists to avoid and it needs a parse
-// this deliberate to reach, so it stays a wart rather than a reason to change
-// the syntax.
-static bool looks_like_type_args(const Parser *p) {
-  int angle = 0, paren = 0, square = 0;
-  for (int i = p->current; i < p->count; i++) {
-    switch (p->tokens[i].type) {
-    case TOKEN_LT:
-      angle++;
-      break;
-    case TOKEN_GT:
-      if (--angle == 0) {
-        return i + 1 < p->count && p->tokens[i + 1].type == TOKEN_LPAREN;
-      }
-      break;
-    case TOKEN_LPAREN:
-      paren++;
-      break;
-    case TOKEN_RPAREN:
-      if (paren-- == 0) {
-        return false;
-      }
-      break;
-    case TOKEN_LBRACKET:
-      square++;
-      break;
-    case TOKEN_RBRACKET:
-      if (square-- == 0) {
-        return false;
-      }
-      break;
-    // none of these can occur inside a type argument list, so meeting one means
-    // the expression has already run past the `<` that started this scan.
-    case TOKEN_SEMICOLON:
-    case TOKEN_LBRACE:
-    case TOKEN_RBRACE:
-    case TOKEN_EOF:
-      return false;
-    default:
-      break;
-    }
-  }
-  return false;
-}
-
 static Expr *parse_postfix(Parser *p) {
   Expr *base = parse_primary(p);
   while (true) {
@@ -873,40 +804,22 @@ static Expr *parse_postfix(Parser *p) {
       if (match_tok(p, TOKEN_IDENT)) {
         Token name = *previous_tok(p);
 
-        TypeNode *type_args[8];
+        // A method call's type arguments are spelled with the turbofish, the
+        // same `::<..>` a path already requires (`Point::<Int>::new`). The
+        // brackets are the only ones in the expression grammar that could have
+        // been read as operators — `it.fold<Int>(0, f)` against `self.at < n`
+        // — and the `::` is what settles it before either side is parsed, so
+        // the `<` after a field or method access is now unconditionally the
+        // less-than operator and `a.b < c > (d)` is two comparisons.
+        TypeNode **type_args = NULL;
         int type_arg_count = 0;
         Span start_span = current_tok_span(p);
 
-        if (check_tok(p, TOKEN_LT) && looks_like_type_args(p) &&
-            match_tok(p, TOKEN_LT)) {
-          bool had_error = false;
-
-          if (!check_tok(p, TOKEN_GT)) {
-            do {
-              if (type_arg_count >= 8) {
-                error_at(p, span_merge(start_span, previous_tok_span(p)),
-                         "too many type arguments in method call");
-                had_error = true;
-                break;
-              }
-              TypeNode *ty = parse_type(p);
-              if (ty->kind == TYNODE_POISON) {
-                had_error = true;
-                break;
-              }
-              type_args[type_arg_count++] = ty;
-            } while (match_tok(p, TOKEN_COMMA));
-          }
-
-          consume_tok(p, TOKEN_GT, "expected '>' after type arguments");
-
-          if (type_arg_count == 0) {
-            error_at(p, current_tok_span(p),
-                     "expected at least one type argument in type application");
-            had_error = true;
-          }
-
-          if (had_error) {
+        if (check_tok(p, TOKEN_COLONCOLON) &&
+            peek_ahead(p, 1)->type == TOKEN_LT) {
+          advance_tok(p); // consume '::'
+          type_arg_count = parse_type_args(p, &type_args);
+          if (type_arg_count <= 0) {
             return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
           }
         }
@@ -938,16 +851,9 @@ static Expr *parse_postfix(Parser *p) {
           expr->as.method_call.method_name = name.lexeme;
           expr->as.method_call.args = args;
           expr->as.method_call.arg_count = argc;
-          expr->as.method_call.type_args = NULL;
-          expr->as.method_call.type_arg_count = 0;
+          expr->as.method_call.type_args = type_args;
+          expr->as.method_call.type_arg_count = type_arg_count;
           expr->as.method_call.resolved_method = NULL;
-          if (type_arg_count > 0) {
-            expr->as.method_call.type_args =
-                al_alloc(p->al, sizeof(TypeNode *) * type_arg_count);
-            memcpy(expr->as.method_call.type_args, type_args,
-                   sizeof(TypeNode *) * type_arg_count);
-            expr->as.method_call.type_arg_count = type_arg_count;
-          }
           base = expr;
         } else {
           // field access: obj.field
@@ -1108,7 +1014,16 @@ static int parse_type_args(Parser *p, TypeNode ***out_args) {
 
   if (!consume_tok(p, TOKEN_LT, "expected '<' before type arguments")) {
     had_error = true;
-  } else if (!check_tok(p, TOKEN_GT)) {
+  } else if (check_tok(p, TOKEN_GT)) {
+    // `::<>` names nothing. Consume the bracket before reporting: leaving it
+    // behind used to hand the `>` back to the expression grammar as an
+    // operator, so the real complaint arrived several tokens later.
+    Span open = previous_tok_span(p);
+    advance_tok(p);
+    error_at(p, span_merge(open, previous_tok_span(p)),
+             "expected at least one type argument between '<' and '>'");
+    had_error = true;
+  } else {
     do {
       if (count >= 16) {
         error_at(p, current_tok_span(p), "too many type arguments");

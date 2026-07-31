@@ -1,0 +1,20 @@
+#! expect: cannot compare a value of type 'Bool'
+# `a.b < c > (d)` — the shape that was the last wart of the bare type-argument
+# spelling. A `(` follows the matching `>`, which is exactly the test the old
+# lookahead used, so this read as a type application on the field `n` and the
+# real complaint was never reachable.
+#
+# With the turbofish there is nothing to look at: no `::` in front of the
+# bracket, so both angles are operators. The diagnostic below is the proof —
+# it is about the *left operand of `>`* being a `Bool`, which is what `h.n < one`
+# evaluates to, and which the type-application reading could never produce.
+struct H {
+    n: Int,
+}
+
+fun main() {
+    var h = H { n: 0 };
+    var one = 1;
+    var four = 4;
+    var b = h.n < one > (four);
+}

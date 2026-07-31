@@ -57,7 +57,7 @@ FieldDef *find_struct_field(const StructDef *def, FieldIdent ident,
       }
     }
 
-    diag_error(diags, span, "unknown field '" SV_FMT " '", SV_ARG(name));
+    diag_error(diags, span, "unknown field '" SV_FMT "'", SV_ARG(name));
     return NULL;
   }
 }
@@ -1169,6 +1169,38 @@ static void note_blocking_bound(DiagBag *diags, ImplIndex *idx, Type *self_type,
         return;
       }
     }
+  }
+}
+
+// A `.name` that is not a field but *is* a method. The language has no method
+// values, so this is never a near miss on something that could work — the two
+// namespaces simply do not overlap, and "unknown field" describes the lookup
+// rather than the mistake. Two spellings reach here: a method mentioned without
+// calling it, and a method call whose type arguments were written bare
+// (`it.fold<Int>(0, f)`), which since the turbofish landed parses as a
+// comparison against a field. The note names both because the error span cannot
+// tell them apart.
+static void note_field_is_method(DiagBag *diags, ImplIndex *idx,
+                                 Type *self_type, StringView name,
+                                 Allocator *al) {
+  for (int i = 0; i < idx->count; i++) {
+    ImplDef *impl = idx->all[i];
+    bool declares = false;
+    for (int j = 0; j < impl->method_count && !declares; j++) {
+      declares = sv_equal(impl->methods[j].name, name);
+    }
+    if (!declares) {
+      continue;
+    }
+    Subst ignored;
+    if (!impl_applies(impl, self_type, NULL, &ignored, NULL, al)) {
+      continue;
+    }
+    diag_note(diags, (Span){0},
+              "'" SV_FMT "' is a method: call it as '." SV_FMT "(..)', and "
+              "write any type arguments as '." SV_FMT "::<..>(..)'",
+              SV_ARG(name), SV_ARG(name), SV_ARG(name));
+    return;
   }
 }
 
@@ -6933,7 +6965,13 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
 
       FieldDef *field_def =
           find_struct_field(def, field->ident, ctx->diags, expr->span);
-      if (!field_def || !check_field_visible(ctx, def, field_def, expr->span)) {
+      if (!field_def) {
+        if (!def->is_tuple) {
+          note_field_is_method(ctx->diags, ctx->impls, base_ty,
+                               field->ident.name, ctx->al);
+        }
+        result = ctx->tc->t_poison;
+      } else if (!check_field_visible(ctx, def, field_def, expr->span)) {
         result = ctx->tc->t_poison;
       } else {
         result = field_def->type;
