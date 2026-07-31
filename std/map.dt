@@ -48,21 +48,17 @@ enum Slot<K, V> {
 
 fun empty_slots<K, V>(n: Int) -> [Slot<K, V>] {
     var slots: [Slot<K, V>] = [];
-    # The annotation is not decoration: `slots.push(Slot::Empty)` does not
-    # check, because the argument hint solves the variant only as far as
-    # `Slot<_, _>` and will not then bind those unknowns to this function's own
-    # `K` and `V`. An annotated local drives the same inference from the other
-    # side and does check — the workaround is one line, but the gap is real and
-    # is recorded in language.md.
-    #
-    # Hoisting it out of the loop is a consequence rather than the point, and a
-    # welcome one: `Empty` carries no payload, so every free slot can be the
-    # same instance, and a fresh table of any size costs one allocation for its
-    # marker rather than `n` of them.
-    var empty: Slot<K, V> = Slot::Empty;
+    # `Slot::Empty` used to need an annotated local here: the argument hint
+    # solved the variant only as far as `Slot<_, _>`, because `K` and `V` are
+    # named the same in this function as in the enum and the seeding step read
+    # that coincidence as "the hint says nothing". Fixed, so the constructor
+    # goes inline. It costs nothing to build one per slot either: `Empty`
+    # carries no payload, so every free slot is the *same* interned instance,
+    # and a fresh table of any size allocates once for its marker rather than
+    # `n` times.
     var i = 0;
     while i < n {
-        slots.push(empty);
+        slots.push(Slot::Empty);
         i += 1;
     }
     return slots;

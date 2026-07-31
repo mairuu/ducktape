@@ -3636,7 +3636,9 @@
     the perf note named — a table is mostly `Slot::Empty` — but `empty_slots`
     builds one `var empty: Slot<K, V> = Slot::Empty;` and pushes *it* n times,
     because a bare `slots.push(Slot::Empty)` does not type-check inside a
-    generic function (the unit-variant hint wart, still open). The workaround
+    generic function (the unit-variant hint wart — open at the time, closed by
+    milestone 69, which deleted the workaround this paragraph describes). The
+    workaround
     for a language wart was already the optimisation, by hand. What this
     milestone actually buys is the case nobody hand-optimised: a `None` returned
     from a lookup, a `Tomb` written on a remove, a sentinel built in a loop.
@@ -3700,6 +3702,47 @@
     `method_is_inherent` return true unconditionally over-fires on 9, including
     `std::iter`'s own trait impls; dropping either direction of the overlap test
     fails exactly the test written for that direction.
+
+- **The unit-variant hint gap (milestone 69)** — a fieldless constructor now
+  takes its type arguments from a hint that names type *parameters*, so
+  `slots.push(Slot::Empty)` checks inside `fun f<K, V>(..)` and `std::map`'s
+  annotated-local workaround is gone. One line of `hint_type_args`, plus a
+  missing diagnostic the change exposed. Design: `architecture.md` under
+  `hint_type_args`.
+
+  - **The gap was a name collision, not a depth limit.** It read as "an
+    argument hint solves the variant only as far as `Slot<_, _>` and will not
+    then bind those to the enclosing function's `K` and `V`" — a plausible
+    story about hints not reaching far enough, and wrong. `TY_GENERIC` interns
+    by name, so the `K` a function declares and the `K` an enum declares are
+    the *same node*; `Slot<K, V>` therefore interns to `Slot`'s own
+    `self_type`, and `hint_type_args` opened with `hint == self_type` as a
+    "this hint says nothing" bail. It fired on exactly the case that had the
+    answer. Renaming one parameter made the bug vanish, which is what
+    identified it: `fun f<K, B>(xs: [Slot<K, B>])` had always worked.
+  - **The fix is to stop excluding it, not to add a case.** Seeding from
+    `self_type`'s own arguments is the identity substitution, and identity is
+    the right answer under both readings of that `T` — the caller's or the
+    enum's, they are the same node either way. Deleting the test is the entire
+    change to inference.
+  - **THE BUG IT FOUND: `infer_unify`'s `TY_GENERIC` branch reported nothing.**
+    It returned a bare `false` — the only failure path in that function without
+    a `diag_error`, against the convention the rest of the checker follows. It
+    had never mattered because a hint's parameters were opened into unknowns
+    first, and an unknown absorbs anything; the mismatch surfaced later at a
+    `types_equal` with a real message. Seeding puts two distinct generics
+    head-on, and a silent `false` becomes `t_poison`, which propagates
+    *silently by design*. So `xs.push(Slot::Full(v, k))` against `[Slot<K, V>]`
+    went from a reported error to **exit 0 with no output at all**. Caught by
+    probing the change for over-fire before trusting it, not by the suite.
+    Fixing it made the surviving diagnostic better than the original: two
+    errors pointing at the two swapped operands, instead of one comparing whole
+    shapes.
+  - **Sabotaged both ways**, per milestone 63's rule. Restoring the
+    `hint == self_type` bail fails 6 tests — the new one, and every `std::map`
+    consumer, since the workaround is no longer there to hide it. Dropping the
+    new `diag_error` alone fails exactly one, `tests/fail/unit_variant_hint_swapped.dt`,
+    *with exit 0* — which is the regression that test exists to name.
 
 ## Next (in recommended order)
 
@@ -3853,19 +3896,15 @@ via `Module.decl_base`) and is not part of the main line.
 
 ## Known warts to clean up opportunistically
 
-- **a call argument's hint will not solve a generic unit variant to the
-  enclosing function's type parameters**: inside `fun f<K, V>(..)`,
-  `slots.push(Slot::Empty)` reports "expected `Slot<K, V>` but got
-  `Slot<_, _>`" — the hint gets the variant as far as unknowns and then will not
-  bind those to `K` and `V`. An annotated local
-  (`var e: Slot<K, V> = Slot::Empty;`) drives the same inference from the other
-  side and checks. Found writing `std::map` (milestone 63), which uses the
-  workaround; it is the same family as the struct-literal field-hint gap below.
-  Milestone 67 found that the workaround had been doing a second job: hoisting
-  the variant into a local is also what kept `empty_slots` from allocating one
-  object per slot. The runtime does that now for every fieldless def, so fixing
-  this wart would cost nothing — but until it is fixed, `std::map` still needs
-  the annotated local to type-check at all.
+- ~~a call argument's hint will not solve a generic unit variant to the
+  enclosing function's type parameters~~ — **closed by milestone 69.**
+- **an inherent associated function on an *enum* is unreachable by name.**
+  `impl<T> Opt<T> { fun none() -> Opt<T> { .. } }` declares it, but
+  `Opt::none()` resolves the path as a *variant* first and reports "unknown
+  variant 'none' in enum 'Opt'" without ever consulting the impls. The same
+  spelling works on a struct (`Point::new(..)`), so it is the enum path
+  resolution that is missing the fallback rather than the impl. Found probing
+  milestone 69, which had nothing to do with it; predates that change.
 - **`a.b < c > (d)` reads as a type application, not two comparisons.** A `<`
   after a field or method access is ambiguous — type arguments are spelled bare,
   with no turbofish — and milestone 63's fix disambiguates by scanning for the

@@ -1,0 +1,96 @@
+# A fieldless constructor has nothing to solve its type parameters from, so it
+# takes them from the expected type. That seeding used to be skipped whenever
+# the hint was pointer-identical to the type's own self type — and because
+# TY_GENERIC interns by name, that is exactly what happens when the enclosing
+# function names its parameters the same as the enum does. `K` and `V` below
+# are deliberately the same letters the enum declares.
+use std::io::print;
+
+enum Slot<K, V> {
+    Empty,
+    Full(K, V),
+}
+
+struct Marker<T>;
+
+# the argument-hint form: `push` expects `Slot<K, V>`
+fun fill<K, V>(n: Int) -> [Slot<K, V>] {
+    var slots: [Slot<K, V>] = [];
+    var i = 0;
+    while i < n {
+        slots.push(Slot::Empty);
+        i += 1;
+    }
+    return slots;
+}
+
+# the return-position form
+fun blank<K, V>() -> Slot<K, V> {
+    return Slot::Empty;
+}
+
+# nested, so the hint's arguments are themselves applications
+fun nested<T>() -> Slot<Slot<T, T>, Int> {
+    return Slot::Empty;
+}
+
+# a unit struct runs the same seeding path as a unit variant
+fun marker<T>() -> Marker<T> {
+    return Marker;
+}
+
+impl<K, V> Slot<K, V> {
+    # here the hint is the impl's own Self
+    fun cleared(self) -> Slot<K, V> {
+        return Slot::Empty;
+    }
+}
+
+# the pre-existing spelling, where the names differ and seeding always worked
+fun blank_renamed<A, B>() -> Slot<A, B> {
+    return Slot::Empty;
+}
+
+fun describe<K, V>(s: Slot<K, V>) -> String {
+    return match s {
+        Slot::Empty => "empty",
+        Slot::Full(_, _) => "full",
+    };
+}
+
+fun main() {
+    # one generic function, two instantiations in one program
+    var a: [Slot<Int, String>] = fill::<Int, String>(3);
+    var b: [Slot<String, Int>] = fill::<String, Int>(2);
+    print("{a.len()} {b.len()}");
+
+    var d0 = describe(a[0]);
+    print("{d0}");
+
+    # the seeded arguments have to be the real ones, not stray unknowns: the
+    # payloads below are read back and *used* at their types.
+    var key = "k";
+    a.push(Slot::Full(7, key));
+    var payload = match a[3] {
+        Slot::Empty => "none",
+        Slot::Full(n, s) => "{s}={n}",
+    };
+    print("{payload}");
+
+    var one: Slot<Int, String> = blank::<Int, String>();
+    var two: Slot<String, Int> = blank_renamed::<String, Int>();
+    var three: Slot<Slot<Int, Int>, Int> = nested::<Int>();
+    var four: Marker<String> = marker::<String>();
+    var five = a[3].cleared();
+
+    var d1 = describe(one);
+    var d2 = describe(two);
+    var d3 = describe(three);
+    var d5 = describe(five);
+    print("{d1} {d2} {d3} {d5}");
+}
+
+#> 3 2
+#> empty
+#> k=7
+#> empty empty empty empty

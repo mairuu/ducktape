@@ -164,7 +164,12 @@ ending in `return` has type `!` (never), which unifies with anything.
   enclosing function's return type, a field, or an array/tuple element. With
   no expected type there is nothing to go on and it is an error asking for an
   annotation; a turbofish (`Opt::<Int>::None`) still overrides
-  (`tests/run/unit_variant_infer.dt`).
+  (`tests/run/unit_variant_infer.dt`). The expected type may name type
+  *parameters* rather than concrete types, including parameters spelled the
+  same as the constructor's own — inside `fun f<T>(xs: [Opt<T>])`,
+  `xs.push(Opt::None)` takes that `T` (`tests/run/unit_variant_hint.dt`).
+  Seeding pins the fields to exactly those parameters, so a payload given in
+  the wrong order is a mismatch rather than a pair of agreeable unknowns.
 - Paths: `Result::Ok(5)`, `Point::new(..)`. Explicit type arguments use
   turbofish in expression position: `Point::<Int>::new(1, 2)`. A bare
   `Point::new(..)` on a generic type selects the impl by method name and
@@ -2173,7 +2178,6 @@ s.contains(4); s.remove(4); s.to_array();
 | hashing a `Float`, and so a `Float` map key | no `impl Hash for Float`: `NaN != NaN` makes such a key unfindable in a table that compares with `==`, and the only Int a Float reaches is a truncating `as`. Wrap one in a struct and say what equality means |
 | an `entry`-style API on a map (`or_insert`, in-place update) | `get` then `insert`, which probes twice. Nothing can hold a slot open between the two |
 | `Display` for a `HashMap` / `HashSet` | none ships; iteration order is unspecified, so a rendering would have to sort and the key would need `Ord` on top of `Hash`. `m.keys()` and `m.values()` are the arrays |
-| a generic unit variant solved by a *call argument's* hint (`slots.push(Slot::Empty)`) | "expected `Slot<K, V>` but got `Slot<_, _>`" — the hint solves the variant's own parameters as far as unknowns but will not then bind them to the enclosing function's type parameters. An annotated local (`var e: Slot<K, V> = Slot::Empty;`) drives it from the other side and does check |
 | `a.b < c > (d)` read as a comparison | it is read as a type application. A `<` after a field or method access is disambiguated by looking ahead for the matching `>` and asking whether a `(` follows, since type arguments are only legal immediately before their call; this is the one shape that satisfies that test without meaning it. Parenthesise the left comparison |
 | an impl overriding a defaulted method restating its `where` | conformance compares signatures, which carry no bounds, so an override may quietly add or drop one; the trait's own clause is still discharged at every call through the trait |
 | `mod` declarations | no such keyword; `use` is what pulls a file in |

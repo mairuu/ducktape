@@ -1,0 +1,23 @@
+#! expect: type mismatch: expected 'K' but got 'V'
+
+# The guard on seeding a constructor from a hint that names type parameters
+# directly (see tests/run/unit_variant_hint.dt): seeding pins the fields to
+# *those* parameters, so passing them in the wrong order is a mismatch, not a
+# pair of unknowns that quietly agree with anything.
+#
+# This is also the shape that caught `infer_unify`'s TY_GENERIC branch
+# returning false without a diagnostic: once the hint pins `K` and `V` instead
+# of opening them into unknowns, two distinct generics meet head-on, and a
+# silent false becomes poison — which propagates silently. The whole function
+# type-checked with no message at all.
+
+enum Slot<K, V> {
+    Empty,
+    Full(K, V),
+}
+
+fun swapped<K, V>(xs: [Slot<K, V>], k: K, v: V) {
+    xs.push(Slot::Full(v, k));
+}
+
+fun main() {}

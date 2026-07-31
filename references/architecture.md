@@ -844,6 +844,26 @@ that supplies a hint, including an argument to a *non-generic* function, where
 the parameter is compared with `types_equal` and an unsolved unknown would
 never have been bound.
 
+The hint's arguments may be type *parameters* rather than concrete types, and
+that case needs no special handling — seeding with them is the identity
+substitution when they are the constructor's own. It used to be excluded: a
+`hint == self_type` test read "the hint is the bare abstract self type, so it
+says nothing". Since `TY_GENERIC` interns by name, the `T` a function declares
+and the `T` an enum declares are the *same node*, so inside `fun f<T>(xs:
+[Opt<T>])` the hint `Opt<T>` is pointer-identical to `Opt`'s self type and the
+test fired on the one case that had the answer. Dropping it is the whole fix;
+the symptom read as "an argument hint will not reach the enclosing function's
+parameters" when it was really "will not reach parameters that share a name",
+which is why renaming one of them made it go away.
+
+Seeding puts two distinct `TY_GENERIC`s in front of `infer_unify` where an
+unknown used to absorb everything, and that exposed the one failure path in
+that function that reported nothing: `case TY_GENERIC` returned a bare `false`.
+A silent false becomes `t_poison`, which propagates silently *by design*, so
+`Slot::Full(v, k)` against `Slot<K, V>` type-checked with no message at all.
+Every failing branch of `infer_unify` now emits its mismatch, per the
+convention the rest of the checker already follows.
+
 Call arguments are checked **left to right, each hinted by what the earlier ones
 already solved.** `resolve_call_expr` runs the parameter type through
 `infer_apply` before handing it to the argument as a hint, rather than using the

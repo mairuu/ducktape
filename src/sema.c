@@ -714,12 +714,29 @@ bool infer_unify(InferCtx *ctx, Type *a, Type *b, DiagBag *diags, Span span) {
   case TY_UNIT:
     return true; // same kind, same singleton -> equal
 
-  case TY_GENERIC:
+  case TY_GENERIC: {
     // generics only unify if they're the same node, i.e. the same parameter on
     // the same generic definition. this is a bit stricter than necessary but
     // simplifies inference since we don't have to worry about accidentally
     // unifying two different generic parameters with the same name.
+    //
+    // The diagnostic is not optional. This branch used to return a bare
+    // `false`, which is the one failure path in this function that reported
+    // nothing — and a silent false becomes poison, which propagates silently
+    // by design, so the whole enclosing statement was accepted with no
+    // message at all. Nothing reached it while a hint's parameters were
+    // opened into unknowns first (an unknown absorbs anything, and the
+    // mismatch surfaced later at a `types_equal`); seeding a constructor from
+    // a hint that names parameters directly is what puts two distinct
+    // TY_GENERICs in front of each other, and `Slot::Full(v, k)` against
+    // `Slot<K, V>` went from a reported error to silence.
+    char ab[64], bb[64];
+    type_sprintf(a, ab, sizeof(ab));
+    type_sprintf(b, bb, sizeof(bb));
+    diag_error(diags, span, "type mismatch: expected '%s' but got '%s'", ab,
+               bb);
     return false;
+  }
 
   case TY_FUNCTION: {
     TypeFun *af = &a->as.fun, *bf = &b->as.fun;
@@ -5858,9 +5875,20 @@ static Type *resolve_closure_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
 // no field to solve `T` from, and neither does a bare `Wrap`. Seeding only —
 // a hint that disagrees with the fields is still a mismatch, reported where
 // the value is used.
+//
+// `hint == self_type` is *not* a no-information case, and used to be rejected
+// as one. TY_GENERIC interns by name, so the `T` a function declares and the
+// `T` an enum declares are the same node: inside `fun f<T>(xs: [Opt<T>])` the
+// hint `Opt<T>` is pointer-identical to `Opt`'s own self type, and bailing
+// there left `Opt::None` with free unknowns nothing could solve — the whole
+// gap, and the reason it looked like "an argument hint will not reach the
+// enclosing fn's parameters" when it was really "will not reach parameters
+// that share a name". Seeding from self_type's own arguments is the identity
+// substitution, which is the right answer in both readings: whether that `T`
+// is the caller's or the enum's, the constructor's `T` is that one.
 static Type **hint_type_args(Type *hint, Type *self_type, int *out_count) {
   *out_count = 0;
-  if (hint == NULL || hint == self_type) {
+  if (hint == NULL) {
     return NULL;
   }
   if (hint->kind == TY_ENUM && self_type->kind == TY_ENUM &&
