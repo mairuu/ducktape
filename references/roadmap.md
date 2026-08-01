@@ -1305,6 +1305,23 @@ keep this file small. Everything from 55 on is below.
   a separate one, that no `dyn` coercion is offered inside an `if`'s or a
   `match`'s arms. Full write-up in the commit body.
 
+- **80. Conditional pattern bindings** (`PENDING`) — `if var Opt::Some(n) = o { .. }
+  else { .. }` and `while var Opt::Some(v) = it.next() { .. }`, Rust's `if let`
+  and `while let` under the keyword this language already has. Design:
+  `language.md` "`if var` and `while var`", `architecture.md` ("Conditional
+  bindings"), `runtime.md` (same heading under "Match compilation"),
+  `grammar.ebnf` `condHead`. The finding: a conditional binding is not a new
+  construct but a *place to send the fail list* — the two pattern passes are
+  compile_match's unchanged, and all either form adds is what failure jumps to
+  (the `else`, or past the loop's back-edge). No opcode, no image change; 33
+  lines of parser, 37 of checker, 95 of codegen. `while var`'s one real
+  difference from every other loop is that its hidden subject local lives
+  *inside* the loop, since re-evaluating the subject is what advances an
+  iterator — which incidentally gives it per-iteration closure capture, where
+  `for`'s one shared cell does not. Remainder: `var P = e else { .. }`
+  (Rust's `let else`) has no spelling, and an irrefutable pattern in either
+  header is accepted silently. Full write-up in the commit body.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -1532,6 +1549,15 @@ via `Module.decl_base`) and is not part of the main line.
 - a refutable `var` binding whose column type inference never pinned down is
   accepted (the tri-state answer reports nothing) and traps at runtime via
   `OP_MATCH_FAIL` instead of at compile time
+- the mirror of that, from milestone 80: an *irrefutable* pattern in an `if
+  var` / `while var` header is accepted silently, so the `else` is dead code
+  and `while var x = e { }` is an infinite loop with nothing said. Rust warns;
+  there is no warning severity here, and the exhaustiveness machinery that
+  would answer the question is already sitting one function over
+- there is no `var P = e else { .. }` (Rust's `let else`): a refutable binding
+  whose failure branch diverges has to be written as an `if var` with the rest
+  of the block inside it, which scopes the binding one level deeper than the
+  code that uses it wants
 - `pub` is parsed and ignored on the `impl` keyword itself, and *rejected* on a
   method: `pub fun` inside an `impl` block is "expected impl item". **Method**
   visibility does not exist — a method is as visible as its impl — which is why

@@ -394,7 +394,9 @@ its bytes.
   expression like every other. There is no `mut` marker and no aliasing check:
   a struct is a shared heap reference, so a write through one binding or through
   `self` is visible through every alias — the same rule arrays already keep.
-- Match (`compile_match`, see "Match compilation" below).
+- Match (`compile_match`, see "Match compilation" below), and the two
+  conditional bindings that reuse it (`compile_if_binding`,
+  `compile_while_binding`).
 - Methods (`compile_method_call`) and associated functions/bare
   self-supplying calls (`Point::new(...)`, `Shape::area(s)`): see "Methods"
   below.
@@ -464,6 +466,34 @@ because its answer is tri-state — an unsolved column type reports nothing
 `compile_pattern_test` emits nothing at all, so the common case costs zero
 instructions; anything it does emit traps through `OP_MATCH_FAIL` rather than
 binding names out of a value that never had the shape.
+
+#### `if var` and `while var`
+
+The same two passes over one pattern again, with the fail list wired to
+something other than the next arm. Neither needs an opcode of its own.
+
+`compile_if_binding` is `compile_match` with the arm list spelled out: subject
+into a hidden local, test, bind, then-block, `OP_SLIDE` the bound names out
+from under the result, jump to the end. The fail list patches to the shared
+`OP_POP` that balances whichever test failed, and the `else` (or `OP_UNIT`)
+follows it; one final `OP_SLIDE 1` drops the hidden subject and keeps the
+branch's value, exactly as the match ending does.
+
+`compile_while_binding` differs from every other loop in where the hidden local
+lives: the subject is **re-evaluated each turn** — that re-evaluation is what
+advances an `it.next()` — so its local is pushed inside the loop and popped
+again at the bottom, where `for`'s loop-carried slots are allocated once above
+`loop_start`. A failed test *is* the exit, so there is no separate exit jump:
+the fail list lands past the back-edge, pops the outstanding bool and then the
+subject, and the loop's `break` jumps patch after that. `break_base` and
+`continue_base` are both the pre-subject local count, so either statement pops
+the bindings and the subject on its way out; `continue` is backward, like a
+`while`'s, and re-drives the subject.
+
+Because the bindings are pushed and closed (`cg_close_scope`) inside the loop,
+a closure made in the body captures **that turn's** binding rather than one
+shared cell — the opposite of `for x in xs`, whose loop variable is a single
+slot written each turn (`language.md` "Not yet implemented").
 
 ### Methods
 

@@ -1,0 +1,7 @@
+#! expect: expected '=' after the pattern
+# `var` in a header always introduces a binding, so what follows the pattern
+# has to be the subject it is matched against.
+fun main() {
+    while var x 5 {
+    }
+}

@@ -49,6 +49,12 @@ Notables:
   `match`/`while` headers. It is cleared for the *header only* — inside the
   body the `{` is unambiguous again, so it must be restored before
   `parse_block`.
+- `parse_cond_binding` — the optional `var P =` prefix of an `if`/`while`
+  header, sharing `parse_pattern` with `var`. It needs no lookahead: `var`
+  cannot start an expression. The flag above stays cleared across it, and a
+  struct *pattern* is unaffected — `parse_pattern` never consults the flag, and
+  the pattern is to the left of the `=`, so `if var Point { x, y } = p` reads
+  while `= Point { .. }` on the right of it still does not.
 - Error recovery: `error_at` sets panic mode; `sync_to_stmt`/`sync_to_decl`
   skip to a boundary; unparseable nodes become `*_POISON` kinds.
 - **Every list buffer grows; none of them caps** (milestone 73). One facility,
@@ -1830,6 +1836,25 @@ correctly-typed names an aborted `check_pattern` already defined still win,
 and only the ones it never reached come back poisoned. Without it one bad
 initializer becomes an "undefined variable" for every name it was meant to
 bind.
+
+### Conditional bindings (`if var` / `while var`)
+
+The same `Pattern` once more, with the exhaustiveness question *removed*
+rather than asked: here the pattern is meant to be refutable, so
+`check_cond_binding` is `check_pattern` against the subject's type, plus
+`bind_pattern_poison` on failure, and nothing else. What each form adds is the
+scope the names land in, and the two differ:
+
+- `if var` pushes a scope around the **then-block only**, and pops it before
+  the `else` is resolved — the else is the branch where the pattern did not
+  match, so it can see nothing the pattern bound. The branch types then unify
+  as in any `if`.
+- `while var` puts the names in the loop's own scope, beside where a `for`
+  defines its variable, so they are gone after the loop.
+
+Both keep the `TY_BOOL` check for a header *without* a binding, and both poison
+the whole expression when the pattern did not fit — after resolving the body
+anyway, so its own mistakes are still reported.
 
 ### Impls and method lookup
 

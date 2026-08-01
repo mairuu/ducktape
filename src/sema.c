@@ -5725,6 +5725,20 @@ static void check_binding_pattern(CheckCtx *ctx, Pattern *pat, Type *init_ty) {
   }
 }
 
+// the pattern half of an `if var` / `while var`. Unlike a `var` binding it is
+// *meant* to be refutable — the failure branch is the `else` or the loop's
+// exit — so the only question left is whether the pattern fits the subject's
+// type. Names land in the scope the caller has already pushed for the body,
+// which is also why a poisoned subject never reaches here: both callers bail
+// on one before pushing that scope.
+static bool check_cond_binding(CheckCtx *ctx, Pattern *pat, Type *subject_ty) {
+  if (!check_pattern(ctx, pat, subject_ty)) {
+    bind_pattern_poison(ctx, pat);
+    return false;
+  }
+  return true;
+}
+
 static Type *resolve_match_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   Type *subject_ty = resolve_expr(ctx, expr->as.match.subject, NULL);
   Type *result_ty = hint;
@@ -7954,7 +7968,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       break;
     }
 
-    if (cond_ty->kind != TY_BOOL) {
+    if (wh->binding == NULL && cond_ty->kind != TY_BOOL) {
       char ct[64];
       type_sprintf(cond_ty, ct, sizeof(ct));
       diag_error(ctx->diags, wh->condition->span,
@@ -7963,13 +7977,17 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       break;
     }
 
+    // the binding's names belong to the loop's own scope, like a `for`'s
+    // variable: they are rebound from the freshly evaluated subject each turn.
     ctx->vscope = vscope_push(ctx->vscope, false, true, ctx->al);
+    bool bound =
+        wh->binding == NULL || check_cond_binding(ctx, wh->binding, cond_ty);
     ctx->loop_depth++;
     resolve_expr(ctx, wh->body, NULL);
     ctx->vscope = vscope_pop(ctx->vscope);
     ctx->loop_depth--;
 
-    result = ctx->tc->t_unit;
+    result = bound ? ctx->tc->t_unit : ctx->tc->t_poison;
     break;
   }
   case EXPR_FOR: {
@@ -8016,7 +8034,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       break;
     }
 
-    if (cond_ty->kind != TY_BOOL) {
+    if (if_->binding == NULL && cond_ty->kind != TY_BOOL) {
       char ct[64];
       type_sprintf(cond_ty, ct, sizeof(ct));
       diag_error(ctx->diags, if_->condition->span,
@@ -8025,12 +8043,27 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       break;
     }
 
+    // the binding is visible in the then-block and nowhere else — the `else`
+    // is the branch where the pattern did *not* match, so nothing is bound.
+    bool bound = true;
+    if (if_->binding != NULL) {
+      ctx->vscope = vscope_push(ctx->vscope, false, false, ctx->al);
+      bound = check_cond_binding(ctx, if_->binding, cond_ty);
+    }
     Type *then_ty = resolve_expr(ctx, if_->then_block, NULL);
+    if (if_->binding != NULL) {
+      ctx->vscope = vscope_pop(ctx->vscope);
+    }
     Type *else_ty = NULL;
     if (if_->else_branch != NULL) {
       else_ty = resolve_expr(ctx, if_->else_branch, NULL);
     } else {
       else_ty = ctx->tc->t_unit;
+    }
+
+    if (!bound) {
+      result = ctx->tc->t_poison;
+      break;
     }
 
     if (!type_is_poison(then_ty) && !type_is_poison(else_ty)) {

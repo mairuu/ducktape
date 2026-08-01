@@ -301,6 +301,18 @@ pub fun process_data<T>(data: T) -> Result<Int, String> {
         Result::Err(_) => 0,
     };
 
+    # a conditional binding: one pattern, and the branch where it fails
+    var one_arm = if var Result::Ok(v) = seed { v } else { 0 };
+    if var Point { x: 10, y: py } = p {
+        var only_here = py;
+    } else if var (1, second) = (a, b) {
+        var also_bound = second;
+    }
+    var pump = Countdown::from(3);
+    while var Option::Some(v) = pump.next() {
+        var per_turn = v;
+    }
+
     var helper = || -> Result<Int, String> {
         var val = process_data(10)?;
         return Result::Ok(val);

@@ -1732,6 +1732,25 @@ static bool parse_format_spec(Parser *p, FormatSpec *spec) {
   return true;
 }
 
+// the optional `var P =` prefix of an `if`/`while` header. `var` cannot start
+// an expression, so seeing it here is unambiguous, and the pattern sits to the
+// left of the `=` — which is what lets a struct pattern keep its braces in a
+// header where a struct *literal* is disallowed. Returns NULL for a plain
+// condition; `*failed` says which NULL it was.
+static Pattern *parse_cond_binding(Parser *p, bool *failed) {
+  *failed = false;
+  if (!match_tok(p, TOKEN_VAR)) {
+    return NULL;
+  }
+  Pattern *binding = parse_pattern(p);
+  if (binding == NULL ||
+      !consume_tok(p, TOKEN_EQ, "expected '=' after the pattern")) {
+    *failed = true;
+    return NULL;
+  }
+  return binding;
+}
+
 static Expr *parse_primary(Parser *p) {
   Token *t = peek_tok(p);
 
@@ -2029,6 +2048,12 @@ static Expr *parse_primary(Parser *p) {
     bool old_allow_struct_init = p->allow_struct_init;
 
     p->allow_struct_init = false;
+    bool binding_failed = false;
+    Pattern *binding = parse_cond_binding(p, &binding_failed);
+    if (binding_failed) {
+      p->allow_struct_init = old_allow_struct_init;
+      return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
+    }
     Expr *cond = parse_expr(p);
     p->allow_struct_init = old_allow_struct_init;
 
@@ -2061,6 +2086,7 @@ static Expr *parse_primary(Parser *p) {
     Expr *expr = ast_expr(
         EXPR_IF, span_merge(token_span(t), previous_tok_span(p)), p->al);
     expr->as.if_expr.condition = cond;
+    expr->as.if_expr.binding = binding;
     expr->as.if_expr.then_block = then_block;
     expr->as.if_expr.else_branch = else_branch;
     return expr;
@@ -2106,6 +2132,12 @@ static Expr *parse_primary(Parser *p) {
   if (match_tok(p, TOKEN_WHILE)) {
     bool old_allow_struct_init = p->allow_struct_init;
     p->allow_struct_init = false;
+    bool binding_failed = false;
+    Pattern *binding = parse_cond_binding(p, &binding_failed);
+    if (binding_failed) {
+      p->allow_struct_init = old_allow_struct_init;
+      return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
+    }
     Expr *cond = parse_expr(p);
     p->allow_struct_init = old_allow_struct_init;
 
@@ -2121,6 +2153,7 @@ static Expr *parse_primary(Parser *p) {
     Expr *expr = ast_expr(
         EXPR_WHILE, span_merge(token_span(t), previous_tok_span(p)), p->al);
     expr->as.while_expr.condition = cond;
+    expr->as.while_expr.binding = binding;
     expr->as.while_expr.body = block;
     return expr;
   }

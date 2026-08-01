@@ -1,0 +1,70 @@
+# `if var P = subject` is a one-armed match whose failure branch is the `else`:
+# the binding is in scope for the then-block only, and the whole thing is an
+# expression like any other `if`.
+#> circle 3
+#> rect 2x5
+#> blank
+#> 24
+#> y is 2
+#> shorthand 4 7
+#> miss
+#> irrefutable 5
+#> captured 8
+#> nested 200
+use std::io::print;
+use std::option;
+
+enum Shape { Circle(Int), Rect(Int, Int), Blank }
+
+struct Point { x: Int, y: Int }
+
+# an `else if var` chains the way an `else if` does: the second pattern is
+# tested only once the first has failed.
+fun describe(s: Shape) -> String {
+    if var Shape::Circle(r) = s {
+        return "circle {r}";
+    } else if var Shape::Rect(w, h) = s {
+        return "rect {w}x{h}";
+    }
+    return "blank";
+}
+
+fun main() {
+    print(describe(Shape::Circle(3)));
+    print(describe(Shape::Rect(2, 5)));
+    print(describe(Shape::Blank));
+
+    # value position: both branches unify, as in a plain `if`
+    var area = if var Shape::Rect(w, h) = Shape::Rect(4, 6) { w * h } else { 0 };
+    print("{area}");
+
+    # a struct pattern keeps its braces in a header where a struct *literal*
+    # would be rejected: the pattern sits to the left of the `=`
+    var p = Point { x: 1, y: 2 };
+    if var Point { x: 1, y: yy } = p {
+        print("y is {yy}");
+    }
+    # ...the *subject*, though, is an ordinary header expression, so a struct
+    # literal there still needs a name of its own
+    var q2 = Point { x: 4, y: 7 };
+    if var Point { x, y } = q2 {
+        print("shorthand {x} {y}");
+    }
+
+    # a literal sub-pattern that does not match takes the else
+    if var (9, b) = (1, 2) { print("hit {b}"); } else { print("miss"); }
+
+    # an irrefutable pattern is allowed; the else is simply unreachable
+    if var q = 5 { print("irrefutable {q}"); } else { print("never"); }
+
+    # a closure may capture a bound name — the binds are closed over before
+    # their slots are slid out
+    var f = if var Shape::Circle(r) = Shape::Circle(8) { || r } else { || 0 };
+    print("captured {f()}");
+
+    if var Shape::Rect(w, h) = Shape::Rect(10, 20) {
+        if var Shape::Circle(inner) = Shape::Circle(w * h) {
+            print("nested {inner}");
+        }
+    }
+}

@@ -140,6 +140,9 @@ ending in `return` has type `!` (never), which unifies with anything.
 - Unary minus `-x`: numeric, or a type implementing `std::ops::Neg` — the same
   rewrite with the operand as receiver and no argument (`-v` is `v.neg()`).
 - `if cond { .. } else { .. }` is an expression; without `else` it is `()`.
+  Either header may instead carry a **conditional binding** — `if var P = e`,
+  `while var P = e` — which matches rather than tests; see "`if var` and
+  `while var`".
 - `while cond { .. }` and `for x in iter { .. }` evaluate to `()`; `iter` may be
   an array, a range, or any type that implements `Iterator` (see below).
 - Ranges: `a..b`, `a..=b` — Int-only, first-class values (`var r = 0..10;`) of
@@ -790,6 +793,46 @@ enum variant where it can (`match is not exhaustive: 'Shape::Point' is not
 covered`). A guarded arm never counts towards coverage — whether it matches is
 a runtime question. Types with no enumerable domain (`Int`, `Float`, `String`)
 therefore always need a `_` or a binding arm.
+
+### `if var` and `while var`
+
+```
+if var Opt::Some(n) = o {
+    use(n);                       # `n` is in scope here and nowhere else
+} else if var Opt::Some(m) = fallback {
+    use(m);
+}
+
+while var Opt::Some(v) = cursor.next() {
+    use(v);
+}
+```
+
+A conditional binding is a `match` with one arm written where a condition
+would go: the header's expression is the **subject**, of any type at all rather
+than a `Bool`, and the branch is taken exactly when it has the pattern's shape.
+Every pattern `match` accepts is accepted here, nested as freely, and the
+pattern is *meant* to be refutable — that is the whole construct. An
+irrefutable one is allowed and simply makes the failure branch unreachable.
+
+The two forms differ only in what failure means:
+
+- `if var P = e { .. } else { .. }` — failure is the `else`, which binds
+  nothing, since it is the branch where the pattern did not match. The whole
+  thing is an expression like any other `if`, so the branches unify and
+  `var n = if var Opt::Some(v) = o { v } else { 0 };` is a value. An
+  `else if var` chains, testing its pattern only once the first has failed.
+- `while var P = e { .. }` — failure ends the loop, so there is no exit
+  condition to write. The subject is **re-evaluated each turn**, which is what
+  drives `it.next()` forward; the binding belongs to the loop's own scope like a
+  `for` variable, and is rebound from that turn's subject, so a closure made in
+  the body captures that turn's value rather than a shared cell.
+
+There is no `let`; `var` is the binding keyword everywhere, so `if var` is the
+spelling `if let` has in Rust. A struct pattern keeps its braces in a header
+(`if var Point { x, y } = p`) because the pattern is to the *left* of the `=` —
+but the subject is an ordinary header expression, so a struct *literal* there
+still needs a name of its own, exactly as in a plain `if`.
 
 ### `?` propagation
 
@@ -2514,11 +2557,12 @@ HashSet::with_capacity(n); s.capacity(); s.reserve(n);   # forwarded, all three
 | visibility below module granularity (`pub(crate)` &c.) | `pub` is the only modifier |
 | two spellings of one file (symlinks, unusual paths) | dedup is lexical, so the file would load twice and collide |
 | top-level `var` (globals) | parses, then a registration diagnostic: move it into a function |
+| a refutable `var` binding with a diverging fallback (Rust's `let else`) | not parsed. `if var P = e { .. } else { return .. }` is the spelling, at the cost of the binding being scoped to the then-block rather than to the rest of the enclosing block |
 | tuple-struct struct-patterns `Pair { a, b }` | write the constructor spelling `Pair(a, b)` — "matching tuple struct with struct pattern syntax is not allowed" |
 | variable shadowing diagnostics | a `var` may silently shadow an earlier one in the same scope (top-level *item* names do collide — that is an error) |
 | declaring a type whose name is a builtin (`struct Range`, `struct String`) | accepted, but a builtin name is resolved before the type scope is consulted, so every mention of it means the builtin and the declaration is unreachable |
 | overlapping method names across impls of one type | rejected since milestone 68: one type spends an inherent name once, whether the two definitions sit in two impl blocks or in one. A name the impl's *trait* declares is exempt — a bound or a trait-qualified path names which body was meant, so two traits may both declare `next` for one type. Where several impls legitimately declare a name (a generic trait like `Into<Int>` / `Into<String>`), a bare path still picks the first registered impl. Milestone 70 extends the same rule to an enum's variants, which spend from the same pool: an inherent associated function under a variant's name is refused, since `Enum::name` reads the variant |
-| capturing a `for` loop variable in a closure | runs, but the closure sees the loop variable's *final* value (one shared cell), not a per-iteration copy — `runtime.md` "Closures & upvalues" |
+| capturing a `for` loop variable in a closure | runs, but the closure sees the loop variable's *final* value (one shared cell), not a per-iteration copy — `runtime.md` "Closures & upvalues". A `while var` binding does *not* share this: it is pushed and closed inside the loop, so each turn's closure keeps that turn's value |
 | infinitely deep generic instantiation | `fun grow<T>(v: T) { grow([v]) }` type-checks but names a new instantiation at every level; codegen stops at 32 and reports it (`runtime.md` "Monomorphisation") |
 | more than 65536 functions, counting one per instantiation | each instantiation takes a global slot, so a heavily generic program can outgrow the two-byte operand space (`runtime.md` "Bytecode") |
 | an `@intrinsic` named as a value (`var f = len::<Int>;`) | an intrinsic is an opcode, so there is no body for a global slot to address — "is an intrinsic and can only be called directly" (an `@native` *can* be a value) |

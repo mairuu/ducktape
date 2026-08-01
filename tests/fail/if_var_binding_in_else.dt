@@ -1,0 +1,13 @@
+#! expect: undefined variable 'n'
+# the else branch is where the pattern did *not* match, so it binds nothing.
+use std::io::print;
+use std::option;
+
+fun main() {
+    var o: Option<Int> = Option::Some(1);
+    if var Option::Some(n) = o {
+        print("{n}");
+    } else {
+        print("{n}");
+    }
+}

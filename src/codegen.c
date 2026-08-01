@@ -958,8 +958,16 @@ static void compile_assign(Cg *cg, Expr *expr) {
   emit2(cg, set_op, operand); // value stays as the expr result
 }
 
+static void compile_if_binding(Cg *cg, Expr *expr);
+static void compile_while_binding(Cg *cg, Expr *expr);
+
 static void compile_if(Cg *cg, Expr *expr) {
   ExprIf *if_ = &expr->as.if_expr;
+
+  if (if_->binding != NULL) {
+    compile_if_binding(cg, expr);
+    return;
+  }
 
   compile_expr(cg, if_->condition);
   int else_jump = emit_jump(cg, OP_JUMP_IF_FALSE);
@@ -979,6 +987,11 @@ static void compile_if(Cg *cg, Expr *expr) {
 
 static void compile_while(Cg *cg, Expr *expr) {
   ExprWhile *wh = &expr->as.while_expr;
+
+  if (wh->binding != NULL) {
+    compile_while_binding(cg, expr);
+    return;
+  }
 
   CgLoop loop = {
       .start = cg->chunk->count,
@@ -2154,6 +2167,88 @@ static void compile_match(Cg *cg, Expr *expr) {
   jump_list_patch(cg, &end_jumps);
   emit_slide(cg, 1); // drop the hidden subject local, keep the arm result
   cg->local_count = saved_locals_outer;
+}
+
+// `if var P = subject { .. } else { .. }` is compile_match with the arm list
+// spelled out: one pattern whose failure lands in the `else` instead of in the
+// next arm. The subject still lives in a hidden local — that is what the
+// accessors read from — and is still slid out from under the result at the end.
+static void compile_if_binding(Cg *cg, Expr *expr) {
+  ExprIf *if_ = &expr->as.if_expr;
+  int saved_outer = cg->local_count;
+
+  compile_expr(cg, if_->condition);
+  int subject_slot = cg_add_local(cg, (StringView){0}, expr->span);
+  int saved = cg->local_count;
+  Accessor acc = {.base_slot = subject_slot};
+
+  JumpList fails = {0};
+  compile_pattern_test(cg, if_->binding, acc, &fails);
+  compile_pattern_bind(cg, if_->binding, acc);
+
+  compile_expr(cg, if_->then_block);
+  cg_close_scope(cg, saved); // a closure may capture a bound name
+  emit_slide(cg, cg->local_count - saved);
+  int end_jump = emit_jump(cg, OP_JUMP);
+  cg->local_count = saved;
+
+  jump_list_patch(cg, &fails);
+  emit(cg, OP_POP); // the outstanding false from whichever test failed
+  if (if_->else_branch != NULL) {
+    compile_expr(cg, if_->else_branch);
+  } else {
+    emit(cg, OP_UNIT);
+  }
+
+  patch_jump(cg, end_jump);
+  emit_slide(cg, 1); // drop the hidden subject, keep the branch's result
+  cg->local_count = saved_outer;
+}
+
+// `while var P = subject { .. }`: the subject is re-evaluated every turn — that
+// re-evaluation is what advances an iterator — so its hidden local is pushed
+// and popped *inside* the loop, where a `for`'s loop-carried slots are
+// allocated once above it. A failed test is the exit, so the loop needs no
+// jump-out of its own.
+static void compile_while_binding(Cg *cg, Expr *expr) {
+  ExprWhile *wh = &expr->as.while_expr;
+  int saved_outer = cg->local_count;
+
+  CgLoop loop = {
+      .start = cg->chunk->count,
+      .continue_is_backward = true,
+      .continue_base = saved_outer,
+      .break_base = saved_outer,
+      .parent = cg->loop,
+  };
+  cg->loop = &loop;
+
+  compile_expr(cg, wh->condition);
+  int subject_slot = cg_add_local(cg, (StringView){0}, expr->span);
+  Accessor acc = {.base_slot = subject_slot};
+
+  JumpList fails = {0};
+  compile_pattern_test(cg, wh->binding, acc, &fails);
+  compile_pattern_bind(cg, wh->binding, acc);
+
+  compile_expr(cg, wh->body);
+  emit(cg, OP_POP);                // the body's value
+  cg_close_scope(cg, saved_outer); // detach captures before the slots go
+  emit2(cg, OP_POPN, (uint8_t)(cg->local_count - saved_outer));
+  cg->local_count = saved_outer;
+  emit_loop(cg, loop.start);
+
+  // the test failed: its bool is on top, the subject beneath it, and this turn
+  // bound nothing.
+  jump_list_patch(cg, &fails);
+  emit(cg, OP_POP);                            // the test result
+  emit(cg, OP_POP);                            // the subject
+  for (int i = 0; i < loop.break_count; i++) { // breaks pop their own locals
+    patch_jump(cg, loop.break_jumps[i]);
+  }
+
+  cg->loop = loop.parent;
+  emit(cg, OP_UNIT); // loops evaluate to unit
 }
 
 static void compile_expr_inner(Cg *cg, Expr *expr);

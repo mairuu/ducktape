@@ -1,0 +1,13 @@
+#! expect: undefined variable 'n'
+# the binding belongs to the loop's own scope, like a `for` variable: it is
+# rebound each turn and gone once the loop exits.
+use std::option;
+
+fun stop() -> Option<Int> { return Option::None; }
+
+fun main() {
+    while var Option::Some(n) = stop() {
+        var used = n;
+    }
+    var after = n;
+}

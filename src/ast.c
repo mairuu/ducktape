@@ -1545,6 +1545,11 @@ void dump_expr(const Expr *e, int indent) {
     break;
   case EXPR_IF:
     fprintf(stdout, "If\n");
+    if (e->as.if_expr.binding) {
+      ind(indent + 1);
+      fprintf(stdout, "Binding:\n");
+      dump_pattern(e->as.if_expr.binding, indent + 2);
+    }
     ind(indent + 1);
     fprintf(stdout, "Condition:\n");
     dump_expr(e->as.if_expr.condition, indent + 2);
@@ -1611,6 +1616,11 @@ void dump_expr(const Expr *e, int indent) {
   }
   case EXPR_WHILE: {
     fprintf(stdout, "While\n");
+    if (e->as.while_expr.binding) {
+      ind(indent + 1);
+      fprintf(stdout, "Binding:\n");
+      dump_pattern(e->as.while_expr.binding, indent + 2);
+    }
     ind(indent + 1);
     fprintf(stdout, "Condition:\n");
     dump_expr(e->as.while_expr.condition, indent + 2);

@@ -1056,8 +1056,12 @@ typedef struct {
   Expr *tail_expr;
 } ExprBlock;
 
+// `binding` is what makes this an `if var P = subject` rather than a plain
+// `if`: when it is set, `condition` is the *subject* — a value of any type,
+// not a Bool — and the test is whether it has the pattern's shape.
 typedef struct {
   Expr *condition;
+  Pattern *binding; // NULL for a plain `if`
   Expr *then_block;
   Expr *else_branch;
 } ExprIf;
@@ -1077,8 +1081,11 @@ typedef struct {
   VariantDef *none_variant; // `None` — its tag ends the loop
 } ExprFor;
 
+// same reading of `condition` as `ExprIf`: with a `binding` the loop runs for
+// as long as the re-evaluated subject keeps matching.
 typedef struct {
   Expr *condition;
+  Pattern *binding; // NULL for a plain `while`
   Expr *body;
 } ExprWhile;
 

@@ -1,0 +1,100 @@
+# `while var P = subject` re-evaluates the subject each turn and exits the
+# first time the pattern fails — the loop form of the same one-armed match.
+#> v=3
+#> v=2
+#> done
+#> n=0
+#> total=6 i=2
+#> 0
+#> 10
+#> 20
+#> sum=6
+#> bound=10
+#> dyn=10
+use std::io::print;
+use std::option;
+
+trait Src { fun take(self) -> Option<Int>; }
+
+struct Counter { n: Int }
+
+impl Src for Counter {
+    fun take(self) -> Option<Int> { return self.next(); }
+}
+
+# the body is monomorphised per instantiation and dispatched off a vtable
+# respectively; the loop shape is the same either way
+fun drain<S: Src>(s: S) -> Int {
+    var t = 0;
+    while var Option::Some(v) = s.take() { t = t + v; }
+    return t;
+}
+
+fun drain_dyn(s: dyn Src) -> Int {
+    var t = 0;
+    while var Option::Some(v) = s.take() { t = t + v; }
+    return t;
+}
+
+impl Counter {
+    fun next(self) -> Option<Int> {
+        if self.n <= 0 { return Option::None; }
+        self.n = self.n - 1;
+        return Option::Some(self.n);
+    }
+}
+
+fun none_now() -> Option<Int> { return Option::None; }
+
+fun at(xs: [Int], i: Int) -> Option<Int> {
+    if i < xs.len() { return Option::Some(xs[i]); }
+    return Option::None;
+}
+
+fun main() {
+    # `break` and `continue` cross the binding: both pop it along with the
+    # hidden subject before leaving
+    var c = Counter { n: 4 };
+    while var Option::Some(v) = c.next() {
+        if v == 1 { continue; }
+        if v == 0 { break; }
+        print("v={v}");
+    }
+    print("done");
+
+    # a first test that already fails runs the body zero times
+    var n = 0;
+    while var Option::Some(v) = none_now() { n = n + v; }
+    print("n={n}");
+
+    # a `break` with a body local live above the binding
+    var xs = [1, 2, 3, 4];
+    var i = 0;
+    var total = 0;
+    while var Option::Some(v) = at(xs, i) {
+        var doubled = v * 2;
+        if doubled > 5 { break; }
+        total = total + doubled;
+        i = i + 1;
+    }
+    print("total={total} i={i}");
+
+    # the binding is fresh each turn, so a closure capturing it sees that
+    # turn's value — unlike a `for` variable, which is one shared cell
+    var fs: [fun() -> Int] = [];
+    var k = 0;
+    while var Option::Some(v) = at([0, 1, 2], k) {
+        fs.push(|| v * 10);
+        k = k + 1;
+    }
+    for f in fs { print("{f()}"); }
+
+    # driving an iterator by hand, which is what the construct is for
+    var sum = 0;
+    var it = Counter { n: 4 };
+    while var Option::Some(v) = it.next() { sum = sum + v; }
+    print("sum={sum}");
+
+    print("bound={drain(Counter { n: 5 })}");
+    print("dyn={drain_dyn(Counter { n: 5 })}");
+}

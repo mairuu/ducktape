@@ -231,8 +231,15 @@ structInit     = "{" fieldInit ( "," fieldInit )* ","? "}" ;
 fieldInit      = IDENT ":" expr | IDENT ;
                  (* disallowed directly in if/match/while headers *)
 
-ifExpr         = "if" expr block ( "else" ( ifExpr | block ) )? ;
-whileExpr      = "while" expr block ;
+ifExpr         = "if" condHead block ( "else" ( ifExpr | block ) )? ;
+whileExpr      = "while" condHead block ;
+condHead       = ( "var" pattern "=" )? expr ;
+                 (* with the "var" prefix the expr is the *subject* — matched
+                    against the pattern instead of tested as a Bool — and the
+                    branch (or the next turn) is taken when it matches. "var"
+                    cannot start an expr, so the two forms never collide, and
+                    the pattern's own "{" is unambiguous because it sits to the
+                    left of the "=" *)
 forExpr        = "for" IDENT "in" expr block ;
 matchExpr      = "match" expr "{" ( matchArm ","? )* "}" ;
 matchArm       = pattern ( "if" expr )? "=>" expr ;
