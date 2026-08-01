@@ -1,0 +1,35 @@
+# A variant import's qualifier may be any enum *in scope*, not just a file
+# path: one this file declares, one it imported, one it imported under another
+# name, or a preluded one.
+use std::io::print;
+use pal::Color;
+use pal::Color as Hue;
+
+use Color::Red;      # the imported enum
+use Hue::Green;      # the same enum, under its alias
+use Option::Some;    # preluded — no `use std::option::...` anywhere here
+use Local::On;       # declared below
+
+enum Local { On, Off }
+
+fun shade(c: Color) -> Int {
+  match c {
+    Red => { return 1; },
+    Green => { return 2; },
+    Color::Blue => { return 3; },
+  }
+}
+
+pub fun main() {
+  print(shade(Red));
+#> 1
+  print(shade(Green));
+#> 2
+  print(Some(4).unwrap());
+#> 4
+  match On {
+    On => { print("on"); },
+#> on
+    Local::Off => { print("off"); },
+  }
+}

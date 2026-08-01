@@ -21,6 +21,9 @@ pub enum Result<T, E> {
     Err(E),
 }
 
+# preluded, like `Option`'s pair — see std/option.dt.
+pub use Result::{Ok, Err};
+
 impl<T, E> Result<T, E> {
     fun is_ok(self) -> Bool {
         match self {

@@ -1,0 +1,25 @@
+use std::io::print;
+use pal::{Color, Tone};
+use pal::Color::*;      # module-qualified glob
+use Tone::Warm;         # a name written wins over the glob, in either order
+use fac::Green;         # the same variant, through the re-export
+
+fun shade(c: Color) -> Int {
+  match c {
+    Red => { return 1; },
+    Green => { return 2; },
+    Blue => { return 3; },
+  }
+}
+
+pub fun main() {
+  print(shade(Red));
+#> 1
+  print(shade(Green));
+#> 2
+  match Warm {
+    Warm => { print("warm"); },
+#> warm
+    Tone::Cool => { print("cool"); },
+  }
+}

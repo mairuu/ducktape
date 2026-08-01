@@ -1,0 +1,14 @@
+# A module's own `Some` beats the prelude's, silently — the prelude is the
+# lowest-priority binding and yields to anything the file writes.
+fun Some(n: Int) -> Int { return n + 1; }
+
+enum Mine { Ok, Nope }
+use Mine::Ok;
+
+fun main() {
+  var a = Some(1);
+  match Ok {
+    Ok => { },
+    Mine::Nope => { },
+  }
+}

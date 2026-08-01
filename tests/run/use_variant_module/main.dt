@@ -1,0 +1,22 @@
+use std::io::print;
+use facade::{Shape, Rect, a_dot};
+# the enum reached through the façade still qualifies a variant import.
+use facade::Shape::Circle as Round;
+use shape::Shape::Dot;
+
+fun area(s: Shape) -> Int {
+  match s {
+    Dot => { return 0; },
+    Round(r) => { return 3 * r * r; },
+    Rect { w, h } => { return w * h; },
+  }
+}
+
+pub fun main() {
+  print(area(a_dot()));
+#> 0
+  print(area(Round(2)));
+#> 12
+  print(area(Rect { w: 3, h: 5 }));
+#> 15
+}

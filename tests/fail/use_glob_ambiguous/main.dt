@@ -1,0 +1,6 @@
+#! expect: which another glob import already binds
+use pal::{Color, Tone};
+use Color::*;
+use Tone::*;
+
+fun main() {}

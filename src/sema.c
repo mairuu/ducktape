@@ -1934,14 +1934,38 @@ static void link_copy_entry(TypeChecker *tc, Module *dst, Module *src,
 // does `alias` already name something in m — an own decl or an earlier
 // import? The silent counterpart of link_name_taken: a prelude import asks
 // this and yields quietly, where an explicit one reports the clash.
+static bool qual_module_bound(Module *m, StringView alias) {
+  for (int i = 0; i < m->qual_module_count; i++) {
+    if (sv_equal(m->qual_modules[i].name, alias)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 static bool link_name_bound(Module *m, StringView alias) {
   return mod_find_own_decl(m, alias) != NULL ||
          tscope_lookup(&m->tscope, alias) != NULL ||
-         vscope_lookup(&m->vscope, alias, NULL) != NULL;
+         vscope_lookup(&m->vscope, alias, NULL) != NULL ||
+         mod_variant_import_slot(m, alias) != NULL ||
+         qual_module_bound(m, alias);
+}
+
+// a glob-bound variant is the one binding anything written by name may take
+// over: `use E::*; use F::V;` binds F's, in either order. Kill the entry rather
+// than leave two — path resolution reads the first match, and a tombstone is
+// what keeps the array's other entries where the linking put them.
+static void link_drop_glob_binding(Module *m, StringView alias) {
+  VariantImport *slot = mod_variant_import_slot(m, alias);
+  if (slot != NULL && slot->from_glob) {
+    slot->name = (StringView){0};
+  }
 }
 
 // return true if `alias` is already taken in m, reporting why.
 static bool link_name_taken(TypeChecker *tc, Module *m, const UseAlias *a) {
+  link_drop_glob_binding(m, a->alias);
+
   if (mod_find_own_decl(m, a->alias) != NULL) {
     diag_error(tc->diags, a->span,
                "'" SV_FMT "' is already declared in this module",
@@ -1952,8 +1976,19 @@ static bool link_name_taken(TypeChecker *tc, Module *m, const UseAlias *a) {
   // return the first match, so an unchecked collision would silently let the
   // import win over whatever was defined later. Check here or not at all.
   if (tscope_lookup(&m->tscope, a->alias) != NULL ||
-      vscope_lookup(&m->vscope, a->alias, NULL) != NULL) {
+      vscope_lookup(&m->vscope, a->alias, NULL) != NULL ||
+      mod_variant_import_slot(m, a->alias) != NULL) {
     diag_error(tc->diags, a->span, "'" SV_FMT "' is already imported",
+               SV_ARG(a->alias));
+    return true;
+  }
+  // the qualifiers are the third namespace and the only one not held in a
+  // scope, so a name reaching them is checked here for every import kind —
+  // otherwise a later import of that name resolves backwards, since path
+  // resolution asks the scopes and the variant table before the qualifiers.
+  if (qual_module_bound(m, a->alias)) {
+    diag_error(tc->diags, a->span,
+               "module qualifier '" SV_FMT "' is already bound",
                SV_ARG(a->alias));
     return true;
   }
@@ -1986,11 +2021,152 @@ static Decl *mod_find_use_alias(Module *m, StringView name) {
   return NULL;
 }
 
+// the declaration `dep` exports under `name`, or NULL with the reason
+// reported: absent, private, or imported without being re-exported.
+static Decl *link_find_export(TypeChecker *tc, Module *dep, StringView name,
+                              Span span) {
+  Decl *d = mod_find_own_decl(dep, name);
+  bool via_reexport = false;
+  if (d == NULL) {
+    d = mod_find_use_alias(dep, name);
+    via_reexport = d != NULL;
+  }
+  if (d == NULL) {
+    diag_error(tc->diags, span,
+               "module '" SV_FMT "' has no item named '" SV_FMT "'",
+               SV_ARG(dep->file_path), SV_ARG(name));
+    return NULL;
+  }
+  if (!d->is_pub) {
+    // an import that isn't re-exported is *not* an item of the module, so the
+    // wording has to differ: nothing is being hidden, it was never offered.
+    if (via_reexport) {
+      diag_error(tc->diags, span,
+                 "'" SV_FMT "' is imported by module '" SV_FMT
+                 "' but not re-exported",
+                 SV_ARG(name), SV_ARG(dep->file_path));
+      diag_note(tc->diags, (Span){0}, "add 'pub' to its 'use' declaration");
+      return NULL;
+    }
+    diag_error(tc->diags, span,
+               "'" SV_FMT "' is private in module '" SV_FMT "'", SV_ARG(name),
+               SV_ARG(dep->file_path));
+    diag_note(tc->diags, (Span){0}, "add 'pub' to its declaration");
+    return NULL;
+  }
+  return d;
+}
+
+// append an entry to m's variant table and hand it back. The collision check
+// is the caller's, because the three callers differ in exactly that.
+static VariantImport *variant_import_push(TypeChecker *tc, Module *m,
+                                          const UseAlias *a, bool is_pub,
+                                          bool from_glob, bool from_prelude) {
+  if (m->variant_import_count == m->variant_import_cap) {
+    int cap = m->variant_import_cap ? m->variant_import_cap * 2 : 4;
+    m->variant_imports =
+        al_realloc(tc->al, m->variant_imports,
+                   sizeof(VariantImport) * (size_t)m->variant_import_cap,
+                   sizeof(VariantImport) * (size_t)cap);
+    m->variant_import_cap = cap;
+  }
+  VariantImport *vi = &m->variant_imports[m->variant_import_count++];
+  *vi = (VariantImport){
+      .name = a->alias,
+      .is_pub = is_pub,
+      .from_glob = from_glob,
+      .from_prelude = from_prelude,
+      .span = a->span,
+  };
+  return vi;
+}
+
+// bind `variant` in `m` under `a->alias`. Its own namespace, so the collision
+// check is link_name_taken's — which sees the list too, in both directions.
+static void link_bind_variant(TypeChecker *tc, Module *m, const UseAlias *a,
+                              EnumDef *enum_def, VariantDef *variant,
+                              bool is_pub, bool from_prelude) {
+  if (link_name_taken(tc, m, a)) {
+    return;
+  }
+  VariantImport *vi =
+      variant_import_push(tc, m, a, is_pub, /*from_glob=*/false, from_prelude);
+  vi->enum_def = enum_def;
+  vi->variant = variant;
+}
+
+// the enum a variant import is qualified by, or NULL with the reason reported.
+// `dep == m` is a scope import, whose qualifier is a name in m's own scope
+// rather than a `pub` export of anywhere — an own enum, an imported one, a
+// preluded one — so there is no visibility question to ask.
+static EnumDef *link_qualifier_enum(TypeChecker *tc, Module *m, Module *dep,
+                                    StringView qualifier, Span span,
+                                    StringView expected_file) {
+  if (dep != m && link_find_export(tc, dep, qualifier, span) == NULL) {
+    return NULL;
+  }
+  TypeEntry *te = tscope_lookup(&dep->tscope, qualifier);
+  if (te == NULL) {
+    if (dep != m) {
+      // dep is resolved (topological order); a missing entry means resolving it
+      // poisoned the decl, which was reported there.
+      return NULL;
+    }
+    // nothing of that name: neither a file (discovery looked) nor a type. The
+    // file it looked for is the more likely intent, so lead with that.
+    diag_error(tc->diags, span, "cannot find module '" SV_FMT "'",
+               SV_ARG(qualifier));
+    if (expected_file.len > 0) {
+      diag_note(tc->diags, (Span){0}, "expected file '" SV_FMT "'",
+                SV_ARG(expected_file));
+    }
+    diag_note(tc->diags, (Span){0},
+              "no enum named '" SV_FMT "' is in scope either",
+              SV_ARG(qualifier));
+    return NULL;
+  }
+  if (te->type->kind != TY_ENUM) {
+    diag_error(tc->diags, span,
+               "'" SV_FMT "' is not an enum, so it qualifies no variant",
+               SV_ARG(qualifier));
+    return NULL;
+  }
+  return te->as.enum_def;
+}
+
+// bring one `use`d variant into `m` under its alias (`use a::E::V;`). A variant
+// has no visibility of its own, so a `pub enum` exports all of them and the
+// only gate is the enum's.
+static void link_import_variant(TypeChecker *tc, Module *m, Module *dep,
+                                StringView qualifier, const UseAlias *a,
+                                bool is_pub, bool from_prelude) {
+  if (from_prelude && link_name_bound(m, a->alias)) {
+    return;
+  }
+
+  EnumDef *enum_def =
+      link_qualifier_enum(tc, m, dep, qualifier, a->span, (StringView){0});
+  if (enum_def == NULL) {
+    return;
+  }
+
+  VariantDef *variant = find_enum_variant(enum_def, a->name);
+  if (variant == NULL) {
+    diag_error(tc->diags, a->span,
+               "enum '" SV_FMT "' has no variant named '" SV_FMT "'",
+               SV_ARG(enum_def->name), SV_ARG(a->name));
+    return;
+  }
+
+  link_bind_variant(tc, m, a, enum_def, variant, is_pub, from_prelude);
+}
+
 // bring one `use`d item into `m` under its alias. There is one import kind:
 // a std module is an ordinary registry entry, vetted by the same `pub` rule
 // as any other dependency.
 static void link_import_item(TypeChecker *tc, Module *m, Module *dep,
-                             const UseAlias *a, bool from_prelude) {
+                             const UseAlias *a, bool is_pub,
+                             bool from_prelude) {
   // a prelude name is lowest priority: if the module already has it — its own
   // decl, or an explicit import linked earlier — the prelude simply steps
   // aside, no diagnostic. That is what lets a program define its own `Option`
@@ -1999,22 +2175,11 @@ static void link_import_item(TypeChecker *tc, Module *m, Module *dep,
     return;
   }
 
-  Decl *d = mod_find_own_decl(dep, a->name);
-  bool via_reexport = false;
-  if (d == NULL) {
-    d = mod_find_use_alias(dep, a->name);
-    via_reexport = d != NULL;
-  }
-  if (d == NULL) {
-    diag_error(tc->diags, a->span,
-               "module '" SV_FMT "' has no item named '" SV_FMT "'",
-               SV_ARG(dep->file_path), SV_ARG(a->name));
-    return;
-  }
-  if (!d->is_pub) {
-    // an import that isn't re-exported is *not* an item of the module, so the
-    // wording has to differ: nothing is being hidden, it was never offered.
-    if (via_reexport) {
+  // a variant `dep` itself imported: a bare name there is a bare name here, so
+  // a re-export carries the binding rather than looking for an item of it.
+  VariantImport *vi = mod_find_variant_import(dep, a->name);
+  if (vi != NULL) {
+    if (!vi->is_pub) {
       diag_error(tc->diags, a->span,
                  "'" SV_FMT "' is imported by module '" SV_FMT
                  "' but not re-exported",
@@ -2022,10 +2187,12 @@ static void link_import_item(TypeChecker *tc, Module *m, Module *dep,
       diag_note(tc->diags, (Span){0}, "add 'pub' to its 'use' declaration");
       return;
     }
-    diag_error(tc->diags, a->span,
-               "'" SV_FMT "' is private in module '" SV_FMT "'",
-               SV_ARG(a->name), SV_ARG(dep->file_path));
-    diag_note(tc->diags, (Span){0}, "add 'pub' to its declaration");
+    link_bind_variant(tc, m, a, vi->enum_def, vi->variant, is_pub,
+                      from_prelude);
+    return;
+  }
+
+  if (link_find_export(tc, dep, a->name, a->span) == NULL) {
     return;
   }
 
@@ -2041,20 +2208,12 @@ static void link_import_item(TypeChecker *tc, Module *m, Module *dep,
 // bind `dep` as a module qualifier in `m` under `a->alias` (`use a::b;` →
 // `b::thing`). A qualifier shares the item namespaces' names — a module can't
 // be spelled where a type or value is expected — so a collision with an own
-// decl, an import, or another qualifier is reported here, the only place it
-// can be (the scopes don't hold the binding).
+// decl, an import, a variant or another qualifier is link_name_taken's, which
+// is the only place any of them can be seen at once.
 static void link_bind_module(TypeChecker *tc, Module *m, Module *dep,
                              const UseAlias *a) {
   if (link_name_taken(tc, m, a)) {
     return;
-  }
-  for (int i = 0; i < m->qual_module_count; i++) {
-    if (sv_equal(m->qual_modules[i].name, a->alias)) {
-      diag_error(tc->diags, a->span,
-                 "module qualifier '" SV_FMT "' is already bound",
-                 SV_ARG(a->alias));
-      return;
-    }
   }
 
   if (m->qual_module_count == m->qual_module_cap) {
@@ -2069,23 +2228,139 @@ static void link_bind_module(TypeChecker *tc, Module *m, Module *dep,
       (QualModule){.name = a->alias, .target = dep, .span = a->span};
 }
 
+// bind every variant of `enum_def` under its own name. A glob is the lowest
+// priority binding there is — anything written by name wins, in either order —
+// so it yields silently where an explicit import reports, and the one thing it
+// *does* report is a second glob disagreeing about a name, since resolution
+// reads the first match and would otherwise pick one in silence.
+static void link_glob_variants(TypeChecker *tc, Module *m, EnumDef *enum_def,
+                               bool is_pub, Span span) {
+  for (int i = 0; i < enum_def->variant_count; i++) {
+    VariantDef *variant = &enum_def->variants[i];
+    UseAlias a = {.name = variant->name, .alias = variant->name, .span = span};
+
+    VariantImport *prior = mod_variant_import_slot(m, a.alias);
+    if (prior != NULL && prior->from_glob) {
+      if (prior->variant != variant) {
+        diag_error(tc->diags, span,
+                   "glob import of enum '" SV_FMT "' binds '" SV_FMT
+                   "', which another glob import already binds",
+                   SV_ARG(enum_def->name), SV_ARG(variant->name));
+        diag_note(tc->diags, (Span){0},
+                  "name the variants you want instead of globbing");
+      }
+      continue; // same variant twice is one binding, not a clash
+    }
+    // a glob outranks the prelude — it is written in the file and the prelude
+    // is not — and the prelude links a pass earlier, so taking the name back
+    // here is what makes `enum My { Some } use My::*;` mean `My::Some`.
+    if (prior != NULL && prior->from_prelude) {
+      prior->name = (StringView){0};
+    } else if (link_name_bound(m, a.alias)) {
+      continue; // written by name, or declared here: that binding stands
+    }
+
+    VariantImport *vi = variant_import_push(tc, m, &a, is_pub,
+                                            /*from_glob=*/true,
+                                            /*from_prelude=*/false);
+    vi->enum_def = enum_def;
+    vi->variant = variant;
+  }
+}
+
+void tc_link_scope_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
+  for (int i = 0; i < m->import_count; i++) {
+    ModImport *imp = &m->imports[i];
+    DeclUse *use = &imp->decl->as.use_decl;
+    bool glob = use->target.is_glob;
+    if (!use->is_scope_import && !glob) {
+      continue;
+    }
+
+    // a file-qualified glob resolved its module at discovery; only a scope
+    // import has to find its enum here.
+    Module *dep = use->is_scope_import ? m : NULL;
+    if (dep == NULL) {
+      if (imp->module_index < 0) {
+        continue; // discovery diagnosed it
+      }
+      dep = reg->modules[imp->module_index];
+    }
+
+    Span span = glob ? use->target.span : use->path.span;
+    EnumDef *enum_def = link_qualifier_enum(
+        tc, m, dep, use->qualifier, span,
+        use->is_scope_import ? imp->file_path : (StringView){0});
+    if (enum_def == NULL) {
+      continue;
+    }
+
+    if (glob) {
+      link_glob_variants(tc, m, enum_def, imp->decl->is_pub, span);
+      continue;
+    }
+
+    for (int j = 0; j < use->target.count; j++) {
+      const UseAlias *a = &use->target.aliases[j];
+      VariantDef *variant = find_enum_variant(enum_def, a->name);
+      if (variant == NULL) {
+        diag_error(tc->diags, a->span,
+                   "enum '" SV_FMT "' has no variant named '" SV_FMT "'",
+                   SV_ARG(enum_def->name), SV_ARG(a->name));
+        continue;
+      }
+      // the name was claimed in source order by the reservation below; fill it
+      // in, unless the claim was refused (a collision, already reported).
+      VariantImport *slot = mod_variant_import_slot(m, a->alias);
+      if (slot == NULL || slot->variant != NULL) {
+        continue;
+      }
+      slot->enum_def = enum_def;
+      slot->variant = variant;
+    }
+  }
+}
+
 void tc_link_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
   for (int i = 0; i < m->import_count; i++) {
     ModImport *imp = &m->imports[i];
+    UseTarget *target = &imp->decl->as.use_decl.target;
+
+    // A scope import cannot say what it names until this module has resolved,
+    // but it can *claim its name*, here, among the imports it was written
+    // beside — which is the only way a collision with one of them is reported
+    // against whichever came second. `tc_link_scope_imports` fills the claim.
+    if (imp->decl->as.use_decl.is_scope_import && !target->is_glob) {
+      for (int j = 0; j < target->count; j++) {
+        const UseAlias *a = &target->aliases[j];
+        if (!link_name_taken(tc, m, a)) {
+          variant_import_push(tc, m, a, imp->decl->is_pub, /*from_glob=*/false,
+                              /*from_prelude=*/false);
+        }
+      }
+      continue;
+    }
+
     if (imp->module_index < 0) {
       continue; // discovery already diagnosed it; stay quiet
     }
     Module *dep = reg->modules[imp->module_index];
 
-    UseTarget *target = &imp->decl->as.use_decl.target;
     if (imp->decl->as.use_decl.is_module_import) {
       // a bare `use a::b;` naming a module: one alias, the qualifier.
       link_bind_module(tc, m, dep, &target->aliases[0]);
       continue;
     }
     bool from_prelude = imp->decl->as.use_decl.from_prelude;
+    bool is_pub = imp->decl->is_pub;
+    StringView qualifier = imp->decl->as.use_decl.qualifier;
     for (int j = 0; j < target->count; j++) {
-      link_import_item(tc, m, dep, &target->aliases[j], from_prelude);
+      if (qualifier.len > 0) {
+        link_import_variant(tc, m, dep, qualifier, &target->aliases[j], is_pub,
+                            from_prelude);
+      } else {
+        link_import_item(tc, m, dep, &target->aliases[j], is_pub, from_prelude);
+      }
     }
   }
 }
@@ -5180,6 +5455,30 @@ static bool check_pattern(CheckCtx *ctx, Pattern *pattern, Type *expected_ty) {
       return check_struct_pattern(ctx, pattern, expected_ty, te->as.struct_def);
     }
 
+    // same reasoning one namespace over: a bare imported variant tests for
+    // that variant. Without this `match o { None => .., Some(v) => .. }` would
+    // bind everything to `None` and report the second arm unreachable.
+    VariantImport *vi =
+        mod_find_variant_import(ctx->tyres.module, pattern->as.bind.name);
+    if (vi != NULL) {
+      PathSegment *seg = al_alloc_zero(ctx->al, sizeof(PathSegment));
+      seg->name = pattern->as.bind.name;
+      Pattern new = {
+          .kind = PAT_VARIANT,
+          .span = pattern->span,
+          .resolved_type = expected_ty,
+          .as.variant =
+              {
+                  .path = {.segments = seg, .count = 1, .span = pattern->span},
+                  .field_count = 0,
+                  .fields = NULL,
+              },
+      };
+      *pattern = new;
+      return check_variant_pattern(ctx, pattern, expected_ty, vi->enum_def,
+                                   vi->variant);
+    }
+
     vscope_define(ctx->vscope, pattern->as.bind.name, expected_ty, ctx->diags,
                   pattern->span, NULL);
     break;
@@ -7575,6 +7874,23 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
             .span = expr->span,
             .as.struct_init = init,
         };
+        return resolve_expr(ctx, expr, hint);
+      }
+
+      // and a variant imported bare is a value the same way: `None` after
+      // `use std::option::Option::None;`. A lone name never reaches
+      // resolve_path, so the binding has to be read here too.
+      VariantImport *vi = mod_find_variant_import(ctx->tyres.module, name);
+      if (vi != NULL) {
+        if (vi->variant->field_count != 0) {
+          diag_error(ctx->diags, expr->span,
+                     "variant '" SV_FMT "' requires arguments",
+                     SV_ARG(vi->variant->name));
+          result = ctx->tc->t_poison;
+          break;
+        }
+        rewrite_tuple_variant_call(ctx, expr, vi->enum_def->self_type,
+                                   vi->enum_def, vi->variant);
         return resolve_expr(ctx, expr, hint);
       }
 
@@ -10882,6 +11198,34 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
 
       TypeEntry *te = tscope_lookup(ctx->tscope, segment);
       if (!te) {
+        // a variant imported bare (`use a::E::V;`) is the whole path: it names
+        // no scope to descend into, and its type arguments belong to the enum,
+        // which is exactly what the qualified spelling says one segment on.
+        VariantImport *vi =
+            mod_find_variant_import(ctx->tyres->module, segment);
+        if (vi != NULL) {
+          if (!is_last) {
+            diag_error(ctx->diags, path->span,
+                       "cannot access member '" SV_FMT "' of enum variant",
+                       SV_ARG(path->segments[i + 1].name));
+            return false;
+          }
+          if (path->segments[i].type_arg_count > 0) {
+            diag_error(ctx->diags, path->span,
+                       "cannot apply type arguments to enum variant '" SV_FMT
+                       "'",
+                       SV_ARG(segment));
+            return false;
+          }
+          *out_res = (PathRes){
+              .kind = PATHRES_VARIANT,
+              .type = vi->enum_def->self_type,
+              .as.variant.enum_def = vi->enum_def,
+              .as.variant.def = vi->variant,
+          };
+          return true;
+        }
+
         // not a type — but a `use`d module can qualify what follows
         // (`string::len`). A module never stands alone as a value or a type, so
         // it only resolves when a segment follows it.

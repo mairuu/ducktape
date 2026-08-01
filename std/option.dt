@@ -18,6 +18,11 @@ pub enum Option<T> {
     None,
 }
 
+# Both variants are preluded, so `Some(v)` and `None` are written bare in any
+# module. Re-exported here rather than special-cased in the compiler: the
+# prelude imports names from a module, and this is what makes these two names.
+pub use Option::{Some, None};
+
 impl<T> Option<T> {
     fun is_some(self) -> Bool {
         match self {

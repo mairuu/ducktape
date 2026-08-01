@@ -1,0 +1,5 @@
+use pal::Color;
+
+# a glob re-exports like a named import: every variant it bound is an item of
+# fac, importable one at a time.
+pub use Color::*;

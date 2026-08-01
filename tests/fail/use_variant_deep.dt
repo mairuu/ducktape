@@ -1,0 +1,4 @@
+#! expect: too many segments in use path
+use std::option::Option::Some::Deeper;
+
+fun main() {}

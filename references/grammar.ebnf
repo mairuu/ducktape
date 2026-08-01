@@ -23,7 +23,8 @@ attribute      = "@" ( "native" | "intrinsic" | "lang" ) "(" STRING ")" ;
                     "Lang items" *)
 
 useDecl        = "use" usePath ( "as" IDENT )? ";" ;
-usePath        = path ( "::" "{" useItem ( "," useItem )* ","? "}" )? ;
+usePath        = path ( "::" ( "{" useItem ( "," useItem )* ","? "}"
+                             | "*" ) )? ;
 useItem        = IDENT ( "as" IDENT )? ;
                  (* Braced: leading segments name the file, the brace group
                     names the items. Bare (no braces): if the whole path names a
@@ -32,8 +33,14 @@ useItem        = IDENT ( "as" IDENT )? ;
                     names an item of b without importing it. Otherwise the last
                     segment is a single item of the prefix module. Only file
                     existence tells the two apart — mod_collect_imports decides.
-                    `pub use` re-exports each item alias — language.md
-                    "Modules" *)
+                    One further segment may name an *enum* whose variants the
+                    remaining names are (`use a::E::V;`, `use a::E::{V, W};`),
+                    which the same file question separates, shortest prefix
+                    last — and last of all, that enum may be one already in
+                    SCOPE, so `use E::V;` names no module at all. `*` takes
+                    every variant of it; there is no module glob, and a glob
+                    takes no `as`. `pub use` re-exports each alias —
+                    language.md "Modules" *)
 
 varDecl        = "var" pattern ( ":" type )? "=" expr ";" ;
                  (* the pattern must be irrefutable — checked, not parsed;

@@ -55,6 +55,27 @@ typedef struct {
   Span span;       // where it was bound, for a collision diagnostic
 } QualModule;
 
+// an enum variant bound as a bare name by `use a::E::V;`. It is neither a type
+// nor a value — a variant is only ever the head of a constructor or a pattern —
+// so it gets a namespace of its own beside the qualifier list, checked for
+// collisions against both scopes so the three cannot disagree about a name.
+typedef struct {
+  StringView name; // the bare name (the variant's, or an `as` alias)
+  EnumDef *enum_def;
+  // NULL while the entry is a *reservation*: a scope import claims its name in
+  // source order, with the other imports, but cannot say what it names until
+  // the module has resolved. Every reader outside linking runs a phase later,
+  // by which time it is filled or the entry is dead.
+  VariantDef *variant;
+  bool is_pub;    // the `use` was a `pub use`: re-exportable like any item
+  bool from_glob; // bound by `use E::*;`, so anything written by name wins
+  // bound by the prelude, which nobody wrote: weaker still, and the one thing
+  // a glob may take a name from. (An explicit import cannot collide with one —
+  // the prelude's entries are appended last, so they link last and yield.)
+  bool from_prelude;
+  Span span; // where it was bound, for a collision diagnostic
+} VariantImport;
+
 struct Module {
   // path as given on the command line, or derived from it; used verbatim for
   // fopen and as the registry key. null-terminated.
@@ -69,6 +90,12 @@ struct Module {
   // tc_link_imports, read by resolve_path when a path's first segment is one.
   QualModule *qual_modules;
   int qual_module_count, qual_module_cap;
+
+  // variants this module's `use a::E::V;` declarations bind bare. Filled by
+  // tc_link_imports, read wherever a lone name may name a variant: path
+  // resolution, a path expression, and a binding pattern.
+  VariantImport *variant_imports;
+  int variant_import_count, variant_import_cap;
 
   FunDef **funs;
   int fun_count, fun_cap;
@@ -97,6 +124,13 @@ struct Module {
   ValueScope vscope; // module-level values: functions, global vars
   TypeScope tscope;  // module-level types: structs, enums, traits
 };
+
+// the variant `m` bound bare under `name` (`use a::E::V;` → `V`), or NULL.
+VariantImport *mod_find_variant_import(Module *m, StringView name);
+
+// the same lookup without the "is it filled in" filter: the entry holding this
+// name whatever state it is in. For linking, which owns those states.
+VariantImport *mod_variant_import_slot(Module *m, StringView name);
 
 Module *mod_new(StringView file_path, Allocator *al);
 

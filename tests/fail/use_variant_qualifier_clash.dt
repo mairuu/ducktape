@@ -1,0 +1,7 @@
+#! expect: module qualifier 'io' is already bound
+# a variant, an item and a module qualifier share one namespace: whichever is
+# bound first, the second spelling of the name is the error.
+use std::io;
+use std::option::Option::Some as io;
+
+fun main() {}

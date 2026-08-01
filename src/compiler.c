@@ -203,6 +203,9 @@ static bool compiler_phase_resolve(Compiler *c) {
     tc_link_imports(&c->tc, m, &c->mod_reg);
     tc_import_impls(&c->tc, m, &c->mod_reg);
     tc_resolve_module(&c->tc, m);
+    // after resolve: a variant import qualified by a *name* resolves that name
+    // against m's own type scope, which is complete only now.
+    tc_link_scope_imports(&c->tc, m, &c->mod_reg);
     if (diag_has_diags(&c->diags)) {
       diag_report(&c->diags, m->file_path.chars, m->source.chars, stderr);
     }

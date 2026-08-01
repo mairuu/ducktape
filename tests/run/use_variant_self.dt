@@ -1,0 +1,32 @@
+# A `use` whose qualifier is an enum of *this* file: no module, no file, no
+# dependency — the variants of an enum declared right here, bound bare.
+use std::io::print;
+use Event::A;
+use Event::{B, C as Third};
+
+enum Event {
+  A,
+  B,
+  C,
+  Payload(Int),
+}
+
+fun name(e: Event) -> String {
+  match e {
+    A => { return "a"; },
+    B => { return "b"; },
+    Third => { return "c"; },
+    Event::Payload(n) => { return "payload {n}"; },
+  }
+}
+
+pub fun main() {
+  print(name(A));
+#> a
+  print(name(B));
+#> b
+  print(name(Third));
+#> c
+  print(name(Event::Payload(9)));
+#> payload 9
+}

@@ -1,0 +1,4 @@
+#! expect: enum 'Color' has no variant named 'Blue'
+use pal::Color::Blue;
+
+fun main() {}

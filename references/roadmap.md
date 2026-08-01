@@ -1322,6 +1322,31 @@ keep this file small. Everything from 55 on is below.
   (Rust's `let else`) has no spelling, and an irrefutable pattern in either
   header is accepted silently. Full write-up in the commit body.
 
+- **81. Variant imports** — `use std::option::Option::Some;` binds the
+  variant bare, so `Some(v)` and a `Some(v)` pattern need no `Option::` in
+  front. Every spelling of it: named, braced, aliased, `pub use`d, `use E::*;`
+  globbed, and qualified by a *file* or by any enum already in **scope** — one
+  the file declares, imported, aliased, or preluded. `Some`/`None`/`Ok`/`Err`
+  are now preluded on that same machinery, with no compiler special case.
+  Design: `language.md` "Modules" + the prelude, `architecture.md` ("Variant
+  imports"), `grammar.ebnf` `useDecl`. The finding: a use path's shape was
+  already decided by asking whether a prefix names a *file*, and a variant is
+  that question one segment further along — so discovery grew fallbacks rather
+  than import kinds, and resolution grew nothing at all, since a bound variant
+  *is* the whole path. What the work actually turned on was **ordering**: a
+  scope qualifier can only be read once the module has resolved, so that import
+  links a pass late and has to *claim its name* in source order first; and a
+  glob forced the three binding strengths into the open (written > glob >
+  prelude), which is also how the prelude's four names stay overridable. No
+  opcode, no image change, no codegen. It also closed a pre-existing gap in
+  `link_name_taken`: a module qualifier lives in no scope, so a later import of
+  its name was accepted and then resolved backwards. Remainder: the import
+  binds the variant and not its enum (Rust's rule); there is no module glob
+  (`use a::*;`) and no glob of anything but an enum; a `use` path's module
+  prefix is always a file path, never a bound module qualifier; and a variant
+  is still not a first-class function value (`xs.map(Some)`), which is the
+  qualified spelling's limit too and not a `use` question.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion

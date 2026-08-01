@@ -1,0 +1,13 @@
+pub enum Event { A, B }
+
+# a self import re-exports like any other: `pub use` makes the bare name an
+# item of lib, a plain `use` keeps it here.
+pub use Event::A;
+use Event::B;
+
+pub fun b_name() -> String {
+  match B {
+    A => { return "a"; },
+    B => { return "b"; },
+  }
+}

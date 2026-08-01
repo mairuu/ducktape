@@ -1,0 +1,10 @@
+# a variant re-exports like any other imported name: `pub use` makes the bare
+# binding an item of facade, a plain `use` keeps it here.
+pub use shape::Shape::Rect;
+use shape::Shape::Dot;
+
+pub fun a_dot() -> Shape {
+  return Dot;
+}
+
+pub use shape::Shape;

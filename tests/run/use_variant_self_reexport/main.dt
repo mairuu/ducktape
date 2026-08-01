@@ -1,0 +1,12 @@
+use std::io::print;
+use lib::{Event, A, b_name};
+
+pub fun main() {
+  match A {
+    Event::A => { print("a"); },
+#> a
+    Event::B => { print("b"); },
+  }
+  print(b_name());
+#> b
+}

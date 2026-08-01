@@ -318,6 +318,18 @@ void tc_register_module(TypeChecker *tc, Module *m);
 // why linking is not a standalone pass.
 void tc_link_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg);
 
+// fill in every variant import whose qualifier is a name rather than a file
+// (`use Event::A;`, `use Color::Red;`, `use Option::Some;`) and expand every
+// glob (`use E::*;`).
+//
+// runs immediately *after* tc_resolve_module(m), not before it with the other
+// linking: the qualifier is resolved against m's own type scope, which is
+// complete only then, and a glob needs the enum's variants filled in. Nothing
+// is lost by the wait — a variant is never part of a signature, so only bodies,
+// checked a phase later, can name one. `tc_link_imports` has already claimed
+// each name in source order, so collisions are reported there, not here.
+void tc_link_scope_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg);
+
 // seed m->visible_impls with every impl reachable through its `use`
 // declarations, and report any pair that conflicts.
 //

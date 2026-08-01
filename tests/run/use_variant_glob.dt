@@ -1,0 +1,39 @@
+# `use E::*;` binds every variant of E. A glob is the weakest binding there is:
+# it yields to anything written by name — including the prelude's `Some`, which
+# `My::Some` takes back here — and it is what an exhaustive match reads.
+use std::io::print;
+
+enum Shape {
+  Dot,
+  Circle(Int),
+  Rect { w: Int, h: Int },
+}
+
+enum My { Some, Two }
+
+use Shape::*;
+use My::*;
+
+fun area(s: Shape) -> Int {
+  match s {
+    Dot => { return 0; },
+    Circle(r) => { return 3 * r * r; },
+    Rect { w, h } => { return w * h; },
+  }
+}
+
+pub fun main() {
+  print(area(Dot));
+#> 0
+  print(area(Circle(2)));
+#> 12
+  print(area(Rect { w: 2, h: 4 }));
+#> 8
+
+  # `Some` is the prelude's until a glob of this file's own enum takes it.
+  match Some {
+    Some => { print("mine"); },
+#> mine
+    Two => { print("two"); },
+  }
+}

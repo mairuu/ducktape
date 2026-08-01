@@ -297,6 +297,93 @@ changes. It splits across the same three seams every module feature does:
   qualified function resolves to the same `PATHRES_METHOD` a bare call does:
   codegen reads `ExprPath.resolved_fun` and never learns a module was involved.
 
+### Variant imports
+
+`use a::E::V;` binds the variant `V` bare, so `V(x)` and a `V` pattern need no
+`E::` in front. It splits across the same three seams as a module qualifier, and
+each one is the same question one segment further along:
+
+- **Discovery decides the shape** (`mod_collect_imports`). The path has three
+  parts — module prefix, optional enum qualifier, names — and file existence
+  separates them, exactly as it separates a module import from an item one. A
+  bare path tries its full length (module import), then one less (item), then two
+  (`DeclUse.qualifier` is the segment in between); a braced one tries its length
+  then one less; a glob needs no probing at all, since its last segment is always
+  the enum (there is no module glob, so nothing else it could be). The longer
+  prefix always wins, so an enum can never take a module's meaning away. A std
+  module is fixed at two segments, so its split is arithmetic (`extra > 1` is an
+  error) rather than a probe.
+
+  When *no* file answers and the path is short enough to be one
+  (`a::V` bare, `a::{V, W}`, `a::*`), the qualifier is read as a name rather
+  than a file: `is_scope_import` is set, `module_index` stays -1 — no file, no
+  graph edge, and therefore no self-cycle to exclude — and the binding is
+  deferred. The file the *module* reading would have named is kept on the import
+  for the diagnostic, so a plain typo still reports "cannot find module" with
+  the path it looked for.
+
+- **A scope import links a pass later** (`tc_link_scope_imports`, called from
+  `compiler_phase_resolve` right *after* `tc_resolve_module`). It has to: the
+  qualifier is resolved against `m`'s own type scope, which is complete only
+  then, and a glob additionally needs the enum's variants filled in — where
+  every other import reads a *dependency*, which topological order already
+  finished. Nothing is lost by the wait, because a variant is never part of a
+  signature: only bodies, checked a phase later, can name one.
+
+  Because it links late, `tc_link_imports` **claims the name in source order**
+  first — a `VariantImport` with a NULL `variant`, which the late pass fills in.
+  Without the claim a collision between a scope import and a file import would
+  be reported against the scope import whichever was written first.
+  `mod_find_variant_import` filters unfilled entries out so nothing downstream
+  sees a claim; `mod_variant_import_slot`, which does not, is linking's own.
+
+- **Linking binds the name** (`link_import_variant`, `link_glob_variants`). A
+  variant is neither a type nor a value — it is only ever the head of a
+  constructor or a pattern — so like a qualifier it gets its own table,
+  `Module.variant_imports`, and `link_name_taken`/`link_name_bound` were
+  extended to see it. Both also learned to scan `qual_modules`, which closes a
+  gap that predates variants: a qualifier lives in no scope, so `use std::io;
+  use std::cmp::max as io;` was accepted and then resolved backwards. All three
+  namespaces now collide in both directions, and `link_bind_module`'s own
+  duplicate scan is gone with it.
+
+  The enum comes from `link_qualifier_enum`, which for a module qualifier goes
+  through `link_find_export` — the factored-out `mod_find_own_decl` /
+  `mod_find_use_alias` + `is_pub` gate an item import already used, so a variant
+  is exactly as visible as its enum and a `pub use`d enum can qualify one — and
+  for a scope qualifier (`dep == m`) goes straight to `tscope_lookup`, where
+  visibility is not a question a module can ask about itself. Re-export needs no
+  second mechanism: `link_import_item` asks `mod_find_variant_import(dep, ...)`
+  first, so a `pub use a::E::V;` (or a `pub use a::E::*;`) hands the binding on
+  and a plain one refuses in the usual words.
+
+  **Three strengths of binding**, which is what a glob forced into the open.
+  A name written down is strongest; `from_glob` yields to it silently in either
+  order (`link_drop_glob_binding` tombstones a glob entry when something written
+  claims the name later); `from_prelude` yields to both — a glob may take a name
+  off the prelude, which is what makes `enum My { Some } use My::*;` mean
+  `My::Some`, and which needs the flag because the prelude links a pass earlier
+  than any glob. The one thing a glob *reports* is a second glob offering a
+  different variant for the same name: nothing else could tell them apart, and
+  resolution reads the first match.
+
+- **Resolution adds no state** (`resolve_path`). The binding *is* the whole
+  path, so the scope state answers `PATHRES_VARIANT` outright when a lone
+  segment is neither a type nor a builtin — and every consumer of a qualified
+  variant (a call, a struct-init, `PAT_VARIANT`, `PAT_STRUCT`) already funnels
+  through there, so they came for free. The two sites that short-circuit
+  `resolve_path` had to be taught separately, and both already had the identical
+  case for a bare *unit struct* name: a lone `EXPR_PATH` (rewritten by
+  `rewrite_tuple_variant_call`) and a `PAT_BIND` (rewritten to `PAT_VARIANT`,
+  without which the name would bind everything and shadow the arms after it).
+  Codegen is untouched — it reads `resolved_variant` off the node, never a path.
+
+The prelude carries `Some`/`None`/`Ok`/`Err` on this machinery rather than a
+special case: `std::option` and `std::result` each `pub use` their own two
+variants (a scope import of an own enum), and the prelude table names them
+beside `Option` and `Result`. `link_import_item`'s re-export branch does the
+rest, and `from_prelude` keeps them the weakest binding in the file.
+
 ### Where an `impl` applies
 
 An impl has no name, so it cannot travel through `use` one item at a time.

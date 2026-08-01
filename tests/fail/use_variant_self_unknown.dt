@@ -1,0 +1,6 @@
+#! expect: enum 'Event' has no variant named 'Z'
+use Event::Z;
+
+enum Event { A, B }
+
+fun main() {}

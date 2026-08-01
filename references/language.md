@@ -1135,6 +1135,7 @@ use geometry::Point;                 # <root_dir>/geometry.dt — item Point
 use geo::point::{Point, Line};       # <root_dir>/geo/point.dt, two items
 use util::Maybe as Opt;              # imported under a different name
 use std::string;                     # the *module* string, as a qualifier
+use std::option::Option::Some;       # one variant of an item — see below
 ```
 
 For a **braced** import, the leading segments name the *file* and the brace
@@ -1145,6 +1146,62 @@ segment is a single item of the prefix module. Paths are relative to the
 directory of the root file — the one search root — for every module, including
 modules that are not the root. A file reached by two different importers is
 loaded once.
+
+One further segment may sit between the module and the names, and it is an
+**enum whose variants are being imported**:
+
+```
+use std::option::Option::None;              # `None`, bare
+use std::option::Option::{Some, None};      # both, bare
+use std::result::Result::Ok as Yes;         # under another name
+```
+
+The enum may equally be one **already in scope**, in which case there is no
+module in front of it at all: the `use` names no file and adds no dependency, it
+only binds names. Any enum the file can see qualifies — one it declares, one it
+imported, one it imported under an alias, or a preluded one:
+
+```
+use Event::A;                # `enum Event` is declared in this same file
+use Event::{B, C as Third};
+
+use geo::Shape;              # imported...
+use Shape::Circle;           # ...then its variant
+use Option::Some;            # preluded, so this needs no other import
+```
+
+`*` imports **every** variant of the qualifier enum, each under its own name:
+
+```
+use Shape::*;                # an enum in scope
+use geo::Shape::*;           # or one named by module
+```
+
+There is no module glob: `*` always names an enum's variants, never a module's
+items.
+
+Which reading applies is decided by the same question throughout — does that
+prefix name a file? — and the shortest prefix is tried last, so an enum can
+never take a module's meaning away. A *scope* qualifier is the last reading of
+all, applying only where no file answered.
+
+An imported variant is written bare wherever the qualified spelling would go: as
+a constructor (`Some(v)`, `None`), and as a pattern (`match o { Some(v) => ..,
+None => .. }`). It does **not** bring in the enum: `Option` is a separate `use`,
+needed the moment a signature names the type. A variant is exactly as visible as
+its enum, since variants carry no `pub` of their own, and `pub use` re-exports
+one — or every one a `*` bound — like any other name.
+
+Three strengths of binding decide a collision, and only the weakest two are
+quiet about it:
+
+- **written by name** — a declaration in the file, or a `use` naming the item.
+  Two of these colliding is an error, reported against whichever came second.
+- **a glob** — yields silently to anything written by name, in either order.
+  Two globs offering *different* variants for one name is an error, since
+  nothing else could tell them apart; the same variant reached twice is not.
+- **the prelude** — yields silently to both, which is what lets a module
+  declare its own `Ok` or glob a `Some` of its own.
 
 Items are **private by default**; `pub` makes one importable:
 
@@ -1323,14 +1380,17 @@ but, and `std::array`, `std::string`, `std::strbuf`, `std::char` and
 `std::hash` are the mixed case — a handful of natives, and every other function
 written on top of them in ducktape.
 
-**There is a small prelude.** Every program implicitly imports `Option`
-(`std::option`), `Result` (`std::result`), `Ord` (`std::cmp`), `Display`
-(`std::fmt`), `Iterator` (`std::iter`) and the six operator traits
-(`std::ops`), plus `std::string` for its format-spec helpers — the vocabulary
-types and the lang items, so a construct whose meaning the compiler resolves
-(`"{v}"`, `a < b`, `a + b`, `for x in it`, a `{v:>8}` spec) works without an
-import the user never wrote. The prelude is lowest priority: a module that defines its own `Option`,
-or imports a different `Ord`, keeps it — the prelude's binding steps aside
+**There is a small prelude.** Every program implicitly imports `Option` and its
+variants `Some`/`None` (`std::option`), `Result` and its variants `Ok`/`Err`
+(`std::result`), `Ord` (`std::cmp`), `Display` (`std::fmt`), `Iterator`
+(`std::iter`) and the six operator traits (`std::ops`), plus `std::string` for
+its format-spec helpers — the vocabulary types and the lang items, so a
+construct whose meaning the compiler resolves (`"{v}"`, `a < b`, `a + b`,
+`for x in it`, a `{v:>8}` spec) works without an import the user never wrote.
+The four variants are there for the same reason one level down: `Some(v)` and
+`Err(e)` are what those constructs are *made of*, so they are written bare.
+The prelude is lowest priority: a module that defines its own `Option`, its own
+`Ok`, or imports a different `Ord`, keeps it — the prelude's binding steps aside
 silently. **`print` is *not* in the prelude** — it is an ordinary function tied
 to no syntax, so `use std::io::print;` is still required. Everything else in
 std is imported explicitly as before:
@@ -1801,9 +1861,10 @@ impl<T: Ord> Ord for Option<T>          # None sorts before every Some
 impl<T: Display> Display for Option<T>  # Some(5) / None
 ```
 
-An ordinary generic enum with an ordinary generic inherent impl — nothing
-about it is known to the compiler, and `Option` is not in scope until it is
-imported (`use std::option::Option;`). It is not a prelude.
+An ordinary generic enum with an ordinary generic inherent impl — nothing about
+it is known to the compiler. `Option`, `Some` and `None` are preluded (the
+module `pub use`s its own two variants, which is all that takes), so no import
+is needed to write them.
 
 The `or` combinator is spelled `otherwise`, because `or` is a keyword; by the
 naming convention the rest of the module follows, `or_else` would be the

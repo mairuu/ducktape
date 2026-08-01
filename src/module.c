@@ -141,6 +141,25 @@ bool mod_is_std(const Module *m, const char *name) {
 // the standard library — a user cannot claim a lang item.
 bool mod_is_std_module(const Module *m) { return is_std_key(m->file_path); }
 
+VariantImport *mod_find_variant_import(Module *m, StringView name) {
+  VariantImport *slot = mod_variant_import_slot(m, name);
+  // a reservation names nothing yet, and a dead one never will: both read as
+  // "no such variant" everywhere outside the linking that owns them.
+  return (slot != NULL && slot->variant != NULL) ? slot : NULL;
+}
+
+VariantImport *mod_variant_import_slot(Module *m, StringView name) {
+  if (m == NULL) {
+    return NULL;
+  }
+  for (int i = 0; i < m->variant_import_count; i++) {
+    if (sv_equal(m->variant_imports[i].name, name)) {
+      return &m->variant_imports[i];
+    }
+  }
+  return NULL;
+}
+
 Module *mod_new(StringView file_path, Allocator *al) {
   Module *m = al_alloc_zero_for(al, Module);
   m->file_path = file_path;
@@ -164,6 +183,17 @@ static bool file_exists(const char *path) {
   }
   fclose(f);
   return true;
+}
+
+// does the file the first `count` segments of `path` name already exist (on
+// disk, or as a registry entry)? The one question that splits a use path into
+// a module prefix and what follows it.
+static bool mod_prefix_exists(ModuleRegistry *reg, StringView base_dir,
+                              const Path *path, int count, Allocator *al) {
+  Path prefix = *path;
+  prefix.count = count;
+  StringView file = mod_file_for_use(base_dir, &prefix, al);
+  return modreg_find(reg, file) >= 0 || file_exists(file.chars);
 }
 
 // render a use path back as `a::b` for diagnostics. exact-sized, so there is
@@ -231,6 +261,14 @@ bool mod_collect_imports(Module *m, ModuleRegistry *reg, StringView base_dir,
     }
 
     bool bare = decl->as.use_decl.bare;
+    bool glob = decl->as.use_decl.target.is_glob;
+
+    // A glob's last segment is *always* the enum — there is no module glob, so
+    // nothing else it could be — which makes its module prefix one shorter and
+    // spares it the probing the other two shapes need.
+    if (glob) {
+      decl->as.use_decl.qualifier = path->segments[path->count - 1].name;
+    }
 
     // `std` names the embedded standard library. A std module is exactly two
     // segments (`std::<leaf>`), so a bare `use std::x;` binds that module and a
@@ -242,6 +280,31 @@ bool mod_collect_imports(Module *m, ModuleRegistry *reg, StringView base_dir,
     if (path->count > 0 && sv_equal_cstr(path->segments[0].name, "std")) {
       bool is_module = bare && path->count == 2 &&
                        std_module_source(path->segments[1].name) != NULL;
+      // a std module is exactly two segments, so the shape of what follows is
+      // arithmetic rather than a file question: one segment is an item, two are
+      // an enum and its variant.
+      int extra = path->count - 2 - (bare ? 1 : 0);
+      if (extra > 1) {
+        diag_error(diags, path->span,
+                   "too many segments in use path: '" SV_FMT
+                   "' names an item of a std module, or a variant of one of "
+                   "its enums",
+                   SV_ARG(sprint_mod_path(path, al)));
+        ok = false;
+        continue;
+      }
+      if (glob && extra != 1) {
+        diag_error(diags, decl->as.use_decl.target.span,
+                   "a glob import names the variants of an enum "
+                   "(`use std::<module>::<Enum>::*;`), and there is no module "
+                   "glob");
+        ok = false;
+        continue;
+      }
+      if (extra == 1) {
+        decl->as.use_decl.qualifier =
+            path->segments[path->count - 1 - (bare ? 1 : 0)].name;
+      }
 
       StringView mod_name =
           path->count > 1 ? path->segments[1].name : (StringView){0};
@@ -273,16 +336,60 @@ bool mod_collect_imports(Module *m, ModuleRegistry *reg, StringView base_dir,
     }
 
     // A bare use whose full path names a module file binds that module;
-    // anything else imports the trailing name from its prefix module.
-    // `module_path` is the file to load either way.
+    // anything else imports the trailing name from its prefix module, and one
+    // segment further back may be the enum that name is a variant of. Which is
+    // which is the same file-existence question each time, asked shortest-
+    // prefix-last so an item import keeps winning over a variant one.
+    // `module_path` is the file to load in every case.
+    // The leading segment may also name no file at all, but an *enum in this
+    // module's scope* — its own, one it imported, or a preluded one:
+    // `use Event::A;`, `use Color::Red;`, `use Option::Some;`. That is the last
+    // reading of all, taken only where no file answered, so nothing that
+    // resolved before resolves differently. It carries no dependency edge
+    // (`module_index` stays -1) and binds after this module resolves, since a
+    // scope is only complete then — `tc_link_scope_imports`.
+    int scope_prefix = bare ? 2 : 1;
+    if (path->count == scope_prefix &&
+        !mod_prefix_exists(reg, base_dir, path, path->count, al) &&
+        !mod_prefix_exists(reg, base_dir, path, 1, al)) {
+      decl->as.use_decl.is_scope_import = true;
+      decl->as.use_decl.qualifier = path->segments[0].name;
+      // the file the *module* reading would have named, for the diagnostic the
+      // link pass emits when the qualifier turns out to be no enum either.
+      Path mod_only = *path;
+      mod_only.count = 1;
+      imp->file_path = mod_file_for_use(base_dir, &mod_only, al);
+      continue;
+    }
+
     Path module_path = *path;
     bool is_module = false;
-    if (bare) {
+    if (glob) {
+      // the last segment is the enum, so the prefix is everything before it —
+      // and a prefix that names no file means the whole path was a module,
+      // which a glob cannot take.
+      module_path.count = path->count - 1;
+      if (!mod_prefix_exists(reg, base_dir, &module_path, module_path.count,
+                             al) &&
+          mod_prefix_exists(reg, base_dir, path, path->count, al)) {
+        diag_error(diags, decl->as.use_decl.target.span,
+                   "a glob import names the variants of an enum "
+                   "(`use <module>::<Enum>::*;`), and there is no module glob");
+        ok = false;
+        continue;
+      }
+    } else if (bare) {
       StringView full = mod_file_for_use(base_dir, path, al);
       if (file_exists(full.chars)) {
         is_module = true; // the whole path is a module
       } else if (path->count >= 2) {
         module_path.count = path->count - 1; // trailing name is an item
+        if (path->count >= 3 &&
+            !mod_prefix_exists(reg, base_dir, path, path->count - 1, al) &&
+            mod_prefix_exists(reg, base_dir, path, path->count - 2, al)) {
+          module_path.count = path->count - 2;
+          decl->as.use_decl.qualifier = path->segments[path->count - 2].name;
+        }
       } else {
         // a one-segment bare use has no prefix to fall back on.
         StringView mod_path = sprint_mod_path(path, al);
@@ -292,6 +399,13 @@ bool mod_collect_imports(Module *m, ModuleRegistry *reg, StringView base_dir,
         ok = false;
         continue;
       }
+    } else if (path->count >= 2 &&
+               !mod_prefix_exists(reg, base_dir, path, path->count, al) &&
+               mod_prefix_exists(reg, base_dir, path, path->count - 1, al)) {
+      // braced: the prefix names the file, so a trailing segment it does not
+      // account for is the enum the braced names are variants of.
+      module_path.count = path->count - 1;
+      decl->as.use_decl.qualifier = path->segments[path->count - 1].name;
     }
 
     decl->as.use_decl.is_module_import = is_module;
@@ -343,8 +457,13 @@ typedef struct {
 } PreludeEntry;
 
 static const PreludeEntry prelude[] = {
-    {"option", {"Option", NULL}},
-    {"result", {"Result", NULL}},
+    // the two enums bring their variants: `Some(v)`, `None`, `Ok(v)`, `Err(e)`
+    // are written bare, which is what the prelude is for — a name the language
+    // itself reaches for (`?` builds an `Err`, `for` unwraps a `Some`) should
+    // not need an import to be *written*. Like every prelude name they are
+    // lowest priority, so a module declaring its own `Ok` still wins.
+    {"option", {"Option", "Some", "None", NULL}},
+    {"result", {"Result", "Ok", "Err", NULL}},
     {"cmp", {"Ord", NULL}},
     {"fmt", {"Display", NULL}},
     {"iter", {"Iterator", NULL}},

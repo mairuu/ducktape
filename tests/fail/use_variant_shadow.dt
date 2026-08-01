@@ -1,0 +1,5 @@
+#! expect: 'Some' is already imported
+use std::option::Option::Some;
+use std::result::Result::Ok as Some;
+
+fun main() {}

@@ -1,0 +1,8 @@
+#! expect: cannot find module 'Evnt'
+# neither a file nor an enum in scope: the file is named first, since that is
+# the likelier intent, and the note rules out the other reading.
+use Evnt::A;
+
+enum Event { A }
+
+fun main() {}

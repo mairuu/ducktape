@@ -1,0 +1,5 @@
+pub enum Shape {
+  Dot,
+  Circle(Int),
+  Rect { w: Int, h: Int },
+}

@@ -522,7 +522,10 @@ static bool parse_path(Parser *p, PathParseMode mode, Path *out) {
 
   if (check_tok(p, TOKEN_IDENT) || check_tok(p, TOKEN_SELF_TYPE)) {
     do {
-      if (mode == PATH_USE && check_tok(p, TOKEN_LBRACE)) {
+      // a use path stops before the brace group or the glob that follows it:
+      // `a::b::{X, Y}`, `a::E::*`. Neither is a segment.
+      if (mode == PATH_USE &&
+          (check_tok(p, TOKEN_LBRACE) || check_tok(p, TOKEN_STAR))) {
         break;
       }
       // 'Self' may only lead a path; later segments must be plain idents.
@@ -2853,10 +2856,19 @@ static Decl *parse_use_decl(Parser *p) {
     return ast_decl(DECL_POISON, token_span(&use_tok), p->al);
   }
 
-  if (match_tok(p, TOKEN_LBRACE)) {
+  if (match_tok(p, TOKEN_STAR)) {
+    // `use a::E::*;` — the enum's every variant, each under its own name. No
+    // alias list to build and no `as` to apply, since the names are the enum's.
+    target.is_glob = true;
+    target.span = span_merge(path.span, previous_tok_span(p));
+    if (check_tok(p, TOKEN_AS)) {
+      error_at(p, current_tok_span(p), "cannot rename a glob import");
+      return ast_decl(DECL_POISON, token_span(&use_tok), p->al);
+    }
+  } else if (match_tok(p, TOKEN_LBRACE)) {
     PLIST(UseAlias, aliases, 8);
 
-    // glob import: use foo::{...}
+    // item list: use foo::{...}
     if (!check_tok(p, TOKEN_RBRACE)) {
       do {
         if (match_tok(p, TOKEN_COMMA)) {
