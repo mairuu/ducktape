@@ -857,16 +857,45 @@ bool infer_unify(InferCtx *ctx, Type *a, Type *b, DiagBag *diags, Span span) {
     return false;
   }
 
-  case TY_DYN:
+  case TY_DYN: {
+    // One trait, so the two objects differ only in the ordinary types beside
+    // it, and those decompose like a struct's arguments. A `dyn`'s arguments
+    // are usually decided by the *coercion* that wraps a value, which is why
+    // this used to be an atom — but two trait objects meeting have no
+    // coercion between them, both are already built, so there is nothing to
+    // defer to and `dyn Src<T>` takes a `dyn Src<Int>`.
+    //
+    // Two *different* traits stay atomic on purpose: what relates them is the
+    // upcast, which swaps tables and so is a coercion (check_upcast_dyn).
+    // Reporting the whole objects is also what that path's diagnostics want —
+    // decomposing would name a bare trait reference instead.
+    TypeDyn *ad = &a->as.dyn, *bd = &b->as.dyn;
+    if (dyn_trait_def(a) == dyn_trait_def(b) &&
+        ad->assoc_type_count == bd->assoc_type_count) {
+      if (!infer_unify(ctx, ad->trait, bd->trait, diags, span)) {
+        return false;
+      }
+      bool ok = true;
+      for (int i = 0; i < ad->assoc_type_count; i++) {
+        ok &= infer_unify(ctx, ad->assoc_types[i], bd->assoc_types[i], diags,
+                          span);
+      }
+      return ok;
+    }
+    char ab[64], bb[64];
+    type_sprintf(a, ab, sizeof(ab));
+    type_sprintf(b, bb, sizeof(bb));
+    diag_error(diags, span, "type mismatch: expected '%s' but got '%s'", ab,
+               bb);
+    return false;
+  }
+
   case TY_ASSOC: {
-    // both are interned, so anything that reaches here (they weren't
-    // types_equal) is a genuine mismatch — `T.Item` vs `U.Item`, or two
-    // different trait objects. There is nothing to decompose: a trait
-    // object's bindings are decided by the *coercion*, which is where an
-    // unsolved one is unified (see check_coerce_dyn). Note that
-    // `dyn Show` vs a concrete `Sq` never reaches this switch at all: the
-    // kinds differ, so it is caught above — and a *coercion* is offered
-    // there instead (see check_coerce).
+    // interned, so anything that reaches here (it wasn't types_equal, and the
+    // collapse above left it a projection) is a genuine mismatch — `T.Item`
+    // vs `U.Item`. Note that `dyn Show` vs a concrete `Sq` never reaches this
+    // switch at all: the kinds differ, so it is caught above — and a
+    // *coercion* is offered there instead (see check_coerce_dyn).
     char ab[64], bb[64];
     type_sprintf(a, ab, sizeof(ab));
     type_sprintf(b, bb, sizeof(bb));

@@ -1,0 +1,57 @@
+# A trait object's arguments are unified, not merely compared: `dyn Src<T>`
+# takes a `dyn Src<Int>` and solves `T` from it, and so does the associated
+# binding one bracket list out (`dyn Bag<Item = T>`).
+use std::io::print;
+
+trait Src<T> { fun get(self) -> T; }
+trait Twice<T>: Src<T> { fun again(self) -> T; }
+trait Bag { type Item; fun one(self) -> Self.Item; }
+
+struct Five;
+struct Word;
+struct Nums;
+
+impl Src<Int> for Five { fun get(self) -> Int { return 5; } }
+impl Twice<Int> for Five { fun again(self) -> Int { return 10; } }
+impl Src<String> for Word { fun get(self) -> String { return "w"; } }
+impl Bag for Nums { type Item = Int; fun one(self) -> Int { return 7; } }
+
+fun pull<T>(s: dyn Src<T>) -> T { return s.get(); }
+fun both<T>(a: dyn Src<T>, b: dyn Src<T>) -> T { return b.get(); }
+fun wrap<T>(s: dyn Src<T>) -> dyn Src<T> { return s; }
+fun peek<T>(b: dyn Bag<Item = T>) -> T { return b.one(); }
+# a still-abstract trait object handed from one generic to the next
+fun relay<U>(s: dyn Src<U>) -> U { return pull(s); }
+
+fun main() {
+    var s: dyn Src<Int> = Five;
+    var w: dyn Src<String> = Word;
+    var t: dyn Twice<Int> = Five;
+
+    print(pull(s));
+#> 5
+    print(pull(w));
+#> w
+    print(relay(s));
+#> 5
+    print(wrap(w).get());
+#> w
+
+    # the associated-type binding, solved the same way
+    var b: dyn Bag<Item = Int> = Nums;
+    print(peek(b));
+#> 7
+
+    # a *concrete* value still reads its argument off the impl, unchanged
+    print(pull(Word));
+#> w
+
+    # the upcast is untouched: `Twice<Int>`'s closure is what solves `T` when
+    # the traits differ, and unification is what solves it when they agree
+    print(pull(t));
+#> 5
+    print(both(t, s));
+#> 5
+    print(both(s, t));
+#> 5
+}

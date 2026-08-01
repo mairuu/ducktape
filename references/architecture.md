@@ -1604,11 +1604,24 @@ laid out over the closure (`trait_flat_method_count` slots, supers' first), and
 diamond problem to solve, which is why one flat numbering is enough: a trait
 object always carries the table of the trait it was *written* as, and every
 dispatch on it indexes that same trait's closure (`trait_flat_method_index` in
-`compile_method_call` and `compile_for_iter`). Two tables never have to agree,
-because the language has no `dyn A` → `dyn B` coercion.
+`compile_method_call` and `compile_for_iter`). Two tables never have to agree:
+the upcast below does not make them agree, it swaps one for the other, exactly
+because a super's numbering is its own.
+
+**A trait object decomposes within one trait** (milestone 79). `infer_unify`
+treats a `TY_DYN` as a composite whose parts are the trait reference and the
+bindings beside it, exactly as it treats a struct's type arguments — so
+`dyn Src<T>` takes a `dyn Src<Int>` and solves `T`, and `dyn Bag<Item = T>`
+solves it one bracket list out. Two *different* traits stay atomic on purpose:
+what relates them is the upcast, which swaps tables and so is a coercion, and
+reporting the whole objects is what that path's diagnostics want. The
+milestone's finding is that the atom was never about trait objects being
+opaque, it was about the coercion being the only thing that knew a `dyn`'s
+argument — and two trait objects meeting have no coercion between them,
+because both are already built.
 
 **Coercion** is the one genuinely new concept, and the language's only
-subtyping. Identity is pointer equality and `infer_unify` only decomposes
+subtyping. Identity is pointer equality and unification only decomposes
 structurally, which is enough everywhere else — but `Sq` and `dyn Shape` are
 different runtime representations, and converting between them is a real
 operation, not a re-reading of the same bits. So it is modelled as exactly
@@ -1707,11 +1720,14 @@ Where the coercion asks the impl index, the upcast asks the source trait's
 **closure**, and asks it for the supertrait *restated in the source's type
 arguments* — a `dyn Twice<Int>` is a `dyn Src<Int>`, and `TraitFlat.ref` under
 `trait_ref_subst` is what knows that. Two refusals fall out and are deliberately
-*not* reported here: the same trait at different arguments, and an unrelated
-trait, both return false so the caller's own mismatch names the two whole trait
-objects, which reads better than decomposing to the one argument that differs.
-Only an unsolved target argument (`fun f<T>(s: dyn Src<T>)`) unifies, for the
-same reason the coercion solves one from the impl.
+*not* reported here, both returning false to leave the caller its own answer:
+an unrelated trait, whose mismatch names the two whole trait objects; and the
+same trait at different arguments, which is not an upcast at all and is where
+unification's decomposition takes over. Only an unsolved target argument
+(`fun f<T>(s: dyn Twice<Int>)` reaching a `dyn Src<T>`) unifies here, for the
+same reason the coercion solves one from the impl — the closure is what knows.
+That is the direction unification cannot cover, since across two traits it has
+nothing to decompose.
 
 The bindings are then read *off the source* rather than searched for in the
 index — a trait object already states what its associated types are — which is

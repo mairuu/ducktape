@@ -652,6 +652,16 @@ answers: a type implementing the trait at two different arguments is a
 question only the source can settle
 (`tests/fail/trait_arg_ambiguous.dt`).
 
+The other thing that can solve one is **another trait object**: within a single
+trait, two `dyn`s differ only in the ordinary types beside it, so they unify
+the way `Box<T>` and `Box<Int>` do. A `fun pull<T>(s: dyn Src<T>) -> T` takes a
+`dyn Src<Int>` and answers `Int`, a `dyn Bag<Item = T>` solves its binding the
+same way, and two parameters of one `T` must then agree
+(`tests/run/dyn_trait_arg_infer.dt`, `tests/fail/dyn_trait_arg_disagree.dt`).
+Across *two* traits nothing decomposes — a `dyn Twice<Int>` reaching a
+`dyn Src<T>` is the upcast below, and it is the source trait's supertrait
+closure, not unification, that reads `T` off it.
+
 A trait's own type parameters cost it no object safety. They are written down
 by whoever names the `dyn`, so unlike `Self` they were never erased.
 
@@ -2474,7 +2484,7 @@ HashSet::with_capacity(n); s.capacity(); s.reserve(n);   # forwarded, all three
 | indexing a `String` by character (`s[i]`) | there is none: `s.chars()` walks, because a byte offset is not a character position. `s.chars().collect()` is the array, and `s.chars().skip(i).next()` is the one character |
 | a `String` that is guaranteed valid UTF-8 | it is a byte string — `slice` cuts at byte offsets, so a walk over a halved sequence reports a runtime error when it reaches it (`chars()` itself never does: it is lazy) |
 | a *dynamic* width or precision in a format spec (`{v:>{n}}`) | the width and precision in a `{v:>8}` / `{f:.3}` spec are literals; a runtime value there has no spelling. The spec itself is sugar for `std::string::pad_*` / `std::fmt::float` (milestone 35) |
-| inferring a `dyn`'s trait argument from another `dyn` (`fun f<T>(s: dyn Src<T>)` called with a `dyn Src<Int>`) | "expected `dyn Src<_>`" — unification treats a trait object as an atom and never decomposes its trait arguments. A *coercion* site does solve one, but from the impl |
+| a `dyn` coercion inside an `if`'s or a `match`'s arms (`var x: dyn Shape = if c { Sq } else { Tri };`) | not offered — an `if`'s arms are unified against each other and a `match`'s against the annotation, and neither is a coercion site. The array literal one line over *does* coerce per element, so this is a gap rather than a rule |
 | a downcast to a type that does not implement the trait, or binds a different associated type | rejected, rather than compiled as an always-`None` test: the identity is the vtable, and such a type has no table to recognise |
 | a trait's type arguments at a *bare* method call | the expected type breaks the tie between two impls of one generic trait, and pins an impl parameter the receiver cannot reach (`impl<T, U: From<T>> Into<U> for T`); with no expected type the first impl wins — or, where the parameter was only pinnable that way, no impl applies at all. The trait-qualified spelling (`Into::<Fahrenheit>::into(c)`) settles it explicitly without an expected type |
 | disambiguating a qualified selection whose *argument is itself unresolved* (`Steps::from(None)`) | the argument (for `from`) or the receiver (for a trait-qualified `into`) must type on its own to choose the impl, so a value that would need the impl chosen first cannot be disambiguated |

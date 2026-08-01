@@ -1277,7 +1277,7 @@ keep this file small. Everything from 55 on is below.
   no upcast `dyn Sub` -> `dyn Super`, which is milestone 78. Full write-up in
   the commit body.
 
-- **78. Upcasting a trait object** — `dyn Sub` where a `dyn Super` is expected,
+- **78. Upcasting a trait object** (`55c9d48`) — `dyn Sub` where a `dyn Super` is expected,
   implicit and with no spelling, since the subtrait declaration is the proof.
   Design: `language.md` "Upcasting a trait object", `architecture.md` (the
   third direction), `runtime.md` "the link lives on the table". The finding:
@@ -1291,6 +1291,19 @@ keep this file small. Everything from 55 on is below.
   supertrait was never checked and `dyn DoubleEnded<Item = String>` over an
   `Item = Int` impl segfaulted at run. Remainder: none open. Full write-up in
   the commit body.
+
+- **79. A trait object's arguments unify** — `fun pull<T>(s: dyn Src<T>)` takes
+  a `dyn Src<Int>` and solves `T`, and `dyn Bag<Item = T>` does the same one
+  bracket list out. Design: `language.md` "Trait objects", `architecture.md`
+  ("A trait object decomposes within one trait"). The finding: `TY_DYN` was an
+  atom in `infer_unify` because a `dyn`'s arguments are normally decided by the
+  *coercion* that wraps a value — but two trait objects meeting have no
+  coercion between them, both are already built, so within one trait a `dyn` is
+  an ordinary composite like `TY_TRAIT` one level down. Across two traits it
+  stays atomic, because what relates those is the upcast. 27 lines of checker,
+  no codegen and no runtime change. Remainder: none of this wart; probing found
+  a separate one, that no `dyn` coercion is offered inside an `if`'s or a
+  `match`'s arms. Full write-up in the commit body.
 
 ## Next (in recommended order)
 
@@ -1464,13 +1477,17 @@ via `Module.decl_base`) and is not part of the main line.
   `it.fold<Int>(0, f)` parses as comparisons, so it reports an unknown *field*
   and then usually an undefined variable for the type name (milestone 71); a
   note on the first names the turbofish, which is as far as that site can see
-- a `dyn`'s **trait arguments are compared, never unified**, so a parameter
-  typed `dyn Src<T>` never infers `T` from a `dyn Src<Int>` argument
-  ("expected `dyn Src<_>` but got `dyn Src<Int>`"). Unification treats a
-  trait object as an atom; only a *coercion* site solves a trait argument, and
-  it solves it from the impl rather than from another `dyn`. Found probing
-  milestone 78, which is why `compile_coerce_dyn`'s abstract-target guard on
-  the upcast is currently unreachable — the checker cannot build such a site
+- a **`dyn` coercion is never attempted inside an `if`'s or a `match`'s arms**:
+  `var x: dyn Shape = if c { Sq } else { Tri };` reports `'Sq' vs 'Tri'` (the
+  arms unify against each other) and the `match` spelling reports each arm
+  against the annotation. An array literal one line over coerces per element,
+  so the two disagree and this is a gap rather than a decision. Found probing
+  milestone 79
+- `compile_coerce_dyn`'s abstract-target guard on the upcast is unreachable —
+  every site the checker can build has its target trait reference pinned, by
+  the source's closure (`check_upcast_dyn`) or by `cg_subst` at the
+  instantiation. It stays as a defensive net rather than a diagnostic anyone
+  can reach
 - sema's `MAX_BOUNDS` (16) is the last fixed cap of the family milestone 73
   cleared out of the parser. It bounds a real array and has its own diagnostic,
   so it is a limit rather than a hazard
