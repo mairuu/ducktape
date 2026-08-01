@@ -1440,42 +1440,28 @@ via `Module.decl_base`) and is not part of the main line.
 
 ## Known warts to clean up opportunistically
 
-- ~~a call argument's hint will not solve a generic unit variant to the
-  enclosing function's type parameters~~ — **closed by milestone 69.**
-- ~~an inherent associated function on an *enum* is unreachable by name~~ —
-  **closed by milestone 70**, which took the fix this entry had already named:
-  a fallback in the enum path context, not a change to how impls register.
-  What is left of it is one cascade the fix inherits rather than causes: an
-  associated function written where a *pattern* expects a variant now reports
-  "expected an enum variant in this pattern" **and** an unsolved type
-  parameter, because the bare-path lookup introduced an inference variable
-  nothing goes on to solve. A struct has always done exactly this
-  (`P::new` in a pattern), so the enum now matches it — but two diagnostics
-  for one mistake is still one too many.
-- ~~`a.b < c > (d)` reads as a type application, not two comparisons~~ —
-  **closed by milestone 71**, which took the fix this entry had already named:
-  the turbofish, not a better heuristic. What is left of it is the cost of
-  retiring a spelling rather than any ambiguity: the bare
+- **one mistake, two diagnostics**, in two places, and the same cause in both:
+  a bare-path lookup introduces an inference variable nothing goes on to solve.
+  An associated function written where a *pattern* expects a variant reports
+  "expected an enum variant in this pattern" **and** an unsolved type parameter
+  (milestone 70; a struct has always done this too). The bare
   `it.fold<Int>(0, f)` parses as comparisons, so it reports an unknown *field*
-  and then, usually, an undefined variable for the type name — two diagnostics
-  for one mistake. A note on the first names the turbofish, which is as far as
-  the field-access site can see.
-- ~~most of the parser's list buffers are fixed at 16~~ — **closed by milestone
-  73**, which took the fix this entry had already named: the `PUSH`/`RESERVE`
-  macro from `parse_block`, generalised into one `PLIST` facility and applied to
-  every list in the file. Nothing in `parser.c` reports "too many ..." any
-  more. What the entry got wrong was calling the family "not unsafe": **a method
-  call's arguments were a `tmp[64]` with no bounds check at all**, so the
-  65th argument was memory corruption rather than a diagnostic — the same shape
-  as milestone 72's `NDEBUG`-deleted assert, one list over and with no guard to
-  delete. The remaining caps of this kind are in **sema**, not the parser:
-  `MAX_BOUNDS` (16) bounds a real array and has its own diagnostic
-- ~~no bitwise operators at all~~ — **closed by milestone 65.** What is left of
-  it is small and none of it blocks anything: there are no compound bitwise
-  assignments (`&=`, `<<=`), matching the fact that `%=` does not exist either;
-  there is no unsigned integer type, so `>>>` stands in for one and a bit
-  pattern with the top bit set prints as a negative number; and `a > > b` versus
-  `a >> b` is now the one place in the grammar where whitespace changes a parse.
+  and then usually an undefined variable for the type name (milestone 71); a
+  note on the first names the turbofish, which is as far as that site can see
+- sema's `MAX_BOUNDS` (16) is the last fixed cap of the family milestone 73
+  cleared out of the parser. It bounds a real array and has its own diagnostic,
+  so it is a limit rather than a hazard
+- no compound bitwise assignment (`&=`, `<<=`), matching the absent `%=`; no
+  unsigned integer type, so `>>>` stands in for one and a bit pattern with the
+  top bit set prints negative; and `a > > b` versus `a >> b` is the one place
+  in the grammar where whitespace changes a parse (milestone 65)
+- a *written* impl always wins, which is what keeps milestone 74's supertrait
+  derivation from ever conflicting — so an item of a super that something else
+  already implements may not also be written in the sub's block. The one-block
+  spelling and a separate super impl cannot be mixed for the same name
+- no upcast from a `dyn Sub` to a `dyn Super`. Milestone 77's downcast
+  *recognises* the table a value carries; an upcast would have to build a
+  second one, which is a different operation
 - a format spec inside `{}` exists as of milestone 35 (`{v:>8}`, `{f:.3}`,
   `{f:>10.3}`), desugaring to `std::string::pad_*` / `std::fmt::float`. What has
   no spelling is a *dynamic* width or precision (`{v:>{n}}`): both are literals,
@@ -1487,37 +1473,6 @@ via `Module.decl_base`) and is not part of the main line.
   correct there only because a primitive receiver takes the built-in path —
   the asymmetry is invisible from the source. A cycle check would have to run
   where the impl is written, not where it is called
-- ~~an operator is homogeneous, so `V2 * Float` has no spelling~~ — **closed by
-  milestone 75.** The entry named the blocker correctly (the operator must
-  select by its *right* operand) and drew the wrong conclusion from it: it read
-  "a trait's parameters are never inferred where it is named" as "the operator
-  cannot supply one", when an operator has both operand types in hand and can
-  simply write the argument down. It was also right that `Output` alone would
-  not help, and that half is what survives.
-
-  **What is left of it: the result is always `Self`.** There is no `Output`
-  associated type, so `V2 * Float -> V2` works but a dot product
-  `V2 * V2 -> Float` has no spelling, and neither does an operator whose left
-  operand is the primitive (`2.0 * v` would need `impl Mul<V2> for Float`, which
-  can only return `Float`). Adding `Output` needs a generic use to be able to
-  say `T: Add<Output = T>`; that binding is *writable* as of this milestone, but
-  `ty_assoc` discharges an equality binding by rewriting the projection to the
-  type it named, so a reduce's accumulator would be pinned by the caller's
-  promise rather than by what the impl bound — which breaks every existing
-  generic use of these traits before it enables one. What would reopen it is a
-  way for a binding to be *checked* against the impl instead of substituted for
-  it, which is the same "an equality is compared, never unified" limit the
-  associated-type-bound family already records under item 1.
-- ~~two inherent impls giving one type the same method name collide silently~~ —
-  **closed by milestone 68**, which took the fix this entry had already named: a
-  diagnostic where the second impl is written, not a resolution rule. What
-  remains is the fact underneath it rather than the silence — every `[T]` and
-  `String` method std ships is still a name a program cannot use, and the reach
-  is wider than it looks, since the prelude's `std::iter → std::array` and
-  `std::string` edges make those modules' impls visible to every program whether
-  it imported them or not. That is why `std::sort` is opt-in rather than
-  preluded (found while placing milestone 62). The change is that spending one
-  of those names now says so
 - `std::ops` ships `impl Add for Int` (and the other eleven primitive impls), so
   a program can no longer write its own — the `Display`/`Ord`-for-primitives
   cost, one module over, and unavoidable for the same reason: without them a
@@ -1568,15 +1523,6 @@ via `Module.decl_base`) and is not part of the main line.
   54's equality binding (`J: Iterator<Item = I.Item>`) made `chain` one. The
   family is closed; what it does not do is *infer*, since an equality is
   compared rather than unified
-- ~~a supertrait obligation is *checked*, never discharged~~ — **closed by
-  milestone 74**, which took the wider of the two readings the entry allowed:
-  an impl implements its trait's whole closure, taking each super item from the
-  block or from the super's default. What is left of it is the rule that keeps
-  derivation from ever conflicting — a *written* impl always wins, so an item
-  of a super that something else already implements may not also be written in
-  the sub's block. That is an error rather than a preference, but it means the
-  one-block spelling and a separate super impl cannot be mixed for the same
-  name
 - a supertrait is resolved in its own sub-pass, so it may name a trait declared
   *later* in the file — unlike a type-parameter bound, which is still resolved
   in the declare pass and so stays order-sensitive. The two spellings of "a
@@ -1726,13 +1672,6 @@ via `Module.decl_base`) and is not part of the main line.
   Iterator`'s `map` is `Iterator::map` even for a type that wrote its own
   (milestone 56). Rust behaves the same way, and it is confined to exactly the
   methods object safety could not carry
-- ~~no downcast from `dyn Trait` back to a concrete type~~ — **closed by
-  milestone 77** (`d as? T` → `Option<T>`), and the entry's own diagnosis was
-  the thing that was wrong: it had been filed as needing "runtime type identity
-  the VM does not carry", when the vtable memo had been exactly that identity
-  since milestone 28. What is left of it is the *other* direction: no upcast
-  from a `dyn Sub` to a `dyn Super`, which is a different operation — it would
-  build a second table rather than recognise the one the value carries
 - a trait's type arguments are never *inferred* at the place the trait is
   named: an impl head, a bound and a `dyn` each write them out, and a bare
   `Into` is an arity error rather than a request to work it out. The one

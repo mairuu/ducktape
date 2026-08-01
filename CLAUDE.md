@@ -38,6 +38,9 @@ points at it:
 
 - `roadmap.md` Done entry: ~8 lines — what shipped, the SHA, which
   `references/` sections cover it, the one finding, what's left over.
+- A wart the milestone closes is **deleted** from "Known warts", not struck
+  through with the story of closing it. If it left a remainder, that remainder
+  becomes its own open entry, written as the gap it now is.
 - `references/` prose: what the language/compiler *does now*, not the story of
   arriving at it. No milestone narration.
 - A test file: one or two lines on what it pins. Rationale lives in
