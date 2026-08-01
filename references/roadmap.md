@@ -1292,7 +1292,7 @@ keep this file small. Everything from 55 on is below.
   `Item = Int` impl segfaulted at run. Remainder: none open. Full write-up in
   the commit body.
 
-- **79. A trait object's arguments unify** — `fun pull<T>(s: dyn Src<T>)` takes
+- **79. A trait object's arguments unify** (`7d115b7`) — `fun pull<T>(s: dyn Src<T>)` takes
   a `dyn Src<Int>` and solves `T`, and `dyn Bag<Item = T>` does the same one
   bracket list out. Design: `language.md` "Trait objects", `architecture.md`
   ("A trait object decomposes within one trait"). The finding: `TY_DYN` was an
