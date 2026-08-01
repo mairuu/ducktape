@@ -1,0 +1,14 @@
+#! expect: expected 'dyn Src<String>' but got 'dyn Twice<Int>'
+# The right supertrait at the wrong argument: `Twice<Int>`'s super is
+# `Src<Int>`, so `dyn Src<String>` is not something it can become.
+trait Src<T> { fun get(self) -> T; }
+trait Twice<T>: Src<T> { fun again(self) -> T; }
+
+struct Five;
+impl Src<Int> for Five { fun get(self) -> Int { return 5; } }
+impl Twice<Int> for Five { fun again(self) -> Int { return 10; } }
+
+fun main() {
+    var t: dyn Twice<Int> = Five;
+    var s: dyn Src<String> = t;
+}

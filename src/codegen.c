@@ -1346,6 +1346,85 @@ static FunDef *cg_dyn_slot_target(Cg *cg, Type *trait_ref, Type *self,
   return cg_call_target(cg, inherited->default_impl, &s, &via_subst, span);
 }
 
+// ── upcasting a trait object ─────────────────────────────────────────────────
+//
+// `dyn Sub` -> `dyn Super` swaps tables, and the table to swap to depends on
+// the concrete type. The *site* knows the two traits and not the type; the
+// table the value carries knows the type and was built for one of the traits.
+// So the link is stored on the source table, and these two functions are the
+// two halves of computing every one of them:
+//
+//   - a new pair has to catch up with the tables that already exist
+//   - a new table has to catch up with the pairs already recorded
+//
+// Doing both incrementally is the fixpoint, so nothing has to run after the
+// worklist drains — which matters because building a target table can queue
+// bodies, and a pass that ran *after* the drain would have to restart it.
+static int cg_vtable_for(Cg *cg, Type *trait_ref, Type *self, Span span);
+
+// give `mono->vtables[vi]` its link for `pair`, building the target table if
+// this is the first concrete type to need one.
+static void cg_link_upcast(Cg *cg, int vi, int pair, Span span) {
+  Mono *mono = cg->mono;
+  VTable *from_vt = mono->exe->vtables[mono->vtables[vi].index];
+  for (int i = 0; i < from_vt->upcast_count; i++) {
+    if (from_vt->upcasts[i].pair == pair) {
+      return; // already linked
+    }
+  }
+
+  // read the key out before the recursion: cg_vtable_for may realloc both
+  // tables it appends to, so nothing may be held across it but an index.
+  Type *self = mono->vtables[vi].self_type;
+  int ti = cg_vtable_for(cg, mono->upcasts[pair].to, self, span);
+  if (ti < 0) {
+    return; // reported
+  }
+  from_vt = mono->exe->vtables[mono->vtables[vi].index];
+
+  int n = from_vt->upcast_count;
+  from_vt->upcasts =
+      al_realloc(cg->al, from_vt->upcasts, sizeof(VTableUpcast) * (size_t)n,
+                 sizeof(VTableUpcast) * (size_t)(n + 1));
+  from_vt->upcasts[n] =
+      (VTableUpcast){.pair = (uint16_t)pair, .to = mono->exe->vtables[ti]};
+  from_vt->upcast_count = n + 1;
+}
+
+// record (and dedupe) an upcast spelling, returning the `pair` id its opcode
+// carries.
+static int cg_upcast_pair(Cg *cg, Type *from, Type *to, Span span) {
+  Mono *mono = cg->mono;
+  for (int i = 0; i < mono->upcast_count; i++) {
+    if (mono->upcasts[i].from == from && mono->upcasts[i].to == to) {
+      return i;
+    }
+  }
+  if (mono->upcast_count == SLOT_MAX) {
+    exe_too_many("trait-object upcasts", mono->upcast_count + 1);
+    cg->ok = false;
+    return -1;
+  }
+  if (mono->upcast_count == mono->upcast_cap) {
+    int new_cap = mono->upcast_cap == 0 ? 4 : mono->upcast_cap * 2;
+    mono->upcasts = al_realloc(mono->al, mono->upcasts,
+                               sizeof(UpcastPair) * (size_t)mono->upcast_cap,
+                               sizeof(UpcastPair) * (size_t)new_cap);
+    mono->upcast_cap = new_cap;
+  }
+  int pair = mono->upcast_count++;
+  mono->upcasts[pair] = (UpcastPair){.from = from, .to = to};
+
+  // the count is re-read rather than snapshotted: linking appends the target
+  // tables, and a fresh one may be the source of a pair of its own.
+  for (int i = 0; i < mono->vtable_count; i++) {
+    if (mono->vtables[i].trait == from) {
+      cg_link_upcast(cg, i, pair, span);
+    }
+  }
+  return pair;
+}
+
 // find or build the vtable for coercing `self` to `dyn trait`, returning its
 // slot. Memoised on the (trait, self) pair so every coercion of one type to
 // one trait shares a table.
@@ -1398,6 +1477,7 @@ static int cg_vtable_for(Cg *cg, Type *trait_ref, Type *self, Span span) {
   }
   mono->vtables[mono->vtable_count++] =
       (DynVTable){.trait = trait_ref, .self_type = self, .index = index};
+  int mono_index = mono->vtable_count - 1; // stable: the list only grows
 
   // `Self` rides along harmlessly: a supertrait reference names only the
   // sub's own type parameters, never its receiver.
@@ -1432,6 +1512,14 @@ static int cg_vtable_for(Cg *cg, Type *trait_ref, Type *self, Span span) {
     vt->methods[i] = target;
   }
 
+  // the other half of the fixpoint: a pair recorded before this type was ever
+  // coerced still needs its link from here.
+  for (int i = 0; i < mono->upcast_count; i++) {
+    if (mono->upcasts[i].from == trait_ref) {
+      cg_link_upcast(cg, mono_index, i, span);
+    }
+  }
+
   return index;
 }
 
@@ -1456,8 +1544,31 @@ static void compile_coerce_dyn(Cg *cg, Expr *expr) {
     return;
   }
 
-  Type *trait_ref = cg_subst(cg, expr->coerce_dyn);
-  int slot = cg_vtable_for(cg, trait_ref, self, expr->span);
+  Type *to_ref = cg_subst(cg, expr->coerce_dyn);
+
+  if (self->kind == TY_DYN) {
+    // an upcast: the value is already wrapped, so nothing is built here and
+    // the concrete type is not needed — only which two spellings are in play.
+    // Both must be pinned even so, since the pair is what every table's link
+    // is keyed by: an abstract one would match no table and fail at run.
+    if (type_is_abstract(to_ref)) {
+      char buf[64];
+      type_sprintf(to_ref, buf, sizeof(buf));
+      diag_error(cg->diags, expr->span,
+                 "cannot upcast to 'dyn %s': the trait's arguments are not "
+                 "known here",
+                 buf);
+      cg->ok = false;
+      return;
+    }
+    int pair = cg_upcast_pair(cg, self->as.dyn.trait, to_ref, expr->span);
+    if (pair >= 0) {
+      emit_slot(cg, OP_DYN_UPCAST, pair);
+    }
+    return;
+  }
+
+  int slot = cg_vtable_for(cg, to_ref, self, expr->span);
   if (slot < 0) {
     return;
   }

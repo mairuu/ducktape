@@ -713,10 +713,44 @@ its asymmetry — `self` inside a default body cannot be *made* into a trait
 object, but a trait object can be recognised as it, so `(other as? Self)` is how
 a default body asks whether something is its own type.
 
-The target may **not** be another trait object: `dyn Sub as? dyn Super` is an
-upcast, a different operation, and is not offered
-(`tests/fail/dyn_downcast_to_dyn.dt`). See `tests/run/dyn_downcast.dt`,
-`dyn_downcast_generic.dt` and `dyn_downcast_trait_arg.dt`.
+The target may **not** be another trait object (`tests/fail/dyn_downcast_to_dyn.dt`)
+— that direction is the upcast below, which needs no `as?` because it cannot
+fail. See `tests/run/dyn_downcast.dt`, `dyn_downcast_generic.dt` and
+`dyn_downcast_trait_arg.dt`.
+
+### upcasting a trait object
+
+A `dyn Sub` is usable wherever a `dyn Super` is expected, for every supertrait
+in `Sub`'s closure. It is implicit and has no spelling, like the coercion from a
+concrete type and unlike `as?`: `trait Sub: Super` plus the impl that discharged
+it are already the proof, so there is nothing to test and no `Option`.
+
+```
+trait Base { fun tag(self) -> Int; }
+trait Both: Left + Right { fun both(self) -> Int; }
+
+var b: dyn Both = P { n: 1 };
+var r: dyn Right = b;      # upcast; `r.right()` dispatches through Right's table
+var base: dyn Base = r;    # and again, transitively
+```
+
+It happens at the same places every other coercion does — a `var` with an
+annotation, a `return`, a call argument, an array element — and it keeps the
+inner value rather than copying it, so the upcast object and the original are
+the same object, and `as?` still recovers the concrete type through either.
+
+A supertrait is matched **restated in the source's type arguments**: a
+`dyn Twice<Int>` is a `dyn Src<Int>` and not a `dyn Src<String>`
+(`tests/fail/dyn_upcast_wrong_arg.dt`). Associated-type bindings carry across
+and must agree (`tests/fail/dyn_upcast_assoc_mismatch.dt`); an unrelated trait
+is an ordinary type mismatch (`tests/fail/dyn_upcast_unrelated.dt`). See
+`tests/run/dyn_upcast.dt` and `dyn_upcast_diamond.dt`.
+
+What it is not is a re-reading of the same value. A trait object's vtable is
+laid out over the closure of the trait it was *written* as, and two closures
+agree only by accident: with `trait Both: Left + Right`, `Right`'s methods sit
+at an offset in `Both`'s table and at zero in `Right`'s own. So the upcast swaps
+tables — see `runtime.md`.
 
 ### match
 
@@ -2440,7 +2474,7 @@ HashSet::with_capacity(n); s.capacity(); s.reserve(n);   # forwarded, all three
 | indexing a `String` by character (`s[i]`) | there is none: `s.chars()` walks, because a byte offset is not a character position. `s.chars().collect()` is the array, and `s.chars().skip(i).next()` is the one character |
 | a `String` that is guaranteed valid UTF-8 | it is a byte string — `slice` cuts at byte offsets, so a walk over a halved sequence reports a runtime error when it reaches it (`chars()` itself never does: it is lazy) |
 | a *dynamic* width or precision in a format spec (`{v:>{n}}`) | the width and precision in a `{v:>8}` / `{f:.3}` spec are literals; a runtime value there has no spelling. The spec itself is sugar for `std::string::pad_*` / `std::fmt::float` (milestone 35) |
-| upcasting a `dyn Sub` to a `dyn Super` | `as?` downcasts to a *concrete* type; a trait-object target is rejected. Recognising a table is not the same operation as building one |
+| inferring a `dyn`'s trait argument from another `dyn` (`fun f<T>(s: dyn Src<T>)` called with a `dyn Src<Int>`) | "expected `dyn Src<_>`" — unification treats a trait object as an atom and never decomposes its trait arguments. A *coercion* site does solve one, but from the impl |
 | a downcast to a type that does not implement the trait, or binds a different associated type | rejected, rather than compiled as an always-`None` test: the identity is the vtable, and such a type has no table to recognise |
 | a trait's type arguments at a *bare* method call | the expected type breaks the tie between two impls of one generic trait, and pins an impl parameter the receiver cannot reach (`impl<T, U: From<T>> Into<U> for T`); with no expected type the first impl wins — or, where the parameter was only pinnable that way, no impl applies at all. The trait-qualified spelling (`Into::<Fahrenheit>::into(c)`) settles it explicitly without an expected type |
 | disambiguating a qualified selection whose *argument is itself unresolved* (`Steps::from(None)`) | the argument (for `from`) or the receiver (for a trait-qualified `into`) must type on its own to choose the impl, so a value that would need the impl chosen first cannot be disambiguated |

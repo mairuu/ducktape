@@ -110,6 +110,23 @@ pub fun bricks_only(items: [dyn Weigh]) -> Int {
     return kg;
 }
 
+# a subtrait's object is usable as its supertrait's, implicitly and with no
+# `Option`: the declaration below is the proof, so there is nothing to test at
+# runtime. It is still a table swap rather than a re-reading, because the two
+# tables are laid out over two different closures.
+trait Crated: Weigh {
+    fun crates(self) -> Int;
+}
+
+impl Crated for Brick {
+    fun crates(self) -> Int { 1 }
+}
+
+pub fun crated_weight(c: dyn Crated) -> Int {
+    var one: dyn Weigh = c;
+    return one.weight() * c.crates();
+}
+
 # a trait may take type parameters of its own. They are supplied wherever the
 # trait is *named* — this impl head, the bound on `packed` below, a `dyn` — and
 # a trait reference is what carries them, so the signatures a trait declares

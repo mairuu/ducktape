@@ -1274,7 +1274,23 @@ keep this file small. Everything from 55 on is below.
   pointer compare, with nothing new in the image. The cost landed on
   *producing* an `Option` instead: it becomes the first lang item that is a
   type, because every other consumer takes one apart structurally. Remainder:
-  no upcast `dyn Sub` -> `dyn Super`. Full write-up in the commit body.
+  no upcast `dyn Sub` -> `dyn Super`, which is milestone 78. Full write-up in
+  the commit body.
+
+- **78. Upcasting a trait object** — `dyn Sub` where a `dyn Super` is expected,
+  implicit and with no spelling, since the subtrait declaration is the proof.
+  Design: `language.md` "Upcasting a trait object", `architecture.md` (the
+  third direction), `runtime.md` "the link lives on the table". The finding:
+  the two ends know different halves of the key — the *site* knows both traits
+  and no concrete type, the *table* knows the concrete type and one trait — so
+  the link is stored on the source table and built at compile time, which is
+  only possible because `Mono.vtables` filtered by trait *is* the closed set of
+  types that can be behind a `dyn Sub`. Probing turned up a live bug it had to
+  fix on the way: `dyn_assoc_bindings_agree` indexed a trait's own
+  `assoc_types` with a closure-numbered index, so a binding inherited from a
+  supertrait was never checked and `dyn DoubleEnded<Item = String>` over an
+  `Item = Int` impl segfaulted at run. Remainder: none open. Full write-up in
+  the commit body.
 
 ## Next (in recommended order)
 
@@ -1448,6 +1464,13 @@ via `Module.decl_base`) and is not part of the main line.
   `it.fold<Int>(0, f)` parses as comparisons, so it reports an unknown *field*
   and then usually an undefined variable for the type name (milestone 71); a
   note on the first names the turbofish, which is as far as that site can see
+- a `dyn`'s **trait arguments are compared, never unified**, so a parameter
+  typed `dyn Src<T>` never infers `T` from a `dyn Src<Int>` argument
+  ("expected `dyn Src<_>` but got `dyn Src<Int>`"). Unification treats a
+  trait object as an atom; only a *coercion* site solves a trait argument, and
+  it solves it from the impl rather than from another `dyn`. Found probing
+  milestone 78, which is why `compile_coerce_dyn`'s abstract-target guard on
+  the upcast is currently unreachable — the checker cannot build such a site
 - sema's `MAX_BOUNDS` (16) is the last fixed cap of the family milestone 73
   cleared out of the parser. It bounds a real array and has its own diagnostic,
   so it is a limit rather than a hazard
@@ -1459,9 +1482,6 @@ via `Module.decl_base`) and is not part of the main line.
   derivation from ever conflicting — so an item of a super that something else
   already implements may not also be written in the sub's block. The one-block
   spelling and a separate super impl cannot be mixed for the same name
-- no upcast from a `dyn Sub` to a `dyn Super`. Milestone 77's downcast
-  *recognises* the table a value carries; an upcast would have to build a
-  second one, which is a different operation
 - a format spec inside `{}` exists as of milestone 35 (`{v:>8}`, `{f:.3}`,
   `{f:>10.3}`), desugaring to `std::string::pad_*` / `std::fmt::float`. What has
   no spelling is a *dynamic* width or precision (`{v:>{n}}`): both are literals,

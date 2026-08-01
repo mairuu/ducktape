@@ -1665,8 +1665,8 @@ exactly (trait reference, interned self type), so codegen can ask for the table
 `runtime.md`. The checker's whole job is therefore to establish that the pair is
 one a coercion could have produced, which is the same two questions
 `check_coerce_dyn` asks in the other direction — `impl_index_implements`, then
-`dyn_assoc_bindings_agree` — plus a target that is not another `dyn` (that would
-be an upcast, a different operation). Failing either is an *error* rather than a
+`dyn_assoc_bindings_agree` — plus a target that is not another `dyn` (that
+direction is the upcast below). Failing either is an *error* rather than a
 statically-`None` test, since a type with no table is one the object could never
 be holding.
 
@@ -1696,6 +1696,36 @@ receiver went too — keeping it would have made `d.map(f)` an error while
 `it.map(f)`, compiled the very same body. What is still refused there is an
 *associated function*: no receiver means no value to carry, which is the one
 undispatchable shape no instantiation rescues.
+
+**The upcast is the third direction** (`check_upcast_dyn`, milestone 78), and
+the only one that is *infallible*: `trait Sub: Super` plus the impl that
+discharged the obligation is a compile-time proof, so a `dyn Sub` flows into a
+`dyn Super` position implicitly, with no spelling and no `Option`. It hangs off
+`check_coerce_dyn`'s `TY_DYN` arm, which used to be a flat "already one".
+
+Where the coercion asks the impl index, the upcast asks the source trait's
+**closure**, and asks it for the supertrait *restated in the source's type
+arguments* — a `dyn Twice<Int>` is a `dyn Src<Int>`, and `TraitFlat.ref` under
+`trait_ref_subst` is what knows that. Two refusals fall out and are deliberately
+*not* reported here: the same trait at different arguments, and an unrelated
+trait, both return false so the caller's own mismatch names the two whole trait
+objects, which reads better than decomposing to the one argument that differs.
+Only an unsolved target argument (`fun f<T>(s: dyn Src<T>)`) unifies, for the
+same reason the coercion solves one from the impl.
+
+The bindings are then read *off the source* rather than searched for in the
+index — a trait object already states what its associated types are — which is
+sound because the target's closure is contained in the source's. That
+containment is also what surfaced the flat/own indexing bug
+`dyn_assoc_bindings_agree` had carried since supertraits arrived: its binding
+table is numbered over the closure, and it was indexing the trait's *own*
+`assoc_types`, so on a sub whose associated types are all inherited it checked
+nothing and `dyn DoubleEnded<Item = String>` accepted an `Item = Int` impl
+(`tests/fail/dyn_assoc_super_binding.dt`).
+
+The result is recorded in the same `Expr.coerce_dyn` the coercion uses; codegen
+tells them apart by whether the source is already a `TY_DYN`, which is exactly
+the difference between them.
 
 **Poison convention:** on error, emit one `diag_error` and return
 `t_poison`; poison operands propagate silently so one mistake produces one

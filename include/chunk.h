@@ -119,6 +119,11 @@ typedef enum {
                  // value survives for OP_DYN_INNER on the matching branch.
   OP_DYN_INNER,  // pops a trait object, pushes the value inside it. Only ever
                  // emitted where an OP_DYN_IS just proved which type that is
+  OP_DYN_UPCAST, // u16 upcast pair — pops a `dyn Sub`, pushes the same inner
+                 // value carrying the `dyn Super` table. The table is found
+                 // on the one the value already holds (VTable.upcasts): the
+                 // site knows both traits and no concrete type, the table
+                 // knows the concrete type and both traits
   OP_TAG,        // pops an enum instance, pushes its variant tag as Int
   OP_MATCH_FAIL, // no arm matched a subject not statically proven exhaustive
                  // (checker doesn't enforce exhaustiveness yet); runtime error

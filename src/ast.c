@@ -821,7 +821,8 @@ bool type_is_abstract(const Type *t) {
 // There is no diamond problem to solve, which is why a flat numbering is
 // enough: a trait object always carries the table of the trait it was written
 // as, and every dispatch on it indexes that same trait's closure. Two tables
-// never have to agree, because the language has no `dyn A` → `dyn B` coercion.
+// never have to agree — the upcast (milestone 78) does not make them, it swaps
+// one for the other, precisely because a super's numbering is its own.
 
 int trait_flat_method_count(const TraitDef *trait) {
   int n = 0;
@@ -868,13 +869,20 @@ int trait_flat_assoc_count(const TraitDef *trait) {
   return n;
 }
 
-StringView trait_flat_assoc_name(const TraitDef *trait, int index) {
+StringView trait_flat_assoc_name(const TraitDef *trait, int index,
+                                 TraitDef **owner_def) {
   for (int i = 0; i < trait->flat_count; i++) {
     TraitDef *owner = trait->flat[i].def;
     if (index < owner->assoc_type_count) {
+      if (owner_def != NULL) {
+        *owner_def = owner;
+      }
       return owner->assoc_types[index].name;
     }
     index -= owner->assoc_type_count;
+  }
+  if (owner_def != NULL) {
+    *owner_def = NULL;
   }
   return (StringView){0};
 }
@@ -1128,10 +1136,12 @@ int type_sprintf(const Type *t, char *buf, size_t buf_size) {
                   type_sprintf(ref->type_args[i], buf + n, buf_size - n));
     }
     for (int i = 0; i < t->as.dyn.assoc_type_count; i++) {
+      // numbered over the closure, so a subtrait's table names its supers'
+      // bindings and `def->assoc_types[i]` would be the wrong array.
+      StringView name = trait_flat_assoc_name(def, i, NULL);
       n = sp_bump(n, buf_size,
                   snprintf(buf + n, buf_size - n, "%s" SV_FMT " = ",
-                           written++ == 0 ? "<" : ", ",
-                           SV_ARG(def->assoc_types[i].name)));
+                           written++ == 0 ? "<" : ", ", SV_ARG(name)));
       n = sp_bump(
           n, buf_size,
           type_sprintf(t->as.dyn.assoc_types[i], buf + n, buf_size - n));

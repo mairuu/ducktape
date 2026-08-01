@@ -1,0 +1,29 @@
+#! expect: it implements 'Iterator' with 'Item' = 'Int'
+# A binding a *supertrait* declared is checked like any other. It was not until
+# milestone 78: the dyn's binding table is numbered over the supertrait closure
+# and the check indexed the sub's own (empty) list, so this was accepted and
+# then called String methods on an Int.
+use std::iter::{Iterator, DoubleEnded};
+use std::option::Option;
+
+struct Span { lo: Int, hi: Int }
+impl Iterator for Span {
+    type Item = Int;
+    fun next(self) -> Option<Int> {
+        if self.lo >= self.hi { return Option::None; }
+        var v = self.lo;
+        self.lo += 1;
+        return Option::Some(v);
+    }
+}
+impl DoubleEnded for Span {
+    fun next_back(self) -> Option<Int> {
+        if self.lo >= self.hi { return Option::None; }
+        self.hi -= 1;
+        return Option::Some(self.hi);
+    }
+}
+
+fun main() {
+    var d: dyn DoubleEnded<Item = String> = Span { lo: 0, hi: 4 };
+}

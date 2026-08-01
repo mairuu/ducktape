@@ -755,6 +755,31 @@ static bool run(Vm *vm, int stop_depth) {
       push(vm, val_as_dyn(pop(vm))->inner);
       break;
 
+    case OP_DYN_UPCAST: {
+      uint16_t pair = READ_U16();
+      ObjDyn *d = val_as_dyn(peek(vm, 0));
+      VTable *to = NULL;
+      // short by construction: one entry per supertrait the program upcasts
+      // this table's trait to, which is almost always one.
+      for (int i = 0; i < d->vtable->upcast_count && to == NULL; i++) {
+        if (d->vtable->upcasts[i].pair == pair) {
+          to = d->vtable->upcasts[i].to;
+        }
+      }
+      if (to == NULL) {
+        // codegen links every table of the source trait when it records the
+        // pair, and every later one as it is built, so a miss means the image
+        // disagrees with the code that reads it.
+        VM_RETURN(runtime_error(vm, "trait object cannot be upcast"));
+      }
+      // the source stays on the stack across heap_dyn for the reason
+      // OP_MAKE_DYN keeps its operand there: allocating may collect.
+      ObjDyn *up = heap_dyn(vm->heap, d->inner, to);
+      pop(vm);
+      push(vm, val_obj((Obj *)up));
+      break;
+    }
+
     case OP_MATCH_FAIL:
       // the checker doesn't enforce match exhaustiveness yet, so this is a
       // real, reachable failure mode rather than a should-never-happen case.

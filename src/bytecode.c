@@ -17,6 +17,9 @@
 //   enums    [u32 name, u16 variant_count,
 //               [u32 name, u8 is_tuple, u16 field_count, u32 field_name*]*]
 //   vtables  [u16 method_count, u32 fun_index*]*   (VTABLE_SLOT_EMPTY == none)
+//   upcasts  [u16 link_count, [u16 pair, u32 vtable_index]*]*  — one record
+//              per vtable, in the same order, so a link may name a table
+//              written after its own
 //   funs     [u32 name, u16 param_count, u8 body_kind,
 //               body_kind == BC_BODY_CHUNK:  u32 code_len, code_len bytes,
 //                                            u16 const_count, const*
@@ -32,7 +35,9 @@
 //
 // A vtable is written as bare function indices: which trait and which self
 // type it was built for is compile-time bookkeeping the VM never consults, so
-// it is not in the image — the same rule that keeps types and spans out.
+// it is not in the image — the same rule that keeps types and spans out. Its
+// upcast links follow the same rule and survive it: a link is two tables and
+// an opaque pair id, none of which is a type.
 //
 // A constant is a u8 tag and its payload; the pointer-shaped ones become
 // indices (BC_C_STR into the string table, BC_C_FUN into the funs section,
@@ -161,6 +166,18 @@ static int fun_index(const Executable *exe, const FunDef *fun) {
   for (int i = 0; i < exe->closure_count; i++) {
     if (exe->closures[i] == fun) {
       return exe->global_count + i;
+    }
+  }
+  return -1;
+}
+
+// an upcast link names its target table by position. Tables carry no slot of
+// their own, so this is a scan — over a list one entry long in most programs
+// and only ever walked once per link.
+static int vtable_index(const Executable *exe, const VTable *vt) {
+  for (int i = 0; i < exe->vtable_count; i++) {
+    if (exe->vtables[i] == vt) {
+      return i;
     }
   }
   return -1;
@@ -369,6 +386,20 @@ bool bc_write(const Executable *exe, const FunDef *entry, const char *path,
                         SV_ARG(vt->methods[j]->name));
         idx = 0;
       }
+      w_u32(&w, (uint32_t)idx);
+    }
+  }
+  // the links come after every table, because one may point forward.
+  for (int i = 0; i < exe->vtable_count; i++) {
+    const VTable *vt = exe->vtables[i];
+    w_u16(&w, (uint16_t)vt->upcast_count);
+    for (int j = 0; j < vt->upcast_count; j++) {
+      int idx = vtable_index(exe, vt->upcasts[j].to);
+      if (idx < 0) {
+        w.ok = bc_error("internal: upcast target vtable is not linked");
+        idx = 0;
+      }
+      w_u16(&w, vt->upcasts[j].pair);
       w_u32(&w, (uint32_t)idx);
     }
   }
@@ -768,6 +799,25 @@ bool bc_load(const char *path, Allocator *al, Executable *exe, Heap *heap,
         break;
       }
       vt->methods[j] = exe->globals[idx];
+    }
+  }
+  // a second pass, because a link may name a table later in the section.
+  for (int i = 0; i < exe->vtable_count && r.ok; i++) {
+    VTable *vt = exe->vtables[i];
+    int n = r_u16(&r);
+    if (n <= 0) {
+      continue;
+    }
+    vt->upcasts = al_alloc_zero(al, sizeof(VTableUpcast) * (size_t)n);
+    for (int j = 0; j < n && r.ok; j++) {
+      uint16_t pair = r_u16(&r);
+      uint32_t idx = r_u32(&r);
+      if (idx >= (uint32_t)exe->vtable_count) {
+        r.ok = bc_error("bytecode image: upcast target %u out of range", idx);
+        break;
+      }
+      vt->upcasts[j] = (VTableUpcast){.pair = pair, .to = exe->vtables[idx]};
+      vt->upcast_count = j + 1;
     }
   }
 

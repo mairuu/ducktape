@@ -61,6 +61,15 @@ typedef struct {
   int index;       // into exe->vtables
 } DynVTable;
 
+// one (source trait, target trait) spelling an upcast site named, deduped;
+// its position in `Mono.upcasts` is the `pair` id the opcode carries and the
+// tables are keyed by. Both are trait *references*, restated in the same terms
+// — `dyn Pair<Int>` upcasts to `dyn Into<Int>`, never to `dyn Into<String>`.
+typedef struct {
+  Type *from;
+  Type *to;
+} UpcastPair;
+
 typedef struct {
   Executable *exe;
   Heap *heap;
@@ -72,6 +81,9 @@ typedef struct {
 
   DynVTable *vtables;
   int vtable_count, vtable_cap;
+
+  UpcastPair *upcasts;
+  int upcast_count, upcast_cap;
 } Mono;
 
 void mono_init(Mono *mono, Executable *exe, Heap *heap, Allocator *al);

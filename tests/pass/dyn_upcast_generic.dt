@@ -1,0 +1,17 @@
+# The upcast restates the supertrait in the source's type arguments: a
+# `dyn Twice<Int>` is a `dyn Src<Int>`, and the closure entry is what says so.
+trait Src<T> { fun get(self) -> T; }
+trait Twice<T>: Src<T> { fun again(self) -> T; }
+
+struct Five;
+impl Src<Int> for Five { fun get(self) -> Int { return 5; } }
+impl Twice<Int> for Five { fun again(self) -> Int { return 10; } }
+
+fun take(s: dyn Src<Int>) -> Int { return s.get(); }
+
+fun main() {
+    var t: dyn Twice<Int> = Five;
+    var s: dyn Src<Int> = t;
+    take(t);
+    take(s);
+}

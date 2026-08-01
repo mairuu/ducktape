@@ -110,6 +110,7 @@ Operands are u8 unless noted.
 | `OP_DYN_METHOD index` | pops a trait object, pushes its `index`-th method *then* the unwrapped receiver — so the `OP_CALL` that follows sees an ordinary callee-beneath-args stack |
 | `OP_DYN_IS vtable_slot(u16)` | peeks a trait object, pushes whether it carries `exe->vtables[slot]`. One table per (trait, concrete type), so this *is* the type test `d as? T` compiles to; peeks rather than pops so the value survives for `OP_DYN_INNER` |
 | `OP_DYN_INNER` | pops a trait object, pushes the value inside it — emitted only where an `OP_DYN_IS` just proved which type that is |
+| `OP_DYN_UPCAST pair(u16)` | pops a `dyn Sub`, pushes the same inner value carrying the `dyn Super` table. The table is found on the one the value already holds (`VTable.upcasts`), since the site knows both traits and no concrete type |
 | `OP_MATCH_FAIL` | runtime error "no match arm matched" — a backstop; the checker enforces exhaustiveness, but guards can still fail every arm |
 
 `OP_ADD` additionally handles `String + String` (interned concat) alongside
@@ -687,7 +688,7 @@ self type name two impls, so they are two tables — and a trait's type argument
 is erased at runtime exactly as an associated type is, so that is again the
 only thing that changed.
 
-Four opcodes:
+Five opcodes:
 
 - `OP_MAKE_DYN <vtable>` pops a value and pushes it wrapped as an `ObjDyn`.
   Codegen emits it from `compile_expr`, which wraps every expression so a
@@ -702,6 +703,8 @@ Four opcodes:
   *that* table — the whole of a downcast's runtime test (milestone 77).
 - `OP_DYN_INNER` pops a trait object and pushes the value inside it, emitted
   only on the branch an `OP_DYN_IS` just proved.
+- `OP_DYN_UPCAST <pair>` pops a `dyn Sub` and pushes the same inner value
+  carrying the `dyn Super` table (milestone 78) — see below.
 
 **The vtable is a runtime type identity, and this is where that gets spent.**
 The memo above hands out exactly one table per `(trait reference, self type)`
@@ -723,6 +726,47 @@ is why erasure never bites. And since the key is the trait *reference*, one
 self type behind `dyn Sink<Int>` and `dyn Sink<String>` has two tables; a
 downcast reads its half of the key off the operand, so it always asks about the
 reference the value was written as.
+
+#### Upcasting: the link lives on the table, not at the site
+
+The downcast recognises a table; the **upcast** (milestone 78) cannot, because
+the two closures are laid out independently. With `trait Both: Left + Right`,
+`Both`'s table is `[Base, Left, Right, Both]` and `Right`'s own is
+`[Base, Right]` — so `right` is at index 2 in one and 1 in the other, and
+reusing the sub's table as a prefix of the super's would call `left` and say
+nothing (`tests/run/dyn_upcast_diamond.dt` pins exactly this). A `dyn Sub` -> a
+`dyn Super` therefore keeps its inner value and **swaps tables**.
+
+The difficulty is that the two ends of the operation know different halves of
+the key. An upcast *site* knows both traits and not the concrete type; the table
+the value carries knows the concrete type and only its own trait. So the link is
+stored where both are known — on the source table:
+
+```c
+struct VTable { FunDef **methods; int method_count;
+                VTableUpcast *upcasts; int upcast_count; };   // {u16 pair, VTable *to}
+```
+
+`pair` is a dense compile-time numbering of the `(source trait reference, target
+trait reference)` spellings the program contains (`Mono.upcasts`), which is all
+a site can name; the VM only compares it. Computing every link is a fixpoint,
+and `cg_upcast_pair` / `cg_link_upcast` run it incrementally in two halves: a
+newly recorded pair links every table of that source trait that already exists,
+and `cg_vtable_for` links every already-recorded pair when it builds a new one.
+Doing it incrementally rather than as a pass after the drain matters, because
+building a target table queues bodies — a post-pass would have to restart the
+worklist.
+
+**So the upcast does build a second table, but at compile time.** That is
+possible only because the set of concrete types that can be behind a `dyn Sub`
+is not open: every one of them was coerced somewhere, and `Mono.vtables`
+filtered by trait *is* that set. At run time `OP_DYN_UPCAST` is a scan of a list
+that is almost always one entry long, plus the `ObjDyn` the new pairing needs.
+
+The image carries the links (`BC_VERSION 5`) as one `[u16 count, (u16 pair,
+u32 vtable)*]` record per vtable, written after every table so a link may point
+forward. It survives the serialization rule for the same reason the downcast
+did: a link is two tables and an opaque id, and none of those is a type.
 
 The receiver is unwrapped because the method was compiled for the concrete
 type, not for the trait object; coercion *wraps*, it never converts, so the

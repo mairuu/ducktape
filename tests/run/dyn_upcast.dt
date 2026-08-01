@@ -1,0 +1,66 @@
+# `dyn Sub` where a `dyn Super` is expected (milestone 78): implicit, since the
+# subtrait's declaration is already the proof, and it keeps the inner value —
+# so an upcast trait object is the same object, and `as?` still recovers the
+# concrete type through it.
+use std::iter::{Iterator, DoubleEnded};
+use std::option::Option;
+use std::io::print;
+
+struct Span { lo: Int, hi: Int }
+impl Iterator for Span {
+    type Item = Int;
+    fun next(self) -> Option<Int> {
+        if self.lo >= self.hi { return Option::None; }
+        var v = self.lo;
+        self.lo += 1;
+        return Option::Some(v);
+    }
+}
+impl DoubleEnded for Span {
+    fun next_back(self) -> Option<Int> {
+        if self.lo >= self.hi { return Option::None; }
+        self.hi -= 1;
+        return Option::Some(self.hi);
+    }
+}
+
+fun first(it: dyn Iterator<Item = Int>) -> Option<Int> { return it.next(); }
+
+fun main() {
+    var d: dyn DoubleEnded<Item = Int> = Span { lo: 0, hi: 5 };
+
+    # the annotation is the whole spelling: no `as`, and no Option
+    var i: dyn Iterator<Item = Int> = d;
+    print(i.next());
+#> Some(0)
+
+    # the same value, not a copy — the upcast rewrapped it, so advancing one
+    # advances the other
+    print(d.next_back());
+#> Some(4)
+    print(first(d));
+#> Some(1)
+    print(i.next());
+#> Some(2)
+
+    # and the concrete type is still down there: the table an upcast installs
+    # is the one a direct coercion would have built, so it is the one `as?`
+    # asks for
+    var s = i as? Span;
+    match s {
+        Option::Some(sp) => print(sp.hi),
+#> 4
+        Option::None => print("lost"),
+    }
+
+    # unchanged by any of this: a bounded generic instantiates *at* the trait
+    # object, so `dyn DoubleEnded` satisfies `I: Iterator` with no upcast
+    print(drain(d));
+#> [3]
+}
+
+fun drain<I: Iterator>(it: I) -> [I.Item] {
+    var out: [I.Item] = [];
+    for x in it { out.push(x); }
+    return out;
+}

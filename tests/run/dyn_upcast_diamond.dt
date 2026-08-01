@@ -1,0 +1,65 @@
+# Upcasting a trait object (milestone 78) where the two tables genuinely
+# disagree: `Both`'s closure is [Base, Left, Right, Both], so `right` sits at
+# index 2 there and at index 1 in `Right`'s own table. Truncating the sub's
+# table to the super's length would call `left` and say nothing — which is why
+# the upcast swaps to a table built for the super, rather than reusing a prefix.
+use std::io::print;
+
+trait Base { fun tag(self) -> Int; }
+trait Left: Base { fun left(self) -> Int; }
+trait Right: Base { fun right(self) -> Int; }
+trait Both: Left + Right { fun both(self) -> Int; }
+
+struct P { n: Int }
+impl Base for P { fun tag(self) -> Int { return self.n; } }
+impl Left for P { fun left(self) -> Int { return self.n + 10; } }
+impl Right for P { fun right(self) -> Int { return self.n + 20; } }
+impl Both for P { fun both(self) -> Int { return self.n + 30; } }
+
+struct Q { n: Int }
+impl Base for Q { fun tag(self) -> Int { return self.n * 2; } }
+impl Left for Q { fun left(self) -> Int { return self.n * 3; } }
+impl Right for Q { fun right(self) -> Int { return self.n * 4; } }
+impl Both for Q { fun both(self) -> Int { return self.n * 5; } }
+
+fun show_right(r: dyn Right) { print(r.right()); }
+fun show_base(b: dyn Base) { print(b.tag()); }
+
+fun main() {
+    var b: dyn Both = P { n: 1 };
+
+    # the second super: its methods are at a different offset in each table
+    var r: dyn Right = b;
+    print(r.right());
+#> 21
+    # and its own super, reached through the table the upcast just installed
+    var base: dyn Base = r;
+    print(base.tag());
+#> 1
+
+    # the first super, whose closure *is* a prefix of the sub's — the same
+    # operation, and it must not take a different path
+    var l: dyn Left = b;
+    print(l.left());
+#> 11
+
+    # at an argument position, and for a second concrete type, so the link is
+    # per (source table, target trait) rather than per site
+    show_right(b);
+#> 21
+    show_right(both_of(Q { n: 2 }));
+#> 8
+    show_base(b);
+#> 1
+
+    # an array element coerces the same way
+    var rs: [dyn Right] = [b, Q { n: 3 }];
+    for x in rs {
+        print(x.right());
+    }
+#> 21
+#> 12
+}
+
+# a `dyn Both` from a `Q`, so the upcast at `show_right` sees two source tables
+fun both_of(q: Q) -> dyn Both { return q; }

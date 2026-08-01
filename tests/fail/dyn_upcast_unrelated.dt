@@ -1,0 +1,16 @@
+#! expect: expected 'dyn Other' but got 'dyn Sub'
+# Not a supertrait, so not an upcast: two trait objects are two types, and the
+# implicit conversion runs along the `trait Sub: Super` edge or not at all.
+trait Base { fun tag(self) -> Int; }
+trait Sub: Base { fun more(self) -> Int; }
+trait Other { fun tag(self) -> Int; }
+
+struct P;
+impl Base for P { fun tag(self) -> Int { return 1; } }
+impl Sub for P { fun more(self) -> Int { return 2; } }
+impl Other for P { fun tag(self) -> Int { return 3; } }
+
+fun main() {
+    var s: dyn Sub = P;
+    var o: dyn Other = s;
+}

@@ -6,10 +6,10 @@
 # table `d.next_back()` does, and the associated-type binding written as
 # `<Item = Int>` names `Iterator`'s `Item` through the sub.
 #
-# There is no diamond problem to solve here, which is why one flat numbering is
-# enough: a trait object always carries the table of the trait it was *written*
-# as, and every dispatch on it indexes that same trait's closure. Two tables
-# never have to agree, because the language has no `dyn A` -> `dyn B` coercion.
+# One flat numbering is enough because a trait object always carries the table
+# of the trait it was *written* as, and every dispatch on it indexes that same
+# trait's closure. Two tables never have to agree — see `dyn_upcast_diamond.dt`
+# for what the upcast does instead of making them.
 use std::iter::{Iterator, DoubleEnded};
 use std::option::Option;
 use std::io::print;

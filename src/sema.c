@@ -4297,10 +4297,19 @@ static bool dyn_assoc_bindings_agree(CheckCtx *ctx, Type *dyn_ty, Type *actual,
                                      Type *trait_ref, Span span) {
   TraitDef *trait = dyn_trait_def(dyn_ty);
   for (int i = 0; i < dyn_ty->as.dyn.assoc_type_count; i++) {
-    StringView name = trait->assoc_types[i].name;
+    // the binding table is numbered over the supertrait *closure*, so the name
+    // and the trait that declared it both come from the flat accessor. Reading
+    // `trait->assoc_types[i]` instead was milestone 78's found bug: on a sub
+    // whose associated types are all inherited it indexed an empty array, the
+    // lookup missed, and `dyn DoubleEnded<Item = String>` accepted a `Span`.
+    TraitDef *owner = NULL;
+    StringView name = trait_flat_assoc_name(trait, i, &owner);
+    if (owner == NULL) {
+      continue; // total by construction; no owner means no name to check
+    }
     Type *want =
         infer_apply(&ctx->infer, dyn_ty->as.dyn.assoc_types[i], ctx->al);
-    Type *got = impl_index_assoc_type(ctx->impls, actual, name, trait, ctx->al);
+    Type *got = impl_index_assoc_type(ctx->impls, actual, name, owner, ctx->al);
     if (got == NULL || type_is_poison(want) || type_is_poison(got)) {
       // NULL means the impl is generic enough that no binding is readable
       // here (a bounded `T`); the coercion is re-checked where that parameter
@@ -4329,12 +4338,120 @@ static bool dyn_assoc_bindings_agree(CheckCtx *ctx, Type *dyn_ty, Type *actual,
     type_sprintf(want, wb, sizeof(wb));
     type_sprintf(got, gb, sizeof(gb));
     type_sprintf(trait_ref, tb, sizeof(tb));
+    // the second trait named is the *owner*, not the object's: on a subtrait
+    // the disagreeing binding comes from the super's impl, and saying so is
+    // the difference between naming the impl to fix and naming the spelling.
     diag_error(ctx->diags, span,
                "'%s' cannot be a 'dyn %s<" SV_FMT
-               " = %s>': it implements '%s' with '" SV_FMT "' = '%s'",
-               ab, tb, SV_ARG(name), wb, tb, SV_ARG(name), gb);
+               " = %s>': it implements '" SV_FMT "' with '" SV_FMT "' = '%s'",
+               ab, tb, SV_ARG(name), wb, SV_ARG(owner->name), SV_ARG(name), gb);
     return false;
   }
+  return true;
+}
+
+// `dyn Sub` where a `dyn Super` is expected — the upcast (milestone 78).
+//
+// Unlike `as?` this is implicit and infallible, and for the same reason the
+// coercion from a concrete type is: the declaration `trait Sub: Super` and the
+// impl that discharged it are a compile-time proof that every `dyn Sub` is a
+// `Super`. There is nothing to test at runtime, so there is no `Option` and no
+// spelling — it happens wherever a value flows into a `dyn` position.
+//
+// What it is *not* is a re-reading of the same bits. A trait object's table is
+// laid out over the closure of the trait it was written as, and two closures
+// agree only by accident: with `trait Sub: A, B`, `B`'s methods sit at an
+// offset in `Sub`'s table and at zero in `B`'s own. So the value keeps its
+// inner half and swaps tables — see `cg_link_upcasts` for where the second
+// table comes from, which is the whole cost of this operation.
+//
+// Returns true when `expected` was satisfied, or when a disagreement was
+// reported (the caller must then not add a vaguer second diagnostic).
+static bool check_upcast_dyn(CheckCtx *ctx, Expr *e, Type *actual,
+                             Type *expected) {
+  Type *have_ref = infer_apply(&ctx->infer, actual->as.dyn.trait, ctx->al);
+  Type *want_ref = infer_apply(&ctx->infer, expected->as.dyn.trait, ctx->al);
+  if (have_ref->kind != TY_TRAIT || want_ref->kind != TY_TRAIT) {
+    return false;
+  }
+  TraitDef *have = have_ref->as.trait.def, *want = want_ref->as.trait.def;
+  if (have == want) {
+    // one trait, so this is identity or an ordinary type mismatch between two
+    // references of it (`dyn Into<Int>` against `dyn Into<String>`). Neither is
+    // an upcast, and the caller says it better than a supertrait walk could.
+    return false;
+  }
+
+  // The target must be one of the source's supertraits *restated in the
+  // source's type arguments*: a `dyn Pair<Int>` is a `dyn Into<Int>` and not a
+  // `dyn Into<String>`, and the closure entry is what knows which.
+  Subst s = trait_ref_subst(have_ref, ctx->al);
+  Type *super_ref = NULL;
+  for (int i = 0; i < have->flat_count; i++) {
+    if (have->flat[i].def != want) {
+      continue;
+    }
+    super_ref = have->flat[i].ref;
+    if (s.count > 0) {
+      super_ref = subst_apply_(&s, NULL, super_ref, /*total=*/false, ctx->al);
+    }
+    break;
+  }
+  if (super_ref == NULL) {
+    return false; // unrelated traits; the caller's mismatch is the right one
+  }
+  if (!types_equal(super_ref, want_ref)) {
+    if (!type_is_abstract(want_ref)) {
+      // the right supertrait at the wrong arguments, both written down. The
+      // caller's mismatch names the two whole trait objects, which says more
+      // than decomposing to the one argument that differs.
+      return false;
+    }
+    // still being inferred (`fun f<T>(s: dyn Src<T>)`): the source's closure is
+    // the only thing that knows, so it decides — the same trade the coercion
+    // from a concrete type makes with the impl.
+    if (!infer_unify(&ctx->infer, want_ref, super_ref, ctx->diags, e->span)) {
+      return true; // reported
+    }
+  }
+
+  // The bindings the target states, read off the source rather than searched
+  // for in the impl index: a trait object already says what each of its
+  // associated types is, and the source's table is numbered over a closure that
+  // contains the target's, so every name the target binds the source binds too.
+  for (int i = 0; i < expected->as.dyn.assoc_type_count; i++) {
+    StringView name = trait_flat_assoc_name(want, i, NULL);
+    Type *w =
+        infer_apply(&ctx->infer, expected->as.dyn.assoc_types[i], ctx->al);
+    Type *g = ty_dyn_assoc(actual, name);
+    if (g == NULL || type_is_poison(w)) {
+      continue;
+    }
+    g = infer_apply(&ctx->infer, g, ctx->al);
+    if (w->kind == TY_UNKNOWN) {
+      infer_unify(&ctx->infer, w, g, ctx->diags, e->span);
+      continue;
+    }
+    if (types_equal(w, g)) {
+      continue;
+    }
+    char hb[64], wb[64], gb[64];
+    type_sprintf(actual, hb, sizeof(hb));
+    type_sprintf(w, wb, sizeof(wb));
+    type_sprintf(g, gb, sizeof(gb));
+    diag_error(ctx->diags, e->span,
+               "a '%s' binds '" SV_FMT
+               "' to '%s', so it cannot become a 'dyn " SV_FMT "<" SV_FMT
+               " = %s>'",
+               hb, SV_ARG(name), gb, SV_ARG(want->name), SV_ARG(name), wb);
+    return true;
+  }
+
+  // The same field the coercion from a concrete type uses, and read the same
+  // way: codegen tells the two apart by whether the *source* is already a
+  // trait object, which is exactly the difference between them.
+  e->coerce_dyn = expected->as.dyn.trait;
+  cctx_record_coercion(ctx, &e->coerce_dyn);
   return true;
 }
 
@@ -4362,7 +4479,8 @@ static bool check_coerce_dyn(CheckCtx *ctx, Expr *e, Type *actual,
   }
   actual = infer_apply(&ctx->infer, actual, ctx->al);
   switch (actual->kind) {
-  case TY_DYN:     // already one
+  case TY_DYN: // already one — but perhaps of a *subtrait*
+    return check_upcast_dyn(ctx, e, actual, expected);
   case TY_UNKNOWN: // undecidable here; unification may still solve it
   case TY_POISON:  // already reported
   case TY_TRAIT:   // the abstract `Self` of a default body — known gap
@@ -9119,7 +9237,7 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
         // this, and a method not mentioning it still leaves the type
         // incomplete — two `dyn Iterator`s that agree on nothing are not one
         // type, so the binding is required either way.
-        StringView missing = trait_flat_assoc_name(trait, i);
+        StringView missing = trait_flat_assoc_name(trait, i, NULL);
         diag_error(r->diags, node->span,
                    "'dyn " SV_FMT "' must say what its associated type '" SV_FMT
                    "' is — write 'dyn " SV_FMT "<" SV_FMT " = ...>'",

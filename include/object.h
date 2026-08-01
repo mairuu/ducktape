@@ -25,10 +25,31 @@ typedef struct VariantDef VariantDef;
 // are the compile-time memo key (`Mono.vtables`), not something the VM reads —
 // the same rule the serialization milestone set, that an image is the runtime
 // projection of the program rather than a snapshot of the compiler.
+typedef struct VTable VTable;
+
+// where an upcast lands (milestone 78). `dyn Sub` -> `dyn Super` keeps the
+// inner value and swaps tables, and the table it swaps to depends on the
+// concrete type — which the upcast *site* does not know. So the answer is
+// stored the other way round, on the table that does: each source table
+// carries, for every supertrait the program ever upcasts to, the table that
+// same concrete type would have been coerced through directly.
+//
+// `pair` is an opaque compile-time numbering of the (source trait, target
+// trait) spellings, which is all the site can name; the VM only compares it.
 typedef struct {
+  uint16_t pair;
+  VTable *to;
+} VTableUpcast;
+
+struct VTable {
   FunDef **methods;
   int method_count;
-} VTable;
+
+  // Usually empty, and never more than the number of distinct supertraits the
+  // program upcasts this one to — so a linear scan is the whole lookup.
+  VTableUpcast *upcasts;
+  int upcast_count;
+};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Executable — the linked program: every module's definitions in one slot space

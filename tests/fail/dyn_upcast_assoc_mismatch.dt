@@ -1,0 +1,30 @@
+#! expect: cannot become a 'dyn Iterator<Item = String>'
+# The upcast carries the bindings across, so a target that states a different
+# one is not something this trait object can become. Read off the source's own
+# table rather than the impl index: a `dyn` already says what its associated
+# types are.
+use std::iter::{Iterator, DoubleEnded};
+use std::option::Option;
+
+struct Span { lo: Int, hi: Int }
+impl Iterator for Span {
+    type Item = Int;
+    fun next(self) -> Option<Int> {
+        if self.lo >= self.hi { return Option::None; }
+        var v = self.lo;
+        self.lo += 1;
+        return Option::Some(v);
+    }
+}
+impl DoubleEnded for Span {
+    fun next_back(self) -> Option<Int> {
+        if self.lo >= self.hi { return Option::None; }
+        self.hi -= 1;
+        return Option::Some(self.hi);
+    }
+}
+
+fun main() {
+    var d: dyn DoubleEnded<Item = Int> = Span { lo: 0, hi: 4 };
+    var i: dyn Iterator<Item = String> = d;
+}

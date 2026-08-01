@@ -261,7 +261,12 @@ TraitMethodDef *trait_flat_method(const TraitDef *trait, int index,
                                   Type **owner_ref);
 int trait_flat_method_index(const TraitDef *trait, StringView name);
 int trait_flat_assoc_count(const TraitDef *trait);
-StringView trait_flat_assoc_name(const TraitDef *trait, int index);
+// `*owner_def` (optional) receives the trait that *declared* the associated
+// type, which is what identifies the impl binding it: a sub's flat table
+// carries its supers' names, and `Item` on a `dyn DoubleEnded` is bound by the
+// `impl Iterator`, not by the `impl DoubleEnded`.
+StringView trait_flat_assoc_name(const TraitDef *trait, int index,
+                                 TraitDef **owner_def);
 int trait_flat_assoc_index(const TraitDef *trait, StringView name);
 
 static inline bool types_equal(const Type *a, const Type *b) { return a == b; }
