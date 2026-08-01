@@ -1305,7 +1305,7 @@ keep this file small. Everything from 55 on is below.
   a separate one, that no `dyn` coercion is offered inside an `if`'s or a
   `match`'s arms. Full write-up in the commit body.
 
-- **80. Conditional pattern bindings** (`PENDING`) — `if var Opt::Some(n) = o { .. }
+- **80. Conditional pattern bindings** (`1602acd`) — `if var Opt::Some(n) = o { .. }
   else { .. }` and `while var Opt::Some(v) = it.next() { .. }`, Rust's `if let`
   and `while let` under the keyword this language already has. Design:
   `language.md` "`if var` and `while var`", `architecture.md` ("Conditional
