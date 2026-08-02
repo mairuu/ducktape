@@ -1404,7 +1404,7 @@ keep this file small. Everything from 55 on is below.
   image change. Remainder: a `-> Never` body that falls through is still
   accepted (milestone 85), which is why the trap stays under the `else`.
 
-- **85. A promise nothing was asked to keep** (`SHA`) — `fun evil() -> Never { }`
+- **85. A promise nothing was asked to keep** (`f9ca510`) — `fun evil() -> Never { }`
   compiled, handed its `Unit` to whatever the caller declared, and crashed the
   VM on an assertion. Design: `language.md` "`std::panic`" + two "not yet
   implemented" rows, `architecture.md` (inference intro), `runtime.md`
