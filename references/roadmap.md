@@ -1347,8 +1347,9 @@ keep this file small. Everything from 55 on is below.
   is still not a first-class function value (`xs.map(Some)`), which is the
   qualified spelling's limit too and not a `use` question.
 
-- **82. A branch is a coercion site** — `var x: dyn Shape = if c { Sq } else
-  { Tri };`, the `match` spelling, and `fun pick() -> dyn Shape { Sq }`.
+- **82. A branch is a coercion site** (`d822319`) — `var x: dyn Shape = if c
+  { Sq } else { Tri };`, the `match` spelling, and
+  `fun pick() -> dyn Shape { Sq }`.
   Design: `language.md` "Trait objects" (the coercion positions),
   `architecture.md` "Where a coercion is offered". The finding: a `dyn` position
   is a *written list of call sites*, not something unification derives, so the
