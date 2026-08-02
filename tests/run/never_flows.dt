@@ -1,0 +1,81 @@
+# `!` flows out of diverging code into any expectation, and never in. This
+# pins the "out" half: the sibling positions that join on `!` rather than let
+# it become the expectation, a monomorphic argument (compared with
+# `types_equal`, so it had to learn the rule separately), and a type variable,
+# which a diverging argument must satisfy without solving.
+#
+# The diverging calls sit in branches nothing takes: what is under test is that
+# they compile.
+#> 1
+#> 2
+#> 2
+#> 1
+#> 9
+#> 5
+#> 7
+#> 42
+#> 3
+use std::io::print;
+use std::panic::panic;
+
+fun bail() -> Never {
+    panic("unreachable");
+}
+
+# an `if` whose arms disagree about diverging, in both orders
+fun pick(c: Bool) -> Int {
+    if c { return 1; } else { 2 }
+}
+
+fun pick_flipped(c: Bool) -> Int {
+    if c { 2 } else { return 1; }
+}
+
+# same for a `match`, where the accumulator is the first arm's type
+fun classify(n: Int) -> Int {
+    return match n {
+        0 => { return 9; },
+        _ => 5,
+    };
+}
+
+# a diverging first element must not fix the array's element type at `!`
+fun head_of(c: Bool) -> Int {
+    if c {
+        var xs = [bail(), 8];
+        return xs[1];
+    }
+    return 7;
+}
+
+fun take(x: Int) -> Int {
+    return x;
+}
+
+# a diverging argument satisfies a monomorphic parameter
+fun mono(c: Bool) -> Int {
+    if c { return take(bail()); }
+    return take(42);
+}
+
+# ...and constrains no type variable, so the *other* argument still decides `T`
+fun first<T>(a: T, b: T) -> T {
+    return a;
+}
+
+fun generic(c: Bool) -> Int {
+    if c { return first(bail(), 4); }
+    return first(3, 4);
+}
+
+fun main() {
+    print(pick(true));
+    print(pick(false));
+    print(pick_flipped(true));
+    print(pick_flipped(false));
+    print(classify(0));
+    print(classify(1));
+    print(head_of(false));
+    print(mono(false));
+    print(generic(false));
+}

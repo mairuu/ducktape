@@ -720,6 +720,25 @@ bool infer_unify(InferCtx *ctx, Type *a, Type *b, DiagBag *diags, Span span) {
     return true;
   }
 
+  // `!` (never) is the bottom type, and the rule is **directional**: `a` is the
+  // expectation (see the header), so diverging code on the right satisfies any
+  // expectation at all, while an expectation of `!` on the left is a promise to
+  // diverge that only diverging code keeps. Accepting it in both directions is
+  // what let `fun evil() -> Never { }` hand its Unit to whatever the caller
+  // declared. Two `!`s are already equal above.
+  //
+  // Positions that unify *siblings* rather than a value against an expectation
+  // — an `if`'s arms, a `match`'s, an array's elements — must therefore join on
+  // `!` before asking, since neither side is the expectation there.
+  //
+  // This sits *above* the unknowns on purpose: diverging code satisfies an
+  // expectation without being evidence for it, so it must not solve one.
+  // `twice(panic("z"), 1)` would otherwise fix `T` at `!` and then reject its
+  // own second argument.
+  if (b->kind == TY_NEVER) {
+    return true;
+  }
+
   if (a->kind == TY_UNKNOWN) {
     ctx->solutions[a->as.unknown.id] = b;
     return true;
@@ -729,9 +748,14 @@ bool infer_unify(InferCtx *ctx, Type *a, Type *b, DiagBag *diags, Span span) {
     return true;
   }
 
-  // `!` (never) coerces to any type: the code producing it diverges.
-  if (a->kind == TY_NEVER || b->kind == TY_NEVER) {
-    return true;
+  if (a->kind == TY_NEVER) {
+    char bb[64];
+    type_sprintf(b, bb, sizeof(bb));
+    diag_error(diags, span,
+               "expected 'Never', which only diverging code produces, but got "
+               "'%s'",
+               bb);
+    return false;
   }
 
   if (a->kind != b->kind) {
@@ -4877,6 +4901,15 @@ static bool check_flow_into(CheckCtx *ctx, Expr *e, Type *actual,
   return infer_unify(&ctx->infer, expected, actual, ctx->diags, span);
 }
 
+// The same question for a site that reports its own diagnostic and so cannot
+// call `infer_unify` for it. A monomorphic call compares argument to parameter
+// with `types_equal`, which knows nothing about `!` — so `take(panic("no"))`
+// was rejected where `return panic("no")` was fine. `!` flows into anything;
+// the reverse is `infer_unify`'s business.
+static bool type_flows(Type *actual, Type *expected) {
+  return actual->kind == TY_NEVER || types_equal(actual, expected);
+}
+
 // The expectation that has to reach a branch, or NULL. A trait object is the
 // only type a value is *converted* into rather than found to already have, so
 // it is the only one the branches cannot be left to settle between themselves:
@@ -4950,7 +4983,7 @@ static Type *resolve_assoc_call(CheckCtx *ctx, Expr *expr, Type *self_type,
     if (is_generic) {
       had_error |= !infer_unify(&ctx->infer, param_ty, arg_ty, ctx->diags,
                                 call->args[i]->span);
-    } else if (!types_equal(arg_ty, param_ty)) {
+    } else if (!type_flows(arg_ty, param_ty)) {
       char ab[64], pb[64];
       type_sprintf(arg_ty, ab, sizeof(ab));
       type_sprintf(param_ty, pb, sizeof(pb));
@@ -5128,7 +5161,7 @@ static Type *resolve_trait_qualified_call(CheckCtx *ctx, Expr *expr,
     if (is_generic) {
       had_error |= !infer_unify(&ctx->infer, param_ty, arg_ty, ctx->diags,
                                 call->args[i]->span);
-    } else if (!types_equal(arg_ty, param_ty)) {
+    } else if (!type_flows(arg_ty, param_ty)) {
       char ab[64], pb[64];
       type_sprintf(arg_ty, ab, sizeof(ab));
       type_sprintf(param_ty, pb, sizeof(pb));
@@ -5214,7 +5247,7 @@ static Type *resolve_call_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       had_error |= !infer_unify(&ctx->infer, param_ty, arg_ty, ctx->diags,
                                 call->args[i]->span);
     } else {
-      if (!types_equal(arg_ty, param_ty)) {
+      if (!type_flows(arg_ty, param_ty)) {
         char ab[64], pb[64];
         type_sprintf(arg_ty, ab, sizeof(ab));
         type_sprintf(param_ty, pb, sizeof(pb));
@@ -6127,8 +6160,11 @@ static Type *resolve_match_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     } else if (result_ty == NULL) {
       result_ty = arm_ty;
     } else if (!type_is_poison(result_ty) && !type_is_poison(arm_ty)) {
-      if (!infer_unify(&ctx->infer, result_ty, arm_ty, ctx->diags,
-                       arm->body->span)) {
+      if (result_ty->kind == TY_NEVER) {
+        result_ty =
+            arm_ty; // arms are siblings: a diverging one settles nothing
+      } else if (!infer_unify(&ctx->infer, result_ty, arm_ty, ctx->diags,
+                              arm->body->span)) {
         had_error = true;
       }
     } else if (type_is_poison(result_ty)) {
@@ -6409,7 +6445,7 @@ static Type *check_trait_method_call(CheckCtx *ctx, Expr *expr, Type *trait_ref,
     if (is_generic) {
       had_error |=
           !infer_unify(&ctx->infer, param_ty, arg_ty, ctx->diags, arg->span);
-    } else if (!types_equal(arg_ty, param_ty)) {
+    } else if (!type_flows(arg_ty, param_ty)) {
       char ab[64], pb[64];
       type_sprintf(arg_ty, ab, sizeof(ab));
       type_sprintf(param_ty, pb, sizeof(pb));
@@ -6680,7 +6716,7 @@ static Type *resolve_method_call_typed(CheckCtx *ctx, Expr *expr, Type *self_ty,
     if (is_generic) {
       had_error |=
           !infer_unify(&ctx->infer, param_ty, arg_ty, ctx->diags, arg->span);
-    } else if (!types_equal(arg_ty, param_ty)) {
+    } else if (!type_flows(arg_ty, param_ty)) {
       char ab[64], pb[64];
       type_sprintf(arg_ty, ab, sizeof(ab));
       type_sprintf(param_ty, pb, sizeof(pb));
@@ -8564,14 +8600,23 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       }
       Span mismatch_span =
           if_->else_branch != NULL ? if_->else_branch->span : expr->span;
-      if (!infer_unify(&ctx->infer, then_ty, else_ty, ctx->diags,
-                       mismatch_span)) {
+      // the arms are siblings, so the diverging one joins into the other
+      // rather than becoming the expectation: `!` on the left of a directional
+      // unification is an error, and `if c { return 1; } else { 2 }` would be
+      // rejected for the order alone.
+      bool then_diverges = then_ty->kind == TY_NEVER;
+      Type *joined = then_diverges ? else_ty : then_ty;
+      Type *other = then_diverges ? then_ty : else_ty;
+      if (!infer_unify(&ctx->infer, joined, other, ctx->diags, mismatch_span)) {
         result = ctx->tc->t_poison;
         break;
       }
+      result = joined;
+      break;
     }
 
-    // they are unified; prefer the branch that doesn't diverge
+    // one arm is poison: nothing was unified, so take the other and let the
+    // diagnostic already reported stand alone.
     result = then_ty->kind == TY_NEVER ? else_ty : then_ty;
     break;
   }
@@ -8733,8 +8778,12 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
         continue;
       }
       if (ok) {
-        ok &= infer_unify(&ctx->infer, elem_ty, ty, ctx->diags,
-                          array->elems[i]->span);
+        if (elem_ty->kind == TY_NEVER) {
+          elem_ty = ty; // siblings again: `[panic("x"), 1]` is an `[Int]`
+        } else {
+          ok &= infer_unify(&ctx->infer, elem_ty, ty, ctx->diags,
+                            array->elems[i]->span);
+        }
       }
     }
 

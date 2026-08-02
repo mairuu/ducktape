@@ -1,0 +1,9 @@
+#! expect: expected 'Never', which only diverging code produces, but got 'Int'
+# `return` in a `-> Never` body is the same broken promise, one construct in.
+fun evil() -> Never {
+    return 3;
+}
+
+fun main() {
+    var x: Int = evil();
+}

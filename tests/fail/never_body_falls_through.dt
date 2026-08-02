@@ -1,0 +1,8 @@
+#! expect: expected 'Never', which only diverging code produces, but got '()'
+# A `-> Never` body that runs off its end breaks the promise. Its Unit used to
+# reach whatever the caller declared.
+fun evil() -> Never { }
+
+fun main() {
+    var x: Int = evil();
+}

@@ -1402,7 +1402,28 @@ keep this file small. Everything from 55 on is below.
   refutability check is `matrix_covers` with the answer turned around, so the
   two spellings of `var` partition the patterns between them. No opcode, no
   image change. Remainder: a `-> Never` body that falls through is still
-  accepted (below), which is why the trap stays under the `else`.
+  accepted (milestone 85), which is why the trap stays under the `else`.
+
+- **85. A promise nothing was asked to keep** (`SHA`) — `fun evil() -> Never { }`
+  compiled, handed its `Unit` to whatever the caller declared, and crashed the
+  VM on an assertion. Design: `language.md` "`std::panic`" + two "not yet
+  implemented" rows, `architecture.md` (inference intro), `runtime.md`
+  ("Destructuring a `var`"). The finding: `Never` was not under-checked, it was
+  **checked in a direction that does not exist**. `infer_unify` returned true if
+  *either* side was `!`, and only one of those is a rule — `!` is the bottom
+  type, so it flows out of diverging code into anything and into nothing at all.
+  Making it directional cost three lines and broke everything, because the
+  positions that unify **siblings** (an `if`'s arms, a `match`'s, an array's
+  elements) have no expectation to put first; they must join on `!` themselves,
+  which `EXPR_IF` was already doing one line *after* it asked. The same
+  direction, read the other way, fixed a live rejection: a monomorphic call
+  compares with `types_equal`, which knows nothing of `!`, so `take(panic("no"))`
+  had never been allowed. The sharp bit is placement — the rule sits *above* the
+  unknowns, since divergence satisfies an expectation without being evidence
+  for one, and solving `T` from it makes `first(panic("x"), 4)` reject its own
+  second argument. No codegen change and no image change: a `!` is a type nobody
+  produces, so there was never anything to compile. Remainder: `while true { }`
+  is not divergence, so an endless function still ends in a `panic`.
 
 ## Next (in recommended order)
 
@@ -1642,14 +1663,12 @@ via `Module.decl_base`) and is not part of the main line.
   which is the same one call to `matrix_covers` — what stops it spreading is
   that `check_cond_binding` deliberately has no matrix, and Rust *warns* here
   where the binding forms error, a severity this compiler does not have
-- a `-> Never` body is never checked against its promise: `Never` unifies with
-  everything in both directions, so `fun evil() -> Never { }` is accepted and
-  hands its unit to whatever the caller declared — `var x: Int = evil();` then
-  fails an assertion in the VM's `stringify`. `block_diverges` (milestone 84)
-  is the predicate that would answer it at the definition site; what it does
-  not answer is `fun f() -> Never { return 3; }`, which needs the unify rule to
-  stop being symmetric. `var ... else` is the one construct that consumes the
-  promise and keeps an `OP_MATCH_FAIL` under the block against exactly this
+- there is no diverging **loop**: `while true { }` types `Unit` and there is no
+  `loop` keyword, so `fun serve() -> Never { while true { } }` is refused
+  (milestone 85) and an endless function has to end in a `panic`. Reading a
+  `while` as diverging needs "the condition is literally `true` and no `break`
+  targets this loop", which is a second analysis rather than a widening of
+  `block_diverges`
 - `pub` is parsed and ignored on the `impl` keyword itself, and *rejected* on a
   method: `pub fun` inside an `impl` block is "expected impl item". **Method**
   visibility does not exist — a method is as visible as its impl — which is why
@@ -1812,10 +1831,11 @@ via `Module.decl_base`) and is not part of the main line.
   one branch in `mod_parse`" — each forced by the same rule, that a construct the
   compiler desugars (interpolation, a spec) cannot have its meaning depend on
   what the user happened to import
-- `Never` is not *checked* to diverge: unification lets it stand in for any
-  type in both directions, so `fun f() -> Never { return 1; }` is accepted and
-  a `var x: Never` annotation is legal. It is a promise the compiler takes on
-  trust, which is fine while `std::panic` is the only thing making it
+- `Never` is refused in the positions that ask a **structural** question rather
+  than a flow one: `if panic("x") { }` wants a `Bool`, `for x in panic("x")`
+  wants an `Iterator`, and `r?` inside a `-> Never` function wants the same enum
+  back. Each reports a plain mismatch. Rust accepts all three; nothing is lost
+  by refusing them, since the code below is unreachable either way
 - a panic does not unwind — no `catch`, and no way for a program to observe one
   and keep running. `Never` is only a *type*; the runtime behaviour behind it is
   "print the frames and stop"

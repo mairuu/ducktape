@@ -1061,6 +1061,15 @@ consequence a builtin name carries: `type_named_builtin` is consulted before
 the type scope, so a program's own `struct Range` is declared but never
 reachable by name — the same thing `struct String` has always done.
 
+`infer_unify(a, b)` is **directional**: `a` is the expectation. Only two rules
+read that direction — the `dyn` coercions offered beside it, and `TY_NEVER`.
+`!` is the bottom type, so it satisfies any expectation on the right and is
+satisfiable by nothing but itself on the left (milestone 85); the check sits
+*above* the unknowns so that diverging code, which is not evidence about a
+type, solves none. Callers that unify **siblings** rather than a value against
+an expectation — the arms of an `if` or a `match`, an array's elements — have
+no expectation to put first and so must join on `!` themselves before asking.
+
 Inference is union-find over `TY_UNKNOWN` nodes: `infer_fresh` mints
 unknowns, `infer_unify` solves (emitting "type mismatch" diags itself),
 `infer_find`/`infer_apply` chase and deep-substitute solutions,

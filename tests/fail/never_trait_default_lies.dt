@@ -1,0 +1,7 @@
+#! expect: expected 'Never', which only diverging code produces, but got '()'
+# The default body is checked once, at the trait, so no impl has to reach it.
+trait Bail {
+    fun stop(self) -> Never { }
+}
+
+fun main() { }

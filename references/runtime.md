@@ -503,9 +503,10 @@ nothing else. The bindings have not been pushed at that point, so `local_count`
 is exactly what the stack holds — the outer locals plus the subject — and a
 `break` or `continue` inside pops the right number on its way out with no
 special case. The trap stays *below* the block rather than being replaced by
-it: the checker made the block diverge, and if it ever fell through anyway
-(a `-> Never` body that returns is still accepted — `language.md` "Not yet
-implemented") the alternative would be reading names that were never bound.
+it: the checker made the block diverge, and the alternative to a trap if one
+ever fell through anyway would be reading names that were never bound. Since
+milestone 85 checks `-> Never` bodies too, no source reaches it — it costs one
+byte and is the only thing standing between a checker bug and unbound reads.
 
 #### `if var` and `while var`
 

@@ -1972,8 +1972,9 @@ is the type that says so. It is not a new type — it is the one `return` and
 `break` already gave an expression — but until this module nothing could *name*
 it in a signature.
 
-Naming it is what makes the promise usable. `infer_unify` lets `Never` stand in
-for any type, so `return panic(msg)` satisfies any return type at all:
+Naming it is what makes the promise usable. `Never` is the **bottom type**: it
+flows out of diverging code into any expectation at all, so `return panic(msg)`
+satisfies any return type:
 
 ```
 fun unwrap(self) -> T {
@@ -1985,9 +1986,30 @@ fun unwrap(self) -> T {
 ```
 
 That single rule is the whole of what `std::result` and `Option::unwrap` needed
-(`tests/pass/never_type.dt`). It is also the whole rule: `Never` is coerced
-*from* and never checked *into*, so a body annotated `-> Never` that falls
-through is accepted — a known gap, listed below.
+(`tests/pass/never_type.dt`).
+
+Nothing flows the other way. No value has type `Never`, so an expectation of
+`Never` is a promise to diverge, and only diverging code keeps it: a body
+annotated `-> Never` must not run off its end or `return` a value, and
+`var x: Never = 5;` is refused like any other mismatch.
+
+```
+fun evil() -> Never { }          # error: expected 'Never', which only
+                                 # diverging code produces, but got '()'
+```
+
+A body diverges when it ends in `return`/`break`/`continue`, or in anything
+typed `Never` — `panic("...")`, or a `match` whose every arm diverges. This is
+the same `block_diverges` rule a `var ... else` block is held to. There is no
+`loop` keyword, and a `while true { }` is not recognised as diverging, so an
+endless function still has to end in a `panic`.
+
+Because divergence is not *evidence* about a type, it also solves no type
+variable: `first(panic("x"), 4)` leaves `T` for the second argument to decide
+(`tests/run/never_flows.dt`). And where two positions are **siblings** rather
+than a value and an expectation — the arms of an `if` or a `match`, an array's
+elements — the diverging one joins into the other instead of imposing itself,
+which is what makes `if c { return 1; } else { 2 }` an `Int`.
 
 **There is no unwinding and no `catch`.** A panic sets the same error a failing
 native sets, so the VM reports it at the call site, prints the frames beneath
@@ -2701,7 +2723,8 @@ HashSet::with_capacity(n); s.capacity(); s.reserve(n);   # forwarded, all three
 | visibility below module granularity (`pub(crate)` &c.) | `pub` is the only modifier |
 | two spellings of one file (symlinks, unusual paths) | dedup is lexical, so the file would load twice and collide |
 | top-level `var` (globals) | parses, then a registration diagnostic: move it into a function |
-| checking that a `-> Never` body actually diverges | not checked. `Never` unifies with everything, in both directions, so `fun evil() -> Never { }` is accepted and its unit reaches whatever the caller declared — an assertion failure in the VM if that was an `Int`. `var ... else` is the one construct that consumes the promise, and it keeps an `OP_MATCH_FAIL` under the block for exactly this reason |
+| an endless loop as a diverging body | `while true { }` types `Unit`, so `fun serve() -> Never { while true { } }` is refused since milestone 85 — end it in a `panic`. There is no `loop` keyword to give the "no break, so no exit" reading to |
+| `!` in a position asking a structural question | `if panic("x") { }`, `for x in panic("x")`, and `r?` inside a `-> Never` function are all refused: those sites ask "is it a `Bool`/an `Iterator`/the same enum?", not "does it flow here?", and `Never` answers none of them. Harmless, since the code below is unreachable either way |
 | tuple-struct struct-patterns `Pair { a, b }` | write the constructor spelling `Pair(a, b)` — "matching tuple struct with struct pattern syntax is not allowed" |
 | variable shadowing diagnostics | a `var` may silently shadow an earlier one in the same scope (top-level *item* names do collide — that is an error) |
 | declaring a type whose name is a builtin (`struct Range`, `struct String`) | accepted, but a builtin name is resolved before the type scope is consulted, so every mention of it means the builtin and the declaration is unreachable |
