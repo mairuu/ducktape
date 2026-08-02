@@ -823,6 +823,7 @@ typedef enum {
   EXPR_BLOCK, // { stmts... expr? }
   EXPR_IF,    // if cond { } else { }
   EXPR_WHILE, // while cond { }
+  EXPR_LOOP,  // loop { }
   EXPR_FOR,   // for x in iter { }
   EXPR_MATCH, // match expr { arms }
   // EXPR_RETURN, // return expr? (also appears as Stmt; duplicated for
@@ -1096,6 +1097,15 @@ typedef struct {
   Expr *body;
 } ExprWhile;
 
+// `loop { .. }`. No condition is not a `while` with one field missing: a
+// `while` always has an exit and so always types `()`, while this one leaves
+// only through a `break`. `has_break` is the checker's answer to whether one
+// does — false makes the whole expression `Never`.
+typedef struct {
+  Expr *body;
+  bool has_break;
+} ExprLoop;
+
 typedef struct {
   Expr *subject;
   MatchArm *arms;
@@ -1192,6 +1202,8 @@ struct Expr {
     ExprFor for_expr;
 
     ExprWhile while_expr;
+
+    ExprLoop loop_expr;
 
     ExprMatch match;
 

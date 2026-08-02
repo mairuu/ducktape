@@ -169,7 +169,7 @@ stmt           = varDecl
                | "break" ";"
                | "continue" ";"
                | expr ";"
-               | ifExpr | matchExpr | whileExpr | forExpr ;
+               | ifExpr | matchExpr | whileExpr | loopExpr | forExpr ;
                  (* block-form expressions need no ";" as statements *)
 
 (* ── expressions (lowest to highest precedence) ───────────────────────── *)
@@ -223,7 +223,7 @@ primary        = INT | FLOAT | CHAR | STRING | interpString
                | "(" expr ( "," expr )* ","? ")"        (* tuple / group *)
                | "[" ( expr ( "," expr )* ","? )? "]"   (* array literal *)
                | closure
-               | ifExpr | matchExpr | whileExpr | forExpr
+               | ifExpr | matchExpr | whileExpr | loopExpr | forExpr
                | block
                | exprPath structInit? ;
 
@@ -244,6 +244,9 @@ fieldInit      = IDENT ":" expr | IDENT ;
 
 ifExpr         = "if" condHead block ( "else" ( ifExpr | block ) )? ;
 whileExpr      = "while" condHead block ;
+loopExpr       = "loop" block ;
+                 (* no header: an endless loop is a shape the grammar has,
+                    rather than a condition the checker would have to read *)
 condHead       = ( "var" pattern "=" )? expr ;
                  (* with the "var" prefix the expr is the *subject* — matched
                     against the pattern instead of tested as a Bool — and the

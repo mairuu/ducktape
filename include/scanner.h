@@ -30,6 +30,7 @@ typedef enum {
   TOKEN_IF,
   TOKEN_IMPL,
   TOKEN_IN,
+  TOKEN_LOOP,
   TOKEN_MATCH,
   TOKEN_NOT,
   TOKEN_OR,

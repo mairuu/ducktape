@@ -1,0 +1,96 @@
+# `loop`: break/continue, nesting, and a break inside a nested loop leaving only
+# the inner one. Also that a diverging `loop` ends a block, so nothing follows.
+#> 5
+#> 8
+#> 6
+#> 4
+#> 42
+#> 4
+#> 30
+use std::io::print;
+
+fun counted() -> Int {
+    var n = 0;
+    loop {
+        n += 1;
+        if n == 5 { break; }
+    }
+    return n;
+}
+
+# `continue` goes back to the top, as it does in a `while`.
+fun first_over(limit: Int) -> Int {
+    var n = 0;
+    loop {
+        n += 2;
+        if n < limit { continue; }
+        break;
+    }
+    return n;
+}
+
+# the inner `break` names the inner loop, so the outer one keeps turning.
+fun nested() -> Int {
+    var hits = 0;
+    var rounds = 0;
+    loop {
+        loop {
+            hits += 1;
+            break;
+        }
+        rounds += 1;
+        if rounds == 3 { break; }
+    }
+    return hits + rounds;
+}
+
+# a `loop` is an expression, and one with a break is `()` like a `while`.
+fun as_expr() -> Int {
+    var n = 0;
+    var u = loop { n += 4; break; };
+    return n;
+}
+
+# nothing follows the `loop`, and nothing has to: with no break it is `Never`,
+# so this body diverges before its end.
+fun forever_unless(x: Int) -> Int {
+    if x > 0 { return 42; }
+    loop { }
+}
+
+# locals declared in the body: the `break` has to pop down to the loop's base,
+# or the stack drifts by two every turn.
+fun locals() -> Int {
+    var n = 0;
+    loop {
+        var a = n + 1;
+        var b = a * 2;
+        n = a;
+        if b > 6 { break; }
+    }
+    return n;
+}
+
+# a body local captured by a closure is a fresh cell each turn — it is pushed
+# and popped inside the loop, so `break` has to close it before popping.
+fun captured() -> Int {
+    var fs: [fun() -> Int] = [];
+    var i = 0;
+    loop {
+        var here = i * 10;
+        fs.push(|| here);
+        i += 1;
+        if i == 3 { break; }
+    }
+    return fs[0]() + fs[1]() + fs[2]();
+}
+
+fun main() {
+    print(counted());
+    print(first_over(7));
+    print(nested());
+    print(as_expr());
+    print(forever_unless(1));
+    print(locals());
+    print(captured());
+}

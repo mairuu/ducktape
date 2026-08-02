@@ -1423,7 +1423,22 @@ keep this file small. Everything from 55 on is below.
   for one, and solving `T` from it makes `first(panic("x"), 4)` reject its own
   second argument. No codegen change and no image change: a `!` is a type nobody
   produces, so there was never anything to compile. Remainder: `while true { }`
-  is not divergence, so an endless function still ends in a `panic`.
+  is not divergence, so an endless function still ends in a `panic` —
+  milestone 86.
+
+- **86. The loop that asks nothing** (`SHA`) — `loop { }`, and a body with no
+  `break` in it types `!`, so `fun serve() -> Never { loop { } }` compiles.
+  Design: `language.md` "Divergence and `Never`" + the expression list + two
+  "not yet implemented" rows, `architecture.md` (`CheckLoop`), `runtime.md`
+  (`compile_loop`), `grammar.ebnf`. The finding: the keyword **is** the
+  analysis — reading `while true` as endless means reading a condition's
+  *value*, and dropping the header deletes the question instead of answering
+  it. What was left needed a loop **stack** in `CheckCtx` where a depth counter
+  stood: a depth says "in a loop", which is all `break` ever asked, while "does
+  a break leave *this* loop" needs the frame. Codegen is `compile_while` minus
+  the condition. Spent immediately: 15 `while true` loops in `std/iter.dt`
+  dropped their dead trailing `return`. Remainder: `break` carries no value, so
+  a searching loop still assigns to a `var` above it.
 
 ## Next (in recommended order)
 
@@ -1663,12 +1678,15 @@ via `Module.decl_base`) and is not part of the main line.
   which is the same one call to `matrix_covers` — what stops it spreading is
   that `check_cond_binding` deliberately has no matrix, and Rust *warns* here
   where the binding forms error, a severity this compiler does not have
-- there is no diverging **loop**: `while true { }` types `Unit` and there is no
-  `loop` keyword, so `fun serve() -> Never { while true { } }` is refused
-  (milestone 85) and an endless function has to end in a `panic`. Reading a
-  `while` as diverging needs "the condition is literally `true` and no `break`
-  targets this loop", which is a second analysis rather than a widening of
-  `block_diverges`
+- `break` carries no value: it is a statement, so `loop { break x; }` does not
+  parse and a loop that searches must assign to a `var` declared above it. A
+  `loop` with an exit is therefore always `()`. What it would take is a **join**
+  over every `break` in one loop — the checker computes a join for an `if`'s two
+  arms, but nothing collects one across statements scattered through a body, and
+  the `CheckLoop` frame milestone 86 added is where it would live
+- `while true { }` still types `()`, and deliberately: its condition is an
+  expression, and the checker reads types rather than values. `loop { }` is the
+  spelling that asks no condition (milestone 86)
 - `pub` is parsed and ignored on the `impl` keyword itself, and *rejected* on a
   method: `pub fun` inside an `impl` block is "expected impl item". **Method**
   visibility does not exist — a method is as visible as its impl — which is why

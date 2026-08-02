@@ -217,6 +217,7 @@ static void sync_to_stmt(Parser *p) {
     case TOKEN_USE:
     case TOKEN_RBRACE: // end of the enclosing block
     case TOKEN_WHILE:
+    case TOKEN_LOOP:
       return;
     default:
       advance_tok(p);
@@ -952,7 +953,8 @@ static bool is_pure_stmt(Parser *p) {
   return check_tok(p, TOKEN_VAR) || check_tok(p, TOKEN_RETURN) ||
          check_tok(p, TOKEN_BREAK) || check_tok(p, TOKEN_CONTINUE) ||
          check_tok(p, TOKEN_IF) || check_tok(p, TOKEN_FOR) ||
-         check_tok(p, TOKEN_MATCH) || check_tok(p, TOKEN_WHILE);
+         check_tok(p, TOKEN_MATCH) || check_tok(p, TOKEN_WHILE) ||
+         check_tok(p, TOKEN_LOOP);
 }
 
 static Expr *parse_block(Parser *p) {
@@ -2161,6 +2163,20 @@ static Expr *parse_primary(Parser *p) {
     return expr;
   }
 
+  // loop — no header at all, which is the whole point of the keyword: there is
+  // no condition to read, so nothing has to prove the loop ends.
+  if (match_tok(p, TOKEN_LOOP)) {
+    Expr *block = parse_block(p);
+    if (block->kind == EXPR_POISON) {
+      return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
+    }
+
+    Expr *expr = ast_expr(
+        EXPR_LOOP, span_merge(token_span(t), previous_tok_span(p)), p->al);
+    expr->as.loop_expr.body = block;
+    return expr;
+  }
+
   // block
   if (check_tok(p, TOKEN_LBRACE)) {
     return parse_block(p);
@@ -2335,7 +2351,8 @@ Stmt *parse_stmt(Parser *p) {
   // }
 
   if (check_tok(p, TOKEN_MATCH) || check_tok(p, TOKEN_IF) ||
-      check_tok(p, TOKEN_FOR) || check_tok(p, TOKEN_WHILE)) {
+      check_tok(p, TOKEN_FOR) || check_tok(p, TOKEN_WHILE) ||
+      check_tok(p, TOKEN_LOOP)) {
     Expr *expr = parse_primary(p);
     if (expr->kind == EXPR_POISON) {
       return ast_stmt(STMT_POISON, span_merge(start_span, expr->span), p->al);

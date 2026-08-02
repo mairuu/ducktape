@@ -30,7 +30,7 @@ field/tuple access, indexing, `as`, `?`.
 
 Notables:
 - `parse_block` — statements vs. tail expression. `is_pure_stmt` routes
-  `var/return/break/continue/if/for/match/while` through `parse_stmt`, but a
+  `var/return/break/continue/if/for/match/while/loop` through `parse_stmt`, but a
   parsed `if`/`match` statement immediately before `}` is unwrapped into the
   block's tail (that's what makes `{ if c { 1 } else { 2 } }` an `Int` block).
 - `parse_closure` — `|params| ( -> type )? ( { block } | expr )`. The body has
@@ -139,8 +139,8 @@ Three passes over each module, mirroring compiler phases:
    sees a `TY_TRAIT` base and yields a `ty_assoc` projection instead of going
    through the impl index.
 3. **check** — `tc_check_module`: `resolve_expr`/`resolve_stmt` walk bodies.
-   `CheckCtx` carries the current function, expected return type, loop depth,
-   scopes, and an `InferCtx`. `tc_check_impl` first runs
+   `CheckCtx` carries the current function, expected return type, the enclosing
+   loops, scopes, and an `InferCtx`. `tc_check_impl` first runs
    `tc_check_impl_conformance` for trait impls: every trait associated type and
    every required method must be present (defaulted methods may be omitted),
    and each method's signature must match. Matching rewrites the trait
@@ -2006,6 +2006,16 @@ That predicate is also what `EXPR_BLOCK` now uses for its own type, where the
 rule had been the narrower "the last statement is a `return`" — so
 `else { panic("no"); }` diverges with the semicolon as without it, and a block
 ending in `break` types as `!` everywhere, not only here.
+
+The fourth thing that types `!` is a `loop` with no exit, and finding one is why
+`CheckCtx` keeps a **stack** of enclosing loops (`CheckLoop`, innermost first)
+rather than the depth counter it used to. A depth answers "is there a loop at
+all", which is all `break`/`continue` needed; "does a `break` leave *this* one"
+needs the frame itself, and since a `break` carries no label the frame it marks
+is always the head of the list. Only `loop` frames carry an `endless` pointer —
+a `while` or `for` has an exit whatever its body does — so the mark is a write
+to `ExprLoop.has_break`, read once when the body is done. A closure body sets
+the list to NULL, the same boundary `break` could never cross anyway.
 
 When the pattern cannot be checked — a poisoned initializer, or a mismatch
 that stopped the walk partway — `bind_pattern_poison` defines the remaining

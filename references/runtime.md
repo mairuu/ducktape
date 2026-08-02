@@ -326,6 +326,11 @@ its bytes.
 - Blocks: compile stmts, compile tail (or `OP_UNIT`), then `OP_SLIDE n`.
 - `and`/`or` compile to jump-based short-circuit; `if` always produces a
   value (`OP_UNIT` for a missing else).
+- `loop { .. }` (`compile_loop`) is `compile_while` with the condition and its
+  exit jump removed, so the only edge out is a patched `break`. Its trailing
+  `OP_UNIT` is unreachable when the checker found no `break` — one byte, kept so
+  that "an expression leaves a value" holds without a case. Divergence is a
+  checker fact and costs codegen nothing.
 - Loops evaluate to unit. `for x in <range>` materializes two locals —
   hidden `range` and the loop variable — then tests with `OP_RANGE_TEST` and
   increments by constant 1. `for x in <array>` (`compile_for_array`)

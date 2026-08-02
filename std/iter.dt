@@ -82,13 +82,12 @@ pub trait Iterator {
     # the `iterator` gate that `for` consults is inert).
     fun collect(self) -> [Self.Item] {
         var out: [Self.Item] = [];
-        while true {
+        loop {
             match self.next() {
                 Option::Some(x) => { out.push(x); },
                 Option::None => { return out; },
             }
         }
-        return out;
     }
 
     # Yield at most the first `n` elements, then stop — a lazy adapter holding a
@@ -152,13 +151,12 @@ pub trait Iterator {
     # type, a parameter of the method.
     fun fold<B>(self, init: B, f: fun(B, Self.Item) -> B) -> B {
         var acc = init;
-        while true {
+        loop {
             match self.next() {
                 Option::Some(x) => { acc = f(acc, x); },
                 Option::None => { return acc; },
             }
         }
-        return acc;
     }
 
     # ── Short-circuiting consumers ──────────────────────────────────────────
@@ -182,26 +180,24 @@ pub trait Iterator {
 
     # Is `pred` true of any element? `false` for an empty sequence.
     fun any(self, pred: fun(Self.Item) -> Bool) -> Bool {
-        while true {
+        loop {
             match self.next() {
                 Option::Some(x) => { if pred(x) { return true; } },
                 Option::None => { return false; },
             }
         }
-        return false;
     }
 
     # Is `pred` true of every element? `true` for an empty sequence — there is
     # no element it fails on, which is the only answer that keeps `all` and
     # `any` mirrors of each other.
     fun all(self, pred: fun(Self.Item) -> Bool) -> Bool {
-        while true {
+        loop {
             match self.next() {
                 Option::Some(x) => { if not pred(x) { return false; } },
                 Option::None => { return true; },
             }
         }
-        return true;
     }
 
     # The first element `pred` accepts, or `None`. The element itself — its
@@ -209,13 +205,12 @@ pub trait Iterator {
     # a pair because a caller almost always wants one and would have to unpack
     # the other.
     fun find(self, pred: fun(Self.Item) -> Bool) -> Option<Self.Item> {
-        while true {
+        loop {
             match self.next() {
                 Option::Some(x) => { if pred(x) { return Option::Some(x); } },
                 Option::None => { return Option::None; },
             }
         }
-        return Option::None;
     }
 
     # The index of the first element `pred` accepts, counted from where the
@@ -223,7 +218,7 @@ pub trait Iterator {
     # not know how far it has already come, and nothing can ask it.
     fun position(self, pred: fun(Self.Item) -> Bool) -> Option<Int> {
         var i = 0;
-        while true {
+        loop {
             match self.next() {
                 Option::Some(x) => {
                     if pred(x) { return Option::Some(i); }
@@ -232,7 +227,6 @@ pub trait Iterator {
                 Option::None => { return Option::None; },
             }
         }
-        return Option::None;
     }
 
     # How many elements are left. The one consumer here that cannot short-
@@ -240,13 +234,12 @@ pub trait Iterator {
     # drains it and an endless source never comes back.
     fun count(self) -> Int {
         var n = 0;
-        while true {
+        loop {
             match self.next() {
                 Option::Some(x) => { n += 1; },
                 Option::None => { return n; },
             }
         }
-        return n;
     }
 
     # Run `f` on every element, for its effect. The same walk `for x in it`
@@ -260,7 +253,7 @@ pub trait Iterator {
     # the dropping is the ordinary block rule rather than anything this method
     # asked for.
     fun for_each(self, f: fun(Self.Item) -> Unit) {
-        while true {
+        loop {
             match self.next() {
                 Option::Some(x) => { f(x); },
                 Option::None => { return; },
@@ -285,7 +278,7 @@ pub trait Iterator {
     # `dyn Iterator` keeps `collect`.
     fun max(self) -> Option<Self.Item> where Self.Item: Ord {
         var best = self.next();
-        while true {
+        loop {
             match self.next() {
                 Option::Some(v) => {
                     match best {
@@ -296,13 +289,12 @@ pub trait Iterator {
                 Option::None => { return best; },
             }
         }
-        return best;
     }
 
     # The smallest element, or `None` for an empty sequence.
     fun min(self) -> Option<Self.Item> where Self.Item: Ord {
         var best = self.next();
-        while true {
+        loop {
             match self.next() {
                 Option::Some(v) => {
                     match best {
@@ -313,7 +305,6 @@ pub trait Iterator {
                 Option::None => { return best; },
             }
         }
-        return best;
     }
 
     # The sum of every element, or `None` for an empty sequence. `product` is
@@ -338,7 +329,7 @@ pub trait Iterator {
     # *projection*, which is the language piece that milestone bought.
     fun sum(self) -> Option<Self.Item> where Self.Item: Add<Output = Self.Item> {
         var total = self.next();
-        while true {
+        loop {
             match self.next() {
                 Option::Some(v) => {
                     match total {
@@ -349,14 +340,13 @@ pub trait Iterator {
                 Option::None => { return total; },
             }
         }
-        return total;
     }
 
     # The product of every element, or `None` for an empty sequence.
     fun product(self) -> Option<Self.Item>
         where Self.Item: Mul<Output = Self.Item> {
         var total = self.next();
-        while true {
+        loop {
             match self.next() {
                 Option::Some(v) => {
                     match total {
@@ -367,7 +357,6 @@ pub trait Iterator {
                 Option::None => { return total; },
             }
         }
-        return total;
     }
 }
 
@@ -492,7 +481,7 @@ impl<I: Iterator> Iterator for Filter<I> {
     type Item = I.Item;
 
     fun next(self) -> Option<I.Item> {
-        while true {
+        loop {
             match self.inner.next() {
                 Option::Some(x) => {
                     if (self.pred)(x) { return Option::Some(x); }
@@ -500,9 +489,6 @@ impl<I: Iterator> Iterator for Filter<I> {
                 Option::None => { return Option::None; },
             }
         }
-        # `while true` never falls through, but the checker reads the loop as
-        # able to end, so a trailing `None` makes every path return.
-        return Option::None;
     }
 }
 
@@ -510,7 +496,7 @@ impl<I: Iterator> Iterator for Filter<I> {
 # an element, not about where it sat.
 impl<I: DoubleEnded> DoubleEnded for Filter<I> {
     fun next_back(self) -> Option<I.Item> {
-        while true {
+        loop {
             match self.inner.next_back() {
                 Option::Some(x) => {
                     if (self.pred)(x) { return Option::Some(x); }
@@ -518,7 +504,6 @@ impl<I: DoubleEnded> DoubleEnded for Filter<I> {
                 Option::None => { return Option::None; },
             }
         }
-        return Option::None;
     }
 }
 
@@ -681,7 +666,7 @@ impl<I: Iterator, J: Iterator> Iterator for FlatMap<I, J> {
     type Item = J.Item;
 
     fun next(self) -> Option<J.Item> {
-        while true {
+        loop {
             match self.cur {
                 Option::Some(it) => {
                     match it.next() {
@@ -701,7 +686,6 @@ impl<I: Iterator, J: Iterator> Iterator for FlatMap<I, J> {
                 },
             }
         }
-        return Option::None;
     }
 }
 

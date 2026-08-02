@@ -306,6 +306,12 @@ pub fun process_data<T>(data: T) -> Result<Int, String> {
         var s = "Iter: {i}";
     }
 
+    var spins = 0;
+    loop {
+        spins += 1;
+        if spins == 3 { break; }
+    }
+
     var xs = [1, 2, 3];
     var first = xs[0];
 

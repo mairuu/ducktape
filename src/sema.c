@@ -4284,13 +4284,16 @@ static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
     break;
   }
   case STMT_BREAK: {
-    if (!ctx->loop_depth) {
+    if (ctx->loops == NULL) {
       diag_error(ctx->diags, stmt->span, "break statement not within a loop");
+    } else if (ctx->loops->endless != NULL) {
+      // this `loop` has an exit after all, so it is not a diverging one.
+      ctx->loops->endless->has_break = true;
     }
     break;
   }
   case STMT_CONTINUE: {
-    if (!ctx->loop_depth) {
+    if (ctx->loops == NULL) {
       diag_error(ctx->diags, stmt->span,
                  "continue statement not within a loop");
     }
@@ -7137,10 +7140,10 @@ static Type *resolve_closure_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   // check the body in the closure's own function context
   FunDef *saved_fun = ctx->fun;
   Type *saved_ret = ctx->return_type;
-  int saved_loop_depth = ctx->loop_depth;
+  CheckLoop *saved_loops = ctx->loops;
   ctx->fun = def;
   ctx->return_type = ret_ty;
-  ctx->loop_depth = 0; // break/continue can't escape the closure body
+  ctx->loops = NULL; // break/continue can't escape the closure body
 
   ctx->vscope = vscope_push(ctx->vscope, true, false, ctx->al);
   for (int i = 0; i < closure->param_count; i++) {
@@ -7158,7 +7161,7 @@ static Type *resolve_closure_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   ctx->vscope = vscope_pop(ctx->vscope);
   ctx->fun = saved_fun;
   ctx->return_type = saved_ret;
-  ctx->loop_depth = saved_loop_depth;
+  ctx->loops = saved_loops;
 
   Type *fun_ty = ty_fun(param_types.ptr, closure->param_count, ret_ty, ctx->al);
   def->fun_type = fun_ty;
@@ -8492,12 +8495,28 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     ctx->vscope = vscope_push(ctx->vscope, false, true, ctx->al);
     bool bound =
         wh->binding == NULL || check_cond_binding(ctx, wh->binding, cond_ty);
-    ctx->loop_depth++;
+    CheckLoop frame = {.parent = ctx->loops};
+    ctx->loops = &frame;
     resolve_expr(ctx, wh->body, NULL);
     ctx->vscope = vscope_pop(ctx->vscope);
-    ctx->loop_depth--;
+    ctx->loops = frame.parent;
 
     result = bound ? ctx->tc->t_unit : ctx->tc->t_poison;
+    break;
+  }
+  case EXPR_LOOP: {
+    ExprLoop *lp = &expr->as.loop_expr;
+
+    // no header, so nothing to resolve first and no scope of its own — the
+    // body's block pushes one like any other.
+    CheckLoop frame = {.endless = lp, .parent = ctx->loops};
+    ctx->loops = &frame;
+    resolve_expr(ctx, lp->body, NULL);
+    ctx->loops = frame.parent;
+
+    // this is the whole rule the keyword buys: with no `break` naming it, the
+    // loop has no exit, so control never reaches what follows.
+    result = lp->has_break ? ctx->tc->t_unit : ctx->tc->t_never;
     break;
   }
   case EXPR_FOR: {
@@ -8527,10 +8546,11 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     ctx->vscope = vscope_push(ctx->vscope, false, true, ctx->al);
     vscope_define(ctx->vscope, for_->var_name, item_ty, ctx->diags,
                   for_->var_span, NULL);
-    ctx->loop_depth++;
+    CheckLoop frame = {.parent = ctx->loops};
+    ctx->loops = &frame;
     resolve_expr(ctx, for_->body, NULL);
     ctx->vscope = vscope_pop(ctx->vscope);
-    ctx->loop_depth--;
+    ctx->loops = frame.parent;
 
     result = ctx->tc->t_unit;
     break;

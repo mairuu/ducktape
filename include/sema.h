@@ -481,12 +481,21 @@ static inline Type *rctx_resolve(ResolveCtx *ctx, TypeNode *node) {
 // CheckCtx
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// the loops enclosing the expression being checked, innermost first. A `break`
+// carries no label, so it always names the head of this list — which is what
+// lets a `loop` be asked whether anything leaves it. A depth counter cannot
+// answer that question, only "is there a loop at all".
+typedef struct CheckLoop {
+  ExprLoop *endless; // set only for a `loop`, whose only exits are its breaks
+  struct CheckLoop *parent;
+} CheckLoop;
+
 struct CheckCtx {
   TypeChecker *tc;
   ImplIndex *impls; // the enclosing module's visible set
 
   // current function
-  int loop_depth; // 0 when not in a loop, > 0 inside for/while bodies
+  CheckLoop *loops; // NULL when not in a loop; reset across a closure boundary
   FunDef *fun;
   Type *return_type; // expected return
 

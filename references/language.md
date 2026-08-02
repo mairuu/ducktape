@@ -145,6 +145,11 @@ ending in `return` has type `!` (never), which unifies with anything.
   `while var`".
 - `while cond { .. }` and `for x in iter { .. }` evaluate to `()`; `iter` may be
   an array, a range, or any type that implements `Iterator` (see below).
+- `loop { .. }` has no header, and that is the whole of what it buys: with
+  nothing to test there is nothing to prove, so a `loop` no `break` leaves types
+  `!` rather than `()` and may end a `-> Never` body. One `break` anywhere in it
+  gives it an exit and it types `()` like a `while`. See "Divergence and
+  `Never`".
 - Ranges: `a..b`, `a..=b` — Int-only, first-class values (`var r = 0..10;`) of
   type `Range`, which is nameable (`fun span(r: Range)`) and carries one
   method, `r.iter()`.
@@ -1999,10 +2004,23 @@ fun evil() -> Never { }          # error: expected 'Never', which only
 ```
 
 A body diverges when it ends in `return`/`break`/`continue`, or in anything
-typed `Never` — `panic("...")`, or a `match` whose every arm diverges. This is
-the same `block_diverges` rule a `var ... else` block is held to. There is no
-`loop` keyword, and a `while true { }` is not recognised as diverging, so an
-endless function still has to end in a `panic`.
+typed `Never` — `panic("...")`, a `loop` nothing breaks out of, or a `match`
+whose every arm diverges. This is the same `block_diverges` rule a `var ...
+else` block is held to.
+
+```
+fun serve() -> Never { loop { } }          # no exit, so nothing follows it
+fun serve() -> Never { loop { break; } }   # got '()': the break is an exit
+fun serve() -> Never { while true { } }    # got '()': a `while` may always end
+```
+
+An endless loop is the one form of divergence that is a *shape* rather than a
+type: `loop` takes no header, so there is no condition anything would have to
+prove constant, and the only question left is whether a `break` names this loop
+— which the checker answers while walking the body, since a `break` carries no
+label and so always means the innermost one. `while true { }` stays `()` for
+exactly the reason `loop` was worth adding: reading it as endless would mean
+reading its condition, and the checker reads types rather than values.
 
 Because divergence is not *evidence* about a type, it also solves no type
 variable: `first(panic("x"), 4)` leaves `T` for the second argument to decide
@@ -2723,7 +2741,8 @@ HashSet::with_capacity(n); s.capacity(); s.reserve(n);   # forwarded, all three
 | visibility below module granularity (`pub(crate)` &c.) | `pub` is the only modifier |
 | two spellings of one file (symlinks, unusual paths) | dedup is lexical, so the file would load twice and collide |
 | top-level `var` (globals) | parses, then a registration diagnostic: move it into a function |
-| an endless loop as a diverging body | `while true { }` types `Unit`, so `fun serve() -> Never { while true { } }` is refused since milestone 85 — end it in a `panic`. There is no `loop` keyword to give the "no break, so no exit" reading to |
+| a `break` that carries a value | `loop { break x; }` does not parse: `break` is a statement, so a `loop` with an exit is always `()` and a searching loop has to assign to a `var` declared above it. What it would need is a *join* over every break in one loop, which nothing in the checker computes today |
+| reading `while true { }` as endless | its condition is an expression, and the checker reads types rather than values — `loop { }` is the spelling that asks no condition (milestone 86) |
 | `!` in a position asking a structural question | `if panic("x") { }`, `for x in panic("x")`, and `r?` inside a `-> Never` function are all refused: those sites ask "is it a `Bool`/an `Iterator`/the same enum?", not "does it flow here?", and `Never` answers none of them. Harmless, since the code below is unreachable either way |
 | tuple-struct struct-patterns `Pair { a, b }` | write the constructor spelling `Pair(a, b)` — "matching tuple struct with struct pattern syntax is not allowed" |
 | variable shadowing diagnostics | a `var` may silently shadow an earlier one in the same scope (top-level *item* names do collide — that is an error) |

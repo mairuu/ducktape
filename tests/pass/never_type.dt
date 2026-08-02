@@ -26,6 +26,24 @@ fun an_option<T>(present: Bool, v: T) -> Option<T> {
     return unreachable();
 }
 
+# The other way to keep the promise: a `loop` nothing breaks out of has no exit,
+# so it needs no `panic` to end in. A `while true` would not do — its condition
+# is an expression the checker does not read, so the loop is always able to end.
+fun serve() -> Never {
+    loop { }
+}
+
+# A `break` names the innermost loop only, so none of these three is an exit
+# from the outer one and it still diverges.
+fun serve_nested() -> Never {
+    loop {
+        loop { break; }
+        for i in 0..3 { break; }
+        var n = 0;
+        while n < 3 { n += 1; break; }
+    }
+}
+
 fun main() {
     var a = an_int();
     var b = a_string();

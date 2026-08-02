@@ -1629,6 +1629,11 @@ void dump_expr(const Expr *e, int indent) {
     dump_expr(e->as.while_expr.body, indent + 2);
     break;
   }
+  case EXPR_LOOP: {
+    fprintf(stdout, "Loop\n");
+    dump_expr(e->as.loop_expr.body, indent + 1);
+    break;
+  }
   case EXPR_RANGE:
     fprintf(stdout, "Range %s\n",
             e->as.range.inclusive ? "(inclusive)" : "(exclusive)");

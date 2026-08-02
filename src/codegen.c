@@ -1076,6 +1076,32 @@ static void compile_while(Cg *cg, Expr *expr) {
   emit(cg, OP_UNIT); // loops evaluate to unit
 }
 
+// `loop { .. }` is `compile_while` with the condition and its exit jump taken
+// out — the only way past the back-edge is a patched `break`. When the checker
+// found none the trailing `OP_UNIT` is unreachable, which costs one byte and
+// keeps every caller's "an expression leaves a value" invariant true.
+static void compile_loop(Cg *cg, Expr *expr) {
+  CgLoop loop = {
+      .start = cg->chunk->count,
+      .continue_is_backward = true,
+      .continue_base = cg->local_count,
+      .break_base = cg->local_count,
+      .parent = cg->loop,
+  };
+  cg->loop = &loop;
+
+  compile_expr(cg, expr->as.loop_expr.body);
+  emit(cg, OP_POP);
+  emit_loop(cg, loop.start);
+
+  for (int i = 0; i < loop.break_count; i++) {
+    patch_jump(cg, loop.break_jumps[i]);
+  }
+
+  cg->loop = loop.parent;
+  emit(cg, OP_UNIT);
+}
+
 static void compile_for_range(Cg *cg, Expr *expr) {
   ExprFor *for_ = &expr->as.for_expr;
   int saved_locals = cg->local_count;
@@ -2530,6 +2556,9 @@ static void compile_expr_inner(Cg *cg, Expr *expr) {
     break;
   case EXPR_WHILE:
     compile_while(cg, expr);
+    break;
+  case EXPR_LOOP:
+    compile_loop(cg, expr);
     break;
   case EXPR_FOR:
     compile_for(cg, expr);
