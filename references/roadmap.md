@@ -1386,7 +1386,7 @@ keep this file small. Everything from 55 on is below.
   Remainder: the compound *bitwise* operators still have no spelling, and that
   is now a scanning question rather than a design one.
 
-- **84. A binding whose failure leaves** — `var Shape::Rect(w, h) = s else {
+- **84. A binding whose failure leaves** (`7e92800`) — `var Shape::Rect(w, h) = s else {
   panic("not a rect"); };`, Rust's `let else`: the pattern is refutable and the
   success case stays at statement level, so `w` and `h` are ordinary locals
   below it rather than names nested inside an `if var`. Design:
