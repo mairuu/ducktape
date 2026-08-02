@@ -1,0 +1,39 @@
+# Assigning to a place whose type is already a trait object coerces, the way
+# an annotated `var` does (milestone 82) — a variable, a field, an element.
+use std::io::print;
+
+trait Shape { fun name(self) -> String; }
+struct Sq;
+struct Tri;
+impl Shape for Sq { fun name(self) -> String { return "sq"; } }
+impl Shape for Tri { fun name(self) -> String { return "tri"; } }
+
+struct Holder { s: dyn Shape }
+
+fun main() {
+    var x: dyn Shape = Sq;
+    print(x.name());
+#> sq
+    x = Tri;
+    print(x.name());
+#> tri
+
+    var h = Holder { s: Sq };
+    h.s = Tri;
+    print(h.s.name());
+#> tri
+
+    var xs: [dyn Shape] = [Sq, Sq];
+    xs[1] = Tri;
+    print(xs[0].name());
+#> sq
+    print(xs[1].name());
+#> tri
+
+    # an `if` on the right of the assignment: the arms coerce, then the whole
+    # `if` is already the place's type
+    var c = false;
+    x = if c { Sq } else { Tri };
+    print(x.name());
+#> tri
+}

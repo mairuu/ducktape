@@ -1,0 +1,14 @@
+#! expect: type mismatch: expected 'dyn Shape' but got 'Tri'
+# A plain `=` into a `dyn` place coerces; a compound `+=` does not. Its right
+# operand feeds an operator on the place's own type, which is no more a `dyn`
+# position than the left of a `+` is.
+trait Shape { fun name(self) -> String; }
+struct Sq;
+struct Tri;
+impl Shape for Sq { fun name(self) -> String { return "sq"; } }
+impl Shape for Tri { fun name(self) -> String { return "tri"; } }
+
+fun main() {
+    var x: dyn Shape = Sq;
+    x += Tri;
+}

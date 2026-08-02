@@ -1,0 +1,32 @@
+# A body's tail expression coerces to a trait object the way an explicit
+# `return` does (milestone 82) — the same site written without the keyword.
+use std::io::print;
+
+trait Shape { fun name(self) -> String; }
+struct Sq;
+struct Tri;
+impl Shape for Sq { fun name(self) -> String { return "sq"; } }
+impl Shape for Tri { fun name(self) -> String { return "tri"; } }
+
+fun tail() -> dyn Shape { Sq }
+fun keyword() -> dyn Shape { return Sq; }
+
+# a tail inside a block inside the body, and a generic one
+fun nested() -> dyn Shape { { Tri } }
+fun generic<T: Shape>(v: T) -> dyn Shape { v }
+
+fun main() {
+    print(tail().name());
+#> sq
+    print(keyword().name());
+#> sq
+    print(nested().name());
+#> tri
+    print(generic(Tri).name());
+#> tri
+
+    # a closure's tail, through its annotated return type
+    var f: fun() -> dyn Shape = || Tri;
+    print(f().name());
+#> tri
+}

@@ -548,7 +548,8 @@ the *bound* spelling (`impl Shape for Sq`, `where T: Shape`) — the two are
 different dispatch strategies, so the source says which one it means.
 
 A concrete value **coerces** to `dyn Trait` where one is expected: as a call
-argument, a `return` value, a `var` initializer with a `dyn` annotation, a
+argument, a `return` value, a `var` initializer with a `dyn` annotation, the
+right side of a plain `=` into a place already typed as one, a
 struct or enum-variant field initializer, or an element of a `[dyn T]` or
 `(dyn T, ..)` literal. This is the language's only
 subtyping, and it is one-way and non-transitive — a `dyn Shape` is not a `Sq`
@@ -556,6 +557,31 @@ again. The coercion needs an `impl Trait for T` to
 exist, the same question a bound asks; without one the type error is the
 ordinary "expected 'dyn Shape' but got 'Circle'". A bounded type parameter
 coerces too, so a generic function can hand its own parameter over.
+
+Each **branch** of an `if` or a `match` is its own such position, so the arms
+need not agree on a concrete type:
+
+```rust
+fun heavier(kg: Int) -> dyn Weigh {
+    if kg > 10 { Brick { kg: kg } } else { Feather { grams: kg } }
+}
+```
+
+A `dyn` expectation reaches the arms instead of stopping at the `if`, and each
+coerces into it separately — without that the arms would be compared with each
+other and report `'Brick' vs 'Feather'`. An arm that is *not* a `dyn Weigh` is
+then reported against the expectation rather than against its neighbour, and
+each wrong arm gets its own message. Only a `dyn` expectation travels this way;
+every other hint still stops where it did.
+
+The body above also shows the last position: a **tail expression** is the
+`return` written without the keyword, and coerces like one. The same holds for
+a block's tail and for a closure's body (`|| Tri` against a
+`fun() -> dyn Shape`).
+
+A compound assignment is **not** one of these positions: `x += Tri` on a
+`dyn Shape` is rejected, because the right operand feeds an operator on the
+place's own type rather than flowing into the place.
 
 It can, however, be **recognised** — see "Downcasting" below.
 
@@ -2588,7 +2614,6 @@ HashSet::with_capacity(n); s.capacity(); s.reserve(n);   # forwarded, all three
 | indexing a `String` by character (`s[i]`) | there is none: `s.chars()` walks, because a byte offset is not a character position. `s.chars().collect()` is the array, and `s.chars().skip(i).next()` is the one character |
 | a `String` that is guaranteed valid UTF-8 | it is a byte string — `slice` cuts at byte offsets, so a walk over a halved sequence reports a runtime error when it reaches it (`chars()` itself never does: it is lazy) |
 | a *dynamic* width or precision in a format spec (`{v:>{n}}`) | the width and precision in a `{v:>8}` / `{f:.3}` spec are literals; a runtime value there has no spelling. The spec itself is sugar for `std::string::pad_*` / `std::fmt::float` (milestone 35) |
-| a `dyn` coercion inside an `if`'s or a `match`'s arms (`var x: dyn Shape = if c { Sq } else { Tri };`) | not offered — an `if`'s arms are unified against each other and a `match`'s against the annotation, and neither is a coercion site. The array literal one line over *does* coerce per element, so this is a gap rather than a rule |
 | a downcast to a type that does not implement the trait, or binds a different associated type | rejected, rather than compiled as an always-`None` test: the identity is the vtable, and such a type has no table to recognise |
 | a trait's type arguments at a *bare* method call | the expected type breaks the tie between two impls of one generic trait, and pins an impl parameter the receiver cannot reach (`impl<T, U: From<T>> Into<U> for T`); with no expected type the first impl wins — or, where the parameter was only pinnable that way, no impl applies at all. The trait-qualified spelling (`Into::<Fahrenheit>::into(c)`) settles it explicitly without an expected type |
 | disambiguating a qualified selection whose *argument is itself unresolved* (`Steps::from(None)`) | the argument (for `from`) or the receiver (for a trait-qualified `into`) must type on its own to choose the impl, so a value that would need the impl chosen first cannot be disambiguated |

@@ -1745,6 +1745,36 @@ collect-then-consume shape `inst` uses for monomorphisation, and for the same
 reason: at the moment the coercion is discovered the type may still be an
 unsolved unknown, and codegen is the consumer either way.
 
+### Where a coercion is offered
+
+The "known `dyn` position" above is a **written list of call sites**, not a
+property `infer_unify` derives, so a position is a coercion site exactly when
+someone wrote one there. `check_flow_into` is that call — the coercion first,
+unification only if there is none to make — and milestone 82 added the sites
+that had been missed: each **branch** of an `if` or a `match`, a body's **tail
+expression**, a **closure body**, and the right side of a plain `=`.
+
+A branch was the interesting one, because the omission was structural rather
+than an oversight. `EXPR_IF` unified its arms *against each other* and passed
+them no hint at all, so `if c { Sq } else { Tri }` had failed before any
+expectation could reach it; `resolve_match_expr` did reach its arms with one,
+but only to compare. The fix is `dyn_expectation`: when — and only when — the
+hint is a `TY_DYN`, it travels into each arm, which then coerces into it
+separately, and the construct's type *is* the hint. That is what
+`EXPR_ARRAY` already did for `[dyn Shape]` elements, and the reason it has to
+be a `dyn` and nothing else is that a trait object is the only type a value is
+converted *into* rather than found to already have — two arms of unrelated
+concrete types have no third type for unification to land on.
+
+Nothing downstream changed. A block already forwards a hint to its tail, so an
+arm that is a block needed no special case, and `compile_expr` applies a
+recorded coercion after *any* expression node — so the wrap lands wherever the
+checker put it, and there was no codegen, opcode or image change.
+
+A **compound** assignment is deliberately not on the list: `x += Tri` type-checks
+its right operand against an operator on the place's own type, which is not a
+`dyn` position, so only `TOKEN_EQ` routes through `check_flow_into`.
+
 **A trait object satisfies its own bound** (milestone 56), which is the sentence
 above — "a bound whose witness travels with the value" — read in the other
 direction. `impl_index_implements` already answers in three registers: a

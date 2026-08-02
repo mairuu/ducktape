@@ -1347,6 +1347,24 @@ keep this file small. Everything from 55 on is below.
   is still not a first-class function value (`xs.map(Some)`), which is the
   qualified spelling's limit too and not a `use` question.
 
+- **82. A branch is a coercion site** — `var x: dyn Shape = if c { Sq } else
+  { Tri };`, the `match` spelling, and `fun pick() -> dyn Shape { Sq }`.
+  Design: `language.md` "Trait objects" (the coercion positions),
+  `architecture.md` "Where a coercion is offered". The finding: a `dyn` position
+  is a *written list of call sites*, not something unification derives, so the
+  gap was four missing calls rather than a missing rule — and a branch was
+  missed structurally, since `EXPR_IF` unified its arms against each other and
+  handed them no expectation at all. `dyn_expectation` sends a `TY_DYN` hint
+  (and only that) into each arm, which then coerces separately and makes the
+  construct's type the hint — what `EXPR_ARRAY` already did per element.
+  Checker-only: a block already forwards a hint to its tail and `compile_expr`
+  already wraps after any node, so no codegen, opcode or image change. Probing
+  found three more sites of the same shape (a body's tail, a closure body, a
+  plain `=`) and one live segfault-from-safe-source that is **not** this
+  milestone's and stays open below (`+=` never checks its operator).
+  Remainder: two wrong arms under one `dyn` expectation report twice, one per
+  arm — the array literal's behaviour, and each arm is its own claim.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -1519,12 +1537,20 @@ via `Module.decl_base`) and is not part of the main line.
   `it.fold<Int>(0, f)` parses as comparisons, so it reports an unknown *field*
   and then usually an undefined variable for the type name (milestone 71); a
   note on the first names the turbofish, which is as far as that site can see
-- a **`dyn` coercion is never attempted inside an `if`'s or a `match`'s arms**:
-  `var x: dyn Shape = if c { Sq } else { Tri };` reports `'Sq' vs 'Tri'` (the
-  arms unify against each other) and the `match` spelling reports each arm
-  against the annotation. An array literal one line over coerces per element,
-  so the two disagree and this is a gap rather than a decision. Found probing
-  milestone 79
+- a **compound assignment never checks its operator**, and the miscompile is a
+  segfault from safe source: `a += b` type-checks by unifying the two sides and
+  nothing else, so `a += Sq` on a struct with no `impl Add` compiles — where
+  `a + Sq` one line over is rejected with "does not implement 'Add'" — and then
+  crashes the VM. `EXPR_ASSIGN` ignores `assign->op` entirely; the honest fix is
+  to desugar `a op= b` into `a = a op b` so the operator goes through the
+  `EXPR_BINARY` path (numeric, `String` `+`, bitwise, or `rewrite_ops_call`),
+  which also settles what `&=` should mean. Pre-existing, found probing
+  milestone 82
+- two arms that are both wrong under one `dyn` expectation report twice, once
+  each, since each arm is checked against the expectation rather than against
+  its neighbour. That is the array literal's behaviour per element and is
+  arguably right — two arms are two claims — but it is a second diagnostic for
+  what a reader may see as one mistake (milestone 82)
 - `compile_coerce_dyn`'s abstract-target guard on the upcast is unreachable —
   every site the checker can build has its target trait reference pinned, by
   the source's closure (`check_upcast_dyn`) or by `cg_subst` at the

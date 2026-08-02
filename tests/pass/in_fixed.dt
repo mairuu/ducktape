@@ -127,6 +127,20 @@ pub fun crated_weight(c: dyn Crated) -> Int {
     return one.weight() * c.crates();
 }
 
+# every branch of an `if` or a `match` is a coercion site of its own, so the
+# arms need not agree on a concrete type — and a body's tail expression is one
+# too, which is the `return` below written without the keyword.
+pub fun heavier(kg: Int) -> dyn Weigh {
+    if kg > 10 { Brick { kg: kg } } else { Feather { grams: kg } }
+}
+
+pub fun by_name(which: Int) -> dyn Weigh {
+    match which {
+        0 => Feather { grams: 1 },
+        _ => Brick { kg: 3 },
+    }
+}
+
 # a trait may take type parameters of its own. They are supplied wherever the
 # trait is *named* — this impl head, the bound on `packed` below, a `dyn` — and
 # a trait reference is what carries them, so the signatures a trait declares

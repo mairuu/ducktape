@@ -1,0 +1,142 @@
+# A branch of an `if` or a `match` is a trait-object coercion site (milestone
+# 82): the expectation reaches each arm separately instead of the arms having
+# to agree with each other first. Every branch here is taken, and `as?` reads
+# the vtable back, so an arm that forgot its wrap fails as an output diff.
+use std::io::print;
+use std::option::{Option, Some, None};
+use std::iter::{Iterator, DoubleEnded};
+
+trait Shape { fun name(self) -> String; }
+struct Sq;
+struct Tri;
+struct Circle { r: Int }
+impl Shape for Sq { fun name(self) -> String { return "sq"; } }
+impl Shape for Tri { fun name(self) -> String { return "tri"; } }
+impl Shape for Circle { fun name(self) -> String { return "circle{self.r}"; } }
+
+# an `else if` chain: the else branch is an `if`, so the expectation threads
+# down it by the same recursion that carried it into the arms.
+fun pick_if(n: Int) -> dyn Shape {
+    if n == 0 { Sq } else if n == 1 { Tri } else { Circle { r: n } }
+}
+
+fun pick_match(n: Int) -> dyn Shape {
+    match n {
+        0 => Sq,
+        1 => Tri,
+        _ => Circle { r: n },
+    }
+}
+
+# the arm's concrete type is a type *parameter*: codegen substitutes it before
+# building the vtable, exactly as it does at any other coercion.
+fun wrap<T: Shape>(v: T, c: Bool) -> dyn Shape {
+    if c { v } else { Sq }
+}
+
+struct Holder { s: dyn Shape }
+
+fun takes(s: dyn Shape) -> String { return s.name(); }
+
+# an upcast in the arms: both branches are already trait objects, of a
+# subtrait, so each arm swaps tables rather than building one.
+struct Span { lo: Int, hi: Int }
+impl Iterator for Span {
+    type Item = Int;
+    fun next(self) -> Option<Int> {
+        if self.lo >= self.hi { return None; }
+        var v = self.lo;
+        self.lo += 1;
+        return Some(v);
+    }
+}
+impl DoubleEnded for Span {
+    fun next_back(self) -> Option<Int> {
+        if self.lo >= self.hi { return None; }
+        self.hi -= 1;
+        return Some(self.hi);
+    }
+}
+struct Once { v: Int, done: Bool }
+impl Iterator for Once {
+    type Item = Int;
+    fun next(self) -> Option<Int> {
+        if self.done { return None; }
+        self.done = true;
+        return Some(self.v);
+    }
+}
+fun span(lo: Int, hi: Int) -> dyn DoubleEnded<Item = Int> { Span { lo: lo, hi: hi } }
+
+fun main() {
+    for i in 0..4 { print(pick_if(i).name()); }
+#> sq
+#> tri
+#> circle2
+#> circle3
+    for i in 0..4 { print(pick_match(i).name()); }
+#> sq
+#> tri
+#> circle2
+#> circle3
+
+    print(wrap(Tri, true).name());
+#> tri
+    print(wrap(Tri, false).name());
+#> sq
+
+    var c = false;
+
+    # an `if` inside a `match` arm, both under the one expectation
+    var k = 1;
+    var s: dyn Shape = match k {
+        0 => Sq,
+        _ => if k == 1 { Tri } else { Circle { r: 9 } },
+    };
+    print(s.name());
+#> tri
+
+    # a diverging arm coerces nothing and still unifies
+    var t: dyn Shape = if k == 1 { Circle { r: 2 } } else { return; };
+    print(t.name());
+#> circle2
+
+    # a closure body, a struct field, an argument
+    var f: fun(Bool) -> dyn Shape = |b| if b { Sq } else { Tri };
+    print(f(false).name());
+#> tri
+    var h = Holder { s: if c { Sq } else { Tri } };
+    print(h.s.name());
+#> tri
+    print(takes(match 1 { 0 => Sq, _ => Tri, }));
+#> tri
+
+    # array elements already coerced one by one; an `if` producing one now does too
+    var xs: [dyn Shape] = [if k == 1 { Sq } else { Tri }, Circle { r: 7 }];
+    for x in xs { print(x.name()); }
+#> sq
+#> circle7
+
+    # both arms upcast from `dyn DoubleEnded` to `dyn Iterator`
+    var a: dyn Iterator<Item = Int> = if c { span(0, 3) } else { span(5, 9) };
+    print(a.next());
+#> Some(5)
+    # one arm upcasts, the other builds a table from a concrete type
+    var d: dyn Iterator<Item = Int> = if c { span(7, 9) } else { Once { v: 42, done: false } };
+    print(d.next());
+#> Some(42)
+
+    # the value really is a trait object: `as?` compares vtable identity, which
+    # a branch that skipped its wrap could not answer.
+    var e: dyn Shape = if c { Sq } else { Tri };
+    match e as? Tri {
+        Some(x) => print("downcast {x.name()}"),
+        None => print("downcast failed"),
+    }
+#> downcast tri
+    match e as? Sq {
+        Some(x) => print("downcast {x.name()}"),
+        None => print("not a sq"),
+    }
+#> not a sq
+}

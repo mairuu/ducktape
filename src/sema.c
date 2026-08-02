@@ -4849,6 +4849,33 @@ static bool check_coerce_dyn(CheckCtx *ctx, Expr *e, Type *actual,
   return true;
 }
 
+// A value flowing into a position whose type is already known: the coercion is
+// offered first and unification asked only when there is none to make. That
+// order is what makes a site accept a trait object, and every site that does
+// spells it out — so what a *branch* of an `if` or a `match` needed was to be
+// written as one of these, not a new kind of coercion.
+static bool check_flow_into(CheckCtx *ctx, Expr *e, Type *actual,
+                            Type *expected, Span span) {
+  if (check_coerce_dyn(ctx, e, actual, expected)) {
+    return true;
+  }
+  return infer_unify(&ctx->infer, expected, actual, ctx->diags, span);
+}
+
+// The expectation that has to reach a branch, or NULL. A trait object is the
+// only type a value is *converted* into rather than found to already have, so
+// it is the only one the branches cannot be left to settle between themselves:
+// `Sq` and `Tri` agree on nothing, and there is no third type for unification
+// to land on. Every other hint stays where it was — a branch that ignores it
+// still type-checks, and threading it further is a separate question.
+static Type *dyn_expectation(CheckCtx *ctx, Type *hint) {
+  if (hint == NULL) {
+    return NULL;
+  }
+  Type *want = infer_find(&ctx->infer, hint);
+  return want->kind == TY_DYN ? want : NULL;
+}
+
 // Finish a qualified associated call whose impl the path left ambiguous
 // (`Steps::from(v)` with a `From<Int>` and a `From<Char>`). The arguments are
 // resolved first — hint-free, because the argument is exactly what is supposed
@@ -6041,6 +6068,10 @@ static bool check_cond_binding(CheckCtx *ctx, Pattern *pat, Type *subject_ty) {
 static Type *resolve_match_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   Type *subject_ty = resolve_expr(ctx, expr->as.match.subject, NULL);
   Type *result_ty = hint;
+  // A trait-object expectation decides the type up front and every arm coerces
+  // into it, rather than the first arm deciding and the rest having to match —
+  // the same trade an array literal makes for its elements.
+  Type *dyn_want = dyn_expectation(ctx, hint);
 
   bool had_error = false;
   for (int i = 0; i < expr->as.match.arm_count; i++) {
@@ -6061,9 +6092,15 @@ static Type *resolve_match_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       }
     }
 
-    Type *arm_ty = resolve_expr(ctx, arm->body, NULL);
+    Type *arm_ty = resolve_expr(ctx, arm->body, dyn_want);
 
-    if (result_ty == NULL) {
+    if (dyn_want != NULL) {
+      if (!type_is_poison(arm_ty) &&
+          !check_flow_into(ctx, arm->body, arm_ty, dyn_want, arm->body->span)) {
+        had_error = true;
+      }
+      result_ty = dyn_want;
+    } else if (result_ty == NULL) {
       result_ty = arm_ty;
     } else if (!type_is_poison(result_ty) && !type_is_poison(arm_ty)) {
       if (!infer_unify(&ctx->infer, result_ty, arm_ty, ctx->diags,
@@ -7053,7 +7090,9 @@ static Type *resolve_closure_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
 
   Type *body_ty = resolve_expr(ctx, closure->body, ret_ty);
   if (!type_is_poison(body_ty) && !type_is_poison(ret_ty)) {
-    infer_unify(&ctx->infer, ret_ty, body_ty, ctx->diags, closure->body->span);
+    // the body is the closure's tail expression, so it coerces like any other
+    // one — `|| Tri` against a `fun() -> dyn Shape` builds the trait object.
+    check_flow_into(ctx, closure->body, body_ty, ret_ty, closure->body->span);
   }
 
   ctx->vscope = vscope_pop(ctx->vscope);
@@ -8229,12 +8268,18 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
 
     if (type_is_poison(lhs_ty) || type_is_poison(rhs_ty)) {
       result = ctx->tc->t_poison;
-    } else if (!infer_unify(&ctx->infer, lhs_ty, rhs_ty, ctx->diags,
-                            expr->span)) {
-      result = ctx->tc->t_poison;
-    } else {
-      result = lhs_ty;
+      break;
     }
+
+    // A plain `=` into a place whose type is fixed is the same flow an
+    // annotated `var` is, so `x = Tri` on a `dyn Shape` wraps. A compound `+=`
+    // is not: its right operand feeds an operator on the place's own type, and
+    // nothing there is a `dyn` position.
+    bool assigned =
+        assign->op == TOKEN_EQ
+            ? check_flow_into(ctx, assign->value, rhs_ty, lhs_ty, expr->span)
+            : infer_unify(&ctx->infer, lhs_ty, rhs_ty, ctx->diags, expr->span);
+    result = assigned ? lhs_ty : ctx->tc->t_poison;
     break;
   }
   case EXPR_MATCH:
@@ -8359,6 +8404,13 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       break;
     }
 
+    // A trait-object expectation reaches the branches instead of stopping
+    // here, so each one coerces into it on its own. Left to unify with each
+    // other they report `'Sq' vs 'Tri'` and are never offered the conversion,
+    // which is a `dyn`'s whole reason for existing. An `else if` is an `if` in
+    // the else position, so the chain threads by recursion.
+    Type *dyn_want = dyn_expectation(ctx, hint);
+
     // the binding is visible in the then-block and nowhere else — the `else`
     // is the branch where the pattern did *not* match, so nothing is bound.
     bool bound = true;
@@ -8366,13 +8418,13 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       ctx->vscope = vscope_push(ctx->vscope, false, false, ctx->al);
       bound = check_cond_binding(ctx, if_->binding, cond_ty);
     }
-    Type *then_ty = resolve_expr(ctx, if_->then_block, NULL);
+    Type *then_ty = resolve_expr(ctx, if_->then_block, dyn_want);
     if (if_->binding != NULL) {
       ctx->vscope = vscope_pop(ctx->vscope);
     }
     Type *else_ty = NULL;
     if (if_->else_branch != NULL) {
-      else_ty = resolve_expr(ctx, if_->else_branch, NULL);
+      else_ty = resolve_expr(ctx, if_->else_branch, dyn_want);
     } else {
       else_ty = ctx->tc->t_unit;
     }
@@ -8383,6 +8435,20 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     }
 
     if (!type_is_poison(then_ty) && !type_is_poison(else_ty)) {
+      if (dyn_want != NULL) {
+        // both are checked even after one fails: each branch is its own claim
+        // to be a `dyn Shape`, so each gets its own answer. A missing `else`
+        // is the Unit it already is, and mismatches as one.
+        bool ok = check_flow_into(ctx, if_->then_block, then_ty, dyn_want,
+                                  if_->then_block->span);
+        ok &= if_->else_branch != NULL
+                  ? check_flow_into(ctx, if_->else_branch, else_ty, dyn_want,
+                                    if_->else_branch->span)
+                  : infer_unify(&ctx->infer, dyn_want, else_ty, ctx->diags,
+                                expr->span);
+        result = ok ? dyn_want : ctx->tc->t_poison;
+        break;
+      }
       Span mismatch_span =
           if_->else_branch != NULL ? if_->else_branch->span : expr->span;
       if (!infer_unify(&ctx->infer, then_ty, else_ty, ctx->diags,
@@ -8613,12 +8679,16 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   return result;
 }
 
+// A body's tail expression is a `return` with the keyword left out, so it
+// offers what the statement offers: the coercion first, then unification.
+// Without it `fun pick() -> dyn Shape { Sq }` was rejected where the same
+// function written `{ return Sq; }` was accepted.
 static Type *resolve_expr_coerced(CheckCtx *ctx, Expr *expr, Type *expected) {
   Type *actual = resolve_expr(ctx, expr, expected);
   if (type_is_poison(actual) || type_is_poison(expected)) {
     return ctx->tc->t_poison;
   }
-  if (!infer_unify(&ctx->infer, actual, expected, ctx->diags, expr->span)) {
+  if (!check_flow_into(ctx, expr, actual, expected, expr->span)) {
     return ctx->tc->t_poison;
   }
   return actual;
