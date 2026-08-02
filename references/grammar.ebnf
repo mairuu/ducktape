@@ -171,7 +171,7 @@ stmt           = varDecl
 (* ── expressions (lowest to highest precedence) ───────────────────────── *)
 
 expr           = assign ;
-assign         = range ( ( "=" | "+=" | "-=" | "*=" | "/=" ) assign )? ;
+assign         = range ( ( "=" | "+=" | "-=" | "*=" | "/=" | "%=" ) assign )? ;
 range          = or ( ( ".." | "..=" ) or )? ;         (* Int-only ranges *)
 or             = and ( "or" and )* ;
 and            = equality ( "and" equality )* ;

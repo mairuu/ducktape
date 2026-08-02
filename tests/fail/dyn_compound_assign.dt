@@ -1,7 +1,10 @@
-#! expect: type mismatch: expected 'dyn Shape' but got 'Tri'
-# A plain `=` into a `dyn` place coerces; a compound `+=` does not. Its right
-# operand feeds an operator on the place's own type, which is no more a `dyn`
-# position than the left of a `+` is.
+#! expect: cannot apply '+' to 'dyn Shape' and 'Tri': 'dyn Shape' does not implement 'Add<Tri>'
+# A plain `=` into a `dyn` place coerces (milestone 82); a compound `+=` does
+# not, and since milestone 83 it says why — the right operand feeds an operator
+# on the place's own type, so the question asked is whether `dyn Shape` has an
+# `Add`, not whether a `Tri` can become one.
+use std::ops::Add;
+
 trait Shape { fun name(self) -> String; }
 struct Sq;
 struct Tri;

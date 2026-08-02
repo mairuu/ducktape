@@ -603,7 +603,7 @@ static Expr *parse_assign(Parser *p) {
 
   if (match_tok(p, TOKEN_EQ) || match_tok(p, TOKEN_PLUSEQ) ||
       match_tok(p, TOKEN_MINUSEQ) || match_tok(p, TOKEN_STAREQ) ||
-      match_tok(p, TOKEN_SLASHEQ)) {
+      match_tok(p, TOKEN_SLASHEQ) || match_tok(p, TOKEN_PERCENTEQ)) {
     Token *op = previous_tok(p);
     Expr *rhs = parse_assign(p);
     if (rhs->kind == EXPR_POISON) {

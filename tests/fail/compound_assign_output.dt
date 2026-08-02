@@ -1,0 +1,16 @@
+#! expect: type mismatch: 'Meters' vs 'Feet'
+# The same rule for a trait operator: `Add for Meters` whose `Output` is a
+# `Feet` cannot be compounded into a `Meters` place.
+use std::ops::Add;
+
+struct Meters { m: Int }
+struct Feet { f: Int }
+impl Add for Meters {
+    type Output = Feet;
+    fun add(self, o: Meters) -> Feet { return Feet { f: self.m + o.m }; }
+}
+
+fun main() {
+    var a = Meters { m: 1 };
+    a += Meters { m: 2 };
+}

@@ -69,7 +69,7 @@ var x = 1;                    # inferred; no `let`, no `mut` — all vars mutabl
 var y: [Int] = [1, 2, 3];     # annotated
 var (a, b) = (1, 2.5);        # destructuring — the binding is a pattern
 var Point { x: px, y } = p;   # ... any irrefutable one, nested freely
-x = 2;  x += 1;               # assignment / compound assignment (+= -= *= /=)
+x = 2;  x += 1;               # assignment / compound assignment (+= -= *= /= %=)
 p.x = 3;  p.x += 1;           # ... to a field, tuple element, or array slot too
 xs[i] = v;  t.0 *= 2;         # a struct is a shared reference, so this mutates
 return expr;  return;         # bare return means ()
@@ -1865,6 +1865,29 @@ All six are preluded, so `impl Add for Point` and a `T: Add` bound need no
 are always visible, so a program cannot write its own `impl Add for Int` —
 coherence rejects the pair.
 
+**A compound assignment reaches them too**, because `a op= b` *is* `a = a op b`
+and nothing else:
+
+```
+var v = V2 { x: 1, y: 2 };
+v += V2 { x: 10, y: 20 };   # v.add(..)
+v *= 2;                     # a heterogeneous impl works here as anywhere
+v %= V2 { x: 10, y: 10 };
+```
+
+Two consequences follow from that sentence, and both are the operator's rules
+rather than the assignment's. The result must fit the place, so `Add for Meters`
+whose `Output` is a `Feet` cannot be compounded into a `Meters`, and `i += 1.5`
+is rejected on an `Int` for the reason `i = i + 1.5` is — while `f += 1` on a
+`Float` is *accepted*, since `f + 1` widens. And the right operand is not
+inferred from the left: `|n| { total += n; }` needs `|n: Int|`, exactly as
+`total = total + n` does, because which operator `+` even means depends on the
+operand types (see "the right operand may differ" above).
+
+The place is evaluated **once** — `xs[next()] += 1` advances `next` a single
+time — on both the opcode and the call path. `%=` is included; the compound
+*bitwise* operators (`&=`, `<<=`) still have no spelling.
+
 ### `std::option`
 
 ```
@@ -2627,7 +2650,7 @@ HashSet::with_capacity(n); s.capacity(); s.reserve(n);   # forwarded, all three
 | an associated *type* default (`type Output = Self;` in a trait) | not parsed. A trait's *type parameter* may carry a default (`Rhs = Self`), which is why the `std::ops` migration for `Rhs` was free and the one for `Output` was not: every impl states its `Output`, and every bound that wants to keep the result names it |
 | custom `==` (an `Eq` trait) | equality stays structural and import-less for every type; only ordering and arithmetic are traits. `std::map` was the consumer this was waiting on and did not need it: a hash map resolves collisions with the structural `==` on a `K` bounded only by `Hash` |
 | a bitwise operator on a non-`Int` | refused, with no trait to appeal to: there is no `BitAnd` the way there is an `Add`, so `1.5 & 2` is a type error rather than a call. A `Float`'s bits have no spelling at all — there is no reinterpreting cast |
-| compound bitwise assignment (`&=`, `\|=`, `<<=`) | not parsed, matching `%=`, which does not exist either; write `x = x & y`. `+=`, `-=`, `*=`, `/=` are the whole set |
+| compound bitwise assignment (`&=`, `\|=`, `<<=`) | not parsed; write `x = x & y`. What it would *mean* is settled — `a op= b` is `a = a op b`, which is how `%=` joined `+= -= *= /=` — so what is missing is the spelling, and the scanning is the awkward part: `>>=` sits next to the one place in the grammar where whitespace already changes a parse (`a > > b` versus `a >> b`) |
 | unsigned integers | there is one integer type, signed `Int`. `>>>` is what stands in for an unsigned shift; a value with the top bit set prints as negative even when it is being used as a bit pattern |
 | checked or saturating integer arithmetic | `Int` wraps silently, two's complement; `%` keeps the sign of its left operand, so `(0 - 17) % 5` is `-2` |
 | hashing a `Float`, and so a `Float` map key | no `impl Hash for Float`: `NaN != NaN` makes such a key unfindable in a table that compares with `==`, and the only Int a Float reaches is a truncating `as`. Wrap one in a struct and say what equality means |

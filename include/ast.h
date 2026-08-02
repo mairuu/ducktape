@@ -962,6 +962,13 @@ typedef struct {
   Expr *target;
   Expr *value;
   TokenType op;
+  // A compound `a op= b` whose operator is a trait call rather than an opcode
+  // (`v += w` on a type with `impl Add`). The checker resolves `a.add(b)` and
+  // parks the call here instead of rewriting this node, because the place has
+  // to be compiled once and the call is only half of what happens to it — so
+  // codegen reads the receiver off the stack and never compiles `object`.
+  // NULL for `=` and for every built-in operand type.
+  Expr *op_call;
 } ExprAssign;
 
 typedef struct {

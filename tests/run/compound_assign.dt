@@ -1,0 +1,115 @@
+# `a op= b` is `a = a op b` (milestone 83), so the operator means what it means
+# everywhere else: an opcode over numbers or two strings, and `a.add(b)` for a
+# type with an `impl Add`. The place is still evaluated once — the `tick()`
+# counters are what pin that, on both paths.
+use std::io::print;
+use std::ops::{Add, Sub, Mul, Rem};
+
+struct V2 { x: Int, y: Int }
+impl Add for V2 {
+    type Output = V2;
+    fun add(self, o: V2) -> V2 { return V2 { x: self.x + o.x, y: self.y + o.y }; }
+}
+impl Sub for V2 {
+    type Output = V2;
+    fun sub(self, o: V2) -> V2 { return V2 { x: self.x - o.x, y: self.y - o.y }; }
+}
+# a heterogeneous operator: the right operand is not a V2
+impl Mul<Int> for V2 {
+    type Output = V2;
+    fun mul(self, k: Int) -> V2 { return V2 { x: self.x * k, y: self.y * k }; }
+}
+# `%=` reaches `Rem` the same way, which is what makes the arithmetic family
+# complete: every operator `resolve_arith_op` answers has a compound spelling.
+impl Rem for V2 {
+    type Output = V2;
+    fun rem(self, o: V2) -> V2 { return V2 { x: self.x % o.x, y: self.y % o.y }; }
+}
+
+struct Holder { v: V2 }
+struct Counter { n: Int }
+impl Counter {
+    fun tick(self) -> Int { self.n += 1; return 0; }
+}
+
+fun show(v: V2) -> String { return "({v.x},{v.y})"; }
+
+# the operator reached through a bound rather than a concrete impl
+fun bump<T: Add<Output = T>>(a: T, b: T) -> T {
+    var x = a;
+    x += b;
+    return x;
+}
+
+fun main() {
+    # the built-ins, including `f += 1`, which `f = f + 1` has always allowed
+    var i = 7;   i += 3;   print("{i}");
+#> 10
+    var j = 10;  j /= 4;   print("{j}");
+#> 2
+    var k = 6;   k *= 7;   print("{k}");
+#> 42
+    var m = 9;   m -= 4;   print("{m}");
+#> 5
+    var r = 17;  r %= 5;   print("{r}");
+#> 2
+    var f = 1.5; f += 1;   print("{f}");
+#> 2.5
+    var s = "a"; s += "b"; print(s);
+#> ab
+
+    # a trait operator: local, field, array element
+    var v = V2 { x: 1, y: 2 };
+    v += V2 { x: 10, y: 20 };
+    print(show(v));
+#> (11,22)
+    var h = Holder { v: V2 { x: 1, y: 1 } };
+    h.v += V2 { x: 5, y: 6 };
+    print(show(h.v));
+#> (6,7)
+    var vs = [V2 { x: 0, y: 0 }, V2 { x: 9, y: 9 }];
+    vs[1] -= V2 { x: 4, y: 3 };
+    print(show(vs[1]));
+#> (5,6)
+
+    # heterogeneous, and through a bound
+    v *= 2;
+    print(show(v));
+#> (22,44)
+    print(show(bump(V2 { x: 2, y: 3 }, V2 { x: 10, y: 10 })));
+#> (12,13)
+    v %= V2 { x: 10, y: 10 };
+    print(show(v));
+#> (2,4)
+
+    # THE INVARIANT: the place is compiled once, so the index runs once —
+    # on the opcode path and on the call path alike.
+    var ns = [10, 20];
+    var c1 = Counter { n: 0 };
+    ns[c1.tick()] += 5;
+    print("{ns[0]} {c1.n}");
+#> 15 1
+    var c2 = Counter { n: 0 };
+    vs[c2.tick()] += V2 { x: 1, y: 1 };
+    print("{show(vs[0])} {c2.n}");
+#> (1,1) 1
+
+    # an upvalue, a nested place, and the value the expression itself has
+    var total = 0;
+    var addto = |n: Int| { total += n; };
+    addto(3);
+    addto(4);
+    print("{total}");
+#> 7
+    var o = Holder { v: V2 { x: 1, y: 1 } };
+    o.v.x += 41;
+    print("{o.v.x}");
+#> 42
+    var got = (i += 5);
+    print("{got} {i}");
+#> 15 15
+    var parts = ["a", "b"];
+    parts[1] += "!";
+    print(parts[1]);
+#> b!
+}

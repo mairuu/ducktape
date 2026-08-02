@@ -76,6 +76,7 @@ static const char *token_type_string[] = {
     [TOKEN_MINUSEQ] = "MINUSEQ",
     [TOKEN_STAREQ] = "STAREQ",
     [TOKEN_SLASHEQ] = "SLASHEQ",
+    [TOKEN_PERCENTEQ] = "PERCENTEQ",
     [TOKEN_EQEQ] = "EQEQ",
     [TOKEN_BANGEQ] = "BANGEQ",
     [TOKEN_LT] = "LT",
@@ -535,7 +536,7 @@ Token scanner_next_token(Scanner *s) {
   case '~':
     return make_token(s, TOKEN_TILDE);
   case '%':
-    return make_token(s, TOKEN_PERCENT);
+    return make_token(s, match_char(s, '=') ? TOKEN_PERCENTEQ : TOKEN_PERCENT);
 
   case ':':
     return make_token(s, match_char(s, ':') ? TOKEN_COLONCOLON : TOKEN_COLON);

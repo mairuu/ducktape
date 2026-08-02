@@ -1366,6 +1366,26 @@ keep this file small. Everything from 55 on is below.
   Remainder: two wrong arms under one `dyn` expectation report twice, one per
   arm — the array literal's behaviour, and each arm is its own claim.
 
+- **83. A compound assignment is its operator** — `v += w` reaches
+  `impl Add for V2`, `f += 1` is legal because `f = f + 1` is, and `c += 'y'`
+  no longer prints a reinterpreted bit pattern. `%=` joins the set. Design:
+  `language.md` `std::ops` (the compound paragraph), `architecture.md`
+  ("A compound assignment asks the same question"), `runtime.md`
+  ("Compound assignment"), `grammar.ebnf` `assign`. The finding: `EXPR_ASSIGN`
+  checked `a op= b` by **unifying its two operands with each other**, which is
+  neither the operator's question nor the assignment's, and implies both only
+  when the type is numeric — so the arithmetic opcodes, whose `else` branch
+  reads both operands as doubles with no tag test, were reachable without
+  anyone asking. `resolve_arith_op` is now that question factored out of
+  `EXPR_BINARY`, and the place check is the second half of `a = a op b`. The
+  cost is exact and worth keeping: the unsoundness and the inference were the
+  same line, so `|n| { total += n; }` now needs its annotation for the reason
+  `total = total + n` always did. Codegen already evaluated the place once and
+  still does; a trait operator parks its call on `ExprAssign.op_call` and
+  pushes the callee under the place's value, which is the only new stack shape.
+  Remainder: the compound *bitwise* operators still have no spelling, and that
+  is now a scanning question rather than a design one.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -1538,15 +1558,6 @@ via `Module.decl_base`) and is not part of the main line.
   `it.fold<Int>(0, f)` parses as comparisons, so it reports an unknown *field*
   and then usually an undefined variable for the type name (milestone 71); a
   note on the first names the turbofish, which is as far as that site can see
-- a **compound assignment never checks its operator**, and the miscompile is a
-  segfault from safe source: `a += b` type-checks by unifying the two sides and
-  nothing else, so `a += Sq` on a struct with no `impl Add` compiles — where
-  `a + Sq` one line over is rejected with "does not implement 'Add'" — and then
-  crashes the VM. `EXPR_ASSIGN` ignores `assign->op` entirely; the honest fix is
-  to desugar `a op= b` into `a = a op b` so the operator goes through the
-  `EXPR_BINARY` path (numeric, `String` `+`, bitwise, or `rewrite_ops_call`),
-  which also settles what `&=` should mean. Pre-existing, found probing
-  milestone 82
 - two arms that are both wrong under one `dyn` expectation report twice, once
   each, since each arm is checked against the expectation rather than against
   its neighbour. That is the array literal's behaviour per element and is
@@ -1560,10 +1571,15 @@ via `Module.decl_base`) and is not part of the main line.
 - sema's `MAX_BOUNDS` (16) is the last fixed cap of the family milestone 73
   cleared out of the parser. It bounds a real array and has its own diagnostic,
   so it is a limit rather than a hazard
-- no compound bitwise assignment (`&=`, `<<=`), matching the absent `%=`; no
-  unsigned integer type, so `>>>` stands in for one and a bit pattern with the
-  top bit set prints negative; and `a > > b` versus `a >> b` is the one place
-  in the grammar where whitespace changes a parse (milestone 65)
+- no compound **bitwise** assignment (`&=`, `<<=`). What it would mean is no
+  longer open — milestone 83 settled `a op= b` as `a = a op b` and added `%=` on
+  that basis — so what is missing is the spelling, and the scanning is the part
+  that stopped it: `>>=` sits against `a > > b` versus `a >> b`, the one place
+  in the grammar where whitespace already changes a parse (milestone 65). The
+  checker side is a second branch beside `resolve_arith_op` (bitwise unifies at
+  `Int` rather than asking a trait), and codegen already has the opcodes
+- no unsigned integer type, so `>>>` stands in for one and a bit pattern with
+  the top bit set prints negative
 - a *written* impl always wins, which is what keeps milestone 74's supertrait
   derivation from ever conflicting — so an item of a super that something else
   already implements may not also be written in the sub's block. The one-block

@@ -812,6 +812,96 @@ static void compile_binary(Cg *cg, Expr *expr) {
   }
 }
 
+static bool cg_emit_target(Cg *cg, FunDef *fun, const Subst *primary,
+                           const Subst *fallback, Span span);
+
+// What a compound assignment's operator compiles to. `fun == NULL` is the
+// built-in case — an opcode over two numbers or two strings — and anything else
+// is the `a.add(b)` the checker parked on `ExprAssign.op_call`.
+typedef struct {
+  FunDef *fun;
+  Subst impl_subst;
+  Expr *call;
+} CgCompound;
+
+// The half of a compound assignment that has to happen *before* the place's
+// current value is read: OP_CALL wants [callee, self, arg] and that current
+// value is the `self`, so a trait operator's callee goes underneath it. The
+// built-in case pushes nothing, which is why the DUP depths below shift by one
+// exactly when `fun` is set. Returns false after reporting.
+static bool cg_compound_begin(Cg *cg, Expr *expr, CgCompound *out) {
+  *out = (CgCompound){.impl_subst = subst_empty()};
+
+  Expr *call = expr->as.assign.op_call;
+  if (call == NULL) {
+    return true; // an opcode; nothing to push
+  }
+
+  ExprMethodCall *mc = &call->as.method_call;
+  if (mc->resolved_method != NULL) {
+    out->fun = mc->resolved_method->fun;
+  } else if (mc->resolved_default != NULL) {
+    out->fun = mc->resolved_default;
+  } else if (mc->bound_trait != NULL) {
+    Type *self = cg_subst(cg, mc->bound_self);
+    if (self->kind == TY_DYN) {
+      // unreachable in practice: every `std::ops` method returns `Self.Output`
+      // or takes a `Self`, so none is dispatchable and no trait object of one
+      // exists to be assigned into.
+      cg_error(cg, expr->span,
+               "this compound assignment through a trait "
+               "object");
+      return false;
+    }
+    out->fun = cg_bound_target(cg, self, cg_subst(cg, mc->bound_trait),
+                               mc->method_name, &out->impl_subst, expr->span);
+  }
+
+  if (out->fun == NULL) {
+    cg_error(cg, expr->span, "this compound assignment");
+    return false;
+  }
+  // the stack shape below is [.., self, arg], so the body must want exactly
+  // that: an `@intrinsic` (which is an opcode with no slot to address) or a
+  // receiver anywhere but first would need a different one.
+  if (out->fun->native_kind == ATTR_INTRINSIC || out->fun->param_count != 2 ||
+      !out->fun->params[0].is_self) {
+    cg_error(cg, expr->span, "this compound assignment");
+    return false;
+  }
+
+  out->call = call;
+  return cg_emit_target(cg, out->fun, &mc->inst, &out->impl_subst, expr->span);
+}
+
+// ...and the half that runs with [.., self, arg] on top: the operator itself.
+static void cg_compound_end(Cg *cg, Expr *expr, const CgCompound *c) {
+  if (c->fun != NULL) {
+    emit2(cg, OP_CALL, 2);
+    return;
+  }
+  switch (expr->as.assign.op) {
+  case TOKEN_PLUSEQ:
+    emit(cg, OP_ADD);
+    break;
+  case TOKEN_MINUSEQ:
+    emit(cg, OP_SUB);
+    break;
+  case TOKEN_STAREQ:
+    emit(cg, OP_MUL);
+    break;
+  case TOKEN_SLASHEQ:
+    emit(cg, OP_DIV);
+    break;
+  case TOKEN_PERCENTEQ:
+    emit(cg, OP_MOD);
+    break;
+  default:
+    cg_error(cg, expr->span, "this compound assignment");
+    break;
+  }
+}
+
 // assignment to `arr[i]` (`=` or a compound `+=`/etc). stack discipline:
 // [array, index, value] going into OP_INDEX_SET, which pops all three and
 // pushes `value` back as the expression's result.
@@ -825,27 +915,16 @@ static void compile_index_assign(Cg *cg, Expr *expr) {
   if (assign->op == TOKEN_EQ) {
     compile_expr(cg, assign->value); // [array, index, value]
   } else {
-    emit2(cg, OP_DUP, 1);            // [array, index, array]
-    emit2(cg, OP_DUP, 1);            // [array, index, array, index]
-    emit(cg, OP_INDEX_GET);          // [array, index, current]
-    compile_expr(cg, assign->value); // [array, index, current, value]
-    switch (assign->op) {
-    case TOKEN_PLUSEQ:
-      emit(cg, OP_ADD);
-      break;
-    case TOKEN_MINUSEQ:
-      emit(cg, OP_SUB);
-      break;
-    case TOKEN_STAREQ:
-      emit(cg, OP_MUL);
-      break;
-    case TOKEN_SLASHEQ:
-      emit(cg, OP_DIV);
-      break;
-    default:
-      cg_error(cg, expr->span, "this compound assignment");
-      break;
+    CgCompound c;
+    if (!cg_compound_begin(cg, expr, &c)) { // [array, index, callee?]
+      return;
     }
+    uint8_t d = c.fun != NULL ? 2 : 1; // the callee sits between, if pushed
+    emit2(cg, OP_DUP, d);              // [.., array]
+    emit2(cg, OP_DUP, d);              // [.., array, index]
+    emit(cg, OP_INDEX_GET);            // [.., current]
+    compile_expr(cg, assign->value);   // [.., current, value]
+    cg_compound_end(cg, expr, &c);     // [array, index, combined]
   }
 
   emit(cg, OP_INDEX_SET);
@@ -865,26 +944,14 @@ static void compile_field_assign(Cg *cg, Expr *expr) {
   if (assign->op == TOKEN_EQ) {
     compile_expr(cg, assign->value); // [obj, value]
   } else {
-    emit2(cg, OP_DUP, 0);            // [obj, obj]
-    emit2(cg, OP_FIELD_GET, idx);    // [obj, current]
-    compile_expr(cg, assign->value); // [obj, current, value]
-    switch (assign->op) {
-    case TOKEN_PLUSEQ:
-      emit(cg, OP_ADD);
-      break;
-    case TOKEN_MINUSEQ:
-      emit(cg, OP_SUB);
-      break;
-    case TOKEN_STAREQ:
-      emit(cg, OP_MUL);
-      break;
-    case TOKEN_SLASHEQ:
-      emit(cg, OP_DIV);
-      break;
-    default:
-      cg_error(cg, expr->span, "this compound assignment");
-      break;
+    CgCompound c;
+    if (!cg_compound_begin(cg, expr, &c)) { // [obj, callee?]
+      return;
     }
+    emit2(cg, OP_DUP, c.fun != NULL ? 1 : 0); // [.., obj]
+    emit2(cg, OP_FIELD_GET, idx);             // [.., current]
+    compile_expr(cg, assign->value);          // [.., current, value]
+    cg_compound_end(cg, expr, &c);            // [obj, combined]
   }
 
   emit2(cg, OP_FIELD_SET, idx);
@@ -934,25 +1001,13 @@ static void compile_assign(Cg *cg, Expr *expr) {
   if (assign->op == TOKEN_EQ) {
     compile_expr(cg, assign->value);
   } else {
-    emit2(cg, get_op, operand);
-    compile_expr(cg, assign->value);
-    switch (assign->op) {
-    case TOKEN_PLUSEQ:
-      emit(cg, OP_ADD);
-      break;
-    case TOKEN_MINUSEQ:
-      emit(cg, OP_SUB);
-      break;
-    case TOKEN_STAREQ:
-      emit(cg, OP_MUL);
-      break;
-    case TOKEN_SLASHEQ:
-      emit(cg, OP_DIV);
-      break;
-    default:
-      cg_error(cg, expr->span, "this compound assignment");
-      break;
+    CgCompound c;
+    if (!cg_compound_begin(cg, expr, &c)) { // [callee?]
+      return;
     }
+    emit2(cg, get_op, operand);      // [.., current]
+    compile_expr(cg, assign->value); // [.., current, value]
+    cg_compound_end(cg, expr, &c);   // [combined]
   }
 
   emit2(cg, set_op, operand); // value stays as the expr result

@@ -369,8 +369,10 @@ its bytes.
 - Arrays: `EXPR_ARRAY` compiles elements then `OP_ARRAY`; `EXPR_INDEX` is
   object-then-index-then-`OP_INDEX_GET`. Assigning to `arr[i]` (plain `=`)
   pushes array, index, value, then `OP_INDEX_SET`; a compound `+=` etc.
-  additionally duplicates array+index with two `OP_DUP 1`s to read the
-  current value before combining (`compile_index_assign`).
+  additionally duplicates array+index to read the current value before
+  combining (`compile_index_assign`). The DUP depth is 1 for the opcode form
+  and 2 when the operator is a trait call, because that call's callee has been
+  pushed in between — see "Compound assignment" below.
 - Tuples: `EXPR_TUPLE` compiles elements then `OP_TUPLE`.
 - Structs/enum variants (`compile_struct_init`/`compile_variant_init`): the
   checker validates field names/arity/types but doesn't reorder a literal's
@@ -386,7 +388,7 @@ its bytes.
   `OP_FIELD_GET`.
 - Assigning to `obj.field` (`compile_field_assign`): the plain `=` compiles the
   receiver then the value, then one `OP_FIELD_SET index`; a compound `+=` etc.
-  compiles the receiver once, `OP_DUP 0`s it to read the current field
+  compiles the receiver once, `OP_DUP`s it to read the current field
   (`OP_FIELD_GET`), combines, then `OP_FIELD_SET`. The receiver expression is
   evaluated once — the same discipline `compile_index_assign` keeps for
   `arr[i]`. Every aggregate the getter reads is writable (struct, tuple element,
@@ -394,6 +396,8 @@ its bytes.
   expression like every other. There is no `mut` marker and no aliasing check:
   a struct is a shared heap reference, so a write through one binding or through
   `self` is visible through every alias — the same rule arrays already keep.
+- Compound assignment (`cg_compound_begin`/`cg_compound_end`), shared by all
+  three places above: see "Compound assignment" below.
 - Match (`compile_match`, see "Match compilation" below), and the two
   conditional bindings that reuse it (`compile_if_binding`,
   `compile_while_binding`).
@@ -413,6 +417,33 @@ its bytes.
   say) emits a source-anchored diagnostic
   `"... is not supported by the VM yet"` and fails codegen — it never
   crashes at runtime.
+
+### Compound assignment
+
+`a op= b` is `a = a op b`, so codegen's job is the *place*: it is compiled once
+and then read back off the stack, which is what keeps `xs[next()] += 1` from
+advancing `next` twice. The three targets (local/upvalue, field, index) each
+keep their own stack discipline and share the operator through two calls.
+
+`cg_compound_begin` runs **before** the current value is read, and
+`cg_compound_end` with `[.., self, arg]` on top. The split exists for one
+reason: when the checker decided the operator is a trait call rather than an
+opcode (`ExprAssign.op_call`, an `a.add(b)`), `OP_CALL` wants `[callee, self,
+arg]` — so the callee has to be pushed *underneath* the value the place is
+about to yield. That is the only difference between the two forms, and it is
+why every `OP_DUP` depth in the three targets shifts by one exactly when a
+callee was pushed.
+
+Nothing else is new: the callee is the ordinary `cg_emit_target`, the call is
+an ordinary `OP_CALL 2`, and the built-in form emits the same `OP_ADD`/`OP_SUB`/
+`OP_MUL`/`OP_DIV`/`OP_MOD` it always did. What changed in milestone 83 is that
+the checker now *decides* which of the two it is — those opcodes read their
+operands as numbers with no tag test, and a compound assignment used to reach
+them without asking.
+
+A `dyn` receiver, an `@intrinsic` body, or a method whose `self` is not the
+first parameter would need a different stack shape, so each reports rather than
+compiling (none is reachable: no `std::ops` method is object-safe).
 
 ### Match compilation
 

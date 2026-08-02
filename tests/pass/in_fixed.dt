@@ -141,6 +141,16 @@ pub fun by_name(which: Int) -> dyn Weigh {
     }
 }
 
+# `a op= b` is `a = a op b`, so the operator is the one the operands' types
+# decide: an opcode for two numbers, `a.add(b)` for a type with an impl. The
+# place is compiled once either way, so `bricks[pick()]` picks once.
+pub fun stacked(bricks: [Brick], pick: fun() -> Int) -> Int {
+    var total = 0;
+    total += bricks[pick()].kg;
+    total %= 100;
+    return total;
+}
+
 # a trait may take type parameters of its own. They are supplied wherever the
 # trait is *named* — this impl head, the bound on `packed` below, a `dyn` — and
 # a trait reference is what carries them, so the signatures a trait declares

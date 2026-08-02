@@ -833,6 +833,43 @@ which is why `EXPR_BINARY` reads `binary->left`/`right` out before calling.
 Either way an arithmetic operator has stopped existing by the time codegen runs,
 so the opcodes, the VM and the image format are untouched.
 
+`rewrite_ops_call`'s `out_call` parameter is the one exception, and it exists
+for the compound assignment below: passing it hands the call node back instead
+of overwriting the site, because a `+=` has to keep its own node.
+
+#### A compound assignment asks the same question (milestone 83)
+
+`a op= b` **is** `a = a op b`, and `resolve_arith_op` is that sentence factored
+out — the String case, the numeric widening, and the fallback to
+`rewrite_ops_call` — so `EXPR_BINARY` and `EXPR_ASSIGN` cannot disagree about
+what an operator means. `compound_binary_op` maps `+=` to `+`, which is the
+whole language rule.
+
+Before this, `EXPR_ASSIGN` type-checked a compound by **unifying its two
+operands with each other**, which is neither question that matters. It is not
+the operator's ("what does `+` mean for these types") and not the assignment's
+("does the result fit the place"), and it only implies both when the type is
+numeric. So `c += 'y'` reached `OP_ADD` — whose `else` branch reads both
+operands as doubles with no tag test, a precondition the bitwise group states
+out loud and the arithmetic group had only ever been *given* by `EXPR_BINARY` —
+and printed a reinterpreted bit pattern, while a struct or an array segfaulted
+the VM outright. In the other direction the same line was too strict, refusing
+`f += 1` where `f = f + 1` is legal.
+
+The two questions are now asked in order: `resolve_arith_op` for the operator,
+then `infer_unify(lhs_ty, op_ty)` for the place. Every consequence falls out of
+the sentence rather than being decided separately — a heterogeneous `v *= 2.0`
+works because `Mul<Float>` does, an `Output` that is not `Self` is rejected
+because the place is, and `|n| { total += n; }` now needs its annotation for
+precisely the reason `total = total + n` always did. **That last one is the
+cost, and it is worth naming: the unsoundness and the inference were the same
+line.** Unifying the operands solved the right one from the left; refusing to
+means `+` cannot drive inference here any more than it can anywhere else.
+
+Where the answer is a trait call, the call node is parked on
+`ExprAssign.op_call` rather than replacing the site — see `runtime.md`
+("Compound assignment") for why the place has to survive it.
+
 Three details are the design:
 
 - **The choice is made on the operands' *solved* types.** The arith branch

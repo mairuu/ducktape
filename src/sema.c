@@ -7547,10 +7547,13 @@ static bool ops_satisfied(CheckCtx *ctx, Type *type, TraitDef *trait,
 //
 // Returns the method's return type on success, poison (after one diagnostic)
 // otherwise. On success `*expr` *becomes* the call, so the caller must not
-// touch its old payload afterwards.
+// touch its old payload afterwards — unless `out_call` is non-NULL, in which
+// case the node is handed back instead and `*expr` is left alone. A compound
+// assignment wants the second: its own node has to survive, because the place
+// it writes back to is compiled once and the call is only half of that.
 static Type *rewrite_ops_call(CheckCtx *ctx, Expr *expr, OpsTrait which,
                               Expr *recv, Type *recv_ty, Expr *rhs,
-                              Type *rhs_ty) {
+                              Type *rhs_ty, Expr **out_call) {
   Span span = expr->span;
   const char *op = ops_trait_table[which].op;
   const char *trait_name = ops_trait_table[which].trait;
@@ -7661,6 +7664,10 @@ static Type *rewrite_ops_call(CheckCtx *ctx, Expr *expr, OpsTrait which,
     return ctx->tc->t_poison;
   }
 
+  if (out_call != NULL) {
+    *out_call = call;
+    return ty;
+  }
   *expr = *call; // the operator node *is* the call now
   return ty;
 }
@@ -7682,6 +7689,55 @@ static OpsTrait ops_trait_for_token(TokenType op) {
   default:
     assert(false && "not an arithmetic operator");
     return OPS_ADD;
+  }
+}
+
+// What an arithmetic operator *means* for a pair of operand types, and the one
+// decision `a + b` and `a op= b` have to make identically. The two opcodes it
+// can pick between carry an unwritten precondition — `OP_ADD` and the rest
+// read their operands as numbers with no tag test, exactly as the bitwise
+// group says out loud that it may — so this function is what upholds it, and a
+// caller that skips it hands the VM a `Char` to do arithmetic on.
+//
+// `out_call` is passed straight to `rewrite_ops_call`: NULL rewrites the site
+// into the call, non-NULL hands the call back instead.
+static Type *resolve_arith_op(CheckCtx *ctx, Expr *site, TokenType op,
+                              Expr *lhs_e, Type *lhs, Expr *rhs_e, Type *rhs,
+                              Expr **out_call) {
+  if (op == TOKEN_PLUS && lhs->kind == TY_STRING && rhs->kind == TY_STRING) {
+    return ty_string();
+  }
+  // The built-in/trait choice is made on the operands' *solved* types, so an
+  // operand that is still an unknown at this point is followed first — a
+  // closure parameter typed by its hint arrives here as one.
+  Type *l = infer_find(&ctx->infer, lhs);
+  Type *r = infer_find(&ctx->infer, rhs);
+  if (type_is_numeric(l) && type_is_numeric(r)) {
+    return (l->kind == TY_FLOAT || r->kind == TY_FLOAT) ? ty_float() : ty_int();
+  }
+  // a non-numeric operand asks a trait what the operator means:
+  // `a + b` → `a.add(b)`.
+  return rewrite_ops_call(ctx, site, ops_trait_for_token(op), lhs_e, l, rhs_e,
+                          r, out_call);
+}
+
+// The binary operator a compound assignment is spelled with: `+=` means `+`,
+// and that is the whole of the language rule — `a op= b` is `a = a op b`.
+// TOKEN_EQ (a plain assignment) has no operator and never reaches here.
+static TokenType compound_binary_op(TokenType op) {
+  switch (op) {
+  case TOKEN_PLUSEQ:
+    return TOKEN_PLUS;
+  case TOKEN_MINUSEQ:
+    return TOKEN_MINUS;
+  case TOKEN_STAREQ:
+    return TOKEN_STAR;
+  case TOKEN_SLASHEQ:
+    return TOKEN_SLASH;
+  case TOKEN_PERCENTEQ:
+    return TOKEN_PERCENT;
+  default:
+    return TOKEN_ERROR;
   }
 }
 
@@ -7762,24 +7818,12 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
         (op == TOKEN_AMP || op == TOKEN_PIPE || op == TOKEN_CARET ||
          op == TOKEN_SHL || op == TOKEN_SHR || op == TOKEN_USHR);
 
-    if (op == TOKEN_PLUS && lhs->kind == TY_STRING && rhs->kind == TY_STRING) {
-      result = ty_string();
-    } else if (is_arith) {
-      // The built-in/trait choice is made on the operands' *solved* types, so
-      // an operand that is still an unknown at this point is followed first —
-      // a closure parameter typed by its hint arrives here as one.
-      Type *l = infer_find(&ctx->infer, lhs);
-      Type *r = infer_find(&ctx->infer, rhs);
-      if (type_is_numeric(l) && type_is_numeric(r)) {
-        // Int op Float widens to Float.
-        result = (l->kind == TY_FLOAT || r->kind == TY_FLOAT) ? ty_float()
-                                                              : ty_int();
-      } else {
-        // a non-numeric operand asks a trait what the operator means:
-        // `a + b` → `a.add(b)`, replacing this node with the call.
-        result = rewrite_ops_call(ctx, expr, ops_trait_for_token(op),
-                                  binary->left, l, binary->right, r);
-      }
+    if (is_arith) {
+      // shared with `a op= b`, whose operator means exactly this one — and
+      // whose opcodes are exactly these opcodes. Replaces this node with the
+      // call when the answer is a trait's.
+      result = resolve_arith_op(ctx, expr, op, binary->left, lhs, binary->right,
+                                rhs, /*out_call=*/NULL);
     } else if (is_bitwise) {
       // **Int only, and no trait behind it.** Every other operator that could
       // mean something for a user type routes through `std::ops` when its
@@ -8271,15 +8315,40 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       break;
     }
 
-    // A plain `=` into a place whose type is fixed is the same flow an
-    // annotated `var` is, so `x = Tri` on a `dyn Shape` wraps. A compound `+=`
-    // is not: its right operand feeds an operator on the place's own type, and
-    // nothing there is a `dyn` position.
-    bool assigned =
-        assign->op == TOKEN_EQ
-            ? check_flow_into(ctx, assign->value, rhs_ty, lhs_ty, expr->span)
-            : infer_unify(&ctx->infer, lhs_ty, rhs_ty, ctx->diags, expr->span);
-    result = assigned ? lhs_ty : ctx->tc->t_poison;
+    if (assign->op == TOKEN_EQ) {
+      // A plain `=` into a place whose type is fixed is the same flow an
+      // annotated `var` is, so `x = Tri` on a `dyn Shape` wraps. A compound
+      // one is not: its right operand feeds an operator on the place's own
+      // type, and nothing there is a `dyn` position.
+      result = check_flow_into(ctx, assign->value, rhs_ty, lhs_ty, expr->span)
+                   ? lhs_ty
+                   : ctx->tc->t_poison;
+      break;
+    }
+
+    // `a op= b` **is** `a = a op b`, so it asks that sentence's two questions
+    // and nothing else: what the operator means for these two types, then
+    // whether its result fits the place. Unifying the two operands with each
+    // other — which is all this used to do — is neither, and happens to imply
+    // both only when the type is numeric: it let `c += 'y'` reach `OP_ADD`,
+    // which reads a `Char` as a double, while refusing `f += 1`, which
+    // `f = f + 1` spells legally one line over.
+    TokenType binop = compound_binary_op(assign->op);
+    if (binop == TOKEN_ERROR) {
+      diag_error(ctx->diags, expr->span, "unsupported compound assignment");
+      result = ctx->tc->t_poison;
+      break;
+    }
+
+    Type *op_ty = resolve_arith_op(ctx, expr, binop, assign->target, lhs_ty,
+                                   assign->value, rhs_ty, &assign->op_call);
+    if (type_is_poison(op_ty)) {
+      result = ctx->tc->t_poison;
+      break;
+    }
+    result = infer_unify(&ctx->infer, lhs_ty, op_ty, ctx->diags, expr->span)
+                 ? lhs_ty
+                 : ctx->tc->t_poison;
     break;
   }
   case EXPR_MATCH:
@@ -8511,7 +8580,8 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
         // operand is the receiver and there is no second one, so the call has
         // no arguments.
         result = rewrite_ops_call(ctx, expr, OPS_NEG, unary->operand, op_ty,
-                                  /*rhs=*/NULL, /*rhs_ty=*/NULL);
+                                  /*rhs=*/NULL, /*rhs_ty=*/NULL,
+                                  /*out_call=*/NULL);
       } else {
         result = op_ty;
       }
