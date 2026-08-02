@@ -1366,7 +1366,7 @@ keep this file small. Everything from 55 on is below.
   Remainder: two wrong arms under one `dyn` expectation report twice, one per
   arm — the array literal's behaviour, and each arm is its own claim.
 
-- **83. A compound assignment is its operator** — `v += w` reaches
+- **83. A compound assignment is its operator** (`692c789`) — `v += w` reaches
   `impl Add for V2`, `f += 1` is legal because `f = f + 1` is, and `c += 'y'`
   no longer prints a reinterpreted bit pattern. `%=` joins the set. Design:
   `language.md` `std::ops` (the compound paragraph), `architecture.md`
