@@ -1386,6 +1386,24 @@ keep this file small. Everything from 55 on is below.
   Remainder: the compound *bitwise* operators still have no spelling, and that
   is now a scanning question rather than a design one.
 
+- **84. A binding whose failure leaves** — `var Shape::Rect(w, h) = s else {
+  panic("not a rect"); };`, Rust's `let else`: the pattern is refutable and the
+  success case stays at statement level, so `w` and `h` are ordinary locals
+  below it rather than names nested inside an `if var`. Design:
+  `language.md` "`var ... else`" + the `Never` paragraph in `std::panic`,
+  `architecture.md` ("Binding patterns"), `runtime.md` ("Destructuring a
+  `var`"), `grammar.ebnf` `varDecl`. The finding: the construct needed nothing
+  new anywhere — `compile_destructure` already emitted the failure path, and
+  all the `else` does is sit between its `OP_POP` and its `OP_MATCH_FAIL` —
+  but it needed the language to *have* a notion of divergence, and what stood
+  there was one line reading "the last statement is a `return`". `block_diverges`
+  is that rule widened to `break`/`continue` and to any statement typed `!`,
+  which is what makes `else { panic("no"); }` count with its semicolon. The
+  refutability check is `matrix_covers` with the answer turned around, so the
+  two spellings of `var` partition the patterns between them. No opcode, no
+  image change. Remainder: a `-> Never` body that falls through is still
+  accepted (below), which is why the trap stays under the `else`.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -1619,13 +1637,19 @@ via `Module.decl_base`) and is not part of the main line.
   `OP_MATCH_FAIL` instead of at compile time
 - the mirror of that, from milestone 80: an *irrefutable* pattern in an `if
   var` / `while var` header is accepted silently, so the `else` is dead code
-  and `while var x = e { }` is an infinite loop with nothing said. Rust warns;
-  there is no warning severity here, and the exhaustiveness machinery that
-  would answer the question is already sitting one function over
-- there is no `var P = e else { .. }` (Rust's `let else`): a refutable binding
-  whose failure branch diverges has to be written as an `if var` with the rest
-  of the block inside it, which scopes the binding one level deeper than the
-  code that uses it wants
+  and `while var x = e { }` is an infinite loop with nothing said. Milestone 84
+  narrowed this to the two headers by asking the question for `var ... else`,
+  which is the same one call to `matrix_covers` — what stops it spreading is
+  that `check_cond_binding` deliberately has no matrix, and Rust *warns* here
+  where the binding forms error, a severity this compiler does not have
+- a `-> Never` body is never checked against its promise: `Never` unifies with
+  everything in both directions, so `fun evil() -> Never { }` is accepted and
+  hands its unit to whatever the caller declared — `var x: Int = evil();` then
+  fails an assertion in the VM's `stringify`. `block_diverges` (milestone 84)
+  is the predicate that would answer it at the definition site; what it does
+  not answer is `fun f() -> Never { return 3; }`, which needs the unify rule to
+  stop being symmetric. `var ... else` is the one construct that consumes the
+  promise and keeps an `OP_MATCH_FAIL` under the block against exactly this
 - `pub` is parsed and ignored on the `impl` keyword itself, and *rejected* on a
   method: `pub fun` inside an `impl` block is "expected impl item". **Method**
   visibility does not exist — a method is as visible as its impl — which is why

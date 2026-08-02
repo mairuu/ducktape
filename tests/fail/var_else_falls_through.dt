@@ -1,0 +1,17 @@
+#! expect: must not fall through
+# The `else` is where the pattern did not match, and below the statement the
+# binding is in scope unconditionally — so an `else` that runs off its end
+# would reach `v` having never bound it.
+use std::option;
+
+fun find(x: Int) -> Option<Int> {
+    if x > 0 {
+        return Some(x);
+    }
+    return None;
+}
+
+fun main() {
+    var Some(v) = find(1) else { };
+    v;
+}

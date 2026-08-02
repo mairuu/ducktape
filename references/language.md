@@ -812,7 +812,7 @@ The same patterns are the binding form of `var`, restricted to the
 irrefutable ones — a `var` binding is a match with one arm and no guard, so
 "irrefutable" is decided by the exhaustiveness checker below. `var Opt::Some(n)
 = o;` is rejected (`refutable pattern in a 'var' binding`) because `Opt::None`
-would reach no arm; use `match`.
+would reach no arm; use `match`, or the `else` below.
 
 Matches must be **exhaustive**; a gap is a compile error naming the missing
 enum variant where it can (`match is not exhaustive: 'Shape::Point' is not
@@ -859,6 +859,39 @@ spelling `if let` has in Rust. A struct pattern keeps its braces in a header
 (`if var Point { x, y } = p`) because the pattern is to the *left* of the `=` —
 but the subject is an ordinary header expression, so a struct *literal* there
 still needs a name of its own, exactly as in a plain `if`.
+
+### `var ... else`
+
+```
+fun area(s: Shape) -> Int {
+    var Shape::Rect(w, h) = s else { panic("expected a rect"); };
+    return w * h;              # `w` and `h` are ordinary locals from here on
+}
+```
+
+Rust's `let else`, and the other half of a conditional binding: the pattern is
+refutable and the *failure* branch is the one written out, so the success case
+stays at the statement level instead of nesting inside an `if var`. The names
+are in scope for the rest of the enclosing block, like any `var`.
+
+The `else` block **must not fall through** — it has to `return`, `break`,
+`continue`, or call something that returns `Never` (`panic`) — because below
+the statement the binding is in scope unconditionally, so there is no answer
+for a failure that carries on. A block diverges when any of its statements
+does, so `else { panic("no"); }` counts with the semicolon as without it.
+The `else` also never sees the names the pattern binds: it is precisely the
+branch where they were not produced.
+
+The refutability requirement is the mirror of a plain `var`'s, and is checked
+by the same exhaustiveness matrix: without an `else` a covering pattern is
+required, with one it is an error (`irrefutable pattern in a 'var ... else'
+binding`), since the `else` could never run. The two spellings therefore
+partition the patterns between them, with `match` still there for the case
+where both branches produce a value.
+
+Nothing disambiguates this `else` from an `if`'s by lookahead, and nothing has
+to: in `var x = if c { 1 } else { 2 };` the `if` has already taken its own
+`else` before the binding sees the `;`.
 
 ### `?` propagation
 
@@ -1952,7 +1985,9 @@ fun unwrap(self) -> T {
 ```
 
 That single rule is the whole of what `std::result` and `Option::unwrap` needed
-(`tests/pass/never_type.dt`).
+(`tests/pass/never_type.dt`). It is also the whole rule: `Never` is coerced
+*from* and never checked *into*, so a body annotated `-> Never` that falls
+through is accepted — a known gap, listed below.
 
 **There is no unwinding and no `catch`.** A panic sets the same error a failing
 native sets, so the VM reports it at the call site, prints the frames beneath
@@ -2666,7 +2701,7 @@ HashSet::with_capacity(n); s.capacity(); s.reserve(n);   # forwarded, all three
 | visibility below module granularity (`pub(crate)` &c.) | `pub` is the only modifier |
 | two spellings of one file (symlinks, unusual paths) | dedup is lexical, so the file would load twice and collide |
 | top-level `var` (globals) | parses, then a registration diagnostic: move it into a function |
-| a refutable `var` binding with a diverging fallback (Rust's `let else`) | not parsed. `if var P = e { .. } else { return .. }` is the spelling, at the cost of the binding being scoped to the then-block rather than to the rest of the enclosing block |
+| checking that a `-> Never` body actually diverges | not checked. `Never` unifies with everything, in both directions, so `fun evil() -> Never { }` is accepted and its unit reaches whatever the caller declared — an assertion failure in the VM if that was an `Int`. `var ... else` is the one construct that consumes the promise, and it keeps an `OP_MATCH_FAIL` under the block for exactly this reason |
 | tuple-struct struct-patterns `Pair { a, b }` | write the constructor spelling `Pair(a, b)` — "matching tuple struct with struct pattern syntax is not allowed" |
 | variable shadowing diagnostics | a `var` may silently shadow an earlier one in the same scope (top-level *item* names do collide — that is an error) |
 | declaring a type whose name is a builtin (`struct Range`, `struct String`) | accepted, but a builtin name is resolved before the type scope is consulted, so every mention of it means the builtin and the declaration is unreachable |

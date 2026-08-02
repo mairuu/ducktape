@@ -498,6 +498,15 @@ because its answer is tri-state — an unsolved column type reports nothing
 instructions; anything it does emit traps through `OP_MATCH_FAIL` rather than
 binding names out of a value that never had the shape.
 
+An `else` block is emitted between that shared `OP_POP` and the trap, and needs
+nothing else. The bindings have not been pushed at that point, so `local_count`
+is exactly what the stack holds — the outer locals plus the subject — and a
+`break` or `continue` inside pops the right number on its way out with no
+special case. The trap stays *below* the block rather than being replaced by
+it: the checker made the block diverge, and if it ever fell through anyway
+(a `-> Never` body that returns is still accepted — `language.md` "Not yet
+implemented") the alternative would be reading names that were never bound.
+
 #### `if var` and `while var`
 
 The same two passes over one pattern again, with the fail list wired to

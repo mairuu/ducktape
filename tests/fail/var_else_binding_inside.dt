@@ -1,0 +1,19 @@
+#! expect: undefined variable 'v'
+# The `else` is resolved before the pattern's names are bound, which is what
+# makes it the one place in the statement where they do not exist.
+use std::option;
+
+fun find(x: Int) -> Option<Int> {
+    if x > 0 {
+        return Some(x);
+    }
+    return None;
+}
+
+fun main() {
+    var Some(v) = find(1) else {
+        v;
+        return;
+    };
+    v;
+}

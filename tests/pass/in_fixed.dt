@@ -337,6 +337,12 @@ pub fun process_data<T>(data: T) -> Result<Int, String> {
         var per_turn = v;
     }
 
+    # the same refutability with the branches the other way round: the `else`
+    # leaves, so the name below it is an ordinary local rather than one nested
+    # inside an `if var`
+    var Result::Ok(unwrapped) = seed else { return Result::Err("no seed"); };
+    var after_else = unwrapped + 1;
+
     var helper = || -> Result<Int, String> {
         var val = process_data(10)?;
         return Result::Ok(val);

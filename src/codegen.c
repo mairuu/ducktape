@@ -627,7 +627,8 @@ static void compile_closure(Cg *cg, Expr *expr);
 static FunDef *cg_bound_target(Cg *cg, Type *self, Type *trait_ref,
                                StringView name, Subst *out_impl_subst,
                                Span span);
-static void compile_destructure(Cg *cg, Pattern *pat, int subject_slot);
+static void compile_destructure(Cg *cg, Pattern *pat, int subject_slot,
+                                Expr *else_block);
 
 static void compile_stmt(Cg *cg, Stmt *stmt) {
   switch (stmt->kind) {
@@ -640,7 +641,7 @@ static void compile_stmt(Cg *cg, Stmt *stmt) {
     StmtVar *var = &stmt->as.var_stmt;
     compile_expr(cg, var->initializer);
 
-    if (var->binding->kind == PAT_BIND) {
+    if (var->binding->kind == PAT_BIND && var->else_block == NULL) {
       // the initializer's stack slot becomes the local
       cg_add_local(cg, var->binding->as.bind.name, stmt->span);
       break;
@@ -651,7 +652,7 @@ static void compile_stmt(Cg *cg, Stmt *stmt) {
     // above it. The temp costs a slot for the rest of the scope, which is
     // what keeps every bound name a plain local like any other.
     int subject_slot = cg_add_local(cg, (StringView){0}, stmt->span);
-    compile_destructure(cg, var->binding, subject_slot);
+    compile_destructure(cg, var->binding, subject_slot, var->else_block);
     break;
   }
 
@@ -2142,7 +2143,16 @@ static void compile_pattern_bind(Cg *cg, Pattern *pat, Accessor acc) {
 // still trap through OP_MATCH_FAIL rather than binding from a value that never
 // had the shape. For an irrefutable pattern `compile_pattern_test` emits
 // nothing at all, so this costs the common case zero instructions.
-static void compile_destructure(Cg *cg, Pattern *pat, int subject_slot) {
+//
+// `else_block` is the whole of `var P = e else { .. }`: the failure path stops
+// being the trap and becomes that block. The bindings have not been pushed
+// yet, so `cg->local_count` there is exactly what the stack holds — the outer
+// locals plus the subject — and a `break` or `continue` inside pops the right
+// number on its way out. The trap stays *below* the block: the checker made it
+// diverge, and if it ever fell through anyway the alternative would be reading
+// names that were never bound.
+static void compile_destructure(Cg *cg, Pattern *pat, int subject_slot,
+                                Expr *else_block) {
   Accessor acc = {.base_slot = subject_slot};
   JumpList fails = {0};
 
@@ -2152,6 +2162,10 @@ static void compile_destructure(Cg *cg, Pattern *pat, int subject_slot) {
     int ok_jump = emit_jump(cg, OP_JUMP);
     jump_list_patch(cg, &fails);
     emit(cg, OP_POP); // the outstanding false from whichever test failed
+    if (else_block != NULL) {
+      compile_expr(cg, else_block);
+      emit(cg, OP_POP); // unreached, and keeps the stack model honest
+    }
     emit(cg, OP_MATCH_FAIL);
     patch_jump(cg, ok_jump);
   }

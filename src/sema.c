@@ -4181,7 +4181,8 @@ static bool check_coerce_dyn(CheckCtx *ctx, Expr *e, Type *actual,
                              Type *expected);
 static Type *trait_project(Type *t, TraitDef *trait, Type *self_to,
                            ImplDef *impl, Allocator *al);
-static void check_binding_pattern(CheckCtx *ctx, Pattern *pat, Type *init_ty);
+static void check_binding_pattern(CheckCtx *ctx, Pattern *pat, Type *init_ty,
+                                  bool has_else);
 
 // A call whose callee `resolve_callee` deliberately leaves unselected, because
 // an impl cannot be picked until the arguments are in hand. Two shapes, both
@@ -4241,7 +4242,21 @@ static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
       }
     }
 
-    check_binding_pattern(ctx, var->binding, init_ty);
+    // the `else` runs where the pattern did *not* match, so it must not see
+    // the names — which is the whole reason it is resolved before they are
+    // bound rather than after. It has to leave the block for the same reason:
+    // below the statement the binding is in scope unconditionally.
+    if (var->else_block != NULL) {
+      Type *else_ty = resolve_expr(ctx, var->else_block, NULL);
+      if (!type_is_poison(else_ty) && else_ty->kind != TY_NEVER) {
+        diag_error(ctx->diags, var->else_block->span,
+                   "the 'else' of a 'var' binding must not fall through: it "
+                   "has to 'return', 'break', 'continue' or panic, since the "
+                   "names the pattern binds do not exist inside it");
+      }
+    }
+
+    check_binding_pattern(ctx, var->binding, init_ty, var->else_block != NULL);
     break;
   }
   case STMT_BREAK: {
@@ -6026,7 +6041,11 @@ static void bind_pattern_poison(CheckCtx *ctx, Pattern *pat) {
 // exactly "exhaustive" over a one-row matrix — the same question
 // check_match_exhaustive asks, and the same tri-state answer: a column whose
 // type inference has not pinned down reports nothing rather than guessing.
-static void check_binding_pattern(CheckCtx *ctx, Pattern *pat, Type *init_ty) {
+// `has_else` turns that answer around rather than replacing it: a binding with
+// somewhere to send the values it misses wants EXH_NO, and EXH_YES means the
+// `else` can never run.
+static void check_binding_pattern(CheckCtx *ctx, Pattern *pat, Type *init_ty,
+                                  bool has_else) {
   if (type_is_poison(init_ty)) {
     bind_pattern_poison(ctx, pat);
     return;
@@ -6043,11 +6062,16 @@ static void check_binding_pattern(CheckCtx *ctx, Pattern *pat, Type *init_ty) {
   cols[0] = pat;
   PatRow row = {.cols = cols};
   PatMatrix m = {.rows = &row, .row_count = 1, .width = 1};
+  Exhaustive covers = matrix_covers(ctx, &m);
 
-  if (matrix_covers(ctx, &m) == EXH_NO) {
+  if (!has_else && covers == EXH_NO) {
     diag_error(ctx->diags, pat->span,
                "refutable pattern in a 'var' binding: it does not cover every "
-               "value of the initializer; use 'match' instead");
+               "value of the initializer; use 'match' or an 'else' instead");
+  } else if (has_else && covers == EXH_YES) {
+    diag_error(ctx->diags, pat->span,
+               "irrefutable pattern in a 'var ... else' binding: it covers "
+               "every value of the initializer, so the 'else' is unreachable");
   }
 }
 
@@ -7741,6 +7765,28 @@ static TokenType compound_binary_op(TokenType op) {
   }
 }
 
+// Does control leave the block instead of running off its end? `return`,
+// `break` and `continue` say so outright; a statement whose expression has type
+// `!` — a `panic` call, a `match` whose every arm diverges — says it one type
+// out, which is why this runs after the statements are resolved. Everything
+// below the first such statement is dead, so one anywhere is enough.
+static bool block_diverges(const ExprBlock *block) {
+  for (int i = 0; i < block->stmt_count; i++) {
+    const Stmt *s = block->stmts[i];
+    if (s->kind == STMT_RETURN || s->kind == STMT_BREAK ||
+        s->kind == STMT_CONTINUE) {
+      return true;
+    }
+    if (s->kind == STMT_EXPR) {
+      Type *ty = s->as.expr_stmt.expr->resolved_type;
+      if (ty != NULL && ty->kind == TY_NEVER) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   (void)hint;
   (void)ctx;
@@ -7774,9 +7820,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
 
     if (block->tail_expr != NULL) {
       result = resolve_expr(ctx, block->tail_expr, hint);
-    } else if (block->stmt_count > 0 &&
-               block->stmts[block->stmt_count - 1]->kind == STMT_RETURN) {
-      // a block ending in `return` never falls through
+    } else if (block_diverges(block)) {
       result = ctx->tc->t_never;
     } else {
       result = ctx->tc->t_unit;

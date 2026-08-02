@@ -1,0 +1,96 @@
+# `var P = e else { .. }` binds refutably: the names live below the statement
+# for the rest of the scope, and the `else` is where the pattern did not match.
+# It has to leave the block, so what it pins is that every way out works and
+# that each one pops the right number of locals on the way.
+#> head 10
+#> head -1
+#> sum 6
+#> rect 12
+#> pair 1 9
+#> captured 9
+#> loop 0
+#> loop 2
+#> loop 4
+#> broke at 7
+#> nested 3
+#> deep 30
+use std::io::print;
+use std::option;
+use std::array;
+
+struct Point { x: Int, y: Int }
+enum Shape { Circle(Int), Rect(Int, Int) }
+
+fun even(x: Int) -> Option<Int> {
+    if x % 2 == 0 {
+        return Some(x);
+    }
+    return None;
+}
+
+# `return` is the plain way out, and the binding is a normal local below it.
+fun head(xs: [Int]) -> Int {
+    var Some(h) = xs.first() else { return -1; };
+    return h * 2;
+}
+
+# `continue` from inside an `else`: the subject local is live at that point and
+# has to come off the stack with the loop's own.
+fun sum_even(xs: [Int]) -> Int {
+    var total = 0;
+    for x in xs {
+        var Some(v) = even(x) else { continue; };
+        total = total + v;
+    }
+    return total;
+}
+
+# a variant pattern with two fields, and the annotation still allowed in front.
+fun area(s: Shape) -> Int {
+    var Shape::Rect(w, h): Shape = s else { return 0; };
+    return w * h;
+}
+
+fun main() {
+    print("head {head([5, 6])}");
+    print("head {head([])}");
+    print("sum {sum_even([1, 2, 3, 4])}");
+    print("rect {area(Shape::Rect(3, 4))}");
+
+    # a tuple pattern with a refutable element nested inside it
+    var pair: (Int, Option<Int>) = (1, Some(9));
+    var (a, Some(b)) = pair else { return; };
+    print("pair {a} {b}");
+
+    # the binding outlives the statement, so a closure closes over it
+    var f = || { b };
+    print("captured {f()}");
+
+    # `break` from inside an `else` is the loop's exit
+    var i = 0;
+    while true {
+        var Some(v) = even(i) else { break; };
+        print("loop {v}");
+        i = i + 2;
+        if i > 4 {
+            i = i + 1;
+        }
+    }
+    print("broke at {i}");
+
+    # a struct pattern is refutable only through a nested literal, so this is
+    # also what keeps the `else` above from being rejected as unreachable
+    var p = Point { x: 3, y: 4 };
+    var Point { x, y: 4 } = p else { return; };
+    print("nested {x}");
+
+    # nested loops: the inner `else` breaks the inner loop only
+    var acc = 0;
+    for outer in [1, 2] {
+        for inner in [10, 20, 31] {
+            var Some(v) = even(inner + outer - 1) else { break; };
+            acc = acc + v;
+        }
+    }
+    print("deep {acc}");
+}

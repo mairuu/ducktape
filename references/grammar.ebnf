@@ -42,8 +42,12 @@ useItem        = IDENT ( "as" IDENT )? ;
                     takes no `as`. `pub use` re-exports each alias —
                     language.md "Modules" *)
 
-varDecl        = "var" pattern ( ":" type )? "=" expr ";" ;
-                 (* the pattern must be irrefutable — checked, not parsed;
+varDecl        = "var" pattern ( ":" type )? "=" expr
+                 ( "else" block )? ";" ;
+                 (* without the "else" the pattern must be irrefutable, with it
+                    refutable — checked, not parsed. The "else" block must
+                    diverge. No lookahead disambiguates it from an "if"'s: an
+                    "if" initializer has already taken its own.
                     file-scope var parses but is rejected later — known gap *)
 
 funDecl        = "fun" IDENT typeParams? "(" paramList? ")"

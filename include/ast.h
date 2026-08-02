@@ -1231,6 +1231,10 @@ typedef struct {
   Pattern *binding;
   TypeNode *type_annotation; // NULL if inferred
   Expr *initializer;
+  // `else` inverts the restriction above: the pattern must be refutable, and
+  // this block is where it did not match. It has to diverge, since the names
+  // the binding introduces do not exist below it.
+  Expr *else_block; // NULL for a plain `var`
 } StmtVar;
 
 typedef struct {

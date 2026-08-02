@@ -1983,6 +1983,21 @@ arm and no guard, so irrefutable is precisely exhaustive. `EXH_NO` is the
 "refutable pattern in a 'var' binding" diagnostic; `EXH_UNKNOWN` reports
 nothing, for the reason above.
 
+An `else` block inverts that question rather than replacing it. `has_else`
+turns the same `matrix_covers` answer around — `EXH_YES` now means the `else`
+is unreachable and is the diagnostic — so the two spellings partition the
+patterns between them and neither needs its own analysis. The `else` is
+resolved *before* `check_binding_pattern` runs, which is what keeps the names
+out of it: it is a block, so it pushes its own scope, and the pattern has
+simply not been walked yet.
+
+Its other requirement is that it not fall through, which is `block_diverges`
+asking whether any statement is a `return`/`break`/`continue` or has type `!`.
+That predicate is also what `EXPR_BLOCK` now uses for its own type, where the
+rule had been the narrower "the last statement is a `return`" — so
+`else { panic("no"); }` diverges with the semicolon as without it, and a block
+ending in `break` types as `!` everywhere, not only here.
+
 When the pattern cannot be checked — a poisoned initializer, or a mismatch
 that stopped the walk partway — `bind_pattern_poison` defines the remaining
 names as poison. `vscope_lookup` returns the *first* entry it finds, so the

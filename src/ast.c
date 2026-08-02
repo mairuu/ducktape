@@ -1729,6 +1729,11 @@ void dump_stmt(const Stmt *s, int indent) {
     if (s->as.var_stmt.initializer) {
       dump_expr(s->as.var_stmt.initializer, indent + 1);
     }
+    if (s->as.var_stmt.else_block) {
+      ind(indent + 1);
+      fprintf(stdout, "Else:\n");
+      dump_expr(s->as.var_stmt.else_block, indent + 2);
+    }
     break;
   case STMT_RETURN:
     fprintf(stdout, "ReturnStmt\n");

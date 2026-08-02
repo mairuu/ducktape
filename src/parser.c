@@ -2254,6 +2254,17 @@ static Stmt *parse_var_stmt(Parser *p) {
     return ast_stmt(STMT_POISON, init->span, p->al);
   }
 
+  // `var P = e else { .. };`. No lookahead is needed to tell this `else` from
+  // an `if`'s: an `if` initializer has already taken its own on the way out of
+  // parse_expr, so whatever is left here belongs to the binding.
+  Expr *else_block = NULL;
+  if (match_tok(p, TOKEN_ELSE)) {
+    else_block = parse_block(p);
+    if (else_block->kind == EXPR_POISON) {
+      return ast_stmt(STMT_POISON, else_block->span, p->al);
+    }
+  }
+
   if (!consume_tok(p, TOKEN_SEMICOLON, "expected ';'")) {
     return ast_stmt(STMT_POISON, current_tok_span(p), p->al);
   };
@@ -2264,6 +2275,7 @@ static Stmt *parse_var_stmt(Parser *p) {
   stmt->as.var_stmt.binding = binding;
   stmt->as.var_stmt.initializer = init;
   stmt->as.var_stmt.type_annotation = ann;
+  stmt->as.var_stmt.else_block = else_block;
 
   return stmt;
 }

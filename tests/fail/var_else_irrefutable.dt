@@ -1,0 +1,14 @@
+#! expect: irrefutable pattern in a 'var ... else' binding
+# The dual of `refutable_binding.dt`: with an `else` the exhaustiveness matrix
+# asks the opposite question, and a pattern that covers everything leaves the
+# `else` unreachable.
+use std::option;
+
+fun find(x: Int) -> Option<Int> {
+    return Some(x);
+}
+
+fun main() {
+    var whole = find(1) else { return; };
+    whole;
+}
