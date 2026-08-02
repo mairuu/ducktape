@@ -1440,7 +1440,7 @@ keep this file small. Everything from 55 on is below.
   dropped their dead trailing `return`. Remainder: `break` carries no value, so
   a searching loop still assigns to a `var` above it — milestone 87.
 
-- **87. The break that leaves with something** (`SHA`) — `break x;`, so a
+- **87. The break that leaves with something** (`af0b594`) — `break x;`, so a
   `loop`'s value is the join of its breaks. Design: `language.md` (the
   expression list + the syntax summary), `architecture.md` (`CheckLoop`,
   `parse_block`), `runtime.md` (`compile_loop`, the break), `grammar.ebnf`. The
