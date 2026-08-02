@@ -1,0 +1,67 @@
+# A local's frame slot is a stack position, so a `var` declared while something
+# else is already pending — an operand, a callee, an argument, a duplicated
+# assignment target — sits above those, not at the count of locals. Every line
+# is 20; before this was fixed each read a temporary instead and printed
+# garbage, hung, or crashed the VM.
+#> 20
+#> 20
+#> 20
+#> 20
+#> 20
+#> 20
+#> 20
+#> 20
+#> 20
+#> 20
+#> 20
+#> 20
+#> 20
+#> 20
+#> 20
+#> 20
+#> 20
+#> 20
+use std::io::print;
+use std::option::Option;
+
+fun two(a: Int, b: Int) -> Int { a + b }
+struct P { x: Int, y: Int }
+enum E { A(Int), B }
+trait T { fun go(self, n: Int) -> Int; }
+impl T for P { fun go(self, n: Int) -> Int { n } }
+
+fun main() {
+    # one pending value: an operand, an argument, an element, a receiver
+    print(0 + if true { var b = 2; b * 10 } else { 0 });
+    print(two(0, if true { var b = 2; b * 10 } else { 0 }));
+    print([0, if true { var b = 2; b * 10 } else { 0 }][1]);
+    print(P { x: 0, y: if true { var b = 2; b * 10 } else { 0 } }.y);
+    print(P { x: 0, y: 0 }.go(if true { var b = 2; b * 10 } else { 0 }));
+    print("{if true { var b = 2; b * 10 } else { 0 }}");
+
+    # the callee is pushed before its own only argument, so even a lone call
+    # puts one value under the block
+    print(if true { var b = 2; b * 10 } else { 0 });
+
+    # a compound assignment duplicates the place first
+    var z = 0;
+    z += if true { var b = 2; b * 10 } else { 0 };
+    print(z);
+
+    # two pending values, and a local under a local
+    print(two(two(0, 0), { var a = 1; var b = 1; var c = 18; a + b + c }));
+
+    # every construct that opens a scope, each under a pending operand
+    print(0 + match 1 { 1 => { var b = 2; b * 10 }, _ => 0, });
+    print(0 + match 1 { n if n > 0 => { var b = 2; b * 10 }, _ => 0, });
+    print(0 + match E::A(2) { E::A(v) => { var b = v; b * 10 }, E::B => 0, });
+    print(0 + if var Option::Some(v) = Option::Some(2) { var b = v; b * 10 } else { 0 });
+    print(0 + { var (p, q) = (2, 10); p * q });
+    print(0 + { var n = 0; while n < 20 { var step = 5; n += step; } n });
+    print(0 + { var n = 0; for x in [5, 5, 5, 5] { var step = x; n += step; } n });
+    print(0 + loop { var b = 2; break b * 10; });
+
+    # an upvalue names a frame slot too, so a captured local declared under a
+    # pending value is the same question asked of the closure
+    print(two(0, { var b = 2; var f: fun() -> Int = || b * 10; f() }));
+}

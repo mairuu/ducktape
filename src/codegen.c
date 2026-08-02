@@ -15,7 +15,13 @@
 #define CG_MAX_UPVALUES 256
 
 typedef struct {
-  StringView name;  // empty for hidden locals
+  StringView name; // empty for hidden locals
+  // The *frame* slot this local occupies, which is where the stack happened to
+  // be when it was declared — not its index in `Cg.locals`. The two agree only
+  // while nothing else is pending on the stack, and a block is an expression
+  // here, so a `var` can be declared with an operand, an argument or a
+  // duplicated assignment target already pushed beneath it.
+  int slot;
   bool is_captured; // a nested closure captures this slot (needs closing)
 } CgLocal;
 
@@ -38,6 +44,13 @@ typedef struct CgLoop {
 
   int continue_base; // locals kept on continue (incl. hidden iter locals)
   int break_base;    // locals kept on break (excl. hidden iter locals)
+  // The same two points measured in *stack* rather than in locals, which is
+  // what the pops actually need: a `break` can be reached with temporaries
+  // pushed since the loop began — a callee waiting for its argument, an
+  // operand waiting for its partner — and those are on the stack while being
+  // no one's local. Counting locals leaves them behind.
+  int continue_depth;
+  int break_depth;
   // `loop` only: its breaks are its exits, so each leaves the loop's value on
   // the stack and the landing pad needs nothing further. Every other loop
   // shares that pad with the exit it falls out of, which carries no value.
@@ -65,6 +78,13 @@ typedef struct Cg {
 
   CgLocal locals[CG_MAX_LOCALS];
   int local_count;
+  // How many values this frame currently holds — locals *and* the temporaries
+  // stacked above them mid-expression. `cg_add_local` needs it because a
+  // local's slot is a stack position, and `local_count` stops being one the
+  // moment an expression is half-emitted. Kept honest by `compile_expr`, which
+  // sets it to "one more than on entry" on the way out whatever the case did,
+  // so drift inside a construct cannot outlive that construct.
+  int depth;
 
   CgUpvalue upvalues[CG_MAX_UPVALUES];
   int upvalue_count;
@@ -498,21 +518,51 @@ static void emit_loop(Cg *cg, int target_ip) {
 static void emit_slide(Cg *cg, int n) {
   if (n > 0) {
     emit2(cg, OP_SLIDE, (uint8_t)n);
+    cg->depth -= n;
   }
+}
+
+// Raw stack traffic, for the bytes a construct emits *around* the expressions
+// it contains — a condition popped before the body, a hidden local set up by
+// hand. Everything inside one `compile_expr` accounts for itself, so these are
+// needed only where the emitted sequence is not itself an expression and
+// something after it declares a local or compiles one.
+static void cg_pushed(Cg *cg, int n) { cg->depth += n; }
+
+static void cg_popped(Cg *cg, int n) {
+  cg->depth -= n;
+  assert(cg->depth >= 0 && "stack depth went negative");
 }
 
 // ── locals ───────────────────────────────────────────────────────────────────
 
+// Name the value on top of the stack. Returns its *frame slot*, which is what
+// every OP_GET_LOCAL/OP_SET_LOCAL wants — never an index into `cg->locals`.
 static int cg_add_local(Cg *cg, StringView name, Span span) {
-  if (cg->local_count >= CG_MAX_LOCALS) {
+  int slot = cg->depth - 1;
+  // Two limits, and the slot is the one that binds: `cg->locals` has room for
+  // CG_MAX_LOCALS entries, but what a one-byte operand can address is a
+  // *position*, and positions count the temporaries stacked between locals as
+  // well. Checking only the count would let a deep expression mint a slot that
+  // truncates.
+  if (cg->local_count >= CG_MAX_LOCALS || slot >= CG_MAX_LOCALS) {
     diag_error(cg->diags, span, "too many locals in one function");
     cg->ok = false;
     return 0;
   }
-  cg->locals[cg->local_count] = (CgLocal){.name = name};
-  return cg->local_count++;
+  cg->locals[cg->local_count++] = (CgLocal){.name = name, .slot = slot};
+  return slot;
 }
 
+// The same, for a value a raw `emit` just pushed rather than one `compile_expr`
+// left behind — only the latter is accounted for automatically.
+static int cg_add_pushed_local(Cg *cg, StringView name, Span span) {
+  cg->depth++;
+  return cg_add_local(cg, name, span);
+}
+
+// the *index* in `cg->locals`, since callers need both halves: the slot to
+// emit, and the entry to mark captured.
 static int cg_find_local(Cg *cg, StringView name) {
   for (int i = cg->local_count - 1; i >= 0; i--) {
     if (cg->locals[i].name.len > 0 && sv_equal(cg->locals[i].name, name)) {
@@ -553,7 +603,10 @@ static int cg_resolve_upvalue(Cg *cg, StringView name, Span span) {
   int local = cg_find_local(cg->parent, name);
   if (local >= 0) {
     cg->parent->locals[local].is_captured = true;
-    return cg_add_upvalue(cg, true, (uint8_t)local, span);
+    // the capture names a *frame slot* in the parent, not a position in its
+    // local list
+    return cg_add_upvalue(cg, true, (uint8_t)cg->parent->locals[local].slot,
+                          span);
   }
   int upvalue = cg_resolve_upvalue(cg->parent, name, span);
   if (upvalue >= 0) {
@@ -562,12 +615,14 @@ static int cg_resolve_upvalue(Cg *cg, StringView name, Span span) {
   return -1;
 }
 
-// if any local in [from_slot, local_count) was captured, emit a close so the
-// open upvalues over those dying slots copy their values onto the heap.
-static void cg_close_scope(Cg *cg, int from_slot) {
-  for (int i = from_slot; i < cg->local_count; i++) {
+// if any local in [from, local_count) was captured, emit a close so the open
+// upvalues over those dying slots copy their values onto the heap. `from` is an
+// index into `cg->locals`; the opcode takes the frame slot that index sits at,
+// which is the lowest one about to die.
+static void cg_close_scope(Cg *cg, int from) {
+  for (int i = from; i < cg->local_count; i++) {
     if (cg->locals[i].is_captured) {
-      emit2(cg, OP_CLOSE_UPVALUE, (uint8_t)from_slot);
+      emit2(cg, OP_CLOSE_UPVALUE, (uint8_t)cg->locals[from].slot);
       return;
     }
   }
@@ -634,7 +689,23 @@ static FunDef *cg_bound_target(Cg *cg, Type *self, Type *trait_ref,
 static void compile_destructure(Cg *cg, Pattern *pat, int subject_slot,
                                 Expr *else_block);
 
+// The statement counterpart of `compile_expr`'s invariant, and the reason no
+// case below balances its own stack either: a statement leaves behind exactly
+// the locals it declared and nothing else. `var` leaves one (its initializer's
+// slot *is* the variable) or several when the binding is a pattern; everything
+// else leaves none, and `return`/`break`/`continue` leave by another edge
+// entirely, so what the depth reads afterwards only has to match the paths that
+// do reach the next statement.
+static void compile_stmt_inner(Cg *cg, Stmt *stmt);
+
 static void compile_stmt(Cg *cg, Stmt *stmt) {
+  int base = cg->depth;
+  int base_locals = cg->local_count;
+  compile_stmt_inner(cg, stmt);
+  cg->depth = base + (cg->local_count - base_locals);
+}
+
+static void compile_stmt_inner(Cg *cg, Stmt *stmt) {
   switch (stmt->kind) {
   case STMT_EXPR:
     compile_expr(cg, stmt->as.expr_stmt.expr);
@@ -688,15 +759,19 @@ static void compile_stmt(Cg *cg, Stmt *stmt) {
         compile_expr(cg, value);
       } else {
         emit(cg, OP_UNIT);
+        cg_pushed(cg, 1);
       }
     }
-    int n = cg->local_count - loop->break_base;
+    // everything the loop has stacked since it began, minus the value being
+    // carried out past it
+    int n = cg->depth - loop->break_depth - (loop->break_takes_value ? 1 : 0);
     if (n > 0) {
       cg_close_scope(cg, loop->break_base); // detach captures before popping
       if (loop->break_takes_value) {
         emit_slide(cg, n);
       } else {
         emit2(cg, OP_POPN, (uint8_t)n);
+        cg_popped(cg, n);
       }
     }
     loop->break_jumps[loop->break_count++] = emit_jump(cg, OP_JUMP);
@@ -706,10 +781,11 @@ static void compile_stmt(Cg *cg, Stmt *stmt) {
   case STMT_CONTINUE: {
     CgLoop *loop = cg->loop;
     assert(loop && "continue outside loop got past the checker");
-    int n = cg->local_count - loop->continue_base;
+    int n = cg->depth - loop->continue_depth;
     if (n > 0) {
       cg_close_scope(cg, loop->continue_base); // detach captures before popping
       emit2(cg, OP_POPN, (uint8_t)n);
+      cg_popped(cg, n);
     }
     if (loop->continue_is_backward) {
       emit_loop(cg, loop->start);
@@ -752,11 +828,14 @@ static void compile_binary(Cg *cg, Expr *expr) {
   ExprBinary *binary = &expr->as.binary;
   TokenType op = binary->op;
 
-  // short-circuit logic
+  // short-circuit logic: the left operand is popped only on the path that goes
+  // on to evaluate the right one, so the right is compiled one value shallower
+  // than the jump it hangs off.
   if (op == TOKEN_AND) {
     compile_expr(cg, binary->left);
     int end = emit_jump(cg, OP_JUMP_IF_FALSE);
     emit(cg, OP_POP);
+    cg_popped(cg, 1);
     compile_expr(cg, binary->right);
     patch_jump(cg, end);
     return;
@@ -767,6 +846,7 @@ static void compile_binary(Cg *cg, Expr *expr) {
     int end = emit_jump(cg, OP_JUMP);
     patch_jump(cg, rhs);
     emit(cg, OP_POP);
+    cg_popped(cg, 1);
     compile_expr(cg, binary->right);
     patch_jump(cg, end);
     return;
@@ -943,6 +1023,7 @@ static void compile_index_assign(Cg *cg, Expr *expr) {
     emit2(cg, OP_DUP, d);              // [.., array]
     emit2(cg, OP_DUP, d);              // [.., array, index]
     emit(cg, OP_INDEX_GET);            // [.., current]
+    cg_pushed(cg, 1);                  // the two dups, read down to one
     compile_expr(cg, assign->value);   // [.., current, value]
     cg_compound_end(cg, expr, &c);     // [array, index, combined]
   }
@@ -970,6 +1051,7 @@ static void compile_field_assign(Cg *cg, Expr *expr) {
     }
     emit2(cg, OP_DUP, c.fun != NULL ? 1 : 0); // [.., obj]
     emit2(cg, OP_FIELD_GET, idx);             // [.., current]
+    cg_pushed(cg, 1);                         // the dup, read into the field
     compile_expr(cg, assign->value);          // [.., current, value]
     cg_compound_end(cg, expr, &c);            // [obj, combined]
   }
@@ -1000,12 +1082,12 @@ static void compile_assign(Cg *cg, Expr *expr) {
   StringView name = assign->target->as.path_expr.path.segments[0].name;
   // a target is either a local of this function or an upvalue captured from an
   // enclosing one; both read/write through the same get/set opcode pair.
-  int slot = cg_find_local(cg, name);
+  int local = cg_find_local(cg, name);
   uint8_t get_op, set_op, operand;
-  if (slot >= 0) {
+  if (local >= 0) {
     get_op = OP_GET_LOCAL;
     set_op = OP_SET_LOCAL;
-    operand = (uint8_t)slot;
+    operand = (uint8_t)cg->locals[local].slot;
   } else {
     int upvalue = cg_resolve_upvalue(cg, name, assign->target->span);
     if (upvalue < 0) {
@@ -1025,7 +1107,8 @@ static void compile_assign(Cg *cg, Expr *expr) {
     if (!cg_compound_begin(cg, expr, &c)) { // [callee?]
       return;
     }
-    emit2(cg, get_op, operand);      // [.., current]
+    emit2(cg, get_op, operand); // [.., current]
+    cg_pushed(cg, 1);
     compile_expr(cg, assign->value); // [.., current, value]
     cg_compound_end(cg, expr, &c);   // [combined]
   }
@@ -1046,12 +1129,19 @@ static void compile_if(Cg *cg, Expr *expr) {
 
   compile_expr(cg, if_->condition);
   int else_jump = emit_jump(cg, OP_JUMP_IF_FALSE);
+  // a branch target resumes the stack its *fork* had, not the one the path
+  // falling into it ended with — the two arms are alternatives, so the depth
+  // has to be put back rather than carried across.
+  int forked = cg->depth; // the condition is still live at the fork
   emit(cg, OP_POP);
+  cg_popped(cg, 1);
   compile_expr(cg, if_->then_block);
   int end_jump = emit_jump(cg, OP_JUMP);
 
   patch_jump(cg, else_jump);
+  cg->depth = forked;
   emit(cg, OP_POP);
+  cg_popped(cg, 1);
   if (if_->else_branch != NULL) {
     compile_expr(cg, if_->else_branch);
   } else {
@@ -1073,6 +1163,8 @@ static void compile_while(Cg *cg, Expr *expr) {
       .continue_is_backward = true,
       .continue_base = cg->local_count,
       .break_base = cg->local_count,
+      .continue_depth = cg->depth,
+      .break_depth = cg->depth,
       .parent = cg->loop,
   };
   cg->loop = &loop;
@@ -1080,9 +1172,11 @@ static void compile_while(Cg *cg, Expr *expr) {
   compile_expr(cg, wh->condition);
   int exit_jump = emit_jump(cg, OP_JUMP_IF_FALSE);
   emit(cg, OP_POP);
+  cg_popped(cg, 1); // the condition, before the body may declare anything
 
   compile_expr(cg, wh->body);
   emit(cg, OP_POP);
+  cg_popped(cg, 1);
   emit_loop(cg, loop.start);
 
   patch_jump(cg, exit_jump);
@@ -1107,6 +1201,8 @@ static void compile_loop(Cg *cg, Expr *expr) {
       .continue_is_backward = true,
       .continue_base = cg->local_count,
       .break_base = cg->local_count,
+      .continue_depth = cg->depth,
+      .break_depth = cg->depth,
       .break_takes_value = true,
       .parent = cg->loop,
   };
@@ -1114,6 +1210,7 @@ static void compile_loop(Cg *cg, Expr *expr) {
 
   compile_expr(cg, expr->as.loop_expr.body);
   emit(cg, OP_POP);
+  cg_popped(cg, 1);
   emit_loop(cg, loop.start);
 
   for (int i = 0; i < loop.break_count; i++) {
@@ -1129,18 +1226,24 @@ static void compile_loop(Cg *cg, Expr *expr) {
 static void compile_for_range(Cg *cg, Expr *expr) {
   ExprFor *for_ = &expr->as.for_expr;
   int saved_locals = cg->local_count;
+  int entry_depth = cg->depth;
 
   // [range, i] as hidden + loop locals
   compile_expr(cg, for_->iterable);
   int range_slot = cg_add_local(cg, (StringView){0}, expr->span);
   emit2(cg, OP_GET_LOCAL, (uint8_t)range_slot);
   emit(cg, OP_RANGE_START);
-  int i_slot = cg_add_local(cg, for_->var_name, for_->var_span);
+  int i_slot = cg_add_pushed_local(cg, for_->var_name, for_->var_span);
+  // the loop-carried slots are all the body ever sees beneath it; the test and
+  // the read that run in between balance out, but saying so beats trusting it
+  int body_depth = cg->depth;
 
   CgLoop loop = {
       .continue_is_backward = false, // continue jumps forward to the increment
       .continue_base = cg->local_count,
       .break_base = saved_locals,
+      .continue_depth = cg->depth,
+      .break_depth = entry_depth,
       .parent = cg->loop,
   };
   cg->loop = &loop;
@@ -1153,8 +1256,10 @@ static void compile_for_range(Cg *cg, Expr *expr) {
   int exit_jump = emit_jump(cg, OP_JUMP_IF_FALSE);
   emit(cg, OP_POP);
 
+  cg->depth = body_depth;
   compile_expr(cg, for_->body);
   emit(cg, OP_POP);
+  cg_popped(cg, 1);
 
   // increment; forward `continue`s land here
   for (int i = 0; i < loop.continue_count; i++) {
@@ -1183,20 +1288,24 @@ static void compile_for_range(Cg *cg, Expr *expr) {
 static void compile_for_array(Cg *cg, Expr *expr) {
   ExprFor *for_ = &expr->as.for_expr;
   int saved_locals = cg->local_count;
+  int entry_depth = cg->depth;
 
   // [arr, idx, var] as hidden + loop locals; var is a placeholder (unit)
   // until the first bounds-checked read.
   compile_expr(cg, for_->iterable);
   int arr_slot = cg_add_local(cg, (StringView){0}, expr->span);
   emit_const(cg, val_int(0));
-  int idx_slot = cg_add_local(cg, (StringView){0}, expr->span);
+  int idx_slot = cg_add_pushed_local(cg, (StringView){0}, expr->span);
   emit(cg, OP_UNIT);
-  int var_slot = cg_add_local(cg, for_->var_name, for_->var_span);
+  int var_slot = cg_add_pushed_local(cg, for_->var_name, for_->var_span);
+  int body_depth = cg->depth;
 
   CgLoop loop = {
       .continue_is_backward = false, // continue jumps forward to the increment
       .continue_base = cg->local_count,
       .break_base = saved_locals,
+      .continue_depth = cg->depth,
+      .break_depth = entry_depth,
       .parent = cg->loop,
   };
   cg->loop = &loop;
@@ -1216,8 +1325,10 @@ static void compile_for_array(Cg *cg, Expr *expr) {
   emit2(cg, OP_SET_LOCAL, (uint8_t)var_slot);
   emit(cg, OP_POP);
 
+  cg->depth = body_depth;
   compile_expr(cg, for_->body);
   emit(cg, OP_POP);
+  cg_popped(cg, 1);
 
   // increment; forward `continue`s land here
   for (int i = 0; i < loop.continue_count; i++) {
@@ -1291,18 +1402,22 @@ static void compile_for_iter(Cg *cg, Expr *expr) {
   }
 
   int saved_locals = cg->local_count;
+  int entry_depth = cg->depth;
 
   // [iter, var]: `iter` is the receiver, whose cursor advances in place; `var`
   // is a placeholder (unit) until each `Some` binds it, reused every turn.
   compile_expr(cg, for_->iterable);
   int iter_slot = cg_add_local(cg, (StringView){0}, expr->span);
   emit(cg, OP_UNIT);
-  int var_slot = cg_add_local(cg, for_->var_name, for_->var_span);
+  int var_slot = cg_add_pushed_local(cg, for_->var_name, for_->var_span);
+  int body_depth = cg->depth;
 
   CgLoop loop = {
       .continue_is_backward = true, // `continue` re-drives next()
       .continue_base = cg->local_count,
       .break_base = saved_locals,
+      .continue_depth = cg->depth,
+      .break_depth = entry_depth,
       .parent = cg->loop,
   };
   cg->loop = &loop;
@@ -1340,8 +1455,10 @@ static void compile_for_iter(Cg *cg, Expr *expr) {
   emit2(cg, OP_SET_LOCAL, (uint8_t)var_slot);      // var = payload; [payload]
   emit(cg, OP_POP);                                // []
 
+  cg->depth = body_depth;
   compile_expr(cg, for_->body);
   emit(cg, OP_POP);
+  cg_popped(cg, 1);
   emit_loop(cg, loop_start);
 
   patch_jump(cg, exit_jump);                   // [opt, is_some]
@@ -1372,9 +1489,14 @@ static void compile_for(Cg *cg, Expr *expr) {
 }
 
 // push a call target's global slot, instantiating it if it is generic.
+// Pushes the callee — one value either way, which is why the accounting lives
+// here rather than at the seven call sites: a callee is not an expression node,
+// so nothing else would have counted it, and the arguments compiled on top of
+// it are exactly where a block declaring a local can land.
 static bool cg_emit_target(Cg *cg, FunDef *fun, const Subst *primary,
                            const Subst *fallback, Span span) {
   FunDef *target = cg_call_target(cg, fun, primary, fallback, span);
+  cg_pushed(cg, 1);
   if (target == NULL) {
     emit(cg, OP_UNIT);
     return false;
@@ -1791,6 +1913,7 @@ static void compile_method_call(Cg *cg, Expr *expr) {
         // on top of it and the ordinary OP_CALL below closes the call.
         compile_expr(cg, mc->object);
         emit2(cg, OP_DYN_METHOD, (uint8_t)index);
+        cg_pushed(cg, 1); // one object in, [fun, receiver] out
         for (int i = 0; i < mc->arg_count; i++) {
           compile_expr(cg, mc->args[i]);
         }
@@ -2077,10 +2200,13 @@ static void compile_pattern_test(Cg *cg, Pattern *pat, Accessor acc,
 
   case PAT_LITERAL:
     emit_accessor(cg, &acc);
+    cg_pushed(cg, 1);
     compile_expr(cg, pat->as.literal_expr);
     emit(cg, OP_EQ);
+    cg_popped(cg, 1); // two operands in, one bool out
     jump_list_push(cg, fails, pat->span, emit_jump(cg, OP_JUMP_IF_FALSE));
     emit(cg, OP_POP);
+    cg_popped(cg, 1); // only the matching side pops it; `fails` land above it
     break;
 
   case PAT_TUPLE:
@@ -2110,10 +2236,14 @@ static void compile_pattern_test(Cg *cg, Pattern *pat, Accessor acc,
 
     emit_accessor(cg, &acc);
     emit(cg, OP_TAG);
+    cg_pushed(cg, 1); // the accessor's value, turned into its tag in place
     emit_const(cg, val_int(variant->tag));
+    cg_pushed(cg, 1);
     emit(cg, OP_EQ);
+    cg_popped(cg, 1);
     jump_list_push(cg, fails, pat->span, emit_jump(cg, OP_JUMP_IF_FALSE));
     emit(cg, OP_POP);
+    cg_popped(cg, 1);
 
     for (int i = 0; i < pat->as.variant.field_count; i++) {
       FieldPat *fp = &pat->as.variant.fields[i];
@@ -2140,7 +2270,7 @@ static void compile_pattern_bind(Cg *cg, Pattern *pat, Accessor acc) {
 
   case PAT_BIND:
     emit_accessor(cg, &acc);
-    cg_add_local(cg, pat->as.bind.name, pat->span);
+    cg_add_pushed_local(cg, pat->as.bind.name, pat->span);
     break;
 
   case PAT_TUPLE:
@@ -2161,7 +2291,7 @@ static void compile_pattern_bind(Cg *cg, Pattern *pat, Accessor acc) {
         compile_pattern_bind(cg, fp->sub_pattern, field_acc);
       } else {
         emit_accessor(cg, &field_acc);
-        cg_add_local(cg, fp->ident.name, fp->span);
+        cg_add_pushed_local(cg, fp->ident.name, fp->span);
       }
     }
     break;
@@ -2178,7 +2308,7 @@ static void compile_pattern_bind(Cg *cg, Pattern *pat, Accessor acc) {
         compile_pattern_bind(cg, fp->sub_pattern, field_acc);
       } else {
         emit_accessor(cg, &field_acc);
-        cg_add_local(cg, fp->ident.name, fp->span);
+        cg_add_pushed_local(cg, fp->ident.name, fp->span);
       }
     }
     break;
@@ -2206,18 +2336,24 @@ static void compile_destructure(Cg *cg, Pattern *pat, int subject_slot,
   Accessor acc = {.base_slot = subject_slot};
   JumpList fails = {0};
 
+  int fail_depth = cg->depth + 1; // a failed test's bool, above the subject
   compile_pattern_test(cg, pat, acc, &fails);
+  int ok_depth = cg->depth;
 
   if (fails.count > 0) {
     int ok_jump = emit_jump(cg, OP_JUMP);
     jump_list_patch(cg, &fails);
+    cg->depth = fail_depth;
     emit(cg, OP_POP); // the outstanding false from whichever test failed
+    cg_popped(cg, 1);
     if (else_block != NULL) {
       compile_expr(cg, else_block);
       emit(cg, OP_POP); // unreached, and keeps the stack model honest
+      cg_popped(cg, 1);
     }
     emit(cg, OP_MATCH_FAIL);
     patch_jump(cg, ok_jump);
+    cg->depth = ok_depth;
   }
 
   compile_pattern_bind(cg, pat, acc);
@@ -2236,12 +2372,16 @@ static void compile_match(Cg *cg, Expr *expr) {
   compile_expr(cg, match->subject);
   int subject_slot = cg_add_local(cg, (StringView){0}, expr->span);
   int saved_locals = cg->local_count;
+  // every arm is an alternative reached from the same place, so each starts
+  // from this depth rather than from whatever the arm before it left
+  int arm_depth = cg->depth;
   Accessor subject_acc = {.base_slot = subject_slot};
 
   JumpList end_jumps = {0};
 
   for (int i = 0; i < match->arm_count; i++) {
     MatchArm *arm = &match->arms[i];
+    cg->depth = arm_depth;
     // `fail_jumps` (a failed literal/tag test) land with their own test's
     // bool still on the stack — OP_JUMP_IF_FALSE never pops it, only the
     // fallthrough side does — so they route through one shared OP_POP below
@@ -2256,7 +2396,9 @@ static void compile_match(Cg *cg, Expr *expr) {
     if (arm->guard != NULL) {
       compile_expr(cg, arm->guard);
       int guard_fail_jump = emit_jump(cg, OP_JUMP_IF_FALSE);
+      int guard_forked = cg->depth; // the guard's bool is still live here
       emit(cg, OP_POP);
+      cg_popped(cg, 1);
 
       compile_expr(cg, arm->body);
       cg_close_scope(cg, saved_locals); // a closure may capture a bound name
@@ -2264,9 +2406,12 @@ static void compile_match(Cg *cg, Expr *expr) {
       jump_list_push(cg, &end_jumps, arm->span, emit_jump(cg, OP_JUMP));
 
       patch_jump(cg, guard_fail_jump);
+      cg->depth = guard_forked;
       emit(cg, OP_POP);
+      cg_popped(cg, 1);
       cg_close_scope(cg, saved_locals); // guard could have captured a bind too
       emit2(cg, OP_POPN, (uint8_t)(cg->local_count - saved_locals));
+      cg_popped(cg, cg->local_count - saved_locals);
       jump_list_push(cg, &next_arm_jumps, arm->span, emit_jump(cg, OP_JUMP));
     } else {
       compile_expr(cg, arm->body);
@@ -2299,6 +2444,9 @@ static void compile_if_binding(Cg *cg, Expr *expr) {
   compile_expr(cg, if_->condition);
   int subject_slot = cg_add_local(cg, (StringView){0}, expr->span);
   int saved = cg->local_count;
+  // where a failed test lands: the subject is a local by now, and the test's
+  // own bool is still above it because OP_JUMP_IF_FALSE never pops.
+  int fail_depth = cg->depth + 1;
   Accessor acc = {.base_slot = subject_slot};
 
   JumpList fails = {0};
@@ -2312,7 +2460,9 @@ static void compile_if_binding(Cg *cg, Expr *expr) {
   cg->local_count = saved;
 
   jump_list_patch(cg, &fails);
+  cg->depth = fail_depth;
   emit(cg, OP_POP); // the outstanding false from whichever test failed
+  cg_popped(cg, 1);
   if (if_->else_branch != NULL) {
     compile_expr(cg, if_->else_branch);
   } else {
@@ -2338,12 +2488,15 @@ static void compile_while_binding(Cg *cg, Expr *expr) {
       .continue_is_backward = true,
       .continue_base = saved_outer,
       .break_base = saved_outer,
+      .continue_depth = cg->depth,
+      .break_depth = cg->depth,
       .parent = cg->loop,
   };
   cg->loop = &loop;
 
   compile_expr(cg, wh->condition);
   int subject_slot = cg_add_local(cg, (StringView){0}, expr->span);
+  int fail_depth = cg->depth + 1; // the failed test's bool, above the subject
   Accessor acc = {.base_slot = subject_slot};
 
   JumpList fails = {0};
@@ -2351,17 +2504,22 @@ static void compile_while_binding(Cg *cg, Expr *expr) {
   compile_pattern_bind(cg, wh->binding, acc);
 
   compile_expr(cg, wh->body);
-  emit(cg, OP_POP);                // the body's value
+  emit(cg, OP_POP); // the body's value
+  cg_popped(cg, 1);
   cg_close_scope(cg, saved_outer); // detach captures before the slots go
   emit2(cg, OP_POPN, (uint8_t)(cg->local_count - saved_outer));
+  cg_popped(cg, cg->local_count - saved_outer); // back to the loop's top
   cg->local_count = saved_outer;
   emit_loop(cg, loop.start);
 
   // the test failed: its bool is on top, the subject beneath it, and this turn
   // bound nothing.
   jump_list_patch(cg, &fails);
-  emit(cg, OP_POP);                            // the test result
-  emit(cg, OP_POP);                            // the subject
+  cg->depth = fail_depth;
+  emit(cg, OP_POP); // the test result
+  cg_popped(cg, 1);
+  emit(cg, OP_POP); // the subject
+  cg_popped(cg, 1);
   for (int i = 0; i < loop.break_count; i++) { // breaks pop their own locals
     patch_jump(cg, loop.break_jumps[i]);
   }
@@ -2376,11 +2534,19 @@ static void compile_expr_inner(Cg *cg, Expr *expr);
 // cannot be missed by whichever of the ~30 expression cases produced the
 // value. The wrap is always the *last* thing: `expr` is compiled as the
 // concrete type it is, then boxed.
+//
+// It is also the one place `Cg.depth` has to be right, and the reason no case
+// below has to count its own pushes and pops: an expression leaves exactly one
+// value, whatever it emitted to get there. So each nested `compile_expr` bumps
+// the depth by one, an operand sequence accumulates without being asked to,
+// and whatever a case did in between is overwritten here rather than carried.
 static void compile_expr(Cg *cg, Expr *expr) {
+  int base = cg->depth;
   compile_expr_inner(cg, expr);
   if (expr->coerce_dyn != NULL) {
     compile_coerce_dyn(cg, expr);
   }
+  cg->depth = base + 1;
 }
 
 static void compile_expr_inner(Cg *cg, Expr *expr) {
@@ -2412,6 +2578,7 @@ static void compile_expr_inner(Cg *cg, Expr *expr) {
       InterpolSeg *seg = &interp->segs[i];
       if (seg->kind == ISEG_TEXT) {
         emit_const(cg, val_obj(&cg_decode_string(cg, seg->text)->obj));
+        cg_pushed(cg, 1); // a literal segment is not an expression node
       } else {
         compile_expr(cg, seg->expr);
       }
@@ -2539,9 +2706,9 @@ static void compile_expr_inner(Cg *cg, Expr *expr) {
     }
     StringView name = path->segments[0].name;
 
-    int slot = cg_find_local(cg, name);
-    if (slot >= 0) {
-      emit2(cg, OP_GET_LOCAL, (uint8_t)slot);
+    int local = cg_find_local(cg, name);
+    if (local >= 0) {
+      emit2(cg, OP_GET_LOCAL, (uint8_t)cg->locals[local].slot);
       break;
     }
 
@@ -2672,7 +2839,9 @@ static void compile_fun_body(Mono *mono, FunDef *fun, FunDef *body_of,
     // and `self` is a keyword, so nothing else can claim the slot).
     bool is_self = fun->params[i].is_self;
     StringView name = is_self ? sv_from_cstr("self") : fun->params[i].name;
-    int slot = cg_add_local(&cg, name, body_of->span);
+    // the caller pushed these before the frame opened, so they are slots
+    // 0..n-1 and the depth starts out counting them
+    int slot = cg_add_pushed_local(&cg, name, body_of->span);
     if (is_self) {
       cg.self_slot = slot;
     }
@@ -2729,7 +2898,8 @@ static void compile_closure(Cg *cg, Expr *expr) {
   chunk_init(child.chunk, cg->al);
 
   for (int i = 0; i < closure->param_count; i++) {
-    cg_add_local(&child, closure->params[i].name, expr->span);
+    // slots 0..n-1 of the closure's own frame, like any function's params
+    cg_add_pushed_local(&child, closure->params[i].name, expr->span);
   }
 
   compile_expr(&child, closure->body);

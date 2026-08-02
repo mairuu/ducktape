@@ -1462,8 +1462,33 @@ keep this file small. Everything from 55 on is below.
   search there is a whole function body, so `return` already carries the value
   out, and this pays where a loop is one step of a larger function instead.
   Probing also found a **pre-existing wrong-answer bug unrelated to any of
-  this** — see "a block with a local mis-slots it under a pending temporary" in
-  the warts below, which is the recommended next milestone.
+  this** — a block with a local mis-slots it under a pending temporary, which
+  is milestone 88.
+
+- **88. A slot is a position** (`SHA`) — a local declared while anything else is
+  pending on the stack read the wrong slot: garbage, a hang, or a VM assertion,
+  from safe source, in *every* such position. Design: `runtime.md` "Codegen
+  shapes". The finding is one sentence and the whole milestone: `cg_add_local`
+  handed out `Cg.local_count` as the frame slot, which is the value's position
+  only while the stack holds nothing but locals. That is true in the language
+  this compiler was cribbed from, where blocks are statements; here a block is
+  an **expression**, so a `var` can be declared under an operand, a callee, an
+  element, or a compound assignment's duplicated target. The identity had been
+  load-bearing in four places — the slot, the upvalue's index, `cg_close_scope`'s
+  operand, and the `break`/`continue` pop counts — and each was wrong in the
+  same way. Separating the two (`CgLocal.slot` versus the index; `Cg.depth`
+  versus `local_count`) is the fix, and what makes it cheap is that
+  `compile_expr` can set the depth on the way out without asking the case what
+  it emitted: an expression leaves exactly one value. So operand sequences
+  account for themselves, drift cannot escape one construct, and only the raw
+  traffic *between* expressions is hand-counted. Two rules had to be written
+  down that were never stated before: a branch target resumes its **fork's**
+  depth rather than the fallthrough's, and an unwind target is a *depth* rather
+  than a count of locals. Also closes a truncation hazard the split creates —
+  the one-byte operand bounds the slot, which now outruns the count. 22-case
+  matrix plus a second pass over every scope-opening construct; both are pinned
+  as `tests/run/local_slots_under_temporaries.dt` and
+  `tests/run/break_under_temporaries.dt`, and both crash or hang at `7c1be4f`.
 
 ## Next (in recommended order)
 
@@ -1703,21 +1728,6 @@ via `Module.decl_base`) and is not part of the main line.
   which is the same one call to `matrix_covers` — what stops it spreading is
   that `check_cond_binding` deliberately has no matrix, and Rust *warns* here
   where the binding forms error, a severity this compiler does not have
-- **a block with a local mis-slots it under a pending temporary**, and the
-  answer is silently wrong or is garbage read off the stack. `cg_add_local`
-  hands out `Cg.local_count` as the frame slot, which is the value's physical
-  position only while nothing *else* is pending on the stack — and a block that
-  declares a local can be compiled with plenty pending: an operand
-  (`5 + if c { var b = 2; b * 10 } else { 0 }` is 55, not 25), an argument
-  (`print(if c { var b = 2; b } else { 0 })` reads the callee and prints a
-  garbage Float), an array or tuple element, the read a compound assignment
-  duplicates. Milestone 87 found it, at ffcc6be and every commit before it; it
-  is not about `loop`, which merely reaches it one more way. The fix is for
-  codegen to allocate slots from the **actual stack depth** rather than from a
-  count of locals, which means tracking depth through every emitter — its own
-  milestone, and the recommended next one. Worth noting that the frame budget
-  makes this a wrong answer rather than a crash: the read stays inside the
-  frame's 256 reserved slots
 - `while true { }` still types `()`, and deliberately: its condition is an
   expression, and the checker reads types rather than values. `loop { }` is the
   spelling that asks no condition (milestone 86)

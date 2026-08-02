@@ -323,6 +323,31 @@ its bytes.
 
 - Locals are compile-time tracked (`Cg.locals`, name → frame slot); the
   initializer's stack slot *is* the variable. Params occupy slots 0..n-1.
+- **A local's slot is a stack position, not its index in `Cg.locals`.** The two
+  agree only while nothing else is pending, and a block is an expression here,
+  so a `var` can be declared with an operand, a callee, an array element or a
+  compound assignment's duplicated target already beneath it. `Cg.depth` is what
+  the frame actually holds — locals *and* those temporaries — and
+  `cg_add_local` names the value on top of it (`slot = depth - 1`).
+- Keeping `depth` right costs almost nothing per case, because `compile_expr`
+  sets it to "one more than on entry" on the way out: an expression leaves
+  exactly one value however it got there, so an operand sequence accumulates
+  without being asked to and drift inside a construct cannot outlive it.
+  `compile_stmt` is the same rule one level up — a statement leaves exactly the
+  locals it declared. What is left is the raw traffic *between* expressions
+  (`cg_pushed`/`cg_popped`): a condition popped before a body, a callee pushed
+  by `cg_emit_target`, an interpolation's literal segments, the hidden locals a
+  `for` sets up by hand (`cg_add_pushed_local`).
+- A branch target resumes the depth of its **fork**, not of the path that fell
+  into it — an `if`'s else arm, each `match` arm, a failed pattern test. Those
+  are the sites that save a depth and restore it rather than adjusting one.
+- `break`/`continue` unwind to a recorded *depth* (`CgLoop.break_depth`,
+  `continue_depth`) rather than to a count of locals, since a loop body can
+  reach one with temporaries pushed that are no one's local. The local bases
+  stay beside them for `cg_close_scope`, which is a question about locals.
+- The one-byte operand bounds the *slot*, so `cg_add_local` checks that and not
+  only the count: temporaries between locals push positions up faster than
+  entries.
 - Blocks: compile stmts, compile tail (or `OP_UNIT`), then `OP_SLIDE n`.
 - `and`/`or` compile to jump-based short-circuit; `if` always produces a
   value (`OP_UNIT` for a missing else).
@@ -513,10 +538,9 @@ instructions; anything it does emit traps through `OP_MATCH_FAIL` rather than
 binding names out of a value that never had the shape.
 
 An `else` block is emitted between that shared `OP_POP` and the trap, and needs
-nothing else. The bindings have not been pushed at that point, so `local_count`
-is exactly what the stack holds — the outer locals plus the subject — and a
-`break` or `continue` inside pops the right number on its way out with no
-special case. The trap stays *below* the block rather than being replaced by
+nothing else. The bindings have not been pushed at that point, so the stack
+holds exactly the outer locals plus the subject, and a `break` or `continue`
+inside pops the right number on its way out with no special case. The trap stays *below* the block rather than being replaced by
 it: the checker made the block diverge, and the alternative to a trap if one
 ever fell through anyway would be reading names that were never bound. Since
 milestone 85 checks `-> Never` bodies too, no source reaches it — it costs one
