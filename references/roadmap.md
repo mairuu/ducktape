@@ -1426,7 +1426,7 @@ keep this file small. Everything from 55 on is below.
   is not divergence, so an endless function still ends in a `panic` —
   milestone 86.
 
-- **86. The loop that asks nothing** (`SHA`) — `loop { }`, and a body with no
+- **86. The loop that asks nothing** (`02ee9be`) — `loop { }`, and a body with no
   `break` in it types `!`, so `fun serve() -> Never { loop { } }` compiles.
   Design: `language.md` "Divergence and `Never`" + the expression list + two
   "not yet implemented" rows, `architecture.md` (`CheckLoop`), `runtime.md`
