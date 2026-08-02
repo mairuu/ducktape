@@ -4203,6 +4203,8 @@ bool tc_resolve_module(TypeChecker *tc, Module *m) {
 static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint);
 static bool check_coerce_dyn(CheckCtx *ctx, Expr *e, Type *actual,
                              Type *expected);
+static bool check_flow_into(CheckCtx *ctx, Expr *e, Type *actual,
+                            Type *expected, Span span);
 static Type *trait_project(Type *t, TraitDef *trait, Type *self_to,
                            ImplDef *impl, Allocator *al);
 static void check_binding_pattern(CheckCtx *ctx, Pattern *pat, Type *init_ty,
@@ -4237,6 +4239,18 @@ static MethodDef *impl_index_assoc_select(ImplIndex *idx, Type *self_type,
 
 static bool assoc_candidates_differ_in_args(ImplIndex *idx, Type *self_type,
                                             StringView name, Allocator *al);
+
+static const char *check_loop_name(CheckLoopKind kind) {
+  switch (kind) {
+  case CHECK_LOOP_LOOP:
+    return "loop";
+  case CHECK_LOOP_WHILE:
+    return "while";
+  case CHECK_LOOP_FOR:
+    return "for";
+  }
+  return "loop";
+}
 
 static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
   switch (stmt->kind) {
@@ -4284,11 +4298,52 @@ static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
     break;
   }
   case STMT_BREAK: {
-    if (ctx->loops == NULL) {
+    CheckLoop *loop = ctx->loops;
+    Expr *value = stmt->as.break_stmt.value;
+    // resolved before the position is judged, so a bad value in a `while`
+    // still reports its own errors rather than being skipped over.
+    Type *val_ty = value != NULL
+                       ? resolve_expr(ctx, value, loop ? loop->want : NULL)
+                       : ctx->tc->t_unit;
+
+    if (loop == NULL) {
       diag_error(ctx->diags, stmt->span, "break statement not within a loop");
-    } else if (ctx->loops->endless != NULL) {
-      // this `loop` has an exit after all, so it is not a diverging one.
-      ctx->loops->endless->has_break = true;
+      break;
+    }
+    if (value != NULL && loop->kind != CHECK_LOOP_LOOP) {
+      diag_error(ctx->diags, stmt->span,
+                 "a '%s' loop's break cannot carry a value, because the loop "
+                 "also leaves by finishing and that exit has none to agree "
+                 "with; only a 'loop' has no other way out",
+                 check_loop_name(loop->kind));
+      break;
+    }
+    if (type_is_poison(val_ty)) {
+      loop->break_type = ctx->tc->t_poison; // absorbs, so one bad break is one
+      break;                                // diagnostic and not a wrong type
+    }
+    if (loop->break_type != NULL && type_is_poison(loop->break_type)) {
+      break;
+    }
+    // a break whose value diverges never reaches the loop's exit, so it is
+    // evidence for no type at all — the sibling rule m85 settled, applied to
+    // however many breaks one loop has rather than to two arms.
+    if (val_ty->kind == TY_NEVER) {
+      break;
+    }
+    if (loop->want != NULL) {
+      bool ok = value != NULL ? check_flow_into(ctx, value, val_ty, loop->want,
+                                                stmt->span)
+                              : infer_unify(&ctx->infer, loop->want, val_ty,
+                                            ctx->diags, stmt->span);
+      loop->break_type = ok ? loop->want : ctx->tc->t_poison;
+      break;
+    }
+    if (loop->break_type == NULL) {
+      loop->break_type = val_ty;
+    } else if (!infer_unify(&ctx->infer, loop->break_type, val_ty, ctx->diags,
+                            stmt->span)) {
+      loop->break_type = ctx->tc->t_poison;
     }
     break;
   }
@@ -8495,7 +8550,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     ctx->vscope = vscope_push(ctx->vscope, false, true, ctx->al);
     bool bound =
         wh->binding == NULL || check_cond_binding(ctx, wh->binding, cond_ty);
-    CheckLoop frame = {.parent = ctx->loops};
+    CheckLoop frame = {.kind = CHECK_LOOP_WHILE, .parent = ctx->loops};
     ctx->loops = &frame;
     resolve_expr(ctx, wh->body, NULL);
     ctx->vscope = vscope_pop(ctx->vscope);
@@ -8508,15 +8563,20 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     ExprLoop *lp = &expr->as.loop_expr;
 
     // no header, so nothing to resolve first and no scope of its own — the
-    // body's block pushes one like any other.
-    CheckLoop frame = {.endless = lp, .parent = ctx->loops};
+    // body's block pushes one like any other. The hint reaches the breaks
+    // because they are where the value is: a `loop` is a `dyn` position in
+    // exactly the way an `if`'s arms are (m82), one arm per break.
+    CheckLoop frame = {.kind = CHECK_LOOP_LOOP,
+                       .want = dyn_expectation(ctx, hint),
+                       .parent = ctx->loops};
     ctx->loops = &frame;
     resolve_expr(ctx, lp->body, NULL);
     ctx->loops = frame.parent;
 
-    // this is the whole rule the keyword buys: with no `break` naming it, the
-    // loop has no exit, so control never reaches what follows.
-    result = lp->has_break ? ctx->tc->t_unit : ctx->tc->t_never;
+    // this is the whole rule the keyword buys, now that a break can say what
+    // it leaves with: the breaks are the only exits, so their join is the
+    // loop's type, and with nothing leaving control never reaches what follows.
+    result = frame.break_type != NULL ? frame.break_type : ctx->tc->t_never;
     break;
   }
   case EXPR_FOR: {
@@ -8546,7 +8606,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     ctx->vscope = vscope_push(ctx->vscope, false, true, ctx->al);
     vscope_define(ctx->vscope, for_->var_name, item_ty, ctx->diags,
                   for_->var_span, NULL);
-    CheckLoop frame = {.parent = ctx->loops};
+    CheckLoop frame = {.kind = CHECK_LOOP_FOR, .parent = ctx->loops};
     ctx->loops = &frame;
     resolve_expr(ctx, for_->body, NULL);
     ctx->vscope = vscope_pop(ctx->vscope);

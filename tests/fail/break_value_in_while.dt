@@ -1,0 +1,10 @@
+#! expect: a 'while' loop's break cannot carry a value
+# A `while` also leaves when its condition fails, and that exit brings nothing
+# to join with — so only a `loop` has a value for its breaks to carry.
+fun main() {
+    var i = 0;
+    var x = while i < 3 {
+        i += 1;
+        break i;
+    };
+}

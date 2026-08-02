@@ -1,0 +1,11 @@
+#! expect: type mismatch: expected 'Int' but got 'String'
+# The breaks are the loop's exits, so they are siblings and have to join. The
+# first one to land is what the rest are measured against.
+fun main() {
+    var n = 0;
+    var x = loop {
+        n += 1;
+        if n == 1 { break 1; }
+        break "two";
+    };
+}

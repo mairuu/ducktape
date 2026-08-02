@@ -31,8 +31,11 @@ field/tuple access, indexing, `as`, `?`.
 Notables:
 - `parse_block` — statements vs. tail expression. `is_pure_stmt` routes
   `var/return/break/continue/if/for/match/while/loop` through `parse_stmt`, but a
-  parsed `if`/`match` statement immediately before `}` is unwrapped into the
-  block's tail (that's what makes `{ if c { 1 } else { 2 } }` an `Int` block).
+  parsed `if`/`match`/`loop` statement immediately before `}` is unwrapped into
+  the block's tail (that's what makes `{ if c { 1 } else { 2 } }` an `Int`
+  block). `while` and `for` are not on that list: they are always `()`, so
+  there would be nothing to promote. `break expr?` needs no lookahead — a block
+  is not an expression primary, so anything but `;` after it starts a value.
 - `parse_closure` — `|params| ( -> type )? ( { block } | expr )`. The body has
   no introducer token: a `{` is read as the block form and anything else starts
   an expression, so the two are told apart by lookahead rather than by a `=>`.
@@ -2012,10 +2015,25 @@ The fourth thing that types `!` is a `loop` with no exit, and finding one is why
 rather than the depth counter it used to. A depth answers "is there a loop at
 all", which is all `break`/`continue` needed; "does a `break` leave *this* one"
 needs the frame itself, and since a `break` carries no label the frame it marks
-is always the head of the list. Only `loop` frames carry an `endless` pointer —
-a `while` or `for` has an exit whatever its body does — so the mark is a write
-to `ExprLoop.has_break`, read once when the body is done. A closure body sets
-the list to NULL, the same boundary `break` could never cross anyway.
+is always the head of the list. A closure body sets the list to NULL, the same
+boundary `break` could never cross anyway.
+
+What the frame accumulates is `break_type`, the **join of every break's value**,
+which is the `loop`'s type — divergence and a value being the same answer read
+at two ends of the same range. Each `break` joins as siblings do (`EXPR_IF`'s
+arms, an array's elements): a `!` value is evidence for nothing and is skipped,
+so the first non-diverging break establishes the type and the rest unify into
+it; a bare `break;` joins as `()`; a poisoned one makes the join poison so a
+single bad break is a single diagnostic. `NULL` after the body means nothing
+ever leaves — no break at all, or every one of them diverging first — and that
+is the `!` case, so the node itself records nothing. The frame also carries
+`want`, the `dyn` expectation `dyn_expectation` reads off the loop's hint: a
+`loop` is a `dyn` position in exactly the way an `if` is, one arm per break.
+
+Only a `loop` frame accepts a value at all, which `CheckLoop.kind` says. A
+`while` or `for` leaves by finishing as well as by breaking, and that exit has
+nothing to bring to the join — so the refusal is about the *other* exit, not
+about the break, and the diagnostic names the construct that has one.
 
 When the pattern cannot be checked — a poisoned initializer, or a mismatch
 that stopped the walk partway — `bind_pattern_poison` defines the remaining

@@ -327,11 +327,20 @@ its bytes.
 - `and`/`or` compile to jump-based short-circuit; `if` always produces a
   value (`OP_UNIT` for a missing else).
 - `loop { .. }` (`compile_loop`) is `compile_while` with the condition and its
-  exit jump removed, so the only edge out is a patched `break`. Its trailing
-  `OP_UNIT` is unreachable when the checker found no `break` — one byte, kept so
-  that "an expression leaves a value" holds without a case. Divergence is a
-  checker fact and costs codegen nothing.
-- Loops evaluate to unit. `for x in <range>` materializes two locals —
+  exit jump removed, so the only edge out is a patched `break` — and since each
+  one of those brings the loop's value with it, the landing pad emits nothing.
+  The trailing `OP_UNIT` is only for the loop nothing leaves, where it is
+  unreachable but keeps "an expression leaves a value" true without a case.
+  Divergence is a checker fact and costs codegen nothing.
+- A `break` in a `loop` (`CgLoop.break_takes_value`) compiles its value first —
+  it may read the very locals about to go — and then `OP_SLIDE`s them out from
+  under it, the same "remove n beneath the top" a block's tail already needed;
+  a bare `break;` there pushes `OP_UNIT` so every edge into the pad agrees. A
+  `break` in any other loop lands where that loop's own exit does, which carries
+  no value, so it stays the plain `OP_POPN`. No opcode and no image change:
+  `OP_SLIDE` and the existing `break_base`/`cg_close_scope` cover body locals
+  and captures, and the close still happens before the slide.
+- `while` and `for` evaluate to unit. `for x in <range>` materializes two locals —
   hidden `range` and the loop variable — then tests with `OP_RANGE_TEST` and
   increments by constant 1. `for x in <array>` (`compile_for_array`)
   dispatches on `iterable->resolved_type->kind`; it materializes three

@@ -312,6 +312,12 @@ pub fun process_data<T>(data: T) -> Result<Int, String> {
         if spins == 3 { break; }
     }
 
+    # a `loop`'s value is the join of its breaks
+    var spun = loop {
+        spins += 1;
+        if spins > 5 { break spins * 2; }
+    };
+
     var xs = [1, 2, 3];
     var first = xs[0];
 

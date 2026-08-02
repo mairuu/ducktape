@@ -1,0 +1,8 @@
+#! expect: a 'for' loop's break cannot carry a value
+# The same rule as `break_value_in_while.dt`, for the exit that is running out
+# of items rather than a false condition.
+fun main() {
+    for i in 0..3 {
+        break i;
+    }
+}

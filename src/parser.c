@@ -980,8 +980,11 @@ static Expr *parse_block(Parser *p) {
         block_had_error = true;
       } else if (stmt->kind == STMT_EXPR && check_tok(p, TOKEN_RBRACE) &&
                  (stmt->as.expr_stmt.expr->kind == EXPR_IF ||
-                  stmt->as.expr_stmt.expr->kind == EXPR_MATCH)) {
-        // a value-bearing block expression just before `}` is the tail
+                  stmt->as.expr_stmt.expr->kind == EXPR_MATCH ||
+                  stmt->as.expr_stmt.expr->kind == EXPR_LOOP)) {
+        // a value-bearing block expression just before `}` is the tail. A
+        // `loop` is one of those and a `while`/`for` is not: only its breaks
+        // leave it, so only it has something other than `()` to be.
         tail = stmt->as.expr_stmt.expr;
       } else {
         PLIST_PUSH(p, stmts, stmt);
@@ -2327,7 +2330,19 @@ Stmt *parse_stmt(Parser *p) {
   }
 
   if (match_tok(p, TOKEN_BREAK)) {
-    Stmt *stmt = ast_stmt(STMT_BREAK, token_span(previous_tok(p)), p->al);
+    Span break_span = token_span(previous_tok(p));
+    // no lookahead needed, and no ambiguity to resolve: a block is not an
+    // expression primary here, so the only thing that can follow is a value.
+    Expr *value = NULL;
+    if (!check_tok(p, TOKEN_SEMICOLON)) {
+      value = parse_expr(p);
+      if (value->kind == EXPR_POISON) {
+        return ast_stmt(STMT_POISON, span_merge(start_span, value->span),
+                        p->al);
+      }
+    }
+    Stmt *stmt = ast_stmt(STMT_BREAK, break_span, p->al);
+    stmt->as.break_stmt.value = value;
     if (!consume_tok(p, TOKEN_SEMICOLON, "expected ';' after 'break'")) {
       return ast_stmt(STMT_POISON, span_merge(start_span, current_tok_span(p)),
                       p->al);

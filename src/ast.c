@@ -1748,6 +1748,9 @@ void dump_stmt(const Stmt *s, int indent) {
     break;
   case STMT_BREAK:
     fprintf(stdout, "BreakStmt\n");
+    if (s->as.break_stmt.value) {
+      dump_expr(s->as.break_stmt.value, indent + 1);
+    }
     break;
   case STMT_CONTINUE:
     fprintf(stdout, "ContinueStmt\n");

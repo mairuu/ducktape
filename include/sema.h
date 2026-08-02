@@ -485,8 +485,24 @@ static inline Type *rctx_resolve(ResolveCtx *ctx, TypeNode *node) {
 // carries no label, so it always names the head of this list — which is what
 // lets a `loop` be asked whether anything leaves it. A depth counter cannot
 // answer that question, only "is there a loop at all".
+typedef enum {
+  CHECK_LOOP_LOOP,
+  CHECK_LOOP_WHILE,
+  CHECK_LOOP_FOR,
+} CheckLoopKind;
+
 typedef struct CheckLoop {
-  ExprLoop *endless; // set only for a `loop`, whose only exits are its breaks
+  // Which construct this frame is. Only a `loop` leaves *solely* through its
+  // breaks, so only a `loop` has a value for one to carry; the other two also
+  // leave by finishing, and that exit brings none to the join. The name is
+  // kept so the refusal can say which construct it was.
+  CheckLoopKind kind;
+  // The join of every break's value so far, or NULL while none has landed —
+  // which is the whole of the loop's type. NULL after the body means nothing
+  // leaves (no break at all, or every one of them diverging before it does),
+  // so the loop is `Never`. A bare `break` joins as `()`.
+  Type *break_type;
+  Type *want; // a `dyn` expectation from the loop's hint, reaching each break
   struct CheckLoop *parent;
 } CheckLoop;
 

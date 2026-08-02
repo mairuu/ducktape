@@ -74,12 +74,13 @@ p.x = 3;  p.x += 1;           # ... to a field, tuple element, or array slot too
 xs[i] = v;  t.0 *= 2;         # a struct is a shared reference, so this mutates
 return expr;  return;         # bare return means ()
 break;  continue;             # inside loops only
+break x;                      # ... and the value form only inside a `loop`
 ```
 
 Blocks are expressions: the trailing expression without `;` is the block's
-value; otherwise the block is `()`. A trailing block-form `if`/`match` counts
-as the tail (`fun abs(n: Int) -> Int { if n < 0 { -n } else { n } }`). A block
-ending in `return` has type `!` (never), which unifies with anything.
+value; otherwise the block is `()`. A trailing block-form `if`/`match`/`loop`
+counts as the tail (`fun abs(n: Int) -> Int { if n < 0 { -n } else { n } }`).
+A block ending in `return` has type `!` (never), which unifies with anything.
 
 ## Expressions
 
@@ -147,9 +148,16 @@ ending in `return` has type `!` (never), which unifies with anything.
   an array, a range, or any type that implements `Iterator` (see below).
 - `loop { .. }` has no header, and that is the whole of what it buys: with
   nothing to test there is nothing to prove, so a `loop` no `break` leaves types
-  `!` rather than `()` and may end a `-> Never` body. One `break` anywhere in it
-  gives it an exit and it types `()` like a `while`. See "Divergence and
+  `!` rather than `()` and may end a `-> Never` body. See "Divergence and
   `Never`".
+- Because a `loop`'s breaks are its only exits, they are also its **value**:
+  `break x;` leaves the loop with `x`, and the loop's type is the join of every
+  break in it — `var n = loop { i += 1; if i > 3 { break i * 2; } };`. A bare
+  `break;` joins as `()`, so mixing it with a value-carrying one is a mismatch
+  like any other. A `while` or `for` also leaves by *finishing*, and that exit
+  has no value to agree with, so `break x` in one is an error and both still
+  evaluate to `()`. A `loop` at the end of a block is that block's tail
+  expression, as an `if` or `match` is.
 - Ranges: `a..b`, `a..=b` — Int-only, first-class values (`var r = 0..10;`) of
   type `Range`, which is nameable (`fun span(r: Range)`) and carries one
   method, `r.iter()`.
@@ -2022,6 +2030,12 @@ label and so always means the innermost one. `while true { }` stays `()` for
 exactly the reason `loop` was worth adding: reading it as endless would mean
 reading its condition, and the checker reads types rather than values.
 
+Divergence and a `loop`'s value are the same answer at two ends of one range,
+since both are read off the breaks: no break that leaves gives `!`, and breaks
+that leave give their join. A break whose *value* diverges never reaches the
+exit, so it says nothing about the type and a loop made only of those is `!`
+again — `fun boom() -> Never { loop { break panic("gone"); } }` compiles.
+
 Because divergence is not *evidence* about a type, it also solves no type
 variable: `first(panic("x"), 4)` leaves `T` for the second argument to decide
 (`tests/run/never_flows.dt`). And where two positions are **siblings** rather
@@ -2741,7 +2755,8 @@ HashSet::with_capacity(n); s.capacity(); s.reserve(n);   # forwarded, all three
 | visibility below module granularity (`pub(crate)` &c.) | `pub` is the only modifier |
 | two spellings of one file (symlinks, unusual paths) | dedup is lexical, so the file would load twice and collide |
 | top-level `var` (globals) | parses, then a registration diagnostic: move it into a function |
-| a `break` that carries a value | `loop { break x; }` does not parse: `break` is a statement, so a `loop` with an exit is always `()` and a searching loop has to assign to a `var` declared above it. What it would need is a *join* over every break in one loop, which nothing in the checker computes today |
+| a `break` that carries a value out of a `while`/`for` | `loop { break x; }` works (milestone 87), but the other two loops also leave by *finishing*, and that exit has no value to join with — so `break x` in one is an error and both stay `()` |
+| a labelled `break` | there is no `'outer:` spelling, so a break always names the innermost loop; carrying a value out of a nested loop means breaking each level or using `return` |
 | reading `while true { }` as endless | its condition is an expression, and the checker reads types rather than values — `loop { }` is the spelling that asks no condition (milestone 86) |
 | `!` in a position asking a structural question | `if panic("x") { }`, `for x in panic("x")`, and `r?` inside a `-> Never` function are all refused: those sites ask "is it a `Bool`/an `Iterator`/the same enum?", not "does it flow here?", and `Never` answers none of them. Harmless, since the code below is unreachable either way |
 | tuple-struct struct-patterns `Pair { a, b }` | write the constructor spelling `Pair(a, b)` — "matching tuple struct with struct pattern syntax is not allowed" |

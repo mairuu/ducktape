@@ -162,11 +162,12 @@ assocSuffix    = ( "." IDENT )+ ;                 (* associated types *)
 
 block          = "{" stmt* expr? "}" ;
                  (* the trailing expr (no ";") is the block's value; a
-                    trailing block-form if/match also counts as the tail *)
+                    trailing block-form if/match/loop also counts as the tail *)
 
 stmt           = varDecl
                | "return" expr? ";"
-               | "break" ";"
+               | "break" expr? ";"
+                 (* the value is a `loop`'s; a while/for break may not have one *)
                | "continue" ";"
                | expr ";"
                | ifExpr | matchExpr | whileExpr | loopExpr | forExpr ;

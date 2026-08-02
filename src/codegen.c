@@ -38,6 +38,10 @@ typedef struct CgLoop {
 
   int continue_base; // locals kept on continue (incl. hidden iter locals)
   int break_base;    // locals kept on break (excl. hidden iter locals)
+  // `loop` only: its breaks are its exits, so each leaves the loop's value on
+  // the stack and the landing pad needs nothing further. Every other loop
+  // shares that pad with the exit it falls out of, which carries no value.
+  bool break_takes_value;
 
   struct CgLoop *parent;
 } CgLoop;
@@ -675,10 +679,25 @@ static void compile_stmt(Cg *cg, Stmt *stmt) {
       cg->ok = false;
       break;
     }
+    // the value goes first because it may read the very locals about to go,
+    // and OP_SLIDE is what lets it outlive them — the same "remove n beneath
+    // the top" a block's tail expression already needed.
+    if (loop->break_takes_value) {
+      Expr *value = stmt->as.break_stmt.value;
+      if (value != NULL) {
+        compile_expr(cg, value);
+      } else {
+        emit(cg, OP_UNIT);
+      }
+    }
     int n = cg->local_count - loop->break_base;
     if (n > 0) {
       cg_close_scope(cg, loop->break_base); // detach captures before popping
-      emit2(cg, OP_POPN, (uint8_t)n);
+      if (loop->break_takes_value) {
+        emit_slide(cg, n);
+      } else {
+        emit2(cg, OP_POPN, (uint8_t)n);
+      }
     }
     loop->break_jumps[loop->break_count++] = emit_jump(cg, OP_JUMP);
     break;
@@ -1077,15 +1096,18 @@ static void compile_while(Cg *cg, Expr *expr) {
 }
 
 // `loop { .. }` is `compile_while` with the condition and its exit jump taken
-// out — the only way past the back-edge is a patched `break`. When the checker
-// found none the trailing `OP_UNIT` is unreachable, which costs one byte and
-// keeps every caller's "an expression leaves a value" invariant true.
+// out — the only way past the back-edge is a patched `break`, and each one of
+// those brings the loop's value with it. So there is nothing to emit at the
+// landing pad; the trailing `OP_UNIT` is only for the loop nothing leaves,
+// where it is unreachable but keeps every caller's "an expression leaves a
+// value" invariant true for one byte.
 static void compile_loop(Cg *cg, Expr *expr) {
   CgLoop loop = {
       .start = cg->chunk->count,
       .continue_is_backward = true,
       .continue_base = cg->local_count,
       .break_base = cg->local_count,
+      .break_takes_value = true,
       .parent = cg->loop,
   };
   cg->loop = &loop;
@@ -1099,7 +1121,9 @@ static void compile_loop(Cg *cg, Expr *expr) {
   }
 
   cg->loop = loop.parent;
-  emit(cg, OP_UNIT);
+  if (loop.break_count == 0) {
+    emit(cg, OP_UNIT);
+  }
 }
 
 static void compile_for_range(Cg *cg, Expr *expr) {

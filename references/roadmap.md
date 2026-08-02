@@ -1438,7 +1438,32 @@ keep this file small. Everything from 55 on is below.
   a break leave *this* loop" needs the frame. Codegen is `compile_while` minus
   the condition. Spent immediately: 15 `while true` loops in `std/iter.dt`
   dropped their dead trailing `return`. Remainder: `break` carries no value, so
-  a searching loop still assigns to a `var` above it.
+  a searching loop still assigns to a `var` above it — milestone 87.
+
+- **87. The break that leaves with something** (`SHA`) — `break x;`, so a
+  `loop`'s value is the join of its breaks. Design: `language.md` (the
+  expression list + the syntax summary), `architecture.md` (`CheckLoop`,
+  `parse_block`), `runtime.md` (`compile_loop`, the break), `grammar.ebnf`. The
+  finding: this is the *same question* milestone 86 answered, read at the other
+  end of its range. A `loop` types `!` because its breaks are its only exits and
+  there are none; it types `Int` because its breaks are its only exits and they
+  all say `Int` — so the join **replaces** `ExprLoop.has_break` rather than
+  joining it, and `NULL` after the body is the divergence case with nothing
+  special written for it. Every break is a *sibling*, milestone 85's rule
+  applied to however many a loop has instead of to two arms, which is why a
+  `break panic("x")` is evidence for nothing and a loop whose breaks all diverge
+  is still `!`. The refusal in a `while`/`for` is about the **other exit**, not
+  the break: finishing carries no value, so there is nothing for one to join
+  with. Codegen needed no opcode and no image change — `OP_SLIDE` already
+  removes n values beneath the top, which is exactly a value evaluated before
+  the body locals it reads and outliving them. Probing turned up the real cost:
+  a `loop` was not on `parse_block`'s tail-promotion list, so `fun f() -> Int {
+  loop { break 1; } }` was `()` until it was added. **No spend in std**: every
+  search there is a whole function body, so `return` already carries the value
+  out, and this pays where a loop is one step of a larger function instead.
+  Probing also found a **pre-existing wrong-answer bug unrelated to any of
+  this** — see "a block with a local mis-slots it under a pending temporary" in
+  the warts below, which is the recommended next milestone.
 
 ## Next (in recommended order)
 
@@ -1678,12 +1703,21 @@ via `Module.decl_base`) and is not part of the main line.
   which is the same one call to `matrix_covers` — what stops it spreading is
   that `check_cond_binding` deliberately has no matrix, and Rust *warns* here
   where the binding forms error, a severity this compiler does not have
-- `break` carries no value: it is a statement, so `loop { break x; }` does not
-  parse and a loop that searches must assign to a `var` declared above it. A
-  `loop` with an exit is therefore always `()`. What it would take is a **join**
-  over every `break` in one loop — the checker computes a join for an `if`'s two
-  arms, but nothing collects one across statements scattered through a body, and
-  the `CheckLoop` frame milestone 86 added is where it would live
+- **a block with a local mis-slots it under a pending temporary**, and the
+  answer is silently wrong or is garbage read off the stack. `cg_add_local`
+  hands out `Cg.local_count` as the frame slot, which is the value's physical
+  position only while nothing *else* is pending on the stack — and a block that
+  declares a local can be compiled with plenty pending: an operand
+  (`5 + if c { var b = 2; b * 10 } else { 0 }` is 55, not 25), an argument
+  (`print(if c { var b = 2; b } else { 0 })` reads the callee and prints a
+  garbage Float), an array or tuple element, the read a compound assignment
+  duplicates. Milestone 87 found it, at ffcc6be and every commit before it; it
+  is not about `loop`, which merely reaches it one more way. The fix is for
+  codegen to allocate slots from the **actual stack depth** rather than from a
+  count of locals, which means tracking depth through every emitter — its own
+  milestone, and the recommended next one. Worth noting that the frame budget
+  makes this a wrong answer rather than a crash: the read stays inside the
+  frame's 256 reserved slots
 - `while true { }` still types `()`, and deliberately: its condition is an
   expression, and the checker reads types rather than values. `loop { }` is the
   spelling that asks no condition (milestone 86)

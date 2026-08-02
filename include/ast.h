@@ -1099,11 +1099,12 @@ typedef struct {
 
 // `loop { .. }`. No condition is not a `while` with one field missing: a
 // `while` always has an exit and so always types `()`, while this one leaves
-// only through a `break`. `has_break` is the checker's answer to whether one
-// does — false makes the whole expression `Never`.
+// only through a `break` — which is why a `loop` alone has a value to give its
+// breaks, and why with none that leaves it types `Never`. Both answers are the
+// join the checker accumulates on its `CheckLoop` frame, so the node itself
+// records nothing.
 typedef struct {
   Expr *body;
-  bool has_break;
 } ExprLoop;
 
 typedef struct {
@@ -1227,7 +1228,7 @@ typedef enum {
   STMT_EXPR,     // expr ;
   STMT_VAR,      // var x: T = expr ;
   STMT_RETURN,   // return expr? ;
-  STMT_BREAK,    // break ;
+  STMT_BREAK,    // break expr? ;
   STMT_CONTINUE, // continue ;
   STMT_POISON,   // sentinel
 } StmtKind;
@@ -1253,6 +1254,13 @@ typedef struct {
   Expr *value; // NULL for bare "return;"
 } StmtReturn;
 
+// `break expr?;`. The value is the loop's, so only a `loop` accepts one — a
+// `while` or `for` also leaves by finishing, and that exit has none to agree
+// with.
+typedef struct {
+  Expr *value; // NULL for bare "break;"
+} StmtBreak;
+
 struct Stmt {
   StmtKind kind;
   Span span;
@@ -1261,6 +1269,7 @@ struct Stmt {
     StmtExpr expr_stmt;
     StmtVar var_stmt;
     StmtReturn return_stmt;
+    StmtBreak break_stmt;
   } as;
 };
 
