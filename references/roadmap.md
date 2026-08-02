@@ -1465,7 +1465,7 @@ keep this file small. Everything from 55 on is below.
   this** — a block with a local mis-slots it under a pending temporary, which
   is milestone 88.
 
-- **88. A slot is a position** (`SHA`) — a local declared while anything else is
+- **88. A slot is a position** (`cac1586`) — a local declared while anything else is
   pending on the stack read the wrong slot: garbage, a hang, or a VM assertion,
   from safe source, in *every* such position. Design: `runtime.md` "Codegen
   shapes". The finding is one sentence and the whole milestone: `cg_add_local`
