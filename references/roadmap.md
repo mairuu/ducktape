@@ -1604,7 +1604,7 @@ keep this file small. Everything from 55 on is below.
   Left over: no `#[allow]`; unused *items* unreported; warnings come out in
   scope-close order, not source order.
 
-- **93. A warning you can answer** (`PENDING`) — `@allow("unused_variable")` on a
+- **93. A warning you can answer** (`3df19d3`) — `@allow("unused_variable")` on a
   declaration silences that lint over it and everything inside. Design:
   `language.md` "Warnings and `@allow`" + the gaps table, `architecture.md`
   "Diagnostics", `grammar.ebnf`. The finding is that **suppression is mostly
