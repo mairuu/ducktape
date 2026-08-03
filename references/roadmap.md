@@ -1661,7 +1661,7 @@ keep this file small. Everything from 55 on is below.
   Left over: `pub mod` parses and is recorded but is not enforced (milestone 95,
   see warts).
 
-- **95. The module boundary** (`SHA`) — `pub mod` starts meaning something, and
+- **95. The module boundary** (`65a8651`) — `pub mod` starts meaning something, and
   a `.dt` file nothing declares says so. Design: `language.md` "Modules" +
   "Warnings and `@allow`", `architecture.md` "Modules". Pinned by
   `tests/fail/mod_private_path`, `tests/run/mod_private_subtree`,
