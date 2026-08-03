@@ -1490,7 +1490,7 @@ keep this file small. Everything from 55 on is below.
   as `tests/run/local_slots_under_temporaries.dt` and
   `tests/run/break_under_temporaries.dt`, and both crash or hang at `7c1be4f`.
 
-- **89. Advice needs an audience** (`SHA`) — the first diagnostic below error:
+- **89. Advice needs an audience** (`f216cda`) — the first diagnostic below error:
   an irrefutable `if var`/`while var` header (milestone 80's remainder) and code
   below a diverging statement both warn. Design: `overview.md` repo layout,
   `language.md` "`if var` and `while var`", `architecture.md` "Diagnostics".
