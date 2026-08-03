@@ -1519,7 +1519,7 @@ keep this file small. Everything from 55 on is below.
   milestone 86 had already deleted the dead trailing `return`s that were its
   only population; it is pinned deliberately instead.
 
-- **90. One file, two keys, two modules** (`SHA`) — `./build/ducktape std/<f>.dt`
+- **90. One file, two keys, two modules** (`9e821f5`) — `./build/ducktape std/<f>.dt`
   lints a standard library file for real, and `make test` lints all 18. Design:
   `architecture.md` "Naming a std file as the entry point" and "Diagnostics";
   `CLAUDE.md` "Standard library". The finding is that **a module's identity is
