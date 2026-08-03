@@ -1634,9 +1634,9 @@ milestone (~900 lines).
 Nothing on the main line is *blocked*: every construct the checker accepts in
 `tests/pass/in_fixed.dt` now also runs. The list below is what the "known
 warts" section would promote first, in the order that pays off soonest — pick
-by appetite rather than by necessity. Std module nesting was the one entry whose
-cost rose while it waited, and it is milestone 91; nothing here has that
-property, so the order is preference again.
+by appetite rather than by necessity. **Item 1 is the exception and is not
+optional**: it replaces infrastructure that is known to be wrong, rather than
+adding something absent.
 
 (**A heterogeneous operator** was the largest open design question and is now
 milestone 75: `V2 * Float`. What it needed from the language was two things
@@ -1648,7 +1648,33 @@ unified" limit stopped being a blocker and became a *cost*: `Output` works, it
 just has to be written down at every bound that keeps the result, because
 nothing infers one.)
 
-1. **Growing std on top of the natives** — the mechanism landed in milestone
+1. **The declared module tree — replace path resolution.** Full design in
+   `modules-design.md`; milestones 94 (the tree) and 95 (the boundary). **This
+   is the first priority and the only entry that is not a matter of appetite**,
+   because what it replaces is not missing, it is wrong.
+
+   Three failures, each reproduced at `2c0071c`: creating an unrelated `a/b.dt`
+   changes what an unchanged `use a::b;` *means* and breaks it; an unrelated
+   `Event.dt` breaks a `use Event::A;` that names the importing file's own enum;
+   and a `.dt` file with a type error that nothing imports is never compiled at
+   all. Underneath them: resolution probes the filesystem at three prefix
+   lengths with "shortest tried last" as a tiebreak, stores the guess in three
+   AST flags the parser could not determine, and runs as *two* resolvers that
+   have to be kept in agreement by hand — which is what milestones 90 and 91
+   were both about, and what the hand-written `std/collections.dt` facade is.
+
+   One cause: **the module tree is never declared, so every path re-derives it
+   from the filesystem.** `mod x;` / `pub mod x;` declares it, and every question
+   above becomes a lookup — plus privacy becomes expressible, so std can finally
+   hold internals, and nesting becomes a boundary rather than a namespace.
+
+   What makes it affordable: paths stay **absolute**, so the ~500 `use std::`
+   lines and ~500 single-file tests do not change, and no file moves. The
+   migration is 38 test roots gaining `mod` declarations, two new intermediate
+   modules, and a `std/lib.dt`. It also *deletes* milestone 90's adoption
+   machinery entirely rather than extending it.
+
+2. **Growing std on top of the natives** — the mechanism landed in milestone
    16 with a deliberately small registry, and the pieces with a design question
    behind them are done: a growable `ObjArray` (milestone 23, so `std::array`
    has `push`/`pop`), a growable text buffer (milestone 24, so a `String` can be
@@ -1750,7 +1776,7 @@ name its own argument without macros, and that `assert_eq`'s `Display` bound is
 bought by the *message* rather than the comparison — belong to item 3 as much
 as here.)
 
-2. **A custom equality trait (`Eq`) — the named consumer has now declined it.**
+3. **A custom equality trait (`Eq`) — the named consumer has now declined it.**
    Not on the main line, and deliberately deferred rather than planned —
    recorded here so the reasoning survives. Milestone 63 built the hash map this
    item had been waiting for and found it wanted `Hash` and nothing else: `==`
@@ -1892,19 +1918,26 @@ via `Module.decl_base`) and is not part of the main line.
   rather than source order, so an inner block's precede an outer one's whatever
   their lines. Sorting the bag would need notes to stop attaching to the
   diagnostic before them by position (milestone 89)
-- a directory named `std` holding a file named after a std module is compiled
-  *as* that module when named on the command line (milestone 90), so a user who
-  happens to have `std/cmp.dt` gets it checked with no prelude and `@lang`
-  honoured, which usually fails confusingly. Deliberate: `use std::cmp` is
-  intercepted before the filesystem, so such a directory was never reachable as
-  `std::` anyway — but the diagnostic does not explain what happened. Milestone
-  91 widens the reach without widening the explanation: the name may now span
-  directories, so `std/collections/hashmap.dt` is adopted too
-- a group's facade is hand-written and unchecked (milestone 91's remainder).
-  `std::collections` is a module only because `std/collections.dt` sits beside
-  the directory and `pub use`s what is under it; nothing generates that file or
-  notices when it falls behind, so a module added to a group is reachable by its
-  full path and silently missing from the short one
+- **path resolution guesses, and the guess is observable.** Creating an
+  unrelated `a/b.dt` changes what an unchanged `use a::b;` means; an unrelated
+  `Event.dt` breaks a `use Event::A;` naming the importing file's own enum; a
+  `.dt` file nothing imports is never compiled, so there is no build unit. Under
+  those: probing at three prefix lengths, three AST flags the parser could not
+  determine, and two resolvers kept in agreement by hand. **All of it is "Next"
+  item 1** — `modules-design.md`, milestones 94–95. The three below are the same
+  wart seen from different sides and go with it:
+  - a directory named `std` holding a file named after a std module is compiled
+    *as* that module when named on the command line (milestone 90), and
+    milestone 91 widened the reach without widening the explanation. The
+    declared tree replaces adoption with an explicit `--std-module` flag
+  - a group's facade is hand-written and unchecked (milestone 91's remainder):
+    `std::collections` is a module only because `std/collections.dt` sits beside
+    the directory and `pub use`s what is under it, and nothing notices when it
+    falls behind. `pub mod` replaces it
+  - nesting made a namespace, not a boundary: every std file is permanent public
+    API, so `std::array`'s `pop_last`, `std::iter`'s `char_at`/`prev_boundary`
+    and `std::string`'s `char_width` are documented as internal and reachable
+    anyway
 - `while true { }` still types `()`, and deliberately: its condition is an
   expression, and the checker reads types rather than values. `loop { }` is the
   spelling that asks no condition (milestone 86)

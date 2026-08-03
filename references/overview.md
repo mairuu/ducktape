@@ -26,7 +26,7 @@ names a file, that file is the source of truth. Historical design notes live in
 | `scripts/run_tests.sh` | the test runner (invoked by `make test`) |
 | `scripts/embed_std.sh` | mirrors `std/**/*.dt` into `build/std_data.h` for `src/std_src.c`, keyed by path relative to `std/` so a module may nest |
 | `editors/vscode/` | a VS Code extension: TextMate grammar + language config for `.dt` (highlighting only, no language server) |
-| `references/` | these docs + `grammar.ebnf` |
+| `references/` | these docs + `grammar.ebnf`. `modules-design.md` is the exception to "these describe what is": it specifies the *replacement* for path resolution (milestones 94–95) and is deleted when they land |
 
 A multi-file test is a *subdirectory* of any of the `tests/` categories, with
 `main.dt` as the entry point and its imported modules alongside. The flat
