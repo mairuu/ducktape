@@ -1,0 +1,12 @@
+# A private module is reachable from the module that declared it *and* from
+# everything in that module's subtree — `shape` is a sibling of `internal`, so
+# it may name it, while the root two levels up may not.
+#> 100
+mod geo;
+
+use std::io::print;
+use geo::shape;
+
+fun main() {
+    print(shape::area());
+}

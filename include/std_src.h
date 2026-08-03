@@ -17,3 +17,9 @@ const char *std_module_source(StringView name);
 
 // the embedded module names as `a, b, c`, for the unknown-module diagnostic.
 const char *std_module_names(void);
+
+// the i'th embedded module's library-relative name, or NULL past the end. The
+// orphan-module scan is the one reader that asks what is *there* rather than
+// looking up what something asked for — the library's answer to the directory
+// listing a program module gets from the filesystem.
+const char *std_module_at(int i);

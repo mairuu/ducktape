@@ -1,0 +1,10 @@
+mod internal;
+pub mod shape;
+
+# the declarer's own reach: a private child is named from the file that
+# declared it without any `pub` on either side.
+use geo::internal::hidden;
+
+pub fun near() -> Int {
+    return hidden();
+}

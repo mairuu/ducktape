@@ -2,6 +2,6 @@
 # What follows the module is still at most an enum and a variant — the depth of
 # the module itself does not buy extra segments, because the count is measured
 # from where the module prefix ended rather than from a fixed `std::<name>`.
-use std::collections::hashmap::MapIter::Some::Deeper;
+use std::string::buf::StringBuf::Some::Deeper;
 
 fun main() {}

@@ -1,0 +1,13 @@
+#! expect: warning[orphan_module]: 'tests/warn/orphan_module/geo/stray.dt' is not a module
+# `geo/` is a directory `geo` owns, so a `.dt` file in it that no `mod` claims
+# is not part of the build and does not say so. The warning is anchored on the
+# `mod` list the file should have joined, and `main.dt`'s own directory is
+# exempt — a root owns nothing, since several share one directory.
+mod geo;
+
+use std::io::print;
+use geo::shape;
+
+fun main() {
+    print(shape::area());
+}

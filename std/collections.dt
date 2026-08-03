@@ -1,11 +1,13 @@
 # std::collections — the group's module, and the group's facade.
 #
-# The directory is not the module: this file is, and `pub mod` below is what
-# puts anything under `std/collections/` on a path at all. The `pub use` lines
-# beside them are the short spelling — `use std::collections::HashMap;` without
-# naming the module the type happens to live in.
-pub mod hashmap;
-pub mod hashset;
+# The directory is not the module: this file is, and `mod` below is what puts
+# anything under `std/collections/` on a path at all. Both children are private,
+# so the `pub use` lines are not a *short* spelling but the only one: a type has
+# one name, and which file holds it is a layout decision this group keeps to
+# itself. `hashset` still reaches `hashmap` — a private module is reachable from
+# everything in its declarer's subtree, which is where the two siblings live.
+mod hashmap;
+mod hashset;
 
 pub use std::collections::hashmap::{HashMap, MapIter};
 pub use std::collections::hashset::HashSet;

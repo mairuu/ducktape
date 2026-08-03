@@ -1,0 +1,3 @@
+pub fun area() -> Int {
+    return 1;
+}

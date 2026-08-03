@@ -1,0 +1,8 @@
+#! expect: module 'std::collections::hashmap' is private
+# std's public surface is what `lib.dt` and the group facades declare, not what
+# the directory holds: `HashMap` has one path, and the file it lives in is the
+# group's business. The error also pins the walk itself — reaching the module
+# at all is what lets it be reported as private rather than as a missing item.
+use std::collections::hashmap::HashMap;
+
+fun main() {}

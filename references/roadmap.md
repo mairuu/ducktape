@@ -1629,8 +1629,10 @@ keep this file small. Everything from 55 on is below.
 - **94. The declared module tree** (`bc5d325`) — `mod x;` / `pub mod x;` replaces
   path resolution. Design: `language.md` "Modules" + the gaps table,
   `architecture.md` "Modules" / "The embedded standard library",
-  `grammar.ebnf`, `overview.md`. All three failures in `modules-design.md` §1
-  are fixed and pinned (`tests/pass/mod_declared`, `tests/fail/mod_orphan_checked`).
+  `grammar.ebnf`, `overview.md`. The three failures it set out to fix — a
+  path's meaning depending on which files exist, a scope import reachable by
+  accident, no build unit — are fixed and pinned (`tests/pass/mod_declared`,
+  `tests/fail/mod_orphan_checked`).
 
   The finding is that **declaring the tree deletes the questions rather than
   answering them**: nothing in resolution asks whether a file exists, so
@@ -1659,6 +1661,29 @@ keep this file small. Everything from 55 on is below.
   Left over: `pub mod` parses and is recorded but is not enforced (milestone 95,
   see warts).
 
+- **95. The module boundary** (`SHA`) — `pub mod` starts meaning something, and
+  a `.dt` file nothing declares says so. Design: `language.md` "Modules" +
+  "Warnings and `@allow`", `architecture.md` "Modules". Pinned by
+  `tests/fail/mod_private_path`, `tests/run/mod_private_subtree`,
+  `tests/fail/std_private_module`, `tests/warn/orphan_module`.
+
+  The finding is that **privacy is checked after the walk rather than during
+  it**. Discovery has to *reach* a module to say anything about it, and the two
+  other readings of a walk that stopped — the path names no module, the module's
+  source is missing — have their own answers and must be settled first. So
+  `mod_first_private` runs on the finished path, and reports the component
+  nearest the root rather than the one that stopped the reader.
+
+  Spent on std, which is what the milestone was for: `std::collections`'s
+  `hashmap` and `hashset` are private now, so `HashMap` has exactly one path and
+  which file holds it is the group's business. That is the *only* place in std
+  where privacy was a real decision — every other file is API — and finding that
+  out is the answer to "decide std's surface" rather than a substitute for one.
+  Left over: those `pub use` lines are now the sole path to the types below the
+  façade and nothing checks them (see warts); `orphan_module`'s `@allow` is
+  written one file up, on the `mod` that gave the directory an owner, because
+  the file it is about is not part of the program and has nothing to mark.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -1667,9 +1692,9 @@ milestone (~900 lines).
 Nothing on the main line is *blocked*: every construct the checker accepts in
 `tests/pass/in_fixed.dt` now also runs. The list below is what the "known
 warts" section would promote first, in the order that pays off soonest — pick
-by appetite rather than by necessity. **Item 1 is the exception and is not
-optional**: it replaces infrastructure that is known to be wrong, rather than
-adding something absent.
+by appetite rather than by necessity. Nothing here is load-bearing any more:
+the module system was the one item that replaced infrastructure known to be
+wrong, and it landed in milestones 94–95.
 
 (**A heterogeneous operator** was the largest open design question and is now
 milestone 75: `V2 * Float`. What it needed from the language was two things
@@ -1681,32 +1706,7 @@ unified" limit stopped being a blocker and became a *cost*: `Output` works, it
 just has to be written down at every bound that keeps the result, because
 nothing infers one.)
 
-1. **The module boundary — milestone 95.** Milestone 94 built the tree and
-   fixed all three resolution failures; what it deliberately did not do is make
-   `pub mod` mean anything. Remaining design in `modules-design.md` §4 and §6.
-   **Still the first priority and still not a matter of appetite**, because the
-   half that landed left `pub` on a module parsed and inert, which is a claim
-   the language makes and does not keep.
-
-   Three parts: enforce §4 (a module is reachable from its declarer's subtree,
-   or it is `pub`), add the `orphan_module` warning for a `.dt` file no `mod`
-   claims, and spend both on std — whose 20 `mod` declarations are today
-   *entirely* `pub`, the safe migration choice, so the ability to hold a private
-   module has been used zero times. Privacy is an *error*, not a lint: a private
-   module named from outside is a fact about the program, not advice, so
-   `@allow` deliberately cannot reach it.
-
-   **It buys path privacy, not encapsulation** — a correction to the design,
-   verified at `f6ac08a`. Module privacy gates names; impl visibility is
-   transitive over `use` and is not gated by it, so a public module importing a
-   private sibling still re-exports its impls downstream (a method that sibling
-   defines on `Int` is callable from a root that never named it). Item privacy
-   already works — `use std::array::pop_last;` errors today — so std's internals
-   are private *already*, at the cost of being free functions rather than
-   methods. That cost is the method-visibility wart below, and milestone 95 does
-   not touch it.
-
-2. **Growing std on top of the natives** — the mechanism landed in milestone
+1. **Growing std on top of the natives** — the mechanism landed in milestone
    16 with a deliberately small registry, and the pieces with a design question
    behind them are done: a growable `ObjArray` (milestone 23, so `std::array`
    has `push`/`pop`), a growable text buffer (milestone 24, so a `String` can be
@@ -1808,7 +1808,7 @@ name its own argument without macros, and that `assert_eq`'s `Display` bound is
 bought by the *message* rather than the comparison — belong to item 3 as much
 as here.)
 
-3. **A custom equality trait (`Eq`) — the named consumer has now declined it.**
+2. **A custom equality trait (`Eq`) — the named consumer has now declined it.**
    Not on the main line, and deliberately deferred rather than planned —
    recorded here so the reasoning survives. Milestone 63 built the hash map this
    item had been waiting for and found it wanted `Hash` and nothing else: `==`
@@ -1950,19 +1950,6 @@ via `Module.decl_base`) and is not part of the main line.
   rather than source order, so an inner block's precede an outer one's whatever
   their lines. Sorting the bag would need notes to stop attaching to the
   diagnostic before them by position (milestone 89)
-- **the tree is declared but not yet a boundary** (milestone 94's remainder,
-  and all of "Next" item 1's second half). `mod` and `pub mod` both parse and
-  both are recorded, and nothing enforces the difference: every declared module
-  is reachable from every other, so every std file is still permanent public
-  API. Milestone 95, with the two that go with it:
-  - a `.dt` file no `mod` claims is silently not part of the program. That is
-    the point — it is what makes a path's meaning independent of what is on
-    disk — but nothing says the file is dead, which is the `orphan_module`
-    warning 95 owes
-  - a group's short spellings are still hand-written `pub use` lines:
-    `pub mod hashmap;` puts `std::collections::hashmap` on a path, but
-    `use std::collections::HashMap;` works only because `std/collections.dt`
-    re-exports it by hand, and nothing notices when that falls behind
 - `while true { }` still types `()`, and deliberately: its condition is an
   expression, and the checker reads types rather than values. `loop { }` is the
   spelling that asks no condition (milestone 86)
@@ -2184,10 +2171,15 @@ via `Module.decl_base`) and is not part of the main line.
 - no glob `use a::*`. Module-qualified paths exist as of milestone 33 (`use
   a::b;` binds `b`, then `b::thing`), but a *glob* still has no spelling, and a
   `pub use` re-export names one item at a time — a façade module still lists
-  them, and a qualifier is not re-exportable (it is not an item)
+  them, and a qualifier is not re-exportable (it is not an item). Milestone 95
+  made this load-bearing rather than merely tedious: `std::collections`'s
+  children are private, so its `pub use` lines are the *only* path to `HashMap`,
+  and a type added below the façade is reachable from nowhere with nothing
+  saying so
 - `pub` is ignored on the `impl` keyword and rejected on a method or a struct
-  field (see above); there is no sub-module visibility, so `pub` means something
-  only on a top-level item, at module granularity
+  field (see above). Visibility exists at three grains and they do not compose:
+  an item takes `pub`, a field takes `pub`, a `mod` takes `pub` — and a *method*
+  takes nothing, so it is as visible as its impl however private the path to it
 - module dedup is lexical, so one file reached by two different spellings
   (a symlink, say) would load twice and collide
 - a bytecode image is structurally validated (bounds, indices, counts) but the

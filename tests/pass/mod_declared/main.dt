@@ -3,6 +3,9 @@
 # `use a::b;` became module `a::b` the moment `a/b.dt` existed, and
 # `use Event::A;` stopped naming this file's own enum the moment `Event.dt`
 # did. Both files exist here, and neither is declared, so neither is anything.
+# `a/b.dt` sits in a directory `a` owns, so keeping it undeclared on purpose is
+# exactly what the allow is for; `Event.dt` is beside a root, which owns nothing.
+@allow("orphan_module")
 mod a;
 
 use a::b;

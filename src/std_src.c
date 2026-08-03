@@ -30,6 +30,10 @@ const char *std_module_source(StringView name) {
   return NULL;
 }
 
+const char *std_module_at(int i) {
+  return i >= 0 && i < STD_MODULE_COUNT ? STD_MODULES[i].name : NULL;
+}
+
 const char *std_module_names(void) {
   // built once into a static buffer: the only caller is a diagnostic, and the
   // list is fixed at compile time.

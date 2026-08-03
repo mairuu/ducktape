@@ -176,6 +176,32 @@ a `DECL_MOD`'s name, so `mod foo;` beside `fun foo()` is the ordinary duplicate
 error, and a name is a child or an item, never both. A `mod` whose source is
 missing is reported once, at the declaration, rather than once per importer.
 
+**Module privacy is checked on the finished path, not during the walk**
+(`mod_first_private`, called from `mod_collect_imports`). A component is open
+when it is `pub mod` or when its parent is an ancestor-or-self of the importing
+module, so a private child serves its declarer's whole subtree; the offender
+reported is the one nearest the root, the first door the path could not have
+opened. The walk itself stays permissive because discovery has to *reach* a
+module in order to say anything about it, and because the two other readings of
+a failed walk — a path that named no module, a module whose source is missing —
+have their own answers and must be settled first. It gates paths only: impl
+visibility is transitive over `use` (`Module.visible_impls`) and is not
+consulted here, so a public module importing a private one still re-exports its
+impls.
+
+**`orphan_module` scans the directory a module owns** (`mod_warn_orphans`, at
+the end of `mod_declare_children`, so the children are known). A program module
+reads its directory with `dirent`; a library module reads the embedded table
+(`std_module_at`), which is the same question asked of the only listing std
+has. The results are insertion-sorted, because `readdir` has no order and a
+diagnostic that reorders between runs is a test that fails at random. A program
+*root* is exempt — several roots share one directory, so it is owned by nobody —
+while the library root owns `std/` and is not. The warning is anchored on the
+last `mod` declaration in the file, the list the orphan should have joined, and
+its `@allow` is read off the declaration that named the owning module, one file
+up. It carries its advice in the message rather than a note, because
+`diag_note` is not gated by the allow mask.
+
 A library module's paths are anchored at the **library** root only
 (`from->is_std` in `mod_walk`): `std` is where its own tree begins, and it must
 not be able to name a file of the program that happens to be compiling it. That

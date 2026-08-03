@@ -8,7 +8,9 @@
 #include "string_utils.h"
 
 #include <assert.h>
+#include <dirent.h>
 #include <stdio.h>
+#include <string.h>
 
 StringView path_dir_of(StringView path) {
   for (int i = path.len - 1; i >= 0; i--) {
@@ -74,7 +76,7 @@ StringView path_normalise(StringView path, Allocator *al) {
 // The module tree
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// There are exactly two trees (§2 of references/modules-design.md): the
+// There are exactly two trees (`references/architecture.md`, "Modules"): the
 // program's, rooted at the entry file, and the library's, rooted at
 // `std/lib.dt` and reached through the reserved first segment `std`. Every
 // module below a root is there because some module *declared* it with `mod`,
@@ -168,7 +170,7 @@ static Module *mod_new(StringView file_path, Allocator *al) {
 Module *mod_new_program_root(StringView entry_path, Allocator *al) {
   Module *m = mod_new(entry_path, al);
   // a root's children live in its own directory, which is why every existing
-  // layout already matches §2.2 and the migration moves no file.
+  // layout already matched this rule and the migration moved no file.
   m->child_prefix = path_dir_of(entry_path);
   return m;
 }
@@ -216,10 +218,10 @@ static bool file_exists(const char *path) {
   return true;
 }
 
-// §2.2 in full: a child's source is its parent's child directory plus its own
-// name, and its child directory is that source without the extension. For a
-// library module the same two lines run over library-relative names, because
-// that is the shape the embedded table is keyed by.
+// The layout rule in full: a child's source is its parent's child directory
+// plus its own name, and its child directory is that source without the
+// extension. For a library module the same two lines run over library-relative
+// names, because that is the shape the embedded table is keyed by.
 static Module *mod_new_child(Module *parent, Decl *decl, Allocator *al) {
   StringView name = decl->as.mod_decl.name;
   StringView slash = sv_from_cstr("/");
@@ -259,6 +261,121 @@ static void mod_push_child(Module *parent, StringView name, Module *child,
       (ModChild){.name = name, .mod = child, .decl = decl};
 }
 
+// the orphan scan's working list, kept sorted: `readdir` has no order, and a
+// diagnostic whose order changes between runs is a test that fails at random.
+typedef struct {
+  StringView *names;
+  int count, cap;
+} OrphanList;
+
+static bool sv_less(StringView a, StringView b) {
+  int n = a.len < b.len ? a.len : b.len;
+  int c = n > 0 ? memcmp(a.chars, b.chars, (size_t)n) : 0;
+  return c != 0 ? c < 0 : a.len < b.len;
+}
+
+static void orphan_push(OrphanList *l, StringView name, Allocator *al) {
+  if (l->count == l->cap) {
+    int cap = l->cap ? l->cap * 2 : 4;
+    l->names = al_realloc(al, l->names, sizeof(StringView) * (size_t)l->cap,
+                          sizeof(StringView) * (size_t)cap);
+    l->cap = cap;
+  }
+  int i = l->count++;
+  for (; i > 0 && sv_less(name, l->names[i - 1]); i--) {
+    l->names[i] = l->names[i - 1];
+  }
+  l->names[i] = name;
+}
+
+// `orphan_module`: a `.dt` file in the directory a module owns that no `mod`
+// of that module claims — a file outside the build that does not say so.
+//
+// A *program* root is exempt, and that is the one asymmetry: several roots
+// share one directory (every single-file test in `tests/run/` is a sibling of
+// every other), so a base directory is owned by nobody. The library root does
+// own `std/`, so "a new std file needs a `pub mod`" stops being a silence.
+static void mod_warn_orphans(Module *m, DiagBag *diags, Allocator *al) {
+  if (m->parent == NULL && !m->is_std) {
+    return;
+  }
+
+  OrphanList orphans = {0};
+  if (m->is_std) {
+    for (int i = 0;; i++) {
+      const char *entry = std_module_at(i);
+      if (entry == NULL) {
+        break;
+      }
+      if (strncmp(entry, m->child_prefix.chars, (size_t)m->child_prefix.len) !=
+          0) {
+        continue;
+      }
+      const char *leaf = entry + m->child_prefix.len;
+      // a grandchild is some other module's directory to answer for, and the
+      // root's own `lib` is its source rather than a child of itself.
+      if (strchr(leaf, '/') != NULL || sv_equal_cstr(m->std_rel, entry)) {
+        continue;
+      }
+      StringView name = sv_from_cstr(leaf);
+      if (mod_find_child(m, name) == NULL) {
+        orphan_push(&orphans, name, al);
+      }
+    }
+  } else {
+    DIR *dir = opendir(m->child_prefix.chars);
+    if (dir == NULL) {
+      return; // a module with no children need not have a directory
+    }
+    for (struct dirent *e; (e = readdir(dir)) != NULL;) {
+      size_t len = strlen(e->d_name);
+      if (len <= 3 || strcmp(e->d_name + len - 3, ".dt") != 0) {
+        continue;
+      }
+      StringView name = {.chars = e->d_name, .len = (int)len - 3};
+      if (mod_find_child(m, name) != NULL) {
+        continue;
+      }
+      // `d_name` is reused by the next readdir, so the arena keeps the copy.
+      orphan_push(&orphans, sv_concat3(name, (StringView){0}, "", al), al);
+    }
+    closedir(dir);
+  }
+  if (orphans.count == 0) {
+    return;
+  }
+
+  // the allow lives on the declaration that named this module — one file up,
+  // where the decision to have the directory was made. A root has no such
+  // declaration and so cannot be silenced.
+  ModChild *self =
+      m->parent != NULL ? mod_find_child(m->parent, m->name) : NULL;
+  unsigned saved =
+      diag_push_allowed(diags, self != NULL ? self->decl->allow_mask : 0);
+
+  // anchored on the `mod` list the file should have joined; a module with no
+  // list yet gets its first line, which is where one would start.
+  Span span = {.line = 1, .col = 1, .line_end = 1, .col_end = 2};
+  for (int i = 0; i < m->ast->decl_count; i++) {
+    if (m->ast->decls[i]->kind == DECL_MOD) {
+      span = m->ast->decls[i]->span;
+    }
+  }
+
+  for (int i = 0; i < orphans.count; i++) {
+    StringView rel = sv_concat3(m->child_prefix, orphans.names[i], ".dt", al);
+    StringView file =
+        m->is_std ? sv_concat3(sv_from_cstr("std/"), rel, "", al) : rel;
+    // one line, no note: a note is not gated by the allow mask, so advice that
+    // belongs to a silenceable warning has to travel inside it.
+    diag_warning(diags, LINT_ORPHAN_MODULE, span,
+                 "'" SV_FMT "' is not a module: no `mod " SV_FMT
+                 ";` declares it",
+                 SV_ARG(file), SV_ARG(orphans.names[i]));
+  }
+  diag_pop_allowed(diags, saved);
+}
+
 bool mod_declare_children(Module *m, ModuleRegistry *reg, DiagBag *diags,
                           Allocator *al) {
   assert(m->ast != NULL);
@@ -271,7 +388,7 @@ bool mod_declare_children(Module *m, ModuleRegistry *reg, DiagBag *diags,
     }
     StringView name = decl->as.mod_decl.name;
 
-    // `std` is a reserved first segment (§2): the library is addressed through
+    // `std` is a reserved first segment: the library is addressed through
     // it from every module, so a program cannot spend it on a child.
     if (m == reg->program_root && sv_equal_cstr(name, "std")) {
       diag_error(diags, decl->as.mod_decl.name_span,
@@ -308,13 +425,14 @@ bool mod_declare_children(Module *m, ModuleRegistry *reg, DiagBag *diags,
       modreg_add(reg, child);
     }
   }
+  mod_warn_orphans(m, diags, al);
   return ok;
 }
 
-// §3 steps 1–2: anchor the path at the root its first segment names, then
+// Anchor the path at the root its first segment names, then
 // descend while a segment names a declared child. `*consumed` comes back as the
 // number of segments eaten, counting a leading `std`. The walk is greedy and
-// cannot be ambiguous, because §2.1 forbids a name from being both a child and
+// cannot be ambiguous, because a name may not be both a declared child and
 // an item.
 //
 // `reach` registers each module descended into — which is how a library module
@@ -349,6 +467,40 @@ static Module *mod_walk(ModuleRegistry *reg, Module *from, const Path *path,
     }
   }
   return cur;
+}
+
+// how a diagnostic names a module's source. A library module's registry key is
+// the synthetic `<std>/…` its embedded text has no real path for, and a reader
+// told to open that has been told nothing.
+static StringView mod_display_path(const Module *m, Allocator *al) {
+  return m->is_std && !m->from_disk
+             ? sv_concat3(sv_from_cstr("std/"), m->std_rel, ".dt", al)
+             : m->file_path;
+}
+
+// A module is reachable from `from` when every component of its path is
+// `pub` or was declared inside `from`'s own subtree. Returns the component
+// nearest the root that is neither — the first door the path could not have
+// opened — or NULL when the whole path is reachable.
+//
+// The walk itself stays permissive: privacy is a fact about a `use`, not about
+// the tree, so it is checked once where a path is read and never during
+// discovery, which must reach a module in order to report anything about it.
+static Module *mod_first_private(Module *from, Module *target) {
+  Module *offender = NULL;
+  for (Module *c = target; c->parent != NULL; c = c->parent) {
+    if (c->is_pub) {
+      continue;
+    }
+    bool inside = false;
+    for (Module *a = from; a != NULL && !inside; a = a->parent) {
+      inside = a == c->parent;
+    }
+    if (!inside) {
+      offender = c;
+    }
+  }
+  return offender;
 }
 
 // register the prelude's library modules. Declared here because the prelude
@@ -396,7 +548,7 @@ static StringView sprint_mod_path(const Path *path, int count, Allocator *al) {
 
 // the path named no module below its root. For the library that is the whole
 // answer; for the program the head may still be an *enum* in this module's own
-// scope, which §3.4 is about — so this reports only once that reading is out.
+// scope — the module-less reading — so this reports only once that is out.
 static void report_no_module(const Path *path, bool std_rooted, DiagBag *diags,
                              Allocator *al) {
   if (std_rooted) {
@@ -468,7 +620,7 @@ bool mod_collect_imports(Module *m, ModuleRegistry *reg, DiagBag *diags,
     int depth = consumed - (std_rooted ? 1 : 0);
     int rest = path->count - consumed;
 
-    // §3.4. A root is not addressable — the program's has no name and `std`
+    // A root is not addressable — the program's has no name and `std`
     // alone names the library, not a module of it — so a walk that stayed at
     // one found no module. The head may still be an enum already in scope,
     // which resolves a pass later (`tc_link_scope_imports`); a `std::` path
@@ -488,6 +640,23 @@ bool mod_collect_imports(Module *m, ModuleRegistry *reg, DiagBag *diags,
     // at the `mod`, and every use of it stays quiet.
     if (cur->ast == NULL) {
       imp->file_path = cur->file_path;
+      continue;
+    }
+
+    // Privacy is reported here rather than at the walk, so it survives the two
+    // readings above: a path that named no module at all has a different
+    // answer, and a module with no source has already been reported once.
+    Module *hidden = mod_first_private(m, cur);
+    if (hidden != NULL) {
+      diag_error(diags, path->span, "module '" SV_FMT "' is private",
+                 SV_ARG(hidden->label));
+      diag_note(diags, (Span){0},
+                "declared '" SV_FMT "' in '" SV_FMT "'; `pub mod " SV_FMT
+                ";` would make it public",
+                SV_ARG(hidden->name),
+                SV_ARG(mod_display_path(hidden->parent, al)),
+                SV_ARG(hidden->name));
+      ok = false;
       continue;
     }
 

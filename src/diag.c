@@ -21,6 +21,7 @@ static const char *const lint_names[LINT_COUNT] = {
     [LINT_UNUSED_IMPORT] = "unused_import",
     [LINT_UNREACHABLE_CODE] = "unreachable_code",
     [LINT_IRREFUTABLE_PATTERN] = "irrefutable_pattern",
+    [LINT_ORPHAN_MODULE] = "orphan_module",
 };
 
 const char *diag_lint_name(DiagLint lint) { return lint_names[lint]; }

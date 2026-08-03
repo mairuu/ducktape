@@ -1,0 +1,7 @@
+# a sibling inside `geo`'s subtree: `internal` is private to `geo`, and this
+# module is under `geo`, so the path is open here and closed at the root.
+use geo::internal::hidden;
+
+pub fun area() -> Int {
+    return hidden() + 1;
+}

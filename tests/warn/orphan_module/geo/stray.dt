@@ -1,0 +1,5 @@
+# nothing declares this file, so it is not a module and is not compiled — the
+# error below would be reported if it were.
+pub fun oops() -> Int {
+    return "not an Int";
+}

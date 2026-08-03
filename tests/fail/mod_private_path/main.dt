@@ -1,0 +1,9 @@
+#! expect: module 'geo::internal' is private
+# `mod x;` is private, `pub mod x;` is not, and the root is outside `geo`'s
+# subtree — so the path stops at the door rather than at the item, which is
+# why the error names the module and not `hidden`.
+mod geo;
+
+use geo::internal::hidden;
+
+fun main() {}

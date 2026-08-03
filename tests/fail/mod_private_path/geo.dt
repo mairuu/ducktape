@@ -1,0 +1,5 @@
+mod internal;
+
+pub fun near() -> Int {
+  return 1;
+}

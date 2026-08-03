@@ -22,11 +22,11 @@ names a file, that file is the source of truth. Historical design notes live in
 | `tests/fail/` | programs that must fail; first line `#! expect: <substring>` asserts on stderr |
 | `tests/run/` | programs executed with `--run`; `#> line` comments assert on stdout |
 | `tests/fail_run/` | like `tests/fail`, but invoked with `--run` — for programs that type-check yet the VM rejects |
-| `std/` | the standard library, written in ducktape; embedded into the binary at build time. The bodies that cannot be (`print`, array/string/char primitives, hash mixing) are bodyless declarations bound to `src/native.c`. `std/lib.dt` is the library root and declares the tree — a file is a module only once a `pub mod` names it. `--std-module std::cmp` compiles one *as* that module and warns; `make test` lints them all under the `tests/pass` rule |
+| `std/` | the standard library, written in ducktape; embedded into the binary at build time. The bodies that cannot be (`print`, array/string/char primitives, hash mixing) are bodyless declarations bound to `src/native.c`. `std/lib.dt` is the library root and declares the tree — a file is a module only once a `mod` names it, and only public where that `mod` says `pub`. `--std-module std::cmp` compiles one *as* that module and warns; `make test` lints them all under the `tests/pass` rule |
 | `scripts/run_tests.sh` | the test runner (invoked by `make test`) |
 | `scripts/embed_std.sh` | mirrors `std/**/*.dt` into `build/std_data.h` for `src/std_src.c`, keyed by path relative to `std/`. A loader, not a resolver: what exists is what `std/lib.dt` declares |
 | `editors/vscode/` | a VS Code extension: TextMate grammar + language config for `.dt` (highlighting only, no language server) |
-| `references/` | these docs + `grammar.ebnf`. `modules-design.md` is the exception to "these describe what is": milestone 94 built its tree, and it now specifies only what milestone 95 still owes (privacy, orphans) |
+| `references/` | these docs + `grammar.ebnf` |
 
 A multi-file test is a *subdirectory* of any of the `tests/` categories, with
 `main.dt` as the entry point and the modules it declares alongside. The flat

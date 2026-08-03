@@ -1814,7 +1814,7 @@ static bool decl_item_name(Decl *decl, StringView *out) {
   case DECL_TRAIT:
     *out = decl->as.trait_decl.name;
     return true;
-  // §2.1: a child module's name is bound alongside its parent's items, so
+  // A child module's name is bound alongside its parent's items, so
   // `mod foo;` beside `fun foo()` is the ordinary duplicate-name error — and
   // that collision is exactly what lets a path walk greedily.
   case DECL_MOD:

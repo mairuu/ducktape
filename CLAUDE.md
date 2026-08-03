@@ -59,15 +59,17 @@ ordinary module that `scripts/embed_std.sh` mirrors into `build/std_data.h` at
 build time, so `use std::cmp;` needs no install path and the test suite stays
 hermetic. Edit the `.dt`; never edit the generated header. `std/lib.dt` is the
 library root and declares the tree: a new file needs a `pub mod` there (or in
-its group's file) before `use std::<name>;` resolves.
+its group's file) before `use std::<name>;` resolves. A plain `mod` puts the
+file in the library without exporting it — `std::collections`'s children are
+declared that way, reachable only from inside the group.
 
 **`./build/ducktape --std-module std::cmp` lints one std module**: it compiles
 as the library module its *path* names, reading the source from disk (so you
 see the edit, not the last `make`), and a root always has a warning audience —
 where a program that merely uses std never sees its warnings. `make test` lints
 every module under the `tests/pass` rule, so a warning in std fails the suite.
-A new file also needs a `pub mod` in `std/lib.dt` (or the group's own file);
-without one it is not a module at all.
+A file no `mod` declares is not a module at all, and now warns
+(`orphan_module`) instead of going quiet.
 
 ## Tests
 
@@ -78,6 +80,8 @@ without one it is not a module at all.
   expected stdout, in order.
 - `tests/fail_run/*.dt` — like `tests/fail`, but invoked with `--run`; for
   programs that type-check yet the VM rejects.
+- `tests/warn/*.dt` — must compile (exit 0) with *non-empty* stderr containing
+  the `#! expect:` substring; the one bucket a warning fits.
 - A multi-file test is a *subdirectory* of any of those, entry point
   `main.dt`, imported modules alongside it. The flat globs are non-recursive,
   so the siblings are never collected as tests themselves.

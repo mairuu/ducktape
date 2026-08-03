@@ -1249,7 +1249,29 @@ geo.dt       pub mod shape;   ->  geo/shape.dt
 
 A directory alone is not a module: `geo/` means something only because `geo.dt`
 declares what is in it. A `.dt` file no `mod` names is not part of the program
-at all — it is not compiled, and no path reaches it.
+at all — it is not compiled, and no path reaches it. Left in a directory a
+module owns, it is an `orphan_module` warning; left beside a *root* it is
+silent, because several roots share one directory and none of them owns it.
+
+A `mod` is **private**; `pub mod` is not. A private child is reachable from the
+module that declared it and from everything in that module's subtree, and
+nowhere else:
+
+```
+# geo.dt
+mod internal;      # geo/internal.dt — reachable from geo and below it
+pub mod shape;     # geo/shape.dt — reachable from anywhere
+```
+
+`use geo::internal::x;` written at the root is an error naming the *module*, not
+the item: the path stops at the door. `pub use` still carries an item out of a
+private module, which is how `std::collections` gives `HashMap` a single name
+while keeping the file it lives in to itself.
+
+This hides **names**, not behaviour. Impl visibility is transitive through
+`use`, so a public module that imports a private one re-exports that module's
+impls to everyone downstream — a method is exactly as visible as its impl,
+whatever the path to it says.
 
 A child's name is bound alongside its module's items, so `mod foo;` beside
 `fun foo()` is the ordinary "defined multiple times" error. That rule is what
@@ -2846,7 +2868,7 @@ HashSet::with_capacity(n); s.capacity(); s.reserve(n);   # forwarded, all three
 ## Warnings and `@allow`
 
 A warning is advice, so it never fails the build: the compiler exits 0 and the
-program runs. There are four, and each has a **name**, which is both what the
+program runs. There are five, and each has a **name**, which is both what the
 report prints and what silences it:
 
 | Lint | What it says |
@@ -2855,6 +2877,7 @@ report prints and what silences it:
 | `unused_import` | a `use` binding a name nothing writes, whose impls arrive anyway ("Modules") |
 | `unreachable_code` | a statement below one that leaves the block ("`std::panic`") |
 | `irrefutable_pattern` | an `if var`/`while var` header whose test has one answer ("`if var` and `while var`") |
+| `orphan_module` | a `.dt` file in a module's directory that no `mod` claims ("Modules") |
 
 ```
 warning[unused_variable]: unused variable 'dropped'
@@ -2873,9 +2896,15 @@ impl Walker {                 # covers every method in the block
 }
 ```
 
+`orphan_module` is the one whose allow is written somewhere other than what it
+is about: the file it names is not part of the program, so there is nothing in
+it to mark. It goes on the `mod` declaration that gave the directory an owner —
+`@allow("orphan_module") mod geo;` says geo's directory may hold files the build
+does not. A root has no such declaration and so cannot be silenced.
+
 An attribute takes exactly one key, so two lints are two lines. The sets
 **nest** — an `@allow` on a method adds to the one on its `impl` rather than
-replacing it — and an unknown lint name is an error listing the four, on the
+replacing it — and an unknown lint name is an error listing them all, on the
 same argument as an unknown `@native` key: a policy that silently never fires is
 worse than a typo that says so.
 
