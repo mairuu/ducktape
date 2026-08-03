@@ -183,7 +183,7 @@ keep this file small. Everything from 55 on is below.
     `tests/fail/assert_eq_needs_display.dt` is that seam: a `Widget` the
     comparison would accept and the message cannot name.
 
-  That last point is the milestone's contribution to item 2 below. `assert_eq`
+  That last point is the milestone's contribution to item 3 below. `assert_eq`
   is the closest thing to a *consumer* of equality std has, and it turns out to
   argue **against** an `Eq` trait rather than for one: what it wanted from the
   language was a way to print, not a way to compare. A hash map keyed by user
@@ -501,7 +501,7 @@ keep this file small. Everything from 55 on is below.
   `std::map`, which is what it was called at the time.
 
   This was the fork the previous milestone left open — a hash map keyed by user
-  types was the concrete consumer item 2 said `Eq` was waiting for — and the
+  types was the concrete consumer item 3 said `Eq` was waiting for — and the
   answer is that **it is not one**. `==` in ducktape is a structural primitive
   with no trait behind it, so `k == key` type-checks on a `K` whose only bound
   is `Hash`, and one opcode compares Ints, Strings, structs and tuples alike. A
@@ -1553,7 +1553,8 @@ milestone (~900 lines).
 Nothing on the main line is *blocked*: every construct the checker accepts in
 `tests/pass/in_fixed.dt` now also runs. The list below is what the "known
 warts" section would promote first, in the order that pays off soonest — pick
-by appetite rather than by necessity.
+by appetite rather than by necessity. **Item 1 is the exception: it is the only
+entry whose cost rises while it waits**, which is why it is first.
 
 (**A heterogeneous operator** was the largest open design question and is now
 milestone 75: `V2 * Float`. What it needed from the language was two things
@@ -1565,7 +1566,39 @@ unified" limit stopped being a blocker and became a *cost*: `Output` works, it
 just has to be written down at every bound that keeps the result, because
 nothing infers one.)
 
-1. **Growing std on top of the natives** — the mechanism landed in milestone
+1. **Std module nesting — `use std::collections::hashmap`.** std is flat and
+   `use std::x::y` reads `y` as an *item* of module `x`, always. Four sites say
+   so: `embed_std.sh` globs `std/*.dt` non-recursively with `basename` as the
+   name, `mod_collect_imports` takes `segments[1]` as the whole module name,
+   `std_mod_key` builds a flat `<std>/x.dt`, and milestone 90's
+   `std_name_for_entry` matches exactly one parent component. User modules
+   already nest — `mod_prefix_exists` asks the *filesystem* for the longest
+   prefix that names a file — so std needs the same probe against the embedded
+   table, and **the two resolvers must agree about one file**, which is
+   milestone 90's bug class exactly. That is the risk, and it is the milestone.
+
+   **Why this is first.** `use std::` lines across the tree: 65 (Jul 22) → 214
+   (Jul 26) → 456 (Aug 1) → 500 (Aug 3), about 22/day, and every one of them is
+   still ours to edit. Migration cost only rises. Taxonomy confidence also only
+   rises — the two curves argue opposite ways, so the plan **decouples them**:
+   build the mechanism now, commit to groups incrementally, and move only what
+   is *evidence-determined* rather than taste. `collections` is done
+   (`a12c7d6`, and it was never a guess — the module held `HashSet` too). A
+   `core` group would be the other, because the prelude closure is **computed**
+   (`mod_inject_prelude` plus transitive imports = 11 of 18 modules), not
+   chosen. `sort`, `char`, `strbuf` and `array` stay at top level until they
+   have a reason; mixed depth is normal, and Rust ships
+   `std::collections::HashMap` beside `std::cmp`.
+
+   **What argues for waiting**, and it is the only thing left: doing it at 18
+   modules is doing it with less test surface to catch a resolver disagreement.
+   Nothing is *forcing* it — 18 names still print on one line in the
+   unknown-module diagnostic, and the only compound name flat has cost so far is
+   `strbuf`. The cost curve is the whole argument. Bounds on the work if the
+   taxonomy were ever taken further: 500 `use std::` lines over 275 files, of
+   which `io` alone is 209.
+
+2. **Growing std on top of the natives** — the mechanism landed in milestone
    16 with a deliberately small registry, and the pieces with a design question
    behind them are done: a growable `ObjArray` (milestone 23, so `std::array`
    has `push`/`pop`), a growable text buffer (milestone 24, so a `String` can be
@@ -1603,7 +1636,7 @@ inference, so a closure typed by the source's `Item` projection can be checked.
 `fold`/`enumerate`/`zip`/`take` are milestone 49, the same adapter shape;
 `flat_map` waited on the projection-through-a-bound codegen wart, which
 milestone 50 closes and milestone 51 spends, adding it and `skip`. What is left
-is `chain`, and it waits on a *bound* rather than on machinery — see item 2.)
+is `chain`, and it waits on a *bound* rather than on machinery — see item 3.)
 
 (**Padding a rendered value to a width** was the last open piece here and is now
 milestone 34: `std::string` ships `pad_start`/`pad_end`/`pad_center`. The
@@ -1664,10 +1697,10 @@ piece needs no registry entry at all: five functions over `std::panic`, zero
 compiler change, and the only decisions are where they live and which messages
 cost something when the assertion holds. Its findings — that a callee cannot
 name its own argument without macros, and that `assert_eq`'s `Display` bound is
-bought by the *message* rather than the comparison — belong to item 2 as much
+bought by the *message* rather than the comparison — belong to item 3 as much
 as here.)
 
-2. **A custom equality trait (`Eq`) — the named consumer has now declined it.**
+3. **A custom equality trait (`Eq`) — the named consumer has now declined it.**
    Not on the main line, and deliberately deferred rather than planned —
    recorded here so the reasoning survives. Milestone 63 built the hash map this
    item had been waiting for and found it wanted `Hash` and nothing else: `==`
