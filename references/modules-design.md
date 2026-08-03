@@ -163,10 +163,39 @@ from the root must satisfy: `C` is `pub`, **or** `parent(C)` is an ancestor-or-
 self of `M`.
 
 Item `pub` is unchanged and now composes: an item is reachable only if its
-module is. This is what finally lets std hold internals — `std::array`'s raw
-`pop_last`, `std::iter`'s `char_at`/`prev_boundary`, `std::string`'s
-`char_width` are all documented as "std wants to keep this to itself" and are
-all reachable today.
+module is.
+
+**This hides names, not behaviour, and the first draft of this section claimed
+otherwise.** Module privacy gates *paths*. It does not gate impls, because impl
+visibility is reachability-based and transitive over `use` (`Module.visible_impls`),
+and §2.3 deliberately left that model alone. So a public module that imports a
+private sibling re-exports its impls to everyone downstream — verified at
+`f6ac08a`: with `geo` declaring `mod internal;` and importing it, a method
+`internal` defines on `Int` is callable from the root, which never named
+`internal` at all.
+
+So the three levels do not compose the way the first draft assumed:
+
+| | today | after §4 |
+| --- | --- | --- |
+| a free function | `pub` works — `use std::array::pop_last;` already errors | unchanged |
+| a **method** | no visibility of its own; as visible as its impl | **unchanged** |
+| a module path | every module reachable from every other | gated |
+
+`std::array`'s `pop_last`, `std::iter`'s `char_at`/`prev_boundary` and
+`std::string`'s `char_width` are **already private** — that is why they are
+free *functions* rather than methods. The wart was never that they leak; it is
+that hiding them costs their method spelling, and neither module privacy nor
+milestone 95 changes that. The fix for it is *method* visibility (`pub fun`
+inside an `impl`, still "expected impl item" today). Rust is the same shape:
+a private module's impls stay usable, and `pub fn` is what encapsulates an
+inherent method. This design conflated module privacy with encapsulation.
+
+What milestone 95 does buy is real but narrower: a module's public surface
+becomes a **decision** rather than a consequence of where a file sits, so
+`std/lib.dt` stops being a list of everything and a group can hold a helper
+module nobody can name. Encapsulating a *method* is a separate feature and a
+separate milestone.
 
 ## 5. The library
 

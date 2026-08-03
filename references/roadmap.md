@@ -1690,12 +1690,21 @@ nothing infers one.)
 
    Three parts: enforce §4 (a module is reachable from its declarer's subtree,
    or it is `pub`), add the `orphan_module` warning for a `.dt` file no `mod`
-   claims, and spend both on std — `std::array`'s `pop_last`, `std::iter`'s
-   `char_at`/`prev_boundary` and `std::string`'s `char_width` are documented as
-   internal and reachable today, and the `pub use` facade lines drop wherever
-   `pub mod` replaces them. Privacy is an *error*, not a lint: a private module
-   named from outside is a fact about the program, not advice, so `@allow`
-   deliberately cannot reach it.
+   claims, and spend both on std — whose 20 `mod` declarations are today
+   *entirely* `pub`, the safe migration choice, so the ability to hold a private
+   module has been used zero times. Privacy is an *error*, not a lint: a private
+   module named from outside is a fact about the program, not advice, so
+   `@allow` deliberately cannot reach it.
+
+   **It buys path privacy, not encapsulation** — a correction to the design,
+   verified at `f6ac08a`. Module privacy gates names; impl visibility is
+   transitive over `use` and is not gated by it, so a public module importing a
+   private sibling still re-exports its impls downstream (a method that sibling
+   defines on `Int` is callable from a root that never named it). Item privacy
+   already works — `use std::array::pop_last;` errors today — so std's internals
+   are private *already*, at the cost of being free functions rather than
+   methods. That cost is the method-visibility wart below, and milestone 95 does
+   not touch it.
 
 2. **Growing std on top of the natives** — the mechanism landed in milestone
    16 with a deliberately small registry, and the pieces with a design question
@@ -1945,9 +1954,7 @@ via `Module.decl_base`) and is not part of the main line.
   and all of "Next" item 1's second half). `mod` and `pub mod` both parse and
   both are recorded, and nothing enforces the difference: every declared module
   is reachable from every other, so every std file is still permanent public
-  API and `std::array`'s `pop_last`, `std::iter`'s `char_at`/`prev_boundary`
-  and `std::string`'s `char_width` are documented as internal and reachable
-  anyway. Milestone 95, with the two that go with it:
+  API. Milestone 95, with the two that go with it:
   - a `.dt` file no `mod` claims is silently not part of the program. That is
     the point — it is what makes a path's meaning independent of what is on
     disk — but nothing says the file is dead, which is the `orphan_module`
