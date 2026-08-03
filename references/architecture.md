@@ -2193,6 +2193,24 @@ to the diagnostic before it by position, so a dropped warning sets
 `last_dropped` and the notes that follow it are dropped too; otherwise they
 would orphan onto whatever was reported last.
 
+**Names, and `@allow`.** Suppressing a warning means *asking about* one, and a
+format string cannot be asked about, so every warning carries a `DiagLint`:
+`lint_names[]` in `diag.c` is the single table behind `warning[unused_variable]:`
+in the report, the key `@allow("…")` matches, and the "available:" list an
+unknown key gets. `DiagBag.allowed` is a bitmask of what is silenced right now
+and `diag_warning` tests it in the same `if` as the audience — the second policy
+through the door milestone 89 built, which is why an allowed warning also takes
+its notes with it for free. `diag_push_allowed`/`diag_pop_allowed` union rather
+than replace, so an `@allow` on an `impl` covers the methods inside it, and the
+mask is restored per declaration in `tc_check_module` (with the impl's methods
+pushing their own) — `tc_report_unused_imports` re-establishes it from the `use`
+declaration in hand, since the walk that reports an import is not the walk over
+declarations. The mask itself is resolved in the *parser* (`Decl.allow_mask`,
+`parse_attrs`): a lint name is a key into a table the compiler already owns, so
+unlike a `@native` key there is nothing for a later phase to look up. It is the
+one parser error that does not enter panic mode — the attribute is well-formed
+and merely names nothing, so the declaration behind it still reads.
+
 Warnings are pinned by `tests/warn/`, which asserts exit 0 *and* matching
 stderr — the combination the pass and fail buckets both exclude. `run_tests.sh`
 additionally lints every `std/**/*.dt` under the `tests/pass` rule, so a warning in

@@ -2269,6 +2269,10 @@ carries the same markers and must still work as an ordinary module. (Putting
 `@lang` on something it cannot mark — a struct, a method — is a parse error, the
 one placement it is refused everywhere.)
 
+The fourth attribute, `@allow`, is neither a body nor a marker but a *policy*
+over whatever the declaration contains, and it is the one attribute a program
+outside std has any reason to write — see "Warnings and `@allow`".
+
 ### `std::io`, `std::array`, `std::string`, `std::string::buf`
 
 The primitive operations are **methods** (milestone 40); a free-function line is
@@ -2786,6 +2790,52 @@ HashSet::with_capacity(n); s.capacity(); s.reserve(n);   # forwarded, all three
 - No natives and no language change; `std::hash` is the only thing it needed.
   Not preluded.
 
+## Warnings and `@allow`
+
+A warning is advice, so it never fails the build: the compiler exits 0 and the
+program runs. There are four, and each has a **name**, which is both what the
+report prints and what silences it:
+
+| Lint | What it says |
+|---|---|
+| `unused_variable` | a binding nothing ever names (above, "Statements and blocks") |
+| `unused_import` | a `use` binding a name nothing writes, whose impls arrive anyway ("Modules") |
+| `unreachable_code` | a statement below one that leaves the block ("`std::panic`") |
+| `irrefutable_pattern` | an `if var`/`while var` header whose test has one answer ("`if var` and `while var`") |
+
+```
+warning[unused_variable]: unused variable 'dropped'
+```
+
+`@allow("<lint>")` silences one over the declaration it marks **and everything
+inside it**:
+
+```
+@allow("unused_import")
+use std::string;              # imported for its impls, not its name
+
+@allow("unused_variable")
+impl Walker {                 # covers every method in the block
+    fun step(self) -> Int { var spare = 1; return self.at; }
+}
+```
+
+An attribute takes exactly one key, so two lints are two lines. The sets
+**nest** — an `@allow` on a method adds to the one on its `impl` rather than
+replacing it — and an unknown lint name is an error listing the four, on the
+same argument as an unknown `@native` key: a policy that silently never fires is
+worse than a typo that says so.
+
+A declaration is the smallest thing an allow can cover: there are no attributes
+on statements or expressions, and none on a *trait item* either, so an allow
+over a default method body is written on the trait. For a single binding the `_`
+prefix stays the finer tool — it says "deliberate" where an `@allow` says "don't
+ask about this function".
+
+Warnings are dropped entirely for the embedded standard library, which has no
+reader to advise; naming a std file on the command line makes you that reader.
+See the gaps table below for what suppression still cannot do.
+
 ## Not yet implemented
 
 | Gap | Behavior today |
@@ -2836,7 +2886,8 @@ HashSet::with_capacity(n); s.capacity(); s.reserve(n);   # forwarded, all three
 | tuple-struct struct-patterns `Pair { a, b }` | write the constructor spelling `Pair(a, b)` — "matching tuple struct with struct pattern syntax is not allowed" |
 | variable shadowing diagnostics | a `var` may silently shadow an earlier one in the same scope (top-level *item* names do collide — that is an error). There is a warning severity for it to use since milestone 89; what is missing is the analysis, and the choice about whether shadowing deserves one at all |
 | seeing a warning from the standard library | warnings are advice to an author, so they are dropped for the embedded std that every program compiles from source. Naming the file (`./build/ducktape std/cmp.dt`) compiles it *as* that std module and does warn, because the root always has a reader — milestone 90, which also made all 18 files compilable that way |
-| turning a warning off, or up into an error | there is no `#[allow]`, no `-W` flag, and no `-Werror`; the four warnings that exist are always on for any module but a std dependency. For an unused binding the `_` prefix is the escape hatch, and it is the only one any warning has |
+| turning a warning **up** into an error | `@allow("<lint>")` turns one off over a declaration (see "Warnings and `@allow`"), but there is no `-W` flag and no `-Werror`, so a warning a program wants enforced cannot be made fatal. Nothing asks about a lint from outside the source |
+| silencing a warning over less than a declaration | an attribute sits on a declaration, so an allow covers a whole function, impl or trait. There is no statement-level or expression-level form, and none on a trait item — a default body is covered by its trait |
 | saying that an import is wanted for its *impls* | there is no spelling. A `use` whose names go unwritten is kept silent only when the compiler can see that removing it would lose an impl that was selected — so a deliberate restatement of an import that arrives transitively anyway (`std/iter.dt` used to write `use std::string;` for exactly that reason) now reads as unused and has to go |
 | unused-warning order within a function | a binding is reported when its scope closes, so an inner block's warnings precede an outer one's regardless of line. Sorting the bag is blocked by notes, which attach to the diagnostic before them by position |
 | an unused *item* (a private `fun` or `struct` nothing calls) | not reported; only bindings and imports are. Codegen already skips it — a definition nothing reaches is never compiled |

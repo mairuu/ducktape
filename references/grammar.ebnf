@@ -9,18 +9,22 @@ program        = decl* ;
 
 decl           = attribute* "pub"? ( useDecl | varDecl | funDecl | structDecl
                                    | enumDecl | traitDecl | implDecl ) ;
-                 (* a decl may carry up to two attributes: at most one *body*
-                    attribute (@native/@intrinsic, funDecl only) and at most one
-                    @lang marker (funDecl, traitDecl or enumDecl). Each is
-                    parsed here and rejected on a decl kind it cannot mark, so
-                    the mistake is reported rather than reparsed *)
+                 (* a decl may carry at most one *body* attribute
+                    (@native/@intrinsic, funDecl only), at most one @lang marker
+                    (funDecl, traitDecl or enumDecl), and any number of @allow —
+                    one per lint, since an attribute takes exactly one key. Each
+                    is parsed here and rejected on a decl kind it cannot mark,
+                    so the mistake is reported rather than reparsed; @allow has
+                    no placement rule, covering whatever the decl contains *)
 
-attribute      = "@" ( "native" | "intrinsic" | "lang" ) "(" STRING ")" ;
+attribute      = "@" ( "native" | "intrinsic" | "lang" | "allow" )
+                 "(" STRING ")" ;
                  (* native/intrinsic: a key into C's registry (the fun is
                     bodyless — the attribute *is* the body). lang: a marker that
                     the definition is a compiler lang item, honoured only in the
-                    standard library — language.md "Native functions" and
-                    "Lang items" *)
+                    standard library. allow: the name of a warning to silence
+                    over this declaration — language.md "Native functions",
+                    "Lang items" and "Warnings and `@allow`" *)
 
 useDecl        = "use" usePath ( "as" IDENT )? ";" ;
 usePath        = path ( "::" ( "{" useItem ( "," useItem )* ","? "}"
@@ -83,7 +87,10 @@ traitItem      = "type" IDENT ";"
                | "fun" IDENT typeParams? "(" paramList? ")"
                  ( "->" type )? whereClause?
                  ( ";" | "=>" expr ";" | block ) ;
-                 (* the whereClause may constrain the method's own type
+                 (* no attribute: a trait method's body is generic over `Self`
+                    so it can be neither native nor a lang item, and an `@allow`
+                    over a default body is written on the trait.
+                    the whereClause may constrain the method's own type
                     parameters and, uniquely here, `Self`'s associated types:
                     `where Self.Item: Ord` is what lets a provided method use
                     an element rather than only pass it along (Iterator::max).
@@ -94,10 +101,11 @@ implDecl       = "impl" typeParams? type ( "for" type )? whereClause?
                  "{" implItem* "}" ;
                  (* with "for": first type is the trait, second is self *)
 implItem       = "type" IDENT "=" type ";"
-               | attribute? funDecl ;
+               | attribute* funDecl ;
                  (* method; no "pub" inside impls. An `@native`/`@intrinsic`
-                    method has its body in C, exactly like a top-level fun. A
-                    method is never a lang item, so `@lang` here is rejected —
+                    method has its body in C, exactly like a top-level fun; an
+                    `@allow` here sits one scope inside the impl's own. A method
+                    is never a lang item, so `@lang` here is rejected —
                     language.md "Native functions" *)
 
 typeParams     = "<" typeParam ( "," typeParam )* ">" ;

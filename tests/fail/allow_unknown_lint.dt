@@ -1,0 +1,11 @@
+#! expect: unknown lint 'unusd_variable'
+# A lint name is a key into a table the compiler owns, so a typo in one is an
+# error rather than a policy that silently never fires — the same rule an
+# unknown `@native` key gets. The declaration behind it still parses: only the
+# policy is lost, so `f` is defined and the one error below is the only one.
+use std::io::print;
+
+@allow("unusd_variable")
+fun f() -> Int { return 1; }
+
+fun main() { print("{f()}"); }

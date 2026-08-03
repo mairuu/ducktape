@@ -1,4 +1,4 @@
-#! expect: expected '@native', '@intrinsic' or '@lang'
+#! expect: expected '@native', '@intrinsic', '@lang' or '@allow'
 @inline("io_print")
 fun f(x: Int) -> Int;
 

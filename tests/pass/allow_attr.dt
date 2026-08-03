@@ -1,0 +1,66 @@
+# `@allow("<lint>")` silences one warning over the declaration it marks and
+# everything inside it. All four lints appear below and none of them is
+# reported: this file must compile with stderr empty.
+use std::io::print;
+@allow("unused_import")
+use std::cmp::clamp;
+
+@allow("unused_variable")
+fun bindings() -> Int {
+    var spare = 1;
+    var also_spare = spare;
+    return 7;
+}
+
+@allow("unreachable_code")
+fun dead() -> Int {
+    return 1;
+    print("never runs");
+}
+
+@allow("irrefutable_pattern")
+fun always_matches() -> Int {
+    if var x = 5 { return x; }
+    return 0;
+}
+
+struct P { x: Int }
+
+# on the impl: it covers every method in the block.
+@allow("unused_variable")
+impl P {
+    fun one(self) -> Int { var spare = 1; return self.x; }
+    fun two(self) -> Int { var spare = 2; return self.x; }
+}
+
+# on a method: one scope further in, and it covers only its own body.
+impl P {
+    @allow("unused_variable")
+    fun three(self) -> Int { var spare = 3; return self.x; }
+}
+
+# on a trait: its default bodies are inside it. A trait *item* takes no
+# attribute, so this is the only place to write one for a default body.
+@allow("unused_variable")
+trait Named {
+    fun name(self) -> String;
+    fun label(self) -> String { var spare = 1; return self.name(); }
+}
+
+impl Named for P { fun name(self) -> String { return "p"; } }
+
+# two lints over one declaration: an attribute takes exactly one key, so it is
+# two lines rather than a list.
+@allow("unused_variable")
+@allow("unreachable_code")
+fun both() -> Int {
+    var spare = 1;
+    return 2;
+    print("never runs");
+}
+
+fun main() {
+    var p = P { x: 1 };
+    print("{bindings()}{dead()}{always_matches()}{both()}");
+    print("{p.one()}{p.two()}{p.three()}{p.label()}");
+}

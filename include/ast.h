@@ -519,6 +519,7 @@ typedef enum {
   ATTR_NATIVE,    // a C function, called through the ordinary OP_CALL
   ATTR_INTRINSIC, // an opcode the call lowers to inline
   ATTR_LANG,      // a marker: this definition is a std lang item
+  ATTR_ALLOW,     // policy: silence one lint over this definition
 } AttrKind;
 
 typedef struct {
@@ -1471,6 +1472,13 @@ struct Decl {
   // a trait, enum, or fun — unlike a body attribute, which is fun-only and
   // stays on `DeclFun.attr`.
   AttrNode lang_attr;
+  // the lints `@allow("…")` silences over this declaration and everything
+  // inside it, as `LINT_BIT` flags. A mask rather than a list because the set
+  // is closed and small, and because nesting is then a union: see
+  // `diag_push_allowed`. Resolved in the parser — a lint name is a key into a
+  // table the compiler already owns, so there is nothing for a later phase to
+  // look up.
+  unsigned allow_mask;
   Span span;
   union {
     DeclUse use_decl;

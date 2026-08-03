@@ -93,6 +93,19 @@ static void error_at(Parser *p, Span span, const char *msg) {
   diag_error(p->diags, span, "%s", msg);
 }
 
+// `@allow("typo")`: the only parser error that has to name what it read, and
+// the only one that does not enter panic mode. Every other error here is about
+// a token that arrived where the grammar wanted another, and the parse cannot
+// continue past it; this attribute is well-formed and merely names nothing, so
+// the declaration behind it still reads — all that is lost is the policy.
+static void error_at_lint(Parser *p, Span span, StringView name) {
+  if (p->panic_mode) {
+    return;
+  }
+  diag_error(p->diags, span, "unknown lint '" SV_FMT "'", SV_ARG(name));
+  diag_note(p->diags, (Span){0}, "available: %s", diag_lint_names());
+}
+
 // token navigation
 
 static Token *peek_tok(const Parser *p) { return &p->tokens[p->current]; }
@@ -2440,12 +2453,14 @@ static bool parse_param_list(Parser *p, ParamDeclNode **out, int *count) {
   return !had_error;
 }
 
-// `@native("io_print")` / `@intrinsic("array_len")` / `@lang("display")`,
-// already past the '@'. Each takes exactly one string: the attribute surface is
-// a registry key and nothing more, so there is no attribute *grammar* to grow
-// here — a new tier is a new name in this switch. `@native`/`@intrinsic` are
-// body attributes (the fun is bodyless); `@lang` is a marker (the definition
-// keeps its body). The caller (`parse_decl`) sorts them apart.
+// `@native("io_print")` / `@intrinsic("array_len")` / `@lang("display")` /
+// `@allow("unused_variable")`, already past the '@'. Each takes exactly one
+// string: the attribute surface is a registry key and nothing more, so there is
+// no attribute *grammar* to grow here — a new tier is a new name in this
+// switch. `@native`/`@intrinsic` are body attributes (the fun is bodyless);
+// `@lang` is a marker (the definition keeps its body); `@allow` is policy over
+// whatever the definition contains. `parse_attrs` sorts them apart, and the key
+// itself is checked there or later — never here.
 static AttrNode parse_attr(Parser *p) {
   Token at_tok = *previous_tok(p);
   AttrNode attr = {.kind = ATTR_NONE, .span = token_span(&at_tok)};
@@ -2461,9 +2476,12 @@ static AttrNode parse_attr(Parser *p) {
     kind = ATTR_INTRINSIC;
   } else if (sv_equal_cstr(name_tok.lexeme, "lang")) {
     kind = ATTR_LANG;
+  } else if (sv_equal_cstr(name_tok.lexeme, "allow")) {
+    kind = ATTR_ALLOW;
   } else {
     error_at(p, token_span(&name_tok),
-             "unknown attribute; expected '@native', '@intrinsic' or '@lang'");
+             "unknown attribute; expected '@native', '@intrinsic', '@lang' or "
+             "'@allow'");
     return attr;
   }
 
@@ -2483,6 +2501,48 @@ static AttrNode parse_attr(Parser *p) {
                            .len = key_tok.lexeme.len - 2};
   attr.span = span_merge(token_span(&at_tok), previous_tok_span(p));
   return attr;
+}
+
+// Read the attributes in front of one declaration and sort them into the three
+// slots they can fill: a *body* (`@native`/`@intrinsic`, fun-only, bodyless), a
+// *marker* (`@lang`), and the `@allow` mask. Only the last may be written more
+// than once, because it names a lint rather than the definition — one line per
+// lint, since an attribute takes exactly one key. Returns false if an attribute
+// was malformed, which leaves the caller to poison and resynchronise; a
+// misplaced (rather than broken) attribute is the caller's to reject, since
+// where each may sit depends on what follows.
+static bool parse_attrs(Parser *p, AttrNode *body, AttrNode *lang,
+                        unsigned *allow) {
+  *body = (AttrNode){.kind = ATTR_NONE};
+  *lang = (AttrNode){.kind = ATTR_NONE};
+  *allow = 0;
+
+  while (match_tok(p, TOKEN_AT)) {
+    AttrNode a = parse_attr(p);
+    if (a.kind == ATTR_NONE) {
+      return false;
+    }
+    if (a.kind == ATTR_ALLOW) {
+      int lint = diag_lint_from_name(a.name);
+      if (lint < 0) {
+        error_at_lint(p, a.span, a.name);
+        continue; // the declaration is still readable; only the policy is lost
+      }
+      *allow |= LINT_BIT(lint);
+    } else if (a.kind == ATTR_LANG) {
+      if (lang->kind != ATTR_NONE) {
+        error_at(p, a.span, "duplicate '@lang' attribute");
+      }
+      *lang = a;
+    } else {
+      if (body->kind != ATTR_NONE) {
+        error_at(p, a.span,
+                 "a definition has at most one '@native'/'@intrinsic'");
+      }
+      *body = a;
+    }
+  }
+  return true;
 }
 
 static Decl *parse_fun_decl(Parser *p, bool is_pub, AttrNode attr) {
@@ -3247,25 +3307,24 @@ static Decl *parse_impl_decl(Parser *p, bool is_pub) {
         // the attribute *is* its body, so a primitive's operation can be
         // spelled `s.len()` rather than as a free `string::len(s)`. `self` is
         // an ordinary parameter to the native, so nothing downstream of the
-        // signature has to change.
-        AttrNode attr = {.kind = ATTR_NONE};
-        if (match_tok(p, TOKEN_AT)) {
-          attr = parse_attr(p);
-          if (attr.kind == ATTR_NONE) {
-            had_error = true;
-            break;
-          }
-          if (attr.kind == ATTR_LANG) {
-            // a method is never a lang item — those are top-level.
-            error_at(p, attr.span,
-                     "'@lang' can only mark a trait, enum, or function");
-            attr.kind = ATTR_NONE;
-          }
+        // signature has to change. `@allow` sits here too, one scope inside the
+        // impl's own.
+        AttrNode attr, lang_attr;
+        unsigned allow_mask;
+        if (!parse_attrs(p, &attr, &lang_attr, &allow_mask)) {
+          had_error = true;
+          break;
+        }
+        if (lang_attr.kind != ATTR_NONE) {
+          // a method is never a lang item — those are top-level.
+          error_at(p, lang_attr.span,
+                   "'@lang' can only mark a trait, enum, or function");
         }
         Decl *fun_decl = parse_fun_decl(p, false, attr);
         if (fun_decl->kind == DECL_POISON) {
           had_error = true;
         } else {
+          fun_decl->allow_mask = allow_mask;
           PLIST_GROW(p, items);
           items[items_count].kind = IMPL_ITEM_METHOD;
           items[items_count].name = fun_decl->as.fun_decl.name;
@@ -3308,30 +3367,14 @@ static Decl *parse_impl_decl(Parser *p, bool is_pub) {
 static Decl *parse_decl(Parser *p) {
   Decl *decl = NULL;
 
-  // attributes precede `pub`. There are two kinds and a decl may carry one of
-  // each: a *body* attribute (`@native`/`@intrinsic`, fun-only, bodyless) and a
-  // *marker* (`@lang`, on a bodied trait/enum/fun). `float` is both. Sort them
-  // into two slots here so the decl parsers below only see the body attribute.
-  AttrNode attr = {.kind = ATTR_NONE};      // body attribute
-  AttrNode lang_attr = {.kind = ATTR_NONE}; // marker
-  while (match_tok(p, TOKEN_AT)) {
-    AttrNode a = parse_attr(p);
-    if (a.kind == ATTR_NONE) {
-      sync_to_decl(p);
-      return ast_decl(DECL_POISON, previous_tok_span(p), p->al);
-    }
-    if (a.kind == ATTR_LANG) {
-      if (lang_attr.kind != ATTR_NONE) {
-        error_at(p, a.span, "duplicate '@lang' attribute");
-      }
-      lang_attr = a;
-    } else {
-      if (attr.kind != ATTR_NONE) {
-        error_at(p, a.span,
-                 "a definition has at most one '@native'/'@intrinsic'");
-      }
-      attr = a;
-    }
+  // attributes precede `pub`; the decl parsers below only ever see the body
+  // attribute, since the other two apply to whatever kind of decl follows.
+  AttrNode attr;      // body attribute
+  AttrNode lang_attr; // marker
+  unsigned allow_mask;
+  if (!parse_attrs(p, &attr, &lang_attr, &allow_mask)) {
+    sync_to_decl(p);
+    return ast_decl(DECL_POISON, previous_tok_span(p), p->al);
   }
 
   bool is_pub = match_tok(p, TOKEN_PUB);
@@ -3365,6 +3408,11 @@ static Decl *parse_decl(Parser *p) {
       decl->kind != DECL_POISON) {
     error_at(p, attr.span, "only a function can be '@native' or '@intrinsic'");
   }
+
+  // an allow needs no placement rule: it covers whatever the declaration
+  // contains, and a declaration that contains nothing it names is silenced
+  // about nothing.
+  decl->allow_mask = allow_mask;
 
   // a marker may sit on the definitions a lang item can be — a trait, an enum,
   // or a function — and nowhere else.

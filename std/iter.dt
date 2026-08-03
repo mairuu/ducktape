@@ -15,15 +15,17 @@
 # `collect` builds an array, so `std::array` is imported for its `push` method.
 # `std::ops` is what makes `sum`/`product` expressible: a reduce needs to know
 # the element can be *combined*, which before milestone 55 no bound could say.
-# `CharIter` needs `len` from `std::string` and `code` from `std::char`, and
-# neither is imported: both arrive transitively through `std::cmp`. Writing
-# them out anyway — so an impl this file calls is not reachable only by
-# accident — is what milestone 92 took away, since a `use` binding a name
-# nothing writes now reads as unused whatever it was written for.
+# `CharIter` needs `len` from `std::string` and `code` from `std::char`. Both
+# arrive transitively through `std::cmp`, so the last two lines bind a name
+# nothing here writes — they are written out anyway, so that an impl this file
+# *calls* is not reachable only by accident, and the `@allow` is what says so
+# out loud (milestone 93; milestone 92 had made the two lines unwritable).
 use std::option::Option;
 use std::array;
 use std::cmp::Ord;
 use std::ops::{Add, Mul};
+@allow("unused_import") use std::string;
+@allow("unused_import") use std::char;
 
 @lang("iterator")
 pub trait Iterator {

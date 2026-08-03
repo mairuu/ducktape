@@ -1604,6 +1604,28 @@ keep this file small. Everything from 55 on is below.
   Left over: no `#[allow]`; unused *items* unreported; warnings come out in
   scope-close order, not source order.
 
+- **93. A warning you can answer** (`PENDING`) — `@allow("unused_variable")` on a
+  declaration silences that lint over it and everything inside. Design:
+  `language.md` "Warnings and `@allow`" + the gaps table, `architecture.md`
+  "Diagnostics", `grammar.ebnf`. The finding is that **suppression is mostly
+  naming**: a format string cannot be asked about, so the content of the
+  milestone is `DiagLint` and the one `lint_names[]` table standing behind three
+  things at once — the `warning[unused_variable]:` the report now prints, the key
+  `@allow` matches, and the "available:" list a typo gets. Once the four warnings
+  have names the policy is nearly free, because milestone 89 already built the
+  door: dropping at *emission* rather than filtering at report keeps
+  `diag_has_diags` honest, so `@allow` is one more term in the same `if` and an
+  allowed warning takes its notes with it via the existing `last_dropped`. The
+  mask **unions** rather than replaces, which is the whole of "an `@allow` on an
+  `impl` covers its methods", and it resolves in the *parser*: unlike a
+  `@native` key, a lint name indexes a table the compiler already owns, so
+  nothing later has to look it up. That is also why it is the one parser error
+  that does not enter panic mode — the attribute is well-formed and merely names
+  nothing, so the declaration behind it still reads. Spent immediately:
+  `std/iter.dt`'s two deliberate `use` lines, unwritable since 92, are back with
+  an `@allow` that says why. Left over: no `-W`/`-Werror`, and an allow's grain
+  is a whole declaration (see warts).
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -1841,14 +1863,15 @@ via `Module.decl_base`) and is not part of the main line.
 - a refutable `var` binding whose column type inference never pinned down is
   accepted (the tri-state answer reports nothing) and traps at runtime via
   `OP_MATCH_FAIL` instead of at compile time
-- there is no way to *ask* about a warning: no `#[allow]`, no `-W`, no
-  `-Werror`. Suppression is the one built-in policy (std, unless it is the
-  root), so a warning a program has decided to live with cannot be silenced and
-  one it wants enforced cannot be made fatal. Milestone 92 gave one warning a
-  per-site escape — the `_` prefix on a binding — and made the missing general
-  one cost something: an import wanted for its **impls** has no spelling, so a
-  deliberate restatement of one that arrives transitively anyway now reads as
-  unused. `std/iter.dt` used to write two such lines on purpose and no longer can
+- a warning can be turned **off** and not **up**: `@allow` is milestone 93, but
+  there is still no `-W` and no `-Werror`, so a lint a program wants enforced
+  cannot be made fatal and nothing outside the source can ask about one. The
+  names now exist for a flag to take (`diag_lint_from_name`), which is most of
+  what such a flag needs
+- an allow's grain is a whole **declaration**, since an attribute is what
+  carries one. There is no statement or expression form, and none on a trait
+  item — a default body is covered by its trait, one scope wider than it
+  should be. Rust's `#[allow]` on a statement is the shape this is missing
 - an *item* nothing names — a private `fun`, `struct` or `trait` no call
   reaches — is not reported, where a binding and an import now are (milestone
   92). Codegen already skips it, so the cost is a reader's rather than a

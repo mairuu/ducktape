@@ -1528,7 +1528,8 @@ static void tc_bind_native(TypeChecker *tc, FunDef *def, const AttrNode *attr) {
   case ATTR_NONE:
     return;
   case ATTR_LANG:
-    assert(false && "@lang is a marker, never a fun's body attribute");
+  case ATTR_ALLOW:
+    assert(false && "a marker is never a fun's body attribute");
     return;
   case ATTR_NATIVE:
     def->native = native_lookup(attr->name);
@@ -2487,11 +2488,16 @@ void tc_report_unused_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
       continue;
     }
 
+    // this declaration's own `@allow`, since the walk that reports an import is
+    // not the one that walks declarations.
+    unsigned saved = diag_push_allowed(tc->diags, imp->decl->allow_mask);
+
     if (use->target.is_glob) {
       if (!use->target.used) {
-        diag_warning(tc->diags, use->target.span,
+        diag_warning(tc->diags, LINT_UNUSED_IMPORT, use->target.span,
                      "unused import: this glob binds nothing that is named");
       }
+      diag_pop_allowed(tc->diags, saved);
       continue;
     }
 
@@ -2500,9 +2506,10 @@ void tc_report_unused_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
       if (a->used) {
         continue;
       }
-      diag_warning(tc->diags, a->span, "unused import '" SV_FMT "'",
-                   SV_ARG(a->alias));
+      diag_warning(tc->diags, LINT_UNUSED_IMPORT, a->span,
+                   "unused import '" SV_FMT "'", SV_ARG(a->alias));
     }
+    diag_pop_allowed(tc->diags, saved);
   }
 }
 
@@ -6304,7 +6311,7 @@ static bool check_cond_binding(CheckCtx *ctx, Pattern *pat, Type *subject_ty,
     return false;
   }
   if (pattern_covers(ctx, pat) == EXH_YES) {
-    diag_warning(ctx->diags, pat->span,
+    diag_warning(ctx->diags, LINT_IRREFUTABLE_PATTERN, pat->span,
                  "irrefutable pattern in %s: it matches every value of the "
                  "subject, so %s; use %s instead",
                  kw, always, fix);
@@ -8024,7 +8031,7 @@ static void warn_unreachable(CheckCtx *ctx, const ExprBlock *block, int at) {
     return; // the divergence is the last thing in the block, as intended
   }
   Span span = dead != NULL ? dead->span : block->tail_expr->span;
-  diag_warning(ctx->diags, span,
+  diag_warning(ctx->diags, LINT_UNREACHABLE_CODE, span,
                "unreachable code: control never reaches here");
   diag_note(ctx->diags, (Span){0}, "everything above it leaves the block");
 }
@@ -9413,6 +9420,11 @@ static void tc_check_impl(TypeChecker *tc, Decl *decl) {
       FunDef *fun_def = method_def->fun;
       DeclFun *fun_decl = &item->fun_decl->as.fun_decl;
 
+      // the method's own allows, on top of the impl's — the one place the sets
+      // actually nest.
+      unsigned saved =
+          diag_push_allowed(cctx.diags, item->fun_decl->allow_mask);
+
       cctx.fun = fun_def;
       cctx.return_type = fun_def->return_type;
 
@@ -9431,6 +9443,7 @@ static void tc_check_impl(TypeChecker *tc, Decl *decl) {
       // one, because a parameter no source can name is not an unused one.
       if (fun_decl->body == NULL) {
         cctx.tyres.tscope = tscope_pop(cctx.tyres.tscope);
+        diag_pop_allowed(cctx.diags, saved);
         continue;
       }
 
@@ -9452,6 +9465,7 @@ static void tc_check_impl(TypeChecker *tc, Decl *decl) {
 
       // end method type scope
       cctx.tyres.tscope = tscope_pop(cctx.tyres.tscope);
+      diag_pop_allowed(cctx.diags, saved);
     } else if (item->kind == IMPL_ITEM_ASSOC_TYPE) {
       AssocTypeDef *assoc_def = &impl_def->assoc_types[assoc_idx++];
       (void)assoc_def;
@@ -9545,6 +9559,11 @@ static void tc_check_trait(TypeChecker *tc, Decl *decl) {
 bool tc_check_module(TypeChecker *tc, Module *m) {
   for (int i = 0; i < m->ast->decl_count; i++) {
     Decl *decl = m->ast->decls[i];
+    // one declaration is the widest thing an `@allow` can cover and this loop
+    // is where one begins, so it is also where the set is restored: every
+    // warning below comes from checking a body, and every body is under
+    // exactly one of these.
+    unsigned saved = diag_push_allowed(tc->diags, decl->allow_mask);
     switch (decl->kind) {
     case DECL_FUN:
       tc_check_fun(tc, decl);
@@ -9562,6 +9581,7 @@ bool tc_check_module(TypeChecker *tc, Module *m) {
       tc_check_impl(tc, decl);
       break;
     }
+    diag_pop_allowed(tc->diags, saved);
   }
 
   return true;
@@ -9613,8 +9633,8 @@ ValueScope *vscope_pop(ValueScope *scope, DiagBag *diags) {
         sv_equal(ve->name, sv_from_cstr("self"))) {
       continue;
     }
-    diag_warning(diags, ve->span, "unused variable '" SV_FMT "'",
-                 SV_ARG(ve->name));
+    diag_warning(diags, LINT_UNUSED_VARIABLE, ve->span,
+                 "unused variable '" SV_FMT "'", SV_ARG(ve->name));
     diag_note(diags, (Span){0}, "prefix it with '_' if that is deliberate");
   }
   return scope->parent;

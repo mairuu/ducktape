@@ -1,0 +1,24 @@
+#! expect: warning[unused_variable]: unused variable 'reported'
+# The other side of `tests/pass/allow_attr`: an allow reaches exactly as far as
+# the declaration it is written on. `silenced` is inside one and `reported` is
+# the next function along, so the mask must be restored between the two — and
+# an allow of one lint says nothing about another, which is what the unused
+# import here is for.
+use std::io::print;
+use std::cmp::clamp;
+
+@allow("unused_variable")
+fun quiet() -> Int {
+    var silenced = 1;
+    return 2;
+}
+
+@allow("unreachable_code")
+fun loud() -> Int {
+    var reported = 1;
+    return 2;
+}
+
+fun main() {
+    print("{quiet()}{loud()}");
+}
