@@ -23,7 +23,7 @@
 # keeps it available to one that never asked for this module.
 
 use std::array;
-use std::cmp::{Ord, min};
+use std::cmp::Ord;
 use std::option::Option;
 
 impl<T> [T] {

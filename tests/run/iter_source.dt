@@ -8,7 +8,6 @@
 #
 # `Iterator` is preluded, so nothing here imports it; `DoubleEnded` is not,
 # which is why `rev` needs a `use`.
-use std::iter::DoubleEnded;
 use std::io::print;
 
 # `Range` is a nameable type now — a builtin in the sense `String` and

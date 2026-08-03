@@ -80,7 +80,7 @@ fun main() {
     var one: Slot<Int, String> = blank::<Int, String>();
     var two: Slot<String, Int> = blank_renamed::<String, Int>();
     var three: Slot<Slot<Int, Int>, Int> = nested::<Int>();
-    var four: Marker<String> = marker::<String>();
+    var _four: Marker<String> = marker::<String>();
     var five = a[3].cleared();
 
     var d1 = describe(one);

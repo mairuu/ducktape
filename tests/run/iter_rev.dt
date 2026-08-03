@@ -8,7 +8,7 @@
 # The second half a supertrait buys shows up in `Rev`'s impls: `impl<I:
 # DoubleEnded> Iterator for Rev<I>` calls `self.inner.next_back()` *and*
 # `self.inner.next()`, and `I` was only ever bounded by `DoubleEnded`.
-use std::iter::{Iterator, DoubleEnded, Rev};
+use std::iter::{Iterator, DoubleEnded};
 use std::option::Option;
 use std::io::print;
 

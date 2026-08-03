@@ -2197,3 +2197,42 @@ Warnings are pinned by `tests/warn/`, which asserts exit 0 *and* matching
 stderr — the combination the pass and fail buckets both exclude. `run_tests.sh`
 additionally lints every `std/**/*.dt` under the `tests/pass` rule, so a warning in
 std fails the suite instead of keeping the silence a *program* gets.
+
+### What is never named (`unused variable`, `unused import`)
+
+Both warnings ask one question — *did anything ever name this binding?* — and
+they differ only in the namespace and in what a wrong answer would cost.
+
+**A binding.** `VarEntry` carries `span` and `used`; `vscope_lookup` sets `used`
+on every entry it returns, and `vscope_pop` reports the ones still false. The
+scope closing is the moment the answer is final, which is why the check lives
+there rather than at any of the eleven push/pop sites. Three exemptions, each
+for its own reason: a name starting `_` is the author saying so (a bare `_` is
+an ordinary identifier here, so the rule covers the wildcard spelling for
+free); `self` is written by the signature rather than the body; and a
+`@native`/`@intrinsic` method skips the var scope altogether, since a parameter
+no source can name is not an unused one.
+
+**An import.** Each `UseAlias` carries a `used` flag; the four places an import
+can bind a name — the type scope, the value scope, the variant table, the
+qualifier list — store a `bool *origin` pointing at it, so the marking is a
+side effect of the same lookup that resolves the name. `tscope_peek` /
+`vscope_peek` are the non-marking twins the *linker* uses: "is this name taken"
+is not a use of anything. A `pub use` is exempt (it is an item of the module,
+and its reader is whoever imports it), which is also what keeps the question
+module-local; the prelude is exempt for milestone 89's reason.
+
+**And an import binds more than names.** A `use` also widens
+`Module.visible_impls`, and that half is invisible where it is spent —
+`self.compare(x)` names no import. Reporting on names alone was measured
+against std and got five of twelve module imports wrong. So `ImplIndex` gained
+a `used` array parallel to `all`, set wherever an impl is *selected*
+(`impl_index_method`, `impl_index_default_method`, `impl_index_implements`),
+and `imports_sole_impl_source` turns it into the question that actually
+decides a line: **would removing this import lose an impl that was selected?**
+Not "can this import see one" — reachability is transitive and the prelude
+carries most of std, so that question credits nearly everything. An impl
+reachable through exactly one import pins it; through two, neither. The impls
+only vote when *no* alias of the declaration was named, because deleting one
+unnamed alias beside a named one leaves the line, and everything it makes
+visible, in place.

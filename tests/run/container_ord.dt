@@ -25,7 +25,7 @@
 #> 1
 
 use std::io::print;
-use std::cmp::{Ord, max, min, clamp};
+use std::cmp::{max, min, clamp};
 
 fun main() {
     # arrays: lexicographic, first differing element decides

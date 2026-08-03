@@ -31,11 +31,11 @@ impl<T> Box<T> {
 
 fun main() {
     var p = Point::new(10, 20);
-    var s = p.sum();
+    var _s = p.sum();
 
     var b = Box::make(5);
-    var v = b.get() + 1;
+    var _v = b.get() + 1;
 
     var sb = Box::make("hi");
-    var msg = sb.get();
+    var _msg = sb.get();
 }

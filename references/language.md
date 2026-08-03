@@ -82,6 +82,23 @@ value; otherwise the block is `()`. A trailing block-form `if`/`match`/`loop`
 counts as the tail (`fun abs(n: Int) -> Int { if n < 0 { -n } else { n } }`).
 A block ending in `return` has type `!` (never), which unifies with anything.
 
+A binding nothing ever names **warns** — a `var`, a pattern binding, a
+parameter, a closure parameter, a `for` variable, all of them:
+
+```
+var kept = f();  print("{kept}");
+var dropped = g();            # warning: unused variable 'dropped'
+var _pinned: Shape = g();     # ... silent: a leading `_` says it is deliberate
+```
+
+A bare `_` is an ordinary identifier, so it is that rule at length one and the
+usual wildcard spellings (`Some(_)`, `Point { x: _, y }`) cost nothing extra.
+Two bindings are exempt without a prefix: `self`, which the signature writes
+rather than the body, and every parameter of an `@native`/`@intrinsic`, whose
+body is in C and names nothing here. A struct pattern's **shorthand** binds
+under the field's name, so ignoring one field takes the long form
+(`Point { x: _, y }`) rather than a rename.
+
 ## Expressions
 
 - Number literals: `12`, `2.5`, and an exponent form that is a `Float` with or
@@ -1317,6 +1334,34 @@ use inner::hidden;            # geo's own business; not importable through geo
 
 An importer never needs to know where a re-exported item was originally
 written, which is what lets a module present a façade over the files behind it.
+
+An import that binds a name nothing goes on to write **warns**, one alias at a
+time — so a braced import loses only the names it does not spend:
+
+```
+use std::cmp::{max, clamp};   # warning: unused import 'clamp'
+pub use std::cmp::min;        # silent: a re-export is an item, and its reader
+                              # is whoever imports this module
+```
+
+The prelude is exempt for the reason std is (nobody wrote it), and so is a
+`pub use`. The subtle case is neither: **a `use` binds a name and also widens
+the set of impls the module can select from**, and the second half is invisible
+where it is spent — `self.compare(x)` and `xs.push(v)` name no import at all.
+So a module import whose qualifier is never written is *not* automatically
+unused, and the question asked instead is whether removing the line would lose
+an impl that was actually selected:
+
+```
+use ext;              # never spelled `ext::`, but the only source of `impl Int`
+var n = 21;  n.doubled();     # ... so it is load-bearing, and silent
+
+use std::array;       # its impls also arrive through the preluded std::iter,
+var xs = [1];  xs.push(2);    # ... so this line is redundant: warning
+```
+
+An impl reachable through two imports pins neither — deleting either keeps it —
+which is what makes the second case a warning and the first not.
 
 ### Module-qualified paths
 
@@ -2791,7 +2836,10 @@ HashSet::with_capacity(n); s.capacity(); s.reserve(n);   # forwarded, all three
 | tuple-struct struct-patterns `Pair { a, b }` | write the constructor spelling `Pair(a, b)` — "matching tuple struct with struct pattern syntax is not allowed" |
 | variable shadowing diagnostics | a `var` may silently shadow an earlier one in the same scope (top-level *item* names do collide — that is an error). There is a warning severity for it to use since milestone 89; what is missing is the analysis, and the choice about whether shadowing deserves one at all |
 | seeing a warning from the standard library | warnings are advice to an author, so they are dropped for the embedded std that every program compiles from source. Naming the file (`./build/ducktape std/cmp.dt`) compiles it *as* that std module and does warn, because the root always has a reader — milestone 90, which also made all 18 files compilable that way |
-| turning a warning off, or up into an error | there is no `#[allow]`, no `-W` flag, and no `-Werror`; the two warnings that exist are always on for any module but a std dependency |
+| turning a warning off, or up into an error | there is no `#[allow]`, no `-W` flag, and no `-Werror`; the four warnings that exist are always on for any module but a std dependency. For an unused binding the `_` prefix is the escape hatch, and it is the only one any warning has |
+| saying that an import is wanted for its *impls* | there is no spelling. A `use` whose names go unwritten is kept silent only when the compiler can see that removing it would lose an impl that was selected — so a deliberate restatement of an import that arrives transitively anyway (`std/iter.dt` used to write `use std::string;` for exactly that reason) now reads as unused and has to go |
+| unused-warning order within a function | a binding is reported when its scope closes, so an inner block's warnings precede an outer one's regardless of line. Sorting the bag is blocked by notes, which attach to the diagnostic before them by position |
+| an unused *item* (a private `fun` or `struct` nothing calls) | not reported; only bindings and imports are. Codegen already skips it — a definition nothing reaches is never compiled |
 | a directory that is a module on its own | nesting (milestone 91) makes `std/collections/` a path prefix, not a module: `use std::collections;` resolves only because `std/collections.dt` sits beside the directory and `pub use`s its children. Nothing generates that facade or checks it stays in step, so a module added under a group is reachable by its full path and invisible from the short one until someone edits the facade by hand |
 | declaring a type whose name is a builtin (`struct Range`, `struct String`) | accepted, but a builtin name is resolved before the type scope is consulted, so every mention of it means the builtin and the declaration is unreachable |
 | overlapping method names across impls of one type | rejected since milestone 68: one type spends an inherent name once, whether the two definitions sit in two impl blocks or in one. A name the impl's *trait* declares is exempt — a bound or a trait-qualified path names which body was meant, so two traits may both declare `next` for one type. Where several impls legitimately declare a name (a generic trait like `Into<Int>` / `Into<String>`), a bare path still picks the first registered impl. Milestone 70 extends the same rule to an enum's variants, which spend from the same pool: an inherent associated function under a variant's name is refused, since `Enum::name` reads the variant |

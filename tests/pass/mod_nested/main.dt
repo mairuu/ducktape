@@ -2,7 +2,7 @@
 # boundary, and a diamond (main + helper both reach util.dt).
 
 use std::io::print;
-use shapes::circle::{Circle, Area};
+use shapes::circle::Circle;
 use util::Maybe as Opt;
 use util::twice;
 use helper::quad;

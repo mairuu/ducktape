@@ -20,8 +20,6 @@
 #> ccc |333|
 
 use std::io::print;
-use std::string::{pad_start};
-use std::fmt::{float};
 
 fun main() {
     # the three alignments, brackets making the padding visible

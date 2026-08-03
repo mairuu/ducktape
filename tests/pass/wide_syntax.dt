@@ -8,11 +8,13 @@
 # Not covered here, for want of a way to write it: a path's segments were
 # capped at 8, which needs nine levels of module nesting to reach.
 
-# 16 items in one use glob; the cap was 8. std::iter is preluded, so naming
-# these again is a no-op except to the parser, which is the point.
-use std::iter::{Iterator, DoubleEnded, Rev, Map, Filter, Take, Chain, Skip,
-                TakeWhile, SkipWhile, FlatMap, Enumerate, Zip, ArrayIter,
-                RangeIter, CharIter};
+# 16 items in one use list; the cap was 8. std::iter is preluded, so naming
+# these again is a no-op except to the parser, which is the point. `pub`
+# because a re-export is an item of this module and so is never unused
+# (milestone 92) — a plain `use` here would be 16 unused-import warnings.
+pub use std::iter::{Iterator, DoubleEnded, Rev, Map, Filter, Take, Chain, Skip,
+                    TakeWhile, SkipWhile, FlatMap, Enumerate, Zip, ArrayIter,
+                    RangeIter, CharIter};
 
 # 70 items in one trait; the cap was 64.
 trait Broad {
@@ -139,7 +141,7 @@ where W0: B0, W1: B0, W2: B0, W3: B0, W4: B0, W5: B0, W6: B0, W7: B0, W8: B0, W9
 }
 
 # a 20-element tuple type and a 20-parameter `fun` type; both caps were 16.
-fun wide_types(t: (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int), f: fun(Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) -> Int) -> Int {
+fun wide_types(t: (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int), _f: fun(Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) -> Int) -> Int {
   return t.0;
 }
 

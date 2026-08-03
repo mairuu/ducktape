@@ -86,7 +86,7 @@ fun main() {
   print(b.get());
 
   var c = Box::<Bool>::new(true);
-  print(c.map(|x| "ok").get());
+  print(c.map(|_x| "ok").get());
 
   print(describe(7));
   print(describe(false));

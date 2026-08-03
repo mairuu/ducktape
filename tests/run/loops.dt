@@ -28,7 +28,7 @@ fun main() {
     print(evens);
 
     var nested = 0;
-    for i in 0..2 {
+    for _i in 0..2 {
         for j in 0..2 {
             nested += 1;
             if j == 1 { break; }

@@ -40,7 +40,7 @@ fun corner(p: Pair) -> Int {
     return match p {
         Pair { x: true, y: true } => 1,
         Pair { x: true, y: false } => 2,
-        Pair { x: false, y } => 3,
+        Pair { x: false, y: _ } => 3,
     };
 }
 

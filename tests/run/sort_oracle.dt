@@ -13,7 +13,6 @@
 #> mismatches: 0
 use std::io::print;
 use std::sort;
-use std::array;
 
 # a deterministic stream, so a failure is reproducible rather than a story
 fun lcg(seed: Int) -> Int {

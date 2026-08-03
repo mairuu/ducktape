@@ -12,7 +12,6 @@
 #> bound=10
 #> dyn=10
 use std::io::print;
-use std::option;
 
 trait Src { fun take(self) -> Option<Int>; }
 

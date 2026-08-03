@@ -41,10 +41,7 @@
 
 use std::io::print;
 use std::string::from_chars;
-use std::string::buf;
-use std::char;
 use std::cmp::{max, min};
-use std::array;
 use std::fmt::Display;
 
 struct Tag { c: Char, n: Int }

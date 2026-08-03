@@ -5,23 +5,23 @@ fun apply(f: fun(Int) -> Int, x: Int) -> Int {
 
 fun main() {
     var add = |x: Int, y: Int| x + y;
-    var three = add(1, 2);
+    var _three = add(1, 2);
 
     var hinted: fun(Int, Int) -> Int = |x, y| x + y;
-    var four = (hinted)(2, 2);
+    var _four = (hinted)(2, 2);
 
-    var doubled = apply(|x| x * 2, 21);
+    var _doubled = apply(|x| x * 2, 21);
 
     var blocky = |n: Int| -> Int {
         var m = n + 1;
         return m * 2;
     };
-    var b = (blocky)(3);
+    var _b = (blocky)(3);
 
     var base = 10;
     var offset = |x: Int| x + base;
-    var eleven = (offset)(1);
+    var _eleven = (offset)(1);
 
     var thunk = || 5;
-    var five = (thunk)();
+    var _five = (thunk)();
 }

@@ -44,7 +44,7 @@ impl<T: Hash> HashSet<T> {
     # the map's `insert` hands back the displaced value instead.
     fun insert(self, value: T) -> Bool {
         match self.map.insert(value, true) {
-            Option::Some(v) => {
+            Option::Some(_) => {
                 return false;
             },
             Option::None => {
@@ -60,7 +60,7 @@ impl<T: Hash> HashSet<T> {
     # Take `value` out, answering whether it was there.
     fun remove(self, value: T) -> Bool {
         match self.map.remove(value) {
-            Option::Some(v) => {
+            Option::Some(_) => {
                 return true;
             },
             Option::None => {

@@ -1292,6 +1292,10 @@ typedef struct {
   StringView name;
   StringView alias; // nullable (length == 0)
   Span span;        // the item as written, for per-item import diagnostics
+  // set wherever the name this alias binds is looked up, in any of the three
+  // namespaces an import can reach. Read once, after the module is checked,
+  // by the unused-import warning.
+  bool used;
 } UseAlias;
 
 typedef struct {
@@ -1301,6 +1305,10 @@ typedef struct {
   // The names are unknown until the enum is resolved, so `aliases` is empty and
   // `span` carries the `*` for the diagnostics the expansion may emit.
   bool is_glob;
+  // a glob writes no alias, so the whole target is the unit of use: any one of
+  // the names it expands to counts for all of them. The `used` beside each
+  // alias is the same flag one namespace finer.
+  bool used;
   Span span;
 } UseTarget;
 

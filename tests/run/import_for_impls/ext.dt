@@ -1,0 +1,6 @@
+# An inherent impl on a primitive: nothing here has a name `main.dt` can write,
+# because the receiver type needs no import and the method is reached by the
+# receiver alone.
+impl Int {
+    fun doubled(self) -> Int { return self * 2; }
+}

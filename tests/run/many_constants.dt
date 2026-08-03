@@ -4,7 +4,7 @@
 
 use std::io::print;
 
-fun sink(a: String, b: String) {}
+fun sink(_a: String, _b: String) {}
 
 fun main() {
   sink("s0", "s1");

@@ -18,7 +18,6 @@
 #> Some(2)
 use std::iter::Iterator;
 use std::option::Option;
-use std::cmp::Ord;
 use std::io::print;
 
 struct Counter { n: Int, max: Int }

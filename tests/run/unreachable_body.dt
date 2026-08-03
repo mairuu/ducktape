@@ -16,7 +16,7 @@ use std::io::print;
 fun len<T>(xs: [T]) -> Int;
 
 fun sleeping() {
-  var f = len::<Int>;
+  var _f = len::<Int>;
 }
 
 fun main() {

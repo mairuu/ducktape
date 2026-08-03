@@ -32,6 +32,6 @@ fun tail_return(n: Int) -> Int {
 fun main() {
     var p = Point::new();
     p.do();
-    var u: () = ();
-    var x = early(3) + tail_return(2);
+    var _u: () = ();
+    var _x = early(3) + tail_return(2);
 }

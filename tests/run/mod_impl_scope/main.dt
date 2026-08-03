@@ -1,6 +1,6 @@
 use std::io::print;
-use shape::{Show, sum_twice};
-use pair::{Pair, mk};
+use shape::sum_twice;
+use pair::mk;
 
 # `impl Show for Pair` lives in pair.dt and is invisible inside shape.dt, yet
 # shape::sum_twice compiles at T = Pair: the impl set travels with the

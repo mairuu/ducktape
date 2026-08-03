@@ -21,7 +21,6 @@
 #> custom key: true true
 use std::io::print;
 use std::hash::{Hash, Hasher, hash_of};
-use std::array;
 
 struct Point {
     x: Int,

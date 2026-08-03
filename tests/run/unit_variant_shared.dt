@@ -25,7 +25,6 @@
 #> 3 1 2
 use std::io::print;
 use std::fmt::Display;
-use std::array;
 use std::string::from_chars;
 
 enum Slot {
@@ -49,7 +48,7 @@ fun describe(s: Slot) -> String {
     match s {
         Slot::Empty => { return "Empty"; },
         Slot::Tomb => { return "Tomb"; },
-        Slot::Full(n) => { return "Full"; },
+        Slot::Full(_n) => { return "Full"; },
     }
 }
 

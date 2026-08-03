@@ -27,8 +27,8 @@ pub use Result::{Ok, Err};
 impl<T, E> Result<T, E> {
     fun is_ok(self) -> Bool {
         match self {
-            Result::Ok(v) => { return true; },
-            Result::Err(e) => { return false; },
+            Result::Ok(_) => { return true; },
+            Result::Err(_) => { return false; },
         }
     }
 
@@ -41,13 +41,13 @@ impl<T, E> Result<T, E> {
     fun ok(self) -> Option<T> {
         match self {
             Result::Ok(v) => { return Option::Some(v); },
-            Result::Err(e) => { return Option::None; },
+            Result::Err(_) => { return Option::None; },
         }
     }
 
     fun err(self) -> Option<E> {
         match self {
-            Result::Ok(v) => { return Option::None; },
+            Result::Ok(_) => { return Option::None; },
             Result::Err(e) => { return Option::Some(e); },
         }
     }
@@ -55,7 +55,7 @@ impl<T, E> Result<T, E> {
     fun unwrap_or(self, fallback: T) -> T {
         match self {
             Result::Ok(v) => { return v; },
-            Result::Err(e) => { return fallback; },
+            Result::Err(_) => { return fallback; },
         }
     }
 
@@ -78,7 +78,7 @@ impl<T, E> Result<T, E> {
     fun unwrap(self) -> T {
         match self {
             Result::Ok(v) => { return v; },
-            Result::Err(e) => {
+            Result::Err(_) => {
                 return panic("called 'unwrap' on an 'Err' value");
             },
         }
@@ -89,7 +89,7 @@ impl<T, E> Result<T, E> {
     fun expect(self, message: String) -> T {
         match self {
             Result::Ok(v) => { return v; },
-            Result::Err(e) => { return panic(message); },
+            Result::Err(_) => { return panic(message); },
         }
     }
 

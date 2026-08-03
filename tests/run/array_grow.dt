@@ -22,7 +22,6 @@
 #> [0, 1, 4, 9]
 
 use std::io::print;
-use std::array;
 
 fun squares(n: Int) -> [Int] {
     var out: [Int] = [];

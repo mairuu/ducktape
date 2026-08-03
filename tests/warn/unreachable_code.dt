@@ -52,7 +52,7 @@ struct B;
 impl Greet for A { fun name(self) -> Int { return 1; } }
 impl Greet for B { fun name(self) -> Int { return 2; } }
 
-fun twice<T>(x: T) -> Int {
+fun twice<T>(_x: T) -> Int {
     return 0;
     print("dead once, not once per instantiation");
 }

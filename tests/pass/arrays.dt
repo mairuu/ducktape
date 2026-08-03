@@ -9,10 +9,10 @@ fun sum(xs: [Int]) -> Int {
 
 fun main() {
     var xs = [1, 2, 3];
-    var first = xs[0] + 1;
-    var s = sum(xs);
-    var annotated: [Int] = [4, 5, 6];
+    var _first = xs[0] + 1;
+    var _s = sum(xs);
+    var _annotated: [Int] = [4, 5, 6];
     var nested = [[1], [2, 3]];
-    var inner = nested[1][0];
-    var strs = ["a", "b"];
+    var _inner = nested[1][0];
+    var _strs = ["a", "b"];
 }

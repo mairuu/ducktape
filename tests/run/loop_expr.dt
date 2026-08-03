@@ -47,7 +47,7 @@ fun nested() -> Int {
 # a `loop` is an expression, and one with a break is `()` like a `while`.
 fun as_expr() -> Int {
     var n = 0;
-    var u = loop { n += 4; break; };
+    var _u = loop { n += 4; break; };
     return n;
 }
 

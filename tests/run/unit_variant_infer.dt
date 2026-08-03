@@ -61,5 +61,5 @@ fun main() {
 
     # the turbofish still works, and still wins over the hint
     var t = Opt::<String>::None;
-    var s: Opt<String> = t;
+    var _s: Opt<String> = t;
 }

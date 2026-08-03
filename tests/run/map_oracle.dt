@@ -22,7 +22,6 @@
 #> final agrees: true
 use std::io::print;
 use std::collections::HashMap;
-use std::array;
 
 # a deterministic stream, so a failure is reproducible rather than a story
 fun lcg(seed: Int) -> Int {

@@ -22,7 +22,6 @@
 use std::io::print;
 use std::result::Result;
 use std::option::Option;
-use std::string;
 
 fun divide(a: Int, b: Int) -> Result<Int, String> {
     if b == 0 {

@@ -24,7 +24,7 @@ impl Sink<Int> for Any {
     fun put(self, v: Int) -> Int { v + self.n }
 }
 impl Sink<String> for Any {
-    fun put(self, v: String) -> Int { self.n }
+    fun put(self, _v: String) -> Int { self.n }
 }
 impl Sink<Int> for Ints {
     fun put(self, v: Int) -> Int { v }

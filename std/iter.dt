@@ -15,16 +15,15 @@
 # `collect` builds an array, so `std::array` is imported for its `push` method.
 # `std::ops` is what makes `sum`/`product` expressible: a reduce needs to know
 # the element can be *combined*, which before milestone 55 no bound could say.
-# `std::string` and `std::char` are the sources' business rather than the
-# combinators': `CharIter` needs `len` on one and `code` on the other. Both
-# arrive transitively through `std::cmp` already — they are written out because
-# an impl this file *calls* should not be reachable only by accident.
+# `CharIter` needs `len` from `std::string` and `code` from `std::char`, and
+# neither is imported: both arrive transitively through `std::cmp`. Writing
+# them out anyway — so an impl this file calls is not reachable only by
+# accident — is what milestone 92 took away, since a `use` binding a name
+# nothing writes now reads as unused whatever it was written for.
 use std::option::Option;
 use std::array;
 use std::cmp::Ord;
 use std::ops::{Add, Mul};
-use std::string;
-use std::char;
 
 @lang("iterator")
 pub trait Iterator {
@@ -236,7 +235,7 @@ pub trait Iterator {
         var n = 0;
         loop {
             match self.next() {
-                Option::Some(x) => { n += 1; },
+                Option::Some(_) => { n += 1; },
                 Option::None => { return n; },
             }
         }
@@ -570,7 +569,7 @@ impl<I: Iterator> Iterator for Skip<I> {
         while self.remaining > 0 {
             self.remaining -= 1;
             match self.inner.next() {
-                Option::Some(x) => { },
+                Option::Some(_) => { },
                 # the source ran out mid-skip: nothing is left to yield, and
                 # zeroing the countdown keeps a later `next()` from re-driving it
                 Option::None => {

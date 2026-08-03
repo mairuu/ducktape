@@ -12,7 +12,7 @@ use std::io::print;
 struct Marker;
 struct Wrap<T>;
 
-fun take(m: Marker) -> Int => 7
+fun take(_m: Marker) -> Int => 7
 
 fun main() {
   var m = Marker;

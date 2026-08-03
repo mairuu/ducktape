@@ -22,5 +22,5 @@ impl Drawable for Point {
 fun main() {
     var p = Point { x: 1, y: 2 };
     p.draw();
-    var c: Point.Color = p.color_of();
+    var _c: Point.Color = p.color_of();
 }

@@ -53,6 +53,7 @@ typedef struct {
   StringView name; // the qualifier (the module's leaf, or an `as` alias)
   Module *target;  // the module it opens
   Span span;       // where it was bound, for a collision diagnostic
+  bool *origin;    // the import's `used` flag, for the unused-import warning
 } QualModule;
 
 // an enum variant bound as a bare name by `use a::E::V;`. It is neither a type
@@ -73,7 +74,8 @@ typedef struct {
   // a glob may take a name from. (An explicit import cannot collide with one —
   // the prelude's entries are appended last, so they link last and yield.)
   bool from_prelude;
-  Span span; // where it was bound, for a collision diagnostic
+  Span span;    // where it was bound, for a collision diagnostic
+  bool *origin; // the import's `used` flag, for the unused-import warning
 } VariantImport;
 
 struct Module {

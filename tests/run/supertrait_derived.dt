@@ -105,7 +105,7 @@ impl Counted for M {
     fun count(self) -> Int { return 9; }
 }
 
-fun marked<T: Marker>(x: T) -> Int { return 1; }
+fun marked<T: Marker>(_x: T) -> Int { return 1; }
 
 fun main() {
     print(P.name());

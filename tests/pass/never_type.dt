@@ -38,14 +38,14 @@ fun serve() -> Never {
 fun serve_nested() -> Never {
     loop {
         loop { break; }
-        for i in 0..3 { break; }
+        for _i in 0..3 { break; }
         var n = 0;
         while n < 3 { n += 1; break; }
     }
 }
 
 fun main() {
-    var a = an_int();
-    var b = a_string();
-    var c = an_option(true, 1);
+    var _a = an_int();
+    var _b = a_string();
+    var _c = an_option(true, 1);
 }

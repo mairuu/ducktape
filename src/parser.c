@@ -2961,7 +2961,7 @@ static Decl *parse_use_decl(Parser *p) {
       item_span = span_merge(item_span, previous_tok_span(p));
     }
 
-    target.aliases = al_alloc(p->al, sizeof(UseAlias));
+    target.aliases = al_alloc_zero(p->al, sizeof(UseAlias));
     target.aliases[0].name = last;
     target.aliases[0].alias = alias_name;
     target.aliases[0].span = item_span;

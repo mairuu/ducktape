@@ -1,0 +1,52 @@
+#! expect: unused variable 'dropped'
+# A binding nothing ever names, in each of the places one can be written. A
+# leading underscore is the opt-out, so every deliberate case below stays
+# silent — including a bare `_`, which is an ordinary identifier here.
+use std::io::print;
+
+struct Point { x: Int, y: Int }
+
+enum Slot { Full(Int), Empty }
+
+fun ignores(taken: Int, unused: Int) -> Int {
+    return taken;
+}
+
+fun main() {
+    var dropped = 1;
+
+    # a pattern binding, in a `var` and in a match arm
+    var Point { x, y: kept } = Point { x: 1, y: 2 };
+    print("{kept}");
+
+    var slot = Slot::Full(3);
+    match slot {
+        Slot::Full(payload) => print("full"),
+        Slot::Empty => print("empty"),
+    }
+
+    # a closure parameter, and a `for` variable
+    var thunk = |arg: Int| 7;
+    print("{(thunk)(1)}");
+    for step in 1..3 { print("turn"); }
+
+    print("{ignores(1, 2)}");
+
+    # ── the silent half ──────────────────────────────────────────────────────
+    # an underscore prefix says the binding is deliberate
+    var _pinned: Point = Point { x: 0, y: 0 };
+    var _ = 5;
+    match slot {
+        Slot::Full(_) => print("full"),
+        Slot::Empty => print("empty"),
+    }
+    # a struct pattern's shorthand binds under the *field's* name, so ignoring
+    # one field needs the long form rather than a prefix
+    var Point { x: _, y: _ } = Point { x: 9, y: 9 };
+    # `self` is written by the signature, never by the body
+    print("{Point { x: 1, y: 2 }.zero()}");
+}
+
+impl Point {
+    fun zero(self) -> Int { return 0; }
+}

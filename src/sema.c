@@ -1935,13 +1935,17 @@ static Decl *mod_find_own_decl(Module *m, StringView name) {
 // copy one resolved entry from `src`'s scopes into `dst`'s under `alias`.
 // a fun lives in both scopes, a struct/enum/trait only in the type scope.
 // `src == dst` is the std case: giving a builtin a second name in place.
+// `origin` is the alias that asked for the copy, stamped on both entries so a
+// later lookup can report the *import* rather than the binding it produced.
 static void link_copy_entry(TypeChecker *tc, Module *dst, Module *src,
-                            StringView name, StringView alias, Span span) {
+                            StringView name, UseAlias *origin, Span span) {
+  StringView alias = origin->alias;
   TypeEntry *src_te = tscope_lookup(&src->tscope, name);
   if (src_te != NULL) {
     TypeEntry *te = NULL;
     tscope_define(&dst->tscope, alias, src_te->type, tc->diags, span, &te);
     te->as = src_te->as;
+    te->origin = &origin->used;
   }
 
   VarEntry *src_ve = vscope_lookup(&src->vscope, name, NULL);
@@ -1952,6 +1956,7 @@ static void link_copy_entry(TypeChecker *tc, Module *dst, Module *src,
     // FunDef, assigned program-wide by codegen, and travels with `ve->as`.
     vscope_define(&dst->vscope, alias, src_ve->type, tc->diags, span, &ve);
     ve->as = src_ve->as;
+    ve->origin = &origin->used;
   }
 }
 
@@ -1969,8 +1974,8 @@ static bool qual_module_bound(Module *m, StringView alias) {
 
 static bool link_name_bound(Module *m, StringView alias) {
   return mod_find_own_decl(m, alias) != NULL ||
-         tscope_lookup(&m->tscope, alias) != NULL ||
-         vscope_lookup(&m->vscope, alias, NULL) != NULL ||
+         tscope_peek(&m->tscope, alias) != NULL ||
+         vscope_peek(&m->vscope, alias) != NULL ||
          mod_variant_import_slot(m, alias) != NULL ||
          qual_module_bound(m, alias);
 }
@@ -1987,7 +1992,7 @@ static void link_drop_glob_binding(Module *m, StringView alias) {
 }
 
 // return true if `alias` is already taken in m, reporting why.
-static bool link_name_taken(TypeChecker *tc, Module *m, const UseAlias *a) {
+static bool link_name_taken(TypeChecker *tc, Module *m, UseAlias *a) {
   link_drop_glob_binding(m, a->alias);
 
   if (mod_find_own_decl(m, a->alias) != NULL) {
@@ -1999,8 +2004,8 @@ static bool link_name_taken(TypeChecker *tc, Module *m, const UseAlias *a) {
   // vscope_define/tscope_define don't detect duplicates and both lookups
   // return the first match, so an unchecked collision would silently let the
   // import win over whatever was defined later. Check here or not at all.
-  if (tscope_lookup(&m->tscope, a->alias) != NULL ||
-      vscope_lookup(&m->vscope, a->alias, NULL) != NULL ||
+  if (tscope_peek(&m->tscope, a->alias) != NULL ||
+      vscope_peek(&m->vscope, a->alias) != NULL ||
       mod_variant_import_slot(m, a->alias) != NULL) {
     diag_error(tc->diags, a->span, "'" SV_FMT "' is already imported",
                SV_ARG(a->alias));
@@ -2084,7 +2089,7 @@ static Decl *link_find_export(TypeChecker *tc, Module *dep, StringView name,
 // append an entry to m's variant table and hand it back. The collision check
 // is the caller's, because the three callers differ in exactly that.
 static VariantImport *variant_import_push(TypeChecker *tc, Module *m,
-                                          const UseAlias *a, bool is_pub,
+                                          UseAlias *a, bool is_pub,
                                           bool from_glob, bool from_prelude) {
   if (m->variant_import_count == m->variant_import_cap) {
     int cap = m->variant_import_cap ? m->variant_import_cap * 2 : 4;
@@ -2101,13 +2106,17 @@ static VariantImport *variant_import_push(TypeChecker *tc, Module *m,
       .from_glob = from_glob,
       .from_prelude = from_prelude,
       .span = a->span,
+      // a glob's aliases are synthesised per variant rather than written, so
+      // the whole `use E::*;` is one binding as far as usage goes — its origin
+      // is the caller's, set there.
+      .origin = from_glob ? NULL : &a->used,
   };
   return vi;
 }
 
 // bind `variant` in `m` under `a->alias`. Its own namespace, so the collision
 // check is link_name_taken's — which sees the list too, in both directions.
-static void link_bind_variant(TypeChecker *tc, Module *m, const UseAlias *a,
+static void link_bind_variant(TypeChecker *tc, Module *m, UseAlias *a,
                               EnumDef *enum_def, VariantDef *variant,
                               bool is_pub, bool from_prelude) {
   if (link_name_taken(tc, m, a)) {
@@ -2162,8 +2171,8 @@ static EnumDef *link_qualifier_enum(TypeChecker *tc, Module *m, Module *dep,
 // has no visibility of its own, so a `pub enum` exports all of them and the
 // only gate is the enum's.
 static void link_import_variant(TypeChecker *tc, Module *m, Module *dep,
-                                StringView qualifier, const UseAlias *a,
-                                bool is_pub, bool from_prelude) {
+                                StringView qualifier, UseAlias *a, bool is_pub,
+                                bool from_prelude) {
   if (from_prelude && link_name_bound(m, a->alias)) {
     return;
   }
@@ -2189,8 +2198,7 @@ static void link_import_variant(TypeChecker *tc, Module *m, Module *dep,
 // a std module is an ordinary registry entry, vetted by the same `pub` rule
 // as any other dependency.
 static void link_import_item(TypeChecker *tc, Module *m, Module *dep,
-                             const UseAlias *a, bool is_pub,
-                             bool from_prelude) {
+                             UseAlias *a, bool is_pub, bool from_prelude) {
   // a prelude name is lowest priority: if the module already has it — its own
   // decl, or an explicit import linked earlier — the prelude simply steps
   // aside, no diagnostic. That is what lets a program define its own `Option`
@@ -2226,7 +2234,7 @@ static void link_import_item(TypeChecker *tc, Module *m, Module *dep,
 
   // dep is resolved (topological order), so its scopes carry real types.
   // if they don't, resolving dep poisoned the decl — stay quiet.
-  link_copy_entry(tc, m, dep, a->name, a->alias, a->span);
+  link_copy_entry(tc, m, dep, a->name, a, a->span);
 }
 
 // bind `dep` as a module qualifier in `m` under `a->alias` (`use a::b;` →
@@ -2235,7 +2243,7 @@ static void link_import_item(TypeChecker *tc, Module *m, Module *dep,
 // decl, an import, a variant or another qualifier is link_name_taken's, which
 // is the only place any of them can be seen at once.
 static void link_bind_module(TypeChecker *tc, Module *m, Module *dep,
-                             const UseAlias *a) {
+                             UseAlias *a) {
   if (link_name_taken(tc, m, a)) {
     return;
   }
@@ -2248,8 +2256,8 @@ static void link_bind_module(TypeChecker *tc, Module *m, Module *dep,
                    sizeof(QualModule) * (size_t)cap);
     m->qual_module_cap = cap;
   }
-  m->qual_modules[m->qual_module_count++] =
-      (QualModule){.name = a->alias, .target = dep, .span = a->span};
+  m->qual_modules[m->qual_module_count++] = (QualModule){
+      .name = a->alias, .target = dep, .span = a->span, .origin = &a->used};
 }
 
 // bind every variant of `enum_def` under its own name. A glob is the lowest
@@ -2258,7 +2266,7 @@ static void link_bind_module(TypeChecker *tc, Module *m, Module *dep,
 // *does* report is a second glob disagreeing about a name, since resolution
 // reads the first match and would otherwise pick one in silence.
 static void link_glob_variants(TypeChecker *tc, Module *m, EnumDef *enum_def,
-                               bool is_pub, Span span) {
+                               bool is_pub, Span span, bool *used_flag) {
   for (int i = 0; i < enum_def->variant_count; i++) {
     VariantDef *variant = &enum_def->variants[i];
     UseAlias a = {.name = variant->name, .alias = variant->name, .span = span};
@@ -2289,6 +2297,7 @@ static void link_glob_variants(TypeChecker *tc, Module *m, EnumDef *enum_def,
                                             /*from_prelude=*/false);
     vi->enum_def = enum_def;
     vi->variant = variant;
+    vi->origin = used_flag;
   }
 }
 
@@ -2320,12 +2329,13 @@ void tc_link_scope_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
     }
 
     if (glob) {
-      link_glob_variants(tc, m, enum_def, imp->decl->is_pub, span);
+      link_glob_variants(tc, m, enum_def, imp->decl->is_pub, span,
+                         &use->target.used);
       continue;
     }
 
     for (int j = 0; j < use->target.count; j++) {
-      const UseAlias *a = &use->target.aliases[j];
+      UseAlias *a = &use->target.aliases[j];
       VariantDef *variant = find_enum_variant(enum_def, a->name);
       if (variant == NULL) {
         diag_error(tc->diags, a->span,
@@ -2356,7 +2366,7 @@ void tc_link_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
     // against whichever came second. `tc_link_scope_imports` fills the claim.
     if (imp->decl->as.use_decl.is_scope_import && !target->is_glob) {
       for (int j = 0; j < target->count; j++) {
-        const UseAlias *a = &target->aliases[j];
+        UseAlias *a = &target->aliases[j];
         if (!link_name_taken(tc, m, a)) {
           variant_import_push(tc, m, a, imp->decl->is_pub, /*from_glob=*/false,
                               /*from_prelude=*/false);
@@ -2385,6 +2395,113 @@ void tc_link_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
       } else {
         link_import_item(tc, m, dep, &target->aliases[j], is_pub, from_prelude);
       }
+    }
+  }
+}
+
+// did anything this declaration binds get named? Its aliases are the unit the
+// warning reports, but its *impls* arrive as a lump, so this is the question
+// that decides whether the whole line may go.
+static bool use_names_anything(const DeclUse *use) {
+  if (use->target.is_glob) {
+    return use->target.used;
+  }
+  for (int i = 0; i < use->target.count; i++) {
+    if (use->target.aliases[i].used) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// **A `use` binds a name and widens the impl set, and only the first is
+// visible where it is spent**: `self.compare(x)` names no import, so a module
+// whose every name goes unwritten may still be the reason a method resolves.
+//
+// The question is therefore not "did an impl this import can see get used" —
+// reachability is transitive and the prelude carries most of std, so nearly
+// every import can see nearly every impl. It is **would removing this import
+// lose the impl**, which is the same thing asked of one line: an impl selected
+// out of m and reachable through exactly one of m's imports pins that import,
+// and one reachable through two pins neither. Returns a flag per import.
+static bool *imports_sole_impl_source(TypeChecker *tc, Module *m,
+                                      ModuleRegistry *reg) {
+  bool *sole = al_alloc_zero(tc->al, sizeof(bool) * (size_t)m->import_count);
+
+  for (int k = 0; k < m->visible_impls.count; k++) {
+    if (!m->visible_impls.used[k]) {
+      continue;
+    }
+    ImplDef *impl = m->visible_impls.all[k];
+
+    int owner = -1, sources = 0;
+    for (int i = 0; i < m->import_count && sources < 2; i++) {
+      if (m->imports[i].module_index < 0) {
+        continue;
+      }
+      ImplIndex *dep = &reg->modules[m->imports[i].module_index]->visible_impls;
+      if (impl_index_contains(dep, impl)) {
+        owner = i;
+        sources++;
+      }
+    }
+    // zero sources is m's own impl, which no import pays for.
+    if (sources == 1) {
+      sole[owner] = true;
+    }
+  }
+  return sole;
+}
+
+void tc_report_unused_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
+  bool *sole_impl_source = imports_sole_impl_source(tc, m, reg);
+
+  for (int i = 0; i < m->import_count; i++) {
+    ModImport *imp = &m->imports[i];
+    DeclUse *use = &imp->decl->as.use_decl;
+
+    // the prelude is not written, so there is nobody to advise about it — the
+    // same audience argument that keeps std silent (milestone 89), one scope
+    // in.
+    if (use->from_prelude) {
+      continue;
+    }
+    // a `pub use` is an item of this module, not a name it consumes: its reader
+    // is whoever imports it, and this module naming it too is incidental. That
+    // is also what keeps the question module-local — every path *into* a module
+    // goes through a `pub` item, so nothing outside can be a use of an import
+    // this loop reports.
+    if (imp->decl->is_pub) {
+      continue;
+    }
+    // an import that failed to resolve was already reported; a second
+    // diagnostic saying its unbound name is unused is noise.
+    if (imp->module_index < 0 && !use->is_scope_import) {
+      continue;
+    }
+
+    // the impls only get a vote when *nothing* was named: an alias that goes
+    // unwritten beside one that doesn't can be deleted on its own, and the
+    // line — with everything it makes visible — stays.
+    if (!use_names_anything(use) && sole_impl_source[i]) {
+      continue;
+    }
+
+    if (use->target.is_glob) {
+      if (!use->target.used) {
+        diag_warning(tc->diags, use->target.span,
+                     "unused import: this glob binds nothing that is named");
+      }
+      continue;
+    }
+
+    for (int j = 0; j < use->target.count; j++) {
+      UseAlias *a = &use->target.aliases[j];
+      if (a->used) {
+        continue;
+      }
+      diag_warning(tc->diags, a->span, "unused import '" SV_FMT "'",
+                   SV_ARG(a->alias));
     }
   }
 }
@@ -6244,7 +6361,7 @@ static Type *resolve_match_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       result_ty = arm_ty; // recover
     }
 
-    ctx->vscope = vscope_pop(ctx->vscope);
+    ctx->vscope = vscope_pop(ctx->vscope, ctx->diags);
   }
 
   if (had_error) {
@@ -7228,7 +7345,7 @@ static Type *resolve_closure_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     check_flow_into(ctx, closure->body, body_ty, ret_ty, closure->body->span);
   }
 
-  ctx->vscope = vscope_pop(ctx->vscope);
+  ctx->vscope = vscope_pop(ctx->vscope, ctx->diags);
   ctx->fun = saved_fun;
   ctx->return_type = saved_ret;
   ctx->loops = saved_loops;
@@ -7960,7 +8077,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       warn_unreachable(ctx, block, diverge_at);
     }
 
-    ctx->vscope = vscope_pop(ctx->vscope);
+    ctx->vscope = vscope_pop(ctx->vscope, ctx->diags);
     break;
   }
   case EXPR_BINARY: {
@@ -8594,7 +8711,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     CheckLoop frame = {.kind = CHECK_LOOP_WHILE, .parent = ctx->loops};
     ctx->loops = &frame;
     resolve_expr(ctx, wh->body, NULL);
-    ctx->vscope = vscope_pop(ctx->vscope);
+    ctx->vscope = vscope_pop(ctx->vscope, ctx->diags);
     ctx->loops = frame.parent;
 
     result = bound ? ctx->tc->t_unit : ctx->tc->t_poison;
@@ -8650,7 +8767,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     CheckLoop frame = {.kind = CHECK_LOOP_FOR, .parent = ctx->loops};
     ctx->loops = &frame;
     resolve_expr(ctx, for_->body, NULL);
-    ctx->vscope = vscope_pop(ctx->vscope);
+    ctx->vscope = vscope_pop(ctx->vscope, ctx->diags);
     ctx->loops = frame.parent;
 
     result = ctx->tc->t_unit;
@@ -8691,7 +8808,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     }
     Type *then_ty = resolve_expr(ctx, if_->then_block, dyn_want);
     if (if_->binding != NULL) {
-      ctx->vscope = vscope_pop(ctx->vscope);
+      ctx->vscope = vscope_pop(ctx->vscope, ctx->diags);
     }
     Type *else_ty = NULL;
     if (if_->else_branch != NULL) {
@@ -9010,13 +9127,14 @@ static void tc_check_fun(TypeChecker *tc, Decl *decl) {
   cctx.vscope = vscope_push(cctx.vscope, true, false, cctx.al);
   for (int i = 0; i < fun_def->param_count; i++) {
     vscope_define(cctx.vscope, fun_def->params[i].name,
-                  fun_def->params[i].param_type, cctx.diags, (Span){0}, NULL);
+                  fun_def->params[i].param_type, cctx.diags,
+                  fun_decl->params[i].span, NULL);
   }
 
   resolve_expr_coerced(&cctx, fun_decl->body, fun_def->return_type);
 
   // end var scope
-  cctx.vscope = vscope_pop(cctx.vscope);
+  cctx.vscope = vscope_pop(cctx.vscope, cctx.diags);
 
   // end type scope
   cctx.tyres.tscope = tscope_pop(cctx.tyres.tscope);
@@ -9307,6 +9425,15 @@ static void tc_check_impl(TypeChecker *tc, Decl *decl) {
                       fun_decl->type_params[j].span, NULL);
       }
 
+      // a native/intrinsic method has its body in C, so the signature is the
+      // whole declaration — nothing here to check, same as a top-level native
+      // (tc_check_fun). It skips the var scope rather than opening an empty
+      // one, because a parameter no source can name is not an unused one.
+      if (fun_decl->body == NULL) {
+        cctx.tyres.tscope = tscope_pop(cctx.tyres.tscope);
+        continue;
+      }
+
       // begin method var scope
       cctx.vscope = vscope_push(cctx.vscope, true, false, cctx.al);
       for (int j = 0; j < fun_def->param_count; j++) {
@@ -9315,18 +9442,13 @@ static void tc_check_impl(TypeChecker *tc, Decl *decl) {
             param_def->is_self ? sv_from_cstr("self") : param_def->name;
 
         vscope_define(cctx.vscope, param_name, param_def->param_type,
-                      cctx.diags, (Span){0}, NULL);
+                      cctx.diags, fun_decl->params[j].span, NULL);
       }
 
-      // a native/intrinsic method has its body in C, so the signature is the
-      // whole declaration — nothing here to check, same as a top-level native
-      // (tc_check_fun).
-      if (fun_decl->body != NULL) {
-        resolve_expr_coerced(&cctx, fun_decl->body, fun_def->return_type);
-      }
+      resolve_expr_coerced(&cctx, fun_decl->body, fun_def->return_type);
 
       // end method var scope
-      cctx.vscope = vscope_pop(cctx.vscope);
+      cctx.vscope = vscope_pop(cctx.vscope, cctx.diags);
 
       // end method type scope
       cctx.tyres.tscope = tscope_pop(cctx.tyres.tscope);
@@ -9407,7 +9529,7 @@ static void tc_check_trait(TypeChecker *tc, Decl *decl) {
     resolve_expr_coerced(&cctx, fun->body, cctx.return_type);
 
     // end method var scope
-    cctx.vscope = vscope_pop(cctx.vscope);
+    cctx.vscope = vscope_pop(cctx.vscope, cctx.diags);
     // end method type scope
     cctx.tyres.tscope = tscope_pop(cctx.tyres.tscope);
   }
@@ -9472,9 +9594,29 @@ ValueScope *vscope_push(ValueScope *parent, bool is_fn_boundary, bool is_loop,
   return scope;
 }
 
+// a leading underscore is the author saying "bound on purpose, read never".
+// A bare `_` is the same rule at length one, which is why the wildcard needs no
+// spelling of its own here: the scanner hands `_` back as an ordinary
+// identifier, so it binds like any other name and this silences it.
+static bool name_is_deliberate(StringView name) {
+  return name.len > 0 && name.chars[0] == '_';
+}
+
 // pop this scope, returning its parent. does not free (arena-allocated).
-ValueScope *vscope_pop(ValueScope *scope) {
+ValueScope *vscope_pop(ValueScope *scope, DiagBag *diags) {
   assert(scope->parent && "cannot pop root scope");
+  for (int i = 0; i < scope->count; i++) {
+    VarEntry *ve = &scope->entries[i];
+    // `self` is written by the *signature*, not by the body, so a method that
+    // does not need it has nothing to delete — unlike every other binding here.
+    if (ve->used || name_is_deliberate(ve->name) ||
+        sv_equal(ve->name, sv_from_cstr("self"))) {
+      continue;
+    }
+    diag_warning(diags, ve->span, "unused variable '" SV_FMT "'",
+                 SV_ARG(ve->name));
+    diag_note(diags, (Span){0}, "prefix it with '_' if that is deliberate");
+  }
   return scope->parent;
 }
 
@@ -9489,6 +9631,10 @@ VarEntry *vscope_lookup(ValueScope *scope, StringView name,
         if (out_crossed_fn) {
           *out_crossed_fn = crossed;
         }
+        s->entries[i].used = true;
+        if (s->entries[i].origin != NULL) {
+          *s->entries[i].origin = true;
+        }
         return &s->entries[i];
       }
     }
@@ -9501,11 +9647,23 @@ VarEntry *vscope_lookup(ValueScope *scope, StringView name,
   return NULL;
 }
 
+// the same walk without the marking: "is this name taken", which is the
+// linker's question and names nothing. See tscope_peek.
+VarEntry *vscope_peek(ValueScope *scope, StringView name) {
+  for (ValueScope *s = scope; s; s = s->parent) {
+    for (int i = 0; i < s->count; i++) {
+      if (sv_equal(s->entries[i].name, name)) {
+        return &s->entries[i];
+      }
+    }
+  }
+  return NULL;
+}
+
 int vscope_define(ValueScope *scope, StringView name, Type *type,
                   DiagBag *diags, Span span, VarEntry **ref) {
   // todo: check for duplicates or shadowing and emit diags
   (void)diags;
-  (void)span;
 
   if (scope->count >= scope->cap) {
     int new_cap = scope->cap == 0 ? 4 : scope->cap * 2;
@@ -9522,6 +9680,7 @@ int vscope_define(ValueScope *scope, StringView name, Type *type,
       .type = type,
       .slot = slot,
       .is_captured = false,
+      .span = span,
   };
   if (ref) {
     *ref = &scope->entries[scope->count - 1];
@@ -9551,7 +9710,7 @@ TypeScope *tscope_push(TypeScope *parent, Allocator *al) {
 TypeScope *tscope_pop(TypeScope *scope) { return scope->parent; }
 
 // walk parent chain; return null if not found.
-TypeEntry *tscope_lookup(TypeScope *scope, StringView name) {
+TypeEntry *tscope_peek(TypeScope *scope, StringView name) {
   for (TypeScope *s = scope; s; s = s->parent) {
     for (int i = 0; i < s->count; i++) {
       if (sv_equal(s->entries[i].name, name)) {
@@ -9560,6 +9719,14 @@ TypeEntry *tscope_lookup(TypeScope *scope, StringView name) {
     }
   }
   return NULL;
+}
+
+TypeEntry *tscope_lookup(TypeScope *scope, StringView name) {
+  TypeEntry *te = tscope_peek(scope, name);
+  if (te != NULL && te->origin != NULL) {
+    *te->origin = true;
+  }
+  return te;
 }
 
 // define in the current (top) scope.
@@ -10098,6 +10265,7 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
 
 void impl_index_init(ImplIndex *idx, Allocator *al) {
   idx->all = NULL;
+  idx->used = NULL;
   idx->count = 0;
   idx->cap = 0;
   idx->al = al;
@@ -10113,10 +10281,31 @@ void impl_index_add(ImplIndex *idx, ImplDef *impl) {
     int new_cap = idx->cap == 0 ? 4 : idx->cap * 2;
     idx->all = al_realloc(idx->al, idx->all, sizeof(ImplDef *) * idx->cap,
                           sizeof(ImplDef *) * new_cap);
-    assert(idx->all && "out of memory");
+    idx->used = al_realloc(idx->al, idx->used, sizeof(bool) * idx->cap,
+                           sizeof(bool) * new_cap);
+    assert(idx->all && idx->used && "out of memory");
     idx->cap = new_cap;
   }
+  idx->used[idx->count] = false;
   idx->all[idx->count++] = impl;
+}
+
+void impl_index_mark_used(ImplIndex *idx, ImplDef *impl) {
+  for (int i = 0; i < idx->count; i++) {
+    if (idx->all[i] == impl) {
+      idx->used[i] = true;
+      return;
+    }
+  }
+}
+
+bool impl_index_contains(const ImplIndex *idx, const ImplDef *impl) {
+  for (int i = 0; i < idx->count; i++) {
+    if (idx->all[i] == impl) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // structurally match `pattern` (an impl's self_type, possibly containing
@@ -10588,6 +10777,7 @@ TraitMethodDef *impl_index_default_method(ImplIndex *idx, Type *self_type,
       *out_impl = impl;
       *out_trait = trait;
       *out_subst = subst;
+      impl_index_mark_used(idx, impl);
       return &trait->methods[j];
     }
   }
@@ -10633,6 +10823,7 @@ MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, Type *trait_ref,
           out_match->impl = impl;
           out_match->subst = subst;
         }
+        impl_index_mark_used(idx, impl);
         return &impl->methods[j];
       }
     }
@@ -10649,6 +10840,7 @@ MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, Type *trait_ref,
   // hint is never consulted, so a wrong hint still reports the ordinary
   // mismatch against the one impl that exists.
   MethodDef *first = NULL;
+  ImplDef *chosen = NULL;
   for (int i = 0; i < idx->count; i++) {
     ImplDef *impl = idx->all[i];
     if (impl->self_type == NULL || type_is_poison(impl->self_type)) {
@@ -10732,12 +10924,17 @@ MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, Type *trait_ref,
         out_match->subst = subst;
       }
       first = cand;
+      chosen = impl;
     }
     if (wanted) {
+      impl_index_mark_used(idx, chosen);
       return first;
     }
   }
 
+  if (chosen != NULL) {
+    impl_index_mark_used(idx, chosen);
+  }
   return first;
 }
 
@@ -11111,6 +11308,7 @@ bool impl_index_implements(ImplIndex *idx, Type *type, Type *trait_ref,
     }
     Subst subst;
     if (impl_applies(impl, type, trait_ref, &subst, idx, al)) {
+      impl_index_mark_used(idx, impl);
       return true;
     }
   }
@@ -11250,6 +11448,9 @@ static Module *qual_module_lookup(Module *m, StringView name) {
   }
   for (int i = 0; i < m->qual_module_count; i++) {
     if (sv_equal(m->qual_modules[i].name, name)) {
+      if (m->qual_modules[i].origin != NULL) {
+        *m->qual_modules[i].origin = true;
+      }
       return m->qual_modules[i].target;
     }
   }

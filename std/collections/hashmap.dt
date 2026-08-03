@@ -24,9 +24,8 @@
 # reads only the value's own contents is correct by construction.
 
 use std::option::Option;
-use std::hash::{Hash, Hasher, hash_of};
+use std::hash::{Hash, hash_of};
 use std::panic::panic;
-use std::array;
 use std::iter::Iterator;
 
 # The three states a slot can be in. `Tomb` is the price of open addressing: a
@@ -343,7 +342,7 @@ impl<K: Hash, V> HashMap<K, V> {
 
     fun contains_key(self, key: K) -> Bool {
         match self.get(key) {
-            Option::Some(v) => {
+            Option::Some(_) => {
                 return true;
             },
             Option::None => {

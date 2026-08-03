@@ -31,5 +31,5 @@ impl Shape for Circle {
 
 fun main() {
     var c = Circle { radius: 2 };
-    var a = c.area();
+    var _a = c.area();
 }

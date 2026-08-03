@@ -251,6 +251,7 @@ static bool compiler_phase_check(Compiler *c) {
     compiler_begin_module(c, m);
 
     tc_check_module(&c->tc, m);
+    tc_report_unused_imports(&c->tc, m, &c->mod_reg);
     if (diag_has_diags(&c->diags)) {
       diag_report(&c->diags, m->file_path.chars, m->source.chars, stderr);
     }

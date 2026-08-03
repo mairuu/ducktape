@@ -17,7 +17,7 @@ impl Src<String> for Word { fun get(self) -> String { return "w"; } }
 impl Bag for Nums { type Item = Int; fun one(self) -> Int { return 7; } }
 
 fun pull<T>(s: dyn Src<T>) -> T { return s.get(); }
-fun both<T>(a: dyn Src<T>, b: dyn Src<T>) -> T { return b.get(); }
+fun both<T>(_a: dyn Src<T>, b: dyn Src<T>) -> T { return b.get(); }
 fun wrap<T>(s: dyn Src<T>) -> dyn Src<T> { return s; }
 fun peek<T>(b: dyn Bag<Item = T>) -> T { return b.one(); }
 # a still-abstract trait object handed from one generic to the next

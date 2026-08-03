@@ -10,8 +10,6 @@
 # This file *observes* that rather than asserting it, so the three consequences
 # are an output diff: growth ahead of the cursor is yielded, shrinking ends the
 # walk early, and no sequence of the two can read off the end.
-use std::iter::DoubleEnded;
-use std::array;
 use std::io::print;
 
 fun main() {

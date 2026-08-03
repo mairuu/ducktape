@@ -12,7 +12,6 @@
 #> masks: 255 65280 true
 #> nested generic still parses: 1
 use std::io::print;
-use std::array;
 use std::collections::HashMap;
 
 fun main() {

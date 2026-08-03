@@ -8,8 +8,6 @@
 # functions (`geo::`), and an alias (`g`) — while the primitives' operations use
 # the method spelling the milestone gave them.
 use std::io;
-use std::string;
-use std::array;
 use geo;
 use geo as g; # a module may also be bound under an alias
 

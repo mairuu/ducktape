@@ -61,6 +61,11 @@ typedef struct {
 
 struct ImplIndex {
   ImplDef **all; // flat list; linear search for now
+  // parallel to `all`: was this impl ever *selected* out of this index? An
+  // impl arrives by reachability and is spent by a receiver spelling that
+  // names no import, so this is the only handle the unused-import warning has
+  // on the half of a `use` that binds no name.
+  bool *used;
   int count;
   int cap;
   Allocator *al;
@@ -72,6 +77,13 @@ void impl_index_init(ImplIndex *idx, Allocator *al);
 // are fully resolved. no-op if `impl` is already present, which is what makes
 // unioning two dependency sets idempotent for a diamond import.
 void impl_index_add(ImplIndex *idx, ImplDef *impl);
+
+// record that `impl` was selected out of `idx`. A no-op when it is not in it,
+// which is what lets a caller mark unconditionally.
+void impl_index_mark_used(ImplIndex *idx, ImplDef *impl);
+
+// is `impl` in this index?
+bool impl_index_contains(const ImplIndex *idx, const ImplDef *impl);
 
 // would `a` and `b` both apply to some receiver, for the same trait? Two such
 // impls in one visible set make method selection order-dependent, which is
@@ -343,6 +355,12 @@ bool tc_resolve_module(TypeChecker *tc, Module *m);
 
 bool tc_check_module(TypeChecker *tc, Module *m);
 
+// warn about every `use` in m that bound a name nothing went on to write.
+// Runs at the end of tc_check_module, which is when the answer is final:
+// signatures and bodies are the only things that can name an import, and a
+// `pub use` — the one an outsider could still reach — is exempt.
+void tc_report_unused_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg);
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // ValueScope
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -352,6 +370,11 @@ typedef struct {
   Type *type;
   int slot;         // local slot or global slot (< 0)
   bool is_captured; // set when a nested closure captures this binding
+  Span span;        // where the binding was written, for the unused warning
+  bool used;        // set by every lookup that returns this entry
+  // the `used` flag of the import that bound this name, or NULL for anything
+  // written here. A module-scope entry is the only one that ever has one.
+  bool *origin;
   union {
     FunDef *fun; // when type.kind == TY_FUN
   } as;          // payload for certain kinds of entries
@@ -376,12 +399,17 @@ ValueScope *vscope_push(ValueScope *parent, bool is_fn_boundary, bool is_loop,
                         Allocator *al);
 
 // pop this scope, returning its parent. does not free (arena-allocated).
-ValueScope *vscope_pop(ValueScope *scope);
+// A scope closing is the moment its bindings are complete — nothing can name
+// one afterwards — so this is where an unused binding is reported.
+ValueScope *vscope_pop(ValueScope *scope, DiagBag *diags);
 
 // walk the parent chain.  sets *out_crossed_fn if a fn boundary was crossed.
 // returns null if not found.
 VarEntry *vscope_lookup(ValueScope *scope, StringView name,
                         bool *out_crossed_fn);
+
+// the same walk without the marking; see tscope_peek.
+VarEntry *vscope_peek(ValueScope *scope, StringView name);
 
 // define a new binding; assigns the next slot.  returns the assigned slot.
 // emits a diagnostic and returns -1 if the name already exists in this scope.
@@ -395,6 +423,7 @@ int vscope_define(ValueScope *scope, StringView name, Type *type,
 typedef struct {
   StringView name;
   Type *type;
+  bool *origin; // the import's `used` flag; NULL if the name was written here
   union {
     FunDef *fun_def;       // when type.kind == TY_FUN
     StructDef *struct_def; // when type.kind == TY_STRUCT
@@ -419,8 +448,11 @@ TypeScope *tscope_push(TypeScope *parent, Allocator *al);
 
 TypeScope *tscope_pop(TypeScope *scope);
 
-// walk parent chain; return null if not found.
+// walk parent chain; return null if not found. `lookup` counts as *naming* the
+// entry, so it marks the import that bound it; `peek` only asks whether the
+// name is taken, which is the linker's question and no use of anything.
 TypeEntry *tscope_lookup(TypeScope *scope, StringView name);
+TypeEntry *tscope_peek(TypeScope *scope, StringView name);
 
 // define in the current (top) scope.
 // emits a diagnostic if the name is already defined in this exact scope.

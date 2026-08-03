@@ -4,10 +4,9 @@
 #   for w < 10      ->  while w < 10
 #   inline trait bounds (T: Drawable) are enforced at instantiation
 use std::io::print;
-use std::array;
 use std::string;               # the module, bound as a qualifier
 use std::fmt::Display;
-use std::convert::{From, Into};
+use std::convert::From;
 use std::iter::DoubleEnded;   # `Iterator` is preluded; a supertrait of it is not
 
 enum Result<T, E> {
@@ -170,7 +169,7 @@ impl Pack<Int> for Brick {
 # `Brick` implements the trait twice, at two different arguments: the
 # reference is what tells them apart, so coherence lets both stand.
 impl Pack<String> for Brick {
-    fun pack(self, item: String) -> Int { self.kg }
+    fun pack(self, _item: String) -> Int { self.kg }
 }
 
 pub fun packed<P: Pack<Int>>(packer: P) -> Int {
@@ -209,7 +208,7 @@ pub fun widened(n: Int) -> Float {
 # apart — only `5` vs `true` does.
 struct Tick { at: Int }
 impl From<Int> for Tick { fun from(v: Int) -> Tick { return Tick { at: v }; } }
-impl From<Bool> for Tick { fun from(v: Bool) -> Tick { return Tick { at: 0 }; } }
+impl From<Bool> for Tick { fun from(_v: Bool) -> Tick { return Tick { at: 0 }; } }
 
 pub fun ticks() -> Int {
     var a = Tick::from(5);    # the Int impl
@@ -241,25 +240,25 @@ pub fun render_dyn(item: dyn Drawable<Color = String>) -> String {
     return item.draw();
 }
 
-pub fun process_data<T>(data: T) -> Result<Int, String> {
+pub fun process_data<T>(_data: T) -> Result<Int, String> {
     var p = Point::new(10, 20);
-    var shown: String = render(p);
+    var _shown: String = render(p);
     # `is_visible` has a default body the impl omits — inherited from the trait
-    var visible: Bool = p.is_visible();
-    var packed_kg: Int = packed(Brick { kg: 5 });
+    var _visible: Bool = p.is_visible();
+    var _packed_kg: Int = packed(Brick { kg: 5 });
     # a `var` binding is an irrefutable pattern: tuples, named-field structs,
     # tuple structs, nesting and `_` all bind the same way a match arm does
     var (a, b) = (1, 2.5);
     var Point { x: px, y: _ } = p;
-    var Wrapper(inner, tag) = Wrapper(true, 7);
-    var (nested, (deep, _)) = (a, (px, tag));
-    var unit_val: () = ();
+    var Wrapper(_inner, tag) = Wrapper(true, 7);
+    var (_nested, (_deep, _)) = (a, (px, tag));
+    var _unit_val: () = ();
     # a Char is a primitive like Int or Bool: a literal, an annotation, an
     # equality, and interpolation with no `Display` impl in sight
     var initial: Char = 'd';
-    var newline = '\n';
+    var _newline = '\n';
     var snowman = '\u{2603}';
-    var greeting = "{initial}{snowman} is a {initial == 'd'}";
+    var _greeting = "{initial}{snowman} is a {initial == 'd'}";
 
     var count = 0;
     count += 1;
@@ -268,14 +267,14 @@ pub fun process_data<T>(data: T) -> Result<Int, String> {
     count /= 1;
 
     var logic = true and false or not false;
-    var cmp = (5 >= 4) == (3 != 2) and (1 < 2) and (3 <= 3);
-    var math = -5 + 10 - 2 * 3 / 1 % 2;
-    var bits = ~(1 << 4) & 255 | 3 ^ 9;
-    var signed_shift = -16 >> 2;
-    var unsigned_shift = -16 >>> 2;
+    var _cmp = (5 >= 4) == (3 != 2) and (1 < 2) and (3 <= 3);
+    var _math = -5 + 10 - 2 * 3 / 1 % 2;
+    var _bits = ~(1 << 4) & 255 | 3 ^ 9;
+    var _signed_shift = -16 >> 2;
+    var _unsigned_shift = -16 >>> 2;
 
-    var r1 = 1..10;
-    var r2 = 0..=100;
+    var _r1 = 1..10;
+    var _r2 = 0..=100;
 
     var inline_adder: fun(Int, Int) -> Int = |x, y| x + y;
     var closure_res = inline_adder(1, 2);
@@ -283,12 +282,12 @@ pub fun process_data<T>(data: T) -> Result<Int, String> {
     # closure capturing an enclosing local (upvalue)
     var captured_base = 10;
     var add_base: fun(Int) -> Int = |x| x + captured_base;
-    var captured_res = add_base(closure_res);
+    var _captured_res = add_base(closure_res);
 
-    var drawn = p.draw();
-    var casted = 10 as Float;
+    var _drawn = p.draw();
+    var _casted = 10 as Float;
 
-    var if_val = if logic {
+    var _if_val = if logic {
         1
     } else {
         var fallback = 0;
@@ -303,7 +302,7 @@ pub fun process_data<T>(data: T) -> Result<Int, String> {
     }
 
     for i in 1..=5 {
-        var s = "Iter: {i}";
+        var _s = "Iter: {i}";
     }
 
     var spins = 0;
@@ -313,49 +312,49 @@ pub fun process_data<T>(data: T) -> Result<Int, String> {
     }
 
     # a `loop`'s value is the join of its breaks
-    var spun = loop {
+    var _spun = loop {
         spins += 1;
         if spins > 5 { break spins * 2; }
     };
 
     var xs = [1, 2, 3];
-    var first = xs[0];
+    var _first = xs[0];
 
-    var match_res = match p {
+    var _match_res = match p {
         Point { x: 10, y: val } if val > 0 => true,
         _ => false,
     };
 
-    var tuple_match = match (a, b) {
+    var _tuple_match = match (a, b) {
         (1, 2.5) => "exact",
-        (val_a, val_b) => "bound",
+        (_val_a, _val_b) => "bound",
     };
 
     var seed: Result<Int, String> = Result::Ok(5);
-    var enum_match = match seed {
+    var _enum_match = match seed {
         Result::Ok(v) => v,
         Result::Err(_) => 0,
     };
 
     # a conditional binding: one pattern, and the branch where it fails
-    var one_arm = if var Result::Ok(v) = seed { v } else { 0 };
+    var _one_arm = if var Result::Ok(v) = seed { v } else { 0 };
     if var Point { x: 10, y: py } = p {
-        var only_here = py;
+        var _only_here = py;
     } else if var (1, second) = (a, b) {
-        var also_bound = second;
+        var _also_bound = second;
     }
     var pump = Countdown::from(3);
     while var Option::Some(v) = pump.next() {
-        var per_turn = v;
+        var _per_turn = v;
     }
 
     # the same refutability with the branches the other way round: the `else`
     # leaves, so the name below it is an ordinary local rather than one nested
     # inside an `if var`
     var Result::Ok(unwrapped) = seed else { return Result::Err("no seed"); };
-    var after_else = unwrapped + 1;
+    var _after_else = unwrapped + 1;
 
-    var helper = || -> Result<Int, String> {
+    var _helper = || -> Result<Int, String> {
         var val = process_data(10)?;
         return Result::Ok(val);
     };
@@ -428,11 +427,11 @@ fun largest<I: Iterator>(it: I) -> Option<I.Item> where I.Item: Ord {
 }
 
 fun main() {
-    var r = process_data(1);
+    var _r = process_data(1);
     # coercion at a call site, mixing two concrete types in one array
-    var w = total_weight([Brick { kg: 20 }, Feather { grams: 1 }, Brick { kg: 3 }]);
+    var _w = total_weight([Brick { kg: 20 }, Feather { grams: 1 }, Brick { kg: 3 }]);
     # the same coercion into a trait object that names its associated type
-    var c = render_dyn(Point::new(3, 4));
+    var _c = render_dyn(Point::new(3, 4));
     # native methods (milestone 40): an @intrinsic method lowered to an opcode,
     # an @native method called into C — the receiver at the self position
     var n = [1, 2, 3].len();
@@ -440,17 +439,17 @@ fun main() {
     # a module-qualified path names a still-free item without importing it:
     # `join` and `concat` stay free functions because their receiver is a
     # `[String]`, not a String, so they keep the qualified spelling
-    var sl = string::concat([s, "!"]);
+    var _sl = string::concat([s, "!"]);
     # a Display impl reached by interpolation, beside a primitive segment
-    var shown = "{Point::new(1, 2)} #{n}";
+    var _shown = "{Point::new(1, 2)} #{n}";
     # an associated function through a bound, and the conversion the blanket
     # `impl<T, U: From<T>> Into<U> for T` supplies — pinned by the annotation,
     # since a conversion is the one call its receiver cannot decide
-    var blank = blank_weight::<Brick>();
+    var _blank = blank_weight::<Brick>();
     var wide: Float = 7.into();
     # a format spec (milestone 35): a width aligns a Display value, a precision
     # fixes a Float's decimals — both desugar to std::string::pad_* / fmt::float
-    var padded = "{Point::new(1, 2):>12} {wide:.2}";
+    var _padded = "{Point::new(1, 2):>12} {wide:.2}";
     # a user Iterator driven by `for`: next() advances a private cursor to None
     var acc = 0;
     for k in Countdown::from(3) {
@@ -460,66 +459,66 @@ fun main() {
     # on `Iterator`, so the pipeline reads left to right — `map`/`filter` lazy
     # adapters, `collect` draining into an array. The closures are typed by the
     # source's `Item`.
-    var evens = Countdown::from(6).map(|k| k * 2).filter(|v| v > 4).collect();
+    var _evens = Countdown::from(6).map(|k| k * 2).filter(|v| v > 4).collect();
     # more combinators (milestone 49): `take`/`enumerate`/`zip` are lazy adapters,
     # `fold` an eager consumer. The `filter(..).fold(..)` here also leans on the
     # projection fix that shipped with them — a closure over a pass-through
     # adapter's element now sees the real element type.
-    var total = Countdown::from(10).filter(|k| k % 2 == 0).take(3).fold(0, |a, k| a + k);
-    var paired = Countdown::from(3).enumerate().collect();
-    var zipped = Countdown::from(4).zip(Countdown::from(2)).collect();
+    var _total = Countdown::from(10).filter(|k| k % 2 == 0).take(3).fold(0, |a, k| a + k);
+    var _paired = Countdown::from(3).enumerate().collect();
+    var _zipped = Countdown::from(4).zip(Countdown::from(2)).collect();
     # and the element type reached through a bound (milestone 50): the base is a
     # `Filter`, so `I.Item` is a projection over a projection, collapsed at the
     # instantiation rather than left abstract
-    var biggest = head(Countdown::from(9).filter(|k| k % 3 == 0));
+    var _biggest = head(Countdown::from(9).filter(|k| k % 3 == 0));
     # `flat_map`/`skip` (milestone 51). `flat_map` maps each element to a whole
     # iterator and yields those end to end — its adapter's `Item` is `J.Item`,
     # a projection over a type *parameter*, which is what milestone 50 unblocked
-    var flat = Countdown::from(3).flat_map(|k| Countdown::from(k)).skip(1).collect();
+    var _flat = Countdown::from(3).flat_map(|k| Countdown::from(k)).skip(1).collect();
     # the associated-type bound discharged: `Countdown.Item` is `Int`, which is
     # `Ord`, so `largest`'s `where` is satisfied at this call
-    var peak = largest(Countdown::from(4).filter(|k| k % 2 == 0));
+    var _peak = largest(Countdown::from(4).filter(|k| k % 2 == 0));
     # the same bound on a trait *method's* signature (milestone 53), which is
     # what lets the reduce above be a combinator instead of a free function.
     # Discharged at the call, against this receiver rather than at an
     # instantiation — `Self` is decided by whoever calls
-    var peak2 = Countdown::from(4).filter(|k| k % 2 == 0).max();
-    var trough = Countdown::from(4).min();
+    var _peak2 = Countdown::from(4).filter(|k| k % 2 == 0).max();
+    var _trough = Countdown::from(4).min();
     # an *equality* binding (milestone 54): `chain`'s `J: Iterator<Item =
     # Self.Item>` says the second source's element type *is* this one's, which
     # is a statement about which type a projection is rather than which traits
     # it satisfies — and the only kind of predicate that lets the two sequences
     # be yielded from one `next`
-    var joined = Countdown::from(2).chain(Countdown::from(3)).collect();
+    var _joined = Countdown::from(2).chain(Countdown::from(3)).collect();
     # `rev` (milestone 58) is a method on the *supertrait* `DoubleEnded`, and
     # `map` a method on `Iterator` — one receiver reaches both, because a bound
     # offers its whole supertrait closure. `Map` forwards `DoubleEnded`, so the
     # pipeline stays reversible across it
-    var backwards = Countdown::from(4).rev().collect();
-    var mapped_back = Countdown::from(3).map(|k| k * 10).rev().collect();
+    var _backwards = Countdown::from(4).rev().collect();
+    var _mapped_back = Countdown::from(3).map(|k| k * 10).rev().collect();
     # the short-circuiting consumers and the two `*_while` adapters
     # (milestone 59) — breadth over `next()`, no language feature behind them.
     # Each stops where its answer is, so the cursor is left mid-sequence and
     # the same source can be driven on
-    var seen = Countdown::from(5).any(|k| k == 3);
-    var every = Countdown::from(5).all(|k| k > 0);
-    var hit = Countdown::from(5).find(|k| k % 2 == 0);
-    var at = Countdown::from(5).position(|k| k % 2 == 0);
-    var how_many = Countdown::from(5).filter(|k| k % 2 == 1).count();
+    var _seen = Countdown::from(5).any(|k| k == 3);
+    var _every = Countdown::from(5).all(|k| k > 0);
+    var _hit = Countdown::from(5).find(|k| k % 2 == 0);
+    var _at = Countdown::from(5).position(|k| k % 2 == 0);
+    var _how_many = Countdown::from(5).filter(|k| k % 2 == 1).count();
     Countdown::from(2).for_each(|k| print(k));
-    var while_big = Countdown::from(6).take_while(|k| k > 3).collect();
-    var after_big = Countdown::from(6).skip_while(|k| k > 3).collect();
+    var _while_big = Countdown::from(6).take_while(|k| k > 3).collect();
+    var _after_big = Countdown::from(6).skip_while(|k| k > 3).collect();
     # iterator *sources* (milestone 60): every pipeline above starts from a
     # `Countdown` this file had to write, because an array and a range reach
     # `for` by a desugaring rather than by the trait. `iter()` is the seed that
     # puts all of the above within reach of the two sequence types a program
     # already has — and `Range` is a nameable type now, the way `String` is
     var numbers = [1, 2, 3, 4];
-    var doubled = numbers.iter().map(|k| k * 2).collect();
-    var counted = (0..10).iter().filter(|k| k % 3 == 0).count();
-    var last_two = numbers.iter().rev().take(2).collect();
-    var descending = (1..=4).iter().rev().collect();
-    var spanned = span_len(2..7);
+    var _doubled = numbers.iter().map(|k| k * 2).collect();
+    var _counted = (0..10).iter().filter(|k| k % 3 == 0).count();
+    var _last_two = numbers.iter().rev().take(2).collect();
+    var _descending = (1..=4).iter().rev().collect();
+    var _spanned = span_len(2..7);
 }
 
 # a range as a parameter rather than only a loop header

@@ -15,7 +15,7 @@ fun describe(o: Option<Int>) -> Int {
 }
 
 fun main() {
-    var a = describe(Option::Some(7));
-    var b = describe(Option::Nothing);
-    var c = describe(Option::None);
+    var _a = describe(Option::Some(7));
+    var _b = describe(Option::Nothing);
+    var _c = describe(Option::None);
 }

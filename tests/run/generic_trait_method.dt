@@ -17,13 +17,13 @@ trait Combine<T> {
 struct Item { id: Int }
 
 impl Combine<Int> for Item {
-    fun with<U>(self, a: Int, b: U) -> Int {
+    fun with<U>(self, a: Int, _b: U) -> Int {
         return self.id + a;
     }
 }
 
 impl Combine<Bool> for Item {
-    fun with<U>(self, a: Bool, b: U) -> Int {
+    fun with<U>(self, _a: Bool, _b: U) -> Int {
         return self.id;
     }
 }

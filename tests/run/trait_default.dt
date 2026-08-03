@@ -44,7 +44,7 @@ trait Show {
 
     # a default with a type parameter of its own, alongside `Self`
     fun tagged<T>(self, tag: T) -> T {
-        var n = self.show();
+        var _n = self.show();
         return tag;
     }
 

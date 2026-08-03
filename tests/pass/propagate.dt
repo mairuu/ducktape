@@ -4,7 +4,7 @@ enum Result<T, E> {
     Err(E),
 }
 
-fun parse_num(s: String) -> Result<Int, String> {
+fun parse_num(_s: String) -> Result<Int, String> {
     Result::Ok(42)
 }
 
@@ -15,8 +15,8 @@ fun double_num(s: String) -> Result<Int, String> {
 
 fun main() {
     var r = double_num("21");
-    var doubled = match r {
+    var _doubled = match r {
         Result::Ok(n) => n,
-        Result::Err(e) => 0,
+        Result::Err(_e) => 0,
     };
 }

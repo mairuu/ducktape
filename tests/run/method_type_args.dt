@@ -15,7 +15,6 @@
 #> 3
 #> 2
 use std::io::print;
-use std::array;
 
 struct Holder {
     n: Int,

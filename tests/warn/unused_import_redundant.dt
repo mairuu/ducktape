@@ -1,0 +1,15 @@
+#! expect: unused import 'array'
+# The other side of `tests/run/import_for_impls`: a module import whose name is
+# never written and whose impls arrive anyway. `push` and `len` are `std::array`
+# methods, but the preluded `std::iter` already reaches that module — so this
+# line is the sole source of nothing and deleting it costs nothing. The warning
+# asks "would removing this lose an impl", not "does this supply one": answering
+# the second silences this file.
+use std::io::print;
+use std::array;
+
+fun main() {
+    var xs = [1];
+    xs.push(2);
+    print("{xs.len()}");
+}

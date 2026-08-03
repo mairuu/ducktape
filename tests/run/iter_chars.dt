@@ -27,9 +27,7 @@
 #> 1
 #> 0
 use std::io::print;
-use std::iter::DoubleEnded;
 use std::string::from_chars;
-use std::char;
 
 fun main() {
     # every UTF-8 width in one string: 1, 2, 3 and 4 bytes. Walking it forwards

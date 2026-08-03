@@ -1,0 +1,14 @@
+#! expect: unused import 'clamp'
+# A `use` that binds a name nothing writes. Reported per alias, so a braced
+# import loses only the names it does not spend — and a `pub use` is exempt,
+# being an item of this module rather than a name it consumes.
+use std::io::print;
+use std::cmp::{max, clamp};
+use std::string::pad_end;
+
+# a re-export: its reader is whoever imports this module, so it never warns
+pub use std::cmp::min;
+
+fun main() {
+    print("{max(1, 2)}");
+}

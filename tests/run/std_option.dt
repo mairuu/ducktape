@@ -17,7 +17,7 @@
 
 use std::io::print;
 use std::option::Option;
-use std::cmp::{Ord, min};
+use std::cmp::min;
 
 fun halve(n: Int) -> Option<Int> {
     if n % 2 == 0 {

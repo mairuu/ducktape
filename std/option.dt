@@ -26,7 +26,7 @@ pub use Option::{Some, None};
 impl<T> Option<T> {
     fun is_some(self) -> Bool {
         match self {
-            Option::Some(v) => { return true; },
+            Option::Some(_) => { return true; },
             Option::None => { return false; },
         }
     }
@@ -126,7 +126,7 @@ impl<T: Ord> Ord for Option<T> {
             },
             Option::None => {
                 match other {
-                    Option::Some(b) => { return 0 - 1; },
+                    Option::Some(_) => { return 0 - 1; },
                     Option::None => { return 0; },
                 }
             },

@@ -31,9 +31,11 @@
 # `slice`+`==` one.
 #
 # `s.len()` (bytes) and `cs.len()` (elements) both appear below, told apart by
-# their receiver's type rather than by a module qualifier. The `use` lines make
-# the primitives' impls — `String`, `[T]`, `StringBuf`, `Char` — visible for
-# method resolution; none names an item.
+# their receiver's type rather than by a module qualifier. The impls those
+# receivers need — `String`, `[T]`, `StringBuf`, `Char` — arrive transitively
+# through the two imports below rather than being named here: an import that
+# binds a name nothing writes is reported as unused (milestone 92), and
+# reachability cannot tell a deliberate restatement from a leftover.
 #
 # The crossing is a *walk* as of milestone 61, so `std::iter` joins them and the
 # two functions that cross say `.chars().collect()`. They collect rather than
@@ -42,11 +44,7 @@
 # array a walk builds on request is exactly what that needs. What changed for
 # them is only where it comes from.
 
-use std::string;
-use std::string::buf;
-use std::array;
 use std::option::Option;
-use std::char;
 use std::iter;
 
 impl String {

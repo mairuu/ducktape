@@ -14,7 +14,6 @@ use std::collections::hashmap::HashMap;
 use std::collections::hashset::{HashSet};
 # the two below share a prefix and resolve differently: `buf` is a module under
 # `std::string`, `join` is an item of `std::string` itself.
-use std::string::buf;
 use std::string::join;
 
 fun main() {

@@ -15,8 +15,6 @@
 #> nested 3
 #> deep 30
 use std::io::print;
-use std::option;
-use std::array;
 
 struct Point { x: Int, y: Int }
 enum Shape { Circle(Int), Rect(Int, Int) }

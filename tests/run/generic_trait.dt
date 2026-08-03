@@ -69,7 +69,7 @@ struct Repeat { times: Int }
 
 impl Pipe<String> for Repeat {
     type Out = Int;
-    fun pipe(self, v: String) -> Int { self.times }
+    fun pipe(self, _v: String) -> Int { self.times }
 }
 
 fun run(p: dyn Pipe<String, Out = Int>) -> Int {

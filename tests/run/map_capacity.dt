@@ -25,7 +25,6 @@
 use std::io::print;
 use std::collections::HashMap;
 use std::hash::hash_of;
-use std::array;
 use std::sort;
 
 fun fill(m: HashMap<Int, Int>, n: Int) {
@@ -53,7 +52,7 @@ fun all_present(m: HashMap<Int, Int>, n: Int) -> Bool {
     }
     # and a key that was never inserted must still answer None
     match m.get(n + 1) {
-        Option::Some(v) => {
+        Option::Some(_v) => {
             return false;
         },
         Option::None => {},

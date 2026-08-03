@@ -32,7 +32,6 @@
 #> 0
 use std::io::print;
 use std::sort;
-use std::array;
 
 struct Rec { key: Int, tag: String }
 

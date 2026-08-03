@@ -5,8 +5,8 @@ fun main() {
     var c = not (a > b);
 
     var f = a as Float;
-    var back = f as Int;
-    var same = a as Int;
+    var _back = f as Int;
+    var _same = a as Int;
 
     var r = 1..10;
     var total = 0;
@@ -17,5 +17,5 @@ fun main() {
         total = total + i;
     }
 
-    var s = "a={a} f={f} c={c} msg={"str"}";
+    var _s = "a={a} f={f} c={c} msg={"str"}";
 }

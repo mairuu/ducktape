@@ -25,21 +25,21 @@ impl B for Point {
     }
 }
 
-fun need_a<T: A>(t: T) -> Int {
+fun need_a<T: A>(_t: T) -> Int {
     0
 }
 
-fun need_both<T: A + B>(t: T) -> Int {
+fun need_both<T: A + B>(_t: T) -> Int {
     0
 }
 
-fun need_where<T>(t: T) -> Int where T: B {
+fun need_where<T>(_t: T) -> Int where T: B {
     0
 }
 
 fun main() {
     var p = Point { x: 5 };
-    var r1 = need_a(p);
-    var r2 = need_both(p);
-    var r3 = need_where(p);
+    var _r1 = need_a(p);
+    var _r2 = need_both(p);
+    var _r3 = need_where(p);
 }

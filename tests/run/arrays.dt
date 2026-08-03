@@ -30,7 +30,7 @@ fun main() {
 
     var empty: [Int] = [];
     var seen = 0;
-    for x in empty {
+    for _x in empty {
         seen += 1;
     }
     print(seen);

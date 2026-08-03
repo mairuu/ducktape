@@ -59,7 +59,7 @@ fun mono(c: Bool) -> Int {
 }
 
 # ...and constrains no type variable, so the *other* argument still decides `T`
-fun first<T>(a: T, b: T) -> T {
+fun first<T>(a: T, _b: T) -> T {
     return a;
 }
 

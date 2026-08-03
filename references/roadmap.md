@@ -1583,6 +1583,27 @@ keep this file small. Everything from 55 on is below.
   `use std::collections::HashMap;` still works. Left over: nothing generates or
   checks that facade (see warts).
 
+- **92. What nothing names** (`SHA`) — `unused variable` and `unused import`,
+  the first warnings that have to *analyse* rather than notice. Design:
+  `architecture.md` "What is never named"; `language.md` "Statements and
+  blocks" (the `_` opt-out) and "Modules"; the gaps table.
+  The finding is that **a `use` binds a name and widens the impl set, and only
+  the first is visible where it is spent** — `self.compare(x)` names no import.
+  A name-only rule got 5 of std's 12 unnamed module imports wrong (removing one
+  costs up to 531 errors), so `ImplIndex` gained a `used` array set at
+  selection, and the question became **would removing this line lose an impl
+  that was selected** rather than "can it see one": reachability is transitive
+  and the prelude carries most of std, so the second credits everything. 14/14
+  verdicts then matched a delete-and-recompile probe. Sabotage bites both ways
+  (`tests/run/import_for_impls` for the impl vote, `tests/warn/unused_import_
+  redundant` for the *sole*-source part, which a first no-op attempt missed).
+  Cost: 9 dead imports out of std, ~150 test bindings prefixed `_`, and
+  `std/iter.dt`'s deliberate restatement of an import it only wanted for impls,
+  which is now unwritable. Also found: `UseAlias` came out of the parser's bare
+  form unzeroed — invisible until a `bool` was read from it (sanitizer).
+  Left over: no `#[allow]`; unused *items* unreported; warnings come out in
+  scope-close order, not source order.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -1813,16 +1834,41 @@ via `Module.decl_base`) and is not part of the main line.
   mistake. Rust behaves the same way; the message could be kinder
 - no shadowing diagnostics for `var` (`vscope_define` todo); top-level item
   names do collide, but a `var` may silently shadow one in the same scope. As of
-  milestone 89 there *is* a warning severity for this to use — what is missing
-  is now only the analysis, and the policy call about whether shadowing deserves
-  one at all (Rust does not warn on it)
+  milestone 89 there *is* a warning severity for this to use, and as of 92 the
+  entry to hang it on (`VarEntry.span`, `used`) — what is missing is now only
+  the analysis, and the policy call about whether shadowing deserves one at all
+  (Rust does not warn on it)
 - a refutable `var` binding whose column type inference never pinned down is
   accepted (the tri-state answer reports nothing) and traps at runtime via
   `OP_MATCH_FAIL` instead of at compile time
 - there is no way to *ask* about a warning: no `#[allow]`, no `-W`, no
   `-Werror`. Suppression is the one built-in policy (std, unless it is the
   root), so a warning a program has decided to live with cannot be silenced and
-  one it wants enforced cannot be made fatal
+  one it wants enforced cannot be made fatal. Milestone 92 gave one warning a
+  per-site escape — the `_` prefix on a binding — and made the missing general
+  one cost something: an import wanted for its **impls** has no spelling, so a
+  deliberate restatement of one that arrives transitively anyway now reads as
+  unused. `std/iter.dt` used to write two such lines on purpose and no longer can
+- an *item* nothing names — a private `fun`, `struct` or `trait` no call
+  reaches — is not reported, where a binding and an import now are (milestone
+  92). Codegen already skips it, so the cost is a reader's rather than a
+  program's
+- `PAT_WILDCARD` is **unreachable**, and milestone 92 depends on it being so.
+  `scan_identifier` runs before the `switch` that would make a lone `_` a
+  `TOKEN_UNDER`, so `_` is an ordinary identifier and every `_` in a pattern is
+  a `PAT_BIND` named `_` — which is exactly why the `_` opt-out needed no
+  spelling of its own. The cost is a pattern kind implemented in five places
+  (sema ×3, codegen ×2, ast) that nothing constructs, and `var y = _;` being a
+  legal read of a binding nobody meant to make
+- a **write-only** binding is not reported: `var n = 0; n = 5;` with no read
+  resolves the assignment target through the same lookup a read uses, so it
+  counts as named. Rust splits this out as its own lint (`unused_assignments`);
+  telling the two apart here means knowing the *context* of the lookup, which
+  only `EXPR_ASSIGN` with a plain `=` and a single-segment path target has
+- the unused-binding warnings of one function come out in **scope-close** order
+  rather than source order, so an inner block's precede an outer one's whatever
+  their lines. Sorting the bag would need notes to stop attaching to the
+  diagnostic before them by position (milestone 89)
 - a directory named `std` holding a file named after a std module is compiled
   *as* that module when named on the command line (milestone 90), so a user who
   happens to have `std/cmp.dt` gets it checked with no prelude and `@lang`

@@ -26,9 +26,7 @@
 #> -1
 
 use std::io::print;
-use std::cmp::{Ord, max, min, clamp};
-use std::array;
-use std::string;
+use std::cmp::{max, min, clamp};
 
 fun main() {
     # the raw native, a String method. Equal strings are the same pointer,

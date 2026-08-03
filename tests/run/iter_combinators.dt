@@ -31,7 +31,7 @@ impl Iterator for Counter {
 # re-selects `next` (the same move a bounded method call makes).
 fun count<I: Iterator>(it: I) -> Int {
     var n = 0;
-    for x in it {
+    for _x in it {
         n += 1;
     }
     return n;

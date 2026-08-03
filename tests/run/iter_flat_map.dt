@@ -49,15 +49,15 @@ fun main() {
 #> [0, 0, 1, 0, 1, 2]
 
     # an inner iterator that is always empty flattens to nothing
-    print(Counter::to(4).flat_map(|n| Counter::to(0)).collect());
+    print(Counter::to(4).flat_map(|_n| Counter::to(0)).collect());
 #> []
 
     # an empty source never asks the closure for anything
-    print(Counter::to(0).flat_map(|n| Counter::to(3)).collect());
+    print(Counter::to(0).flat_map(|_n| Counter::to(3)).collect());
 #> []
 
     # a constant inner iterator: the source's length times the inner's
-    print(Counter::to(3).flat_map(|n| Counter::to(2)).collect());
+    print(Counter::to(3).flat_map(|_n| Counter::to(2)).collect());
 #> [0, 1, 0, 1, 0, 1]
 
     # skip: drop the first n, keep the rest
@@ -77,14 +77,14 @@ fun main() {
 #> [1, 2, 3]
     print(Counter::to(4).flat_map(|n| Counter::to(n)).skip(2).collect());
 #> [1, 0, 1, 2]
-    print(Counter::to(3).flat_map(|n| Counter::to(2)).map(|x| x * 10).collect());
+    print(Counter::to(3).flat_map(|_n| Counter::to(2)).map(|x| x * 10).collect());
 #> [0, 10, 0, 10, 0, 10]
     print(Counter::to(4).flat_map(|n| Counter::to(n)).fold(0, |a, x| a + x));
 #> 4
 
     # the flattened element type is the *inner* iterator's, not the source's:
     # an Int source with a String inner yields Strings
-    print(Counter::to(2).flat_map(|n| Words { i: 0 }).collect());
+    print(Counter::to(2).flat_map(|_n| Words { i: 0 }).collect());
 #> [ab, , c, ab, , c]
 
     # and `for` drives a flattened sequence like any other

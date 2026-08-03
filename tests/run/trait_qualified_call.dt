@@ -46,7 +46,7 @@ impl Pack<Int> for Brick {
 }
 
 impl Pack<String> for Brick {
-    fun pack(self, item: String) -> Int {
+    fun pack(self, _item: String) -> Int {
         return self.kg;
     }
 }

@@ -201,7 +201,15 @@ VariantImport *mod_find_variant_import(Module *m, StringView name) {
   VariantImport *slot = mod_variant_import_slot(m, name);
   // a reservation names nothing yet, and a dead one never will: both read as
   // "no such variant" everywhere outside the linking that owns them.
-  return (slot != NULL && slot->variant != NULL) ? slot : NULL;
+  if (slot == NULL || slot->variant == NULL) {
+    return NULL;
+  }
+  // this is the *use* lookup — the slot form beside it is the linker's, which
+  // asks whether a name is taken and so marks nothing.
+  if (slot->origin != NULL) {
+    *slot->origin = true;
+  }
+  return slot;
 }
 
 VariantImport *mod_variant_import_slot(Module *m, StringView name) {

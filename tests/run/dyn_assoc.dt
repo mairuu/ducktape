@@ -29,7 +29,7 @@ trait Iterator {
     # per receiver type, and its signature differs between two trait objects
     # of the same trait
     fun twice(self) -> Self.Item {
-        var first = self.next();
+        var _first = self.next();
         return self.next();
     }
 }

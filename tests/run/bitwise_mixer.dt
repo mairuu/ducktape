@@ -20,7 +20,6 @@
 #> shifts: 4 -4 9223372036854775804 255
 use std::io::print;
 use std::hash::{Hasher, hash_of};
-use std::array;
 
 # splitmix64's multiplier, 0xff51afd7ed558ccd. There are no hex literals, so it
 # is written as the signed Int holding that bit pattern — which is negative,

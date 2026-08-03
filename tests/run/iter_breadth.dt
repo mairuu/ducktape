@@ -55,9 +55,9 @@ fun main() {
 
     # an empty sequence: `any` has nothing that passes, `all` nothing that
     # fails — the only pair of answers that keeps them mirrors
-    print(Span::of(0, 0).any(|x| true));
+    print(Span::of(0, 0).any(|_x| true));
 #> false
-    print(Span::of(0, 0).all(|x| false));
+    print(Span::of(0, 0).all(|_x| false));
 #> true
 
     # ── the searches ────────────────────────────────────────────────────────
@@ -117,9 +117,9 @@ fun main() {
     # would silently eat one element of every sequence
     print(Span::of(0, 6).skip_while(|x| x < 3).collect());
 #> [3, 4, 5]
-    print(Span::of(0, 6).skip_while(|x| true).collect());
+    print(Span::of(0, 6).skip_while(|_x| true).collect());
 #> []
-    print(Span::of(0, 6).skip_while(|x| false).collect());
+    print(Span::of(0, 6).skip_while(|_x| false).collect());
 #> [0, 1, 2, 3, 4, 5]
 
     # and once it has stopped skipping it stays stopped
