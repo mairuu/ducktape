@@ -1583,7 +1583,7 @@ keep this file small. Everything from 55 on is below.
   `use std::collections::HashMap;` still works. Left over: nothing generates or
   checks that facade (see warts).
 
-- **92. What nothing names** (`SHA`) — `unused variable` and `unused import`,
+- **92. What nothing names** (`9c14c14`) — `unused variable` and `unused import`,
   the first warnings that have to *analyse* rather than notice. Design:
   `architecture.md` "What is never named"; `language.md` "Statements and
   blocks" (the `_` opt-out) and "Modules"; the gaps table.
