@@ -4,7 +4,7 @@
 # making out loud. `"{b.build()}"` is the spelling.
 use std::io::print;
 use std::fmt::Display;
-use std::strbuf;
+use std::string::buf;
 
 fun main() {
     var b = StringBuf::new();

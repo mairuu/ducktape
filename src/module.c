@@ -107,6 +107,10 @@ StringView mod_file_for_use(StringView base_dir, const Path *path,
 // So a user file literally named `std/cmp.dt` cannot collide with `std::cmp` —
 // which is what `mod_adopt_std` then has to undo for the one path that *is*
 // the library, since two keys for one file is two modules.
+//
+// `name` may nest (`collections/hashmap`), and nothing here has to know: the
+// name is already the library-relative path, so a key is still one
+// concatenation and still reads as a path.
 StringView std_mod_key(StringView name, Allocator *al) {
   const char *prefix = "<std>/";
   int prefix_len = 6;
@@ -130,8 +134,10 @@ static bool is_std_key(StringView path) {
   return path.len > 6 && memcmp(path.chars, "<std>/", 6) == 0;
 }
 
-// the leaf of a `<std>/<leaf>.dt` key. Caller has checked `is_std_key`.
-static StringView std_key_leaf(StringView key) {
+// the module name inside a `<std>/<name>.dt` key. Caller has checked
+// `is_std_key`. A nested name keeps its '/' — the key carries the whole of it,
+// which is why nesting costs this function nothing.
+static StringView std_key_name(StringView key) {
   return (StringView){.chars = key.chars + 6,
                       .len = key.len - 6 - 3}; // "<std>/" .. ".dt"
 }
@@ -151,38 +157,39 @@ StringView std_name_for_entry(StringView path) {
   if (path.len < 4 || memcmp(path.chars + path.len - 3, ".dt", 3) != 0) {
     return none;
   }
+  StringView rel = {.chars = path.chars, .len = path.len - 3}; // drop ".dt"
 
-  // split off the leaf; a path with no '/' names no directory, so it cannot
-  // spell the library even if the stem matches.
-  int slash = -1;
-  for (int i = path.len - 1; i >= 0; i--) {
-    if (path.chars[i] == '/') {
-      slash = i;
-      break;
+  // Adoption is lexical and still needs both halves — an ancestor component
+  // spelled exactly `std`, and a name below it the binary embeds. Nesting only
+  // changes how far below: the name is everything after that `std`, which is
+  // exactly how `embed_std.sh` keys the table.
+  //
+  // Slashes are walked right to left, so the *nearest* `std` ancestor wins and
+  // a candidate name is tried shortest-first. That matters for a path that has
+  // more than one — `std/std/cmp.dt` is `cmp`, not a `std/cmp` no table holds.
+  for (int i = rel.len - 1; i > 0; i--) {
+    if (rel.chars[i] != '/') {
+      continue;
+    }
+
+    int start = 0;
+    for (int j = i - 1; j >= 0; j--) {
+      if (rel.chars[j] == '/') {
+        start = j + 1;
+        break;
+      }
+    }
+    StringView parent = {.chars = rel.chars + start, .len = i - start};
+    if (!sv_equal_cstr(parent, "std")) {
+      continue;
+    }
+
+    StringView name = {.chars = rel.chars + i + 1, .len = rel.len - i - 1};
+    if (name.len > 0 && std_module_source(name) != NULL) {
+      return name;
     }
   }
-  if (slash < 0) {
-    return none;
-  }
-
-  StringView stem = {.chars = path.chars + slash + 1,
-                     .len = path.len - slash - 1 - 3};
-  if (stem.len == 0 || std_module_source(stem) == NULL) {
-    return none;
-  }
-
-  // the parent component must be exactly `std`
-  StringView dir = {.chars = path.chars, .len = slash};
-  int dir_slash = -1;
-  for (int i = dir.len - 1; i >= 0; i--) {
-    if (dir.chars[i] == '/') {
-      dir_slash = i;
-      break;
-    }
-  }
-  StringView parent = {.chars = dir.chars + dir_slash + 1,
-                       .len = dir.len - dir_slash - 1};
-  return sv_equal_cstr(parent, "std") ? stem : none;
+  return none;
 }
 
 void mod_adopt_std(Module *m, StringView name, Allocator *al) {
@@ -215,7 +222,7 @@ Module *mod_new(StringView file_path, Allocator *al) {
   // a `<std>/…` key names a std module by construction; a real path only does
   // so once `mod_adopt_std` says the entry point spelled the library.
   if (is_std_key(file_path)) {
-    m->std_name = std_key_leaf(file_path);
+    m->std_name = std_key_name(file_path);
   }
   vscope_init(&m->vscope, NULL, al);
   tscope_init(&m->tscope, NULL, al);
@@ -248,6 +255,50 @@ static bool mod_prefix_exists(ModuleRegistry *reg, StringView base_dir,
   prefix.count = count;
   StringView file = mod_file_for_use(base_dir, &prefix, al);
   return modreg_find(reg, file) >= 0 || file_exists(file.chars);
+}
+
+// The longest prefix of a `std::…` use path that names an embedded module:
+// its library-relative name, with `*count` set to how many segments it spans
+// *including* the leading `std`. A zero count means no prefix named one, and
+// the returned name is meaningless.
+//
+// This is `mod_prefix_exists`' question asked of the embedded table instead of
+// the filesystem, and the two resolvers have to agree about one file. They can
+// only be made to agree by asking the same thing: longest prefix wins here as
+// it does there, so a module `std::a::b` shadows an item `b` of `std::a`, the
+// same way `a/b.dt` beats an item `b` of `a.dt` for a bare user import.
+static StringView std_module_prefix(const Path *path, int *count,
+                                    Allocator *al) {
+  *count = 0;
+  if (path->count < 2) {
+    return (StringView){0};
+  }
+
+  // The segments after `std`, joined with '/' — the shape `embed_std.sh` keys
+  // the table by. Built once at full length and grown a segment at a time,
+  // since every prefix is a prefix of these same bytes.
+  int total = 0;
+  for (int i = 1; i < path->count; i++) {
+    total += path->segments[i].name.len + (i > 1 ? 1 : 0);
+  }
+  char *buf = al_alloc(al, sizeof(char) * (size_t)(total + 1));
+  buf[total] = '\0';
+
+  StringView name = {.chars = buf, .len = 0};
+  StringView best = {0};
+  for (int i = 1; i < path->count; i++) {
+    if (i > 1) {
+      buf[name.len++] = '/';
+    }
+    StringView seg = path->segments[i].name;
+    memcpy(buf + name.len, seg.chars, (size_t)seg.len);
+    name.len += seg.len;
+    if (std_module_source(name) != NULL) {
+      best = name;
+      *count = i + 1;
+    }
+  }
+  return best;
 }
 
 // render a use path back as `a::b` for diagnostics. exact-sized, so there is
@@ -324,20 +375,42 @@ bool mod_collect_imports(Module *m, ModuleRegistry *reg, StringView base_dir,
       decl->as.use_decl.qualifier = path->segments[path->count - 1].name;
     }
 
-    // `std` names the embedded standard library. A std module is exactly two
-    // segments (`std::<leaf>`), so a bare `use std::x;` binds that module and a
-    // longer `use std::x::item;` imports an item from it. A std module that
-    // exists is an ordinary registry entry — same dedup, same graph edge, same
-    // `pub` rules — differing from a user module *only* in where mod_parse gets
-    // its bytes. Keeping it ordinary is what makes moving std to a real
-    // directory later a one-branch change.
+    // `std` names the embedded standard library. std modules nest, so which
+    // segments are the module is a lookup rather than a constant: the longest
+    // prefix the embedded table answers to. A bare `use std::cmp;` binds that
+    // module, `use std::cmp::max;` imports an item from it, and
+    // `use std::collections::hashmap::HashMap;` does the same one level down.
+    // A std module that exists is an ordinary registry entry — same dedup,
+    // same graph edge, same `pub` rules — differing from a user module *only*
+    // in where mod_parse gets its bytes. Keeping it ordinary is what makes
+    // moving std to a real directory later a one-branch change.
     if (path->count > 0 && sv_equal_cstr(path->segments[0].name, "std")) {
-      bool is_module = bare && path->count == 2 &&
-                       std_module_source(path->segments[1].name) != NULL;
-      // a std module is exactly two segments, so the shape of what follows is
-      // arithmetic rather than a file question: one segment is an item, two are
-      // an enum and its variant.
-      int extra = path->count - 2 - (bare ? 1 : 0);
+      int mlen = 0;
+      StringView mod_name = std_module_prefix(path, &mlen, al);
+      if (mlen == 0) {
+        // name what was looked for, not the whole path: the trailing segments
+        // of `use std::nope::thing` are an item spelling, and with nothing
+        // resolved there is no way to tell how many of them were meant as the
+        // module. The first segment after `std` is the part that has to exist
+        // either way.
+        Path mod_only = *path;
+        if (mod_only.count > 2) {
+          mod_only.count = 2;
+        }
+        StringView mod_path = sprint_mod_path(&mod_only, al);
+        diag_error(diags, path->span,
+                   "there is no standard library module '" SV_FMT "'",
+                   SV_ARG(mod_path));
+        diag_note(diags, (Span){0}, "available: %s", std_module_names());
+        ok = false;
+        continue;
+      }
+
+      bool is_module = bare && path->count == mlen;
+      // with the module settled, the shape of what follows is arithmetic
+      // rather than a file question: one segment is an item, two are an enum
+      // and its variant.
+      int extra = path->count - mlen - (bare ? 1 : 0);
       if (extra > 1) {
         diag_error(diags, path->span,
                    "too many segments in use path: '" SV_FMT
@@ -358,25 +431,6 @@ bool mod_collect_imports(Module *m, ModuleRegistry *reg, StringView base_dir,
       if (extra == 1) {
         decl->as.use_decl.qualifier =
             path->segments[path->count - 1 - (bare ? 1 : 0)].name;
-      }
-
-      StringView mod_name =
-          path->count > 1 ? path->segments[1].name : (StringView){0};
-
-      if (std_module_source(mod_name) == NULL) {
-        // name the module looked for (`std::<leaf>`), not the whole path — the
-        // trailing segments of `use std::nope::thing` are an item spelling.
-        Path mod_only = *path;
-        if (mod_only.count > 2) {
-          mod_only.count = 2;
-        }
-        StringView mod_path = sprint_mod_path(&mod_only, al);
-        diag_error(diags, path->span,
-                   "there is no standard library module '" SV_FMT "'",
-                   SV_ARG(mod_path));
-        diag_note(diags, (Span){0}, "available: %s", std_module_names());
-        ok = false;
-        continue;
       }
 
       decl->as.use_decl.is_module_import = is_module;
@@ -590,7 +644,7 @@ bool mod_parse(Module *m, DiagBag *diags, Allocator *al) {
   // module read from disk, which is what makes it a lint of the file being
   // edited rather than of whatever `make` last mirrored.
   if (is_std_key(m->file_path)) {
-    const char *src = std_module_source(std_key_leaf(m->file_path));
+    const char *src = std_module_source(std_key_name(m->file_path));
     assert(src != NULL && "std module registered without embedded source");
     m->source = (String){.chars = (char *)src, .len = (int)strlen(src)};
   } else {

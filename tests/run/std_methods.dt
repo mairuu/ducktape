@@ -24,7 +24,7 @@
 use std::io::print;
 use std::string;
 use std::array;
-use std::strbuf;
+use std::string::buf;
 use std::char;
 use std::cmp::{max, min};
 

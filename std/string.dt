@@ -27,7 +27,7 @@
 # building `impl Ord for String` on `compare` here, and it is what `std::array`
 # stopped being able to promise once `pop` started answering with an `Option`.
 
-use std::strbuf;
+use std::string::buf;
 
 impl String {
     @native("string_len")

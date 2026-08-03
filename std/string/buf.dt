@@ -1,4 +1,4 @@
-# std::strbuf — a growable text buffer, the object a `String` is built from.
+# std::string::buf — a growable text buffer, the object a `String` is built from.
 #
 # `a + b` allocates a whole new String and interns it, so growing one a piece at
 # a time re-interns the entire accumulation at every step. A `StringBuf` is the

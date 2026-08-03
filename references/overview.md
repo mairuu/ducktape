@@ -22,9 +22,9 @@ names a file, that file is the source of truth. Historical design notes live in
 | `tests/fail/` | programs that must fail; first line `#! expect: <substring>` asserts on stderr |
 | `tests/run/` | programs executed with `--run`; `#> line` comments assert on stdout |
 | `tests/fail_run/` | like `tests/fail`, but invoked with `--run` — for programs that type-check yet the VM rejects |
-| `std/` | the standard library, written in ducktape; embedded into the binary at build time. The bodies that cannot be (`print`, array/string/char primitives, hash mixing) are bodyless declarations bound to `src/native.c`. Naming one file compiles it *as* that std module and warns (milestone 90); `make test` lints all of them under the `tests/pass` rule |
+| `std/` | the standard library, written in ducktape; embedded into the binary at build time. The bodies that cannot be (`print`, array/string/char primitives, hash mixing) are bodyless declarations bound to `src/native.c`. A subdirectory nests (`std/collections/hashmap.dt` is `std::collections::hashmap`, milestone 91). Naming one file compiles it *as* that std module and warns (milestone 90); `make test` lints all of them under the `tests/pass` rule |
 | `scripts/run_tests.sh` | the test runner (invoked by `make test`) |
-| `scripts/embed_std.sh` | mirrors `std/*.dt` into `build/std_data.h` for `src/std_src.c` |
+| `scripts/embed_std.sh` | mirrors `std/**/*.dt` into `build/std_data.h` for `src/std_src.c`, keyed by path relative to `std/` so a module may nest |
 | `editors/vscode/` | a VS Code extension: TextMate grammar + language config for `.dt` (highlighting only, no language server) |
 | `references/` | these docs + `grammar.ebnf` |
 

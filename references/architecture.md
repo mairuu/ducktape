@@ -657,12 +657,20 @@ alternative rather than the internals:
 
 ### The embedded standard library
 
-`std/*.dt` are ordinary ducktape sources, mirrored into the binary by
+`std/**/*.dt` are ordinary ducktape sources, mirrored into the binary by
 `scripts/embed_std.sh` (one C string literal per line, concatenated by the
 compiler) into `build/std_data.h`, which `src/std_src.c` includes as its table.
 The `.dt` files stay the source of truth and remain directly runnable; the
 generated header lives in `build/`, so `make format` never touches it and
 `make clean` removes it.
+
+A module's table name is **its path relative to `std/` with `.dt` dropped**, so
+`std/collections/hashmap.dt` is `collections/hashmap` and std nests (milestone
+91). Keeping the separator `/` rather than `::` is what makes nesting nearly
+free downstream: the name is already the shape a key wants, so `std_mod_key`
+stays one concatenation and `<std>/collections/hashmap.dt` still reads as a
+path. Only the unknown-module note translates back, `/` to `::`, because it is
+read by someone about to type the name.
 
 The design rule is that **a std module is an ordinary `Module`**. `use std::cmp`
 resolves to a registry entry exactly like a user import does, and therefore gets
@@ -680,14 +688,30 @@ collide with a user path: a real one is a base dir plus identifier segments, and
 an identifier cannot contain `<`. The key also ignores `base_dir`, so two
 modules importing std from different directories dedup to one entry.
 
+#### Which segments name the module
+
+Since std nests, `use std::a::b::c` cannot read `b` as the module by position.
+`std_module_prefix` asks the embedded table for the **longest prefix** of the
+path that names a module and returns how many segments it spans; what follows
+is an item, or an enum and a variant, exactly as before — the arithmetic is now
+measured from there instead of from a fixed two. The name is built once at full
+length and grown a segment at a time, since every prefix is a prefix of the same
+bytes.
+
+This is deliberately the same question `mod_prefix_exists` asks the filesystem
+for a user path, because the two resolvers have to agree about one file and the
+only way to make them agree is to ask the same thing. Longest wins on both
+sides, so a module `std::a::b` shadows an item `b` of `std::a` — which is what
+lets `std::string` hold items *and* the module `std::string::buf`.
+
 #### Naming a std file as the entry point
 
 A std source file named on the command line **is** that std module (milestone
 90). Before it, the entry was keyed under its real path while the prelude
 loaded the same source under `<std>/…`, and **two keys for one file is two
 modules** — each with its own copy of every type and trait the file declares.
-Five files said so (`array`, `char`, `iter`, `strbuf`, `string`: their inherent
-impls land on interned types, so the copies collided). The other six in the
+Five files said so (`array`, `char`, `iter`, `string/buf`, `string`: their
+inherent impls land on interned types, so the copies collided). The other six in the
 prelude's closure were worse — `std/cmp.dt`'s `Ord` and `<std>/cmp.dt`'s `Ord`
 are different `TraitDef`s, so coherence saw nothing to object to and a *shadow*
 std type-checked against the real one and reported success.
@@ -701,10 +725,13 @@ The fix splits the identity `file_path` had been carrying alone:
 | `std_name` | is this a std module: the `@lang` right, the prelude exemption, the warning audience |
 
 `std_name_for_entry` decides adoption lexically, like every other path question
-here: the parent component must be exactly `std` **and** the stem must name a
-module this binary embeds. Both halves matter, and `run_tests.sh` pins each by
-compiling a near-miss that uses a preluded name it never imports — proof it
-still got the prelude. `mod_adopt_std` sets the two fields, and `modreg_find`
+here: an **ancestor** component must be exactly `std` **and** what follows it
+must name a module this binary embeds. Both halves matter, and `run_tests.sh`
+pins each by compiling a near-miss that uses a preluded name it never imports —
+proof it still got the prelude — plus the converse, a real name that *must* now
+fail to resolve it, since a file that merely compiles proves nothing either way.
+Slashes are walked right to left, so the nearest `std` ancestor wins and the
+candidate name is tried shortest-first. `mod_adopt_std` sets the two fields, and `modreg_find`
 matching the alias is the whole of what discovery needs: a later `use std::cmp`
 finds the module already registered instead of minting one.
 
@@ -2168,5 +2195,5 @@ would orphan onto whatever was reported last.
 
 Warnings are pinned by `tests/warn/`, which asserts exit 0 *and* matching
 stderr — the combination the pass and fail buckets both exclude. `run_tests.sh`
-additionally lints every `std/*.dt` under the `tests/pass` rule, so a warning in
+additionally lints every `std/**/*.dt` under the `tests/pass` rule, so a warning in
 std fails the suite instead of keeping the silence a *program* gets.

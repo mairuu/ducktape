@@ -40,7 +40,10 @@ DEPS     := $(SRCS:$(SRCDIR)/%.c=$(DEPDIR)/%.d)
 # files are the source of truth and stay directly runnable; std_data.h is a
 # generated fragment src/std_src.c includes.
 STDDIR   := std
-STDSRCS  := $(wildcard $(STDDIR)/*.dt)
+# std nests, so the prerequisite list has to as well — one level of directory
+# is all the library uses, and a glob that misses a file silently mirrors a
+# stale copy of it into the binary.
+STDSRCS  := $(wildcard $(STDDIR)/*.dt) $(wildcard $(STDDIR)/*/*.dt)
 STDDATA  := $(BUILDDIR)/std_data.h
 
 # compile_commands.json

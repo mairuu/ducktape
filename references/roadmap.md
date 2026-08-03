@@ -1545,6 +1545,44 @@ keep this file small. Everything from 55 on is below.
   warnings, +20 suite checks. Left over: the user-owned `std/` directory case
   (see warts) reports the consequence and not the cause.
 
+- **91. Two resolvers, one file** (`TBD`) — std nests:
+  `use std::collections::hashmap;`. Design: `language.md` "The standard
+  library" and "`std::collections::hashmap`"; `architecture.md` "The embedded
+  standard library" / "Which segments name the module"; `overview.md` layout.
+  The four flat sites collapse to one question asked twice, and **the milestone
+  is making the two askers agree**. A module's table name became its path
+  relative to `std/`, which is what kept the cost low: the name was already the
+  shape a key wants, so `std_mod_key` and `<std>/…` needed no change at all, and
+  only the unknown-module note translates `/` back to `::`. `std_module_prefix`
+  then asks the embedded table for the **longest prefix** that names a module —
+  deliberately `mod_prefix_exists`' question, since two resolvers that must
+  agree about one file can only be made to by asking the same thing — and the
+  segment arithmetic after it is measured from there rather than from a fixed
+  two. Adoption widened from "the parent component is `std`" to "an ancestor
+  is", nearest first.
+
+  Migrated only what the evidence determined: `collections` (533 lines, two
+  public types, the set written on the map) into sibling modules, and `strbuf`
+  into `std::string::buf` — a compound name that was only ever compound because
+  std was flat. **The second one is what makes the milestone testable.** Nothing
+  distinguishes longest-prefix from first-match unless some module both exists
+  *and* has a child, and `std::string` + `std::string::buf` is that case:
+  sabotaged to first-match, 388 tests fail with `<std>/string.dt imports
+  <std>/string.dt`. Sabotaging adoption instead is caught by the new
+  `check_adopted` and, independently, by milestone 90's signature — a conflicting
+  inherent impl "in module `<std>/string/buf.dt`", a second module minted for
+  one file.
+
+  **`core` was planned here and is not done, on the evidence.** The prelude
+  closure is computed, but what it computes is a *dependency* fact, not a
+  taxonomy: it puts `array` and `string` beside `ops` because both happen to be
+  reachable, and it lengthens the most-typed names in the library to shorten
+  nothing. Rust's analogue is a separate crate spelled `core::cmp`, never
+  `std::core::cmp`. Also found: `pub use` already existed, so a directory *can*
+  be a module — `std/collections.dt` is a facade beside its own directory and
+  `use std::collections::HashMap;` still works. Left over: nothing generates or
+  checks that facade (see warts).
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -1553,8 +1591,9 @@ milestone (~900 lines).
 Nothing on the main line is *blocked*: every construct the checker accepts in
 `tests/pass/in_fixed.dt` now also runs. The list below is what the "known
 warts" section would promote first, in the order that pays off soonest — pick
-by appetite rather than by necessity. **Item 1 is the exception: it is the only
-entry whose cost rises while it waits**, which is why it is first.
+by appetite rather than by necessity. Std module nesting was the one entry whose
+cost rose while it waited, and it is milestone 91; nothing here has that
+property, so the order is preference again.
 
 (**A heterogeneous operator** was the largest open design question and is now
 milestone 75: `V2 * Float`. What it needed from the language was two things
@@ -1566,39 +1605,7 @@ unified" limit stopped being a blocker and became a *cost*: `Output` works, it
 just has to be written down at every bound that keeps the result, because
 nothing infers one.)
 
-1. **Std module nesting — `use std::collections::hashmap`.** std is flat and
-   `use std::x::y` reads `y` as an *item* of module `x`, always. Four sites say
-   so: `embed_std.sh` globs `std/*.dt` non-recursively with `basename` as the
-   name, `mod_collect_imports` takes `segments[1]` as the whole module name,
-   `std_mod_key` builds a flat `<std>/x.dt`, and milestone 90's
-   `std_name_for_entry` matches exactly one parent component. User modules
-   already nest — `mod_prefix_exists` asks the *filesystem* for the longest
-   prefix that names a file — so std needs the same probe against the embedded
-   table, and **the two resolvers must agree about one file**, which is
-   milestone 90's bug class exactly. That is the risk, and it is the milestone.
-
-   **Why this is first.** `use std::` lines across the tree: 65 (Jul 22) → 214
-   (Jul 26) → 456 (Aug 1) → 500 (Aug 3), about 22/day, and every one of them is
-   still ours to edit. Migration cost only rises. Taxonomy confidence also only
-   rises — the two curves argue opposite ways, so the plan **decouples them**:
-   build the mechanism now, commit to groups incrementally, and move only what
-   is *evidence-determined* rather than taste. `collections` is done
-   (`a12c7d6`, and it was never a guess — the module held `HashSet` too). A
-   `core` group would be the other, because the prelude closure is **computed**
-   (`mod_inject_prelude` plus transitive imports = 11 of 18 modules), not
-   chosen. `sort`, `char`, `strbuf` and `array` stay at top level until they
-   have a reason; mixed depth is normal, and Rust ships
-   `std::collections::HashMap` beside `std::cmp`.
-
-   **What argues for waiting**, and it is the only thing left: doing it at 18
-   modules is doing it with less test surface to catch a resolver disagreement.
-   Nothing is *forcing* it — 18 names still print on one line in the
-   unknown-module diagnostic, and the only compound name flat has cost so far is
-   `strbuf`. The cost curve is the whole argument. Bounds on the work if the
-   taxonomy were ever taken further: 500 `use std::` lines over 275 files, of
-   which `io` alone is 209.
-
-2. **Growing std on top of the natives** — the mechanism landed in milestone
+1. **Growing std on top of the natives** — the mechanism landed in milestone
    16 with a deliberately small registry, and the pieces with a design question
    behind them are done: a growable `ObjArray` (milestone 23, so `std::array`
    has `push`/`pop`), a growable text buffer (milestone 24, so a `String` can be
@@ -1700,7 +1707,7 @@ name its own argument without macros, and that `assert_eq`'s `Display` bound is
 bought by the *message* rather than the comparison — belong to item 3 as much
 as here.)
 
-3. **A custom equality trait (`Eq`) — the named consumer has now declined it.**
+2. **A custom equality trait (`Eq`) — the named consumer has now declined it.**
    Not on the main line, and deliberately deferred rather than planned —
    recorded here so the reasoning survives. Milestone 63 built the hash map this
    item had been waiting for and found it wanted `Hash` and nothing else: `==`
@@ -1821,7 +1828,14 @@ via `Module.decl_base`) and is not part of the main line.
   happens to have `std/cmp.dt` gets it checked with no prelude and `@lang`
   honoured, which usually fails confusingly. Deliberate: `use std::cmp` is
   intercepted before the filesystem, so such a directory was never reachable as
-  `std::` anyway — but the diagnostic does not explain what happened
+  `std::` anyway — but the diagnostic does not explain what happened. Milestone
+  91 widens the reach without widening the explanation: the name may now span
+  directories, so `std/collections/hashmap.dt` is adopted too
+- a group's facade is hand-written and unchecked (milestone 91's remainder).
+  `std::collections` is a module only because `std/collections.dt` sits beside
+  the directory and `pub use`s what is under it; nothing generates that file or
+  notices when it falls behind, so a module added to a group is reachable by its
+  full path and silently missing from the short one
 - `while true { }` still types `()`, and deliberately: its condition is an
   expression, and the checker reads types rather than values. `loop { }` is the
   spelling that asks no condition (milestone 86)

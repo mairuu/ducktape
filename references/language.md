@@ -51,7 +51,7 @@ case for it) — declare variables inside functions only.
 |---|---|
 | `Int` `Float` `Bool` `String` | primitives |
 | `Char` | one Unicode scalar value — see "`std::char`" |
-| `StringBuf` | a growable text buffer — see "`std::strbuf`" |
+| `StringBuf` | a growable text buffer — see "`std::string::buf`" |
 | `Range` | what `a..b` / `a..=b` evaluate to — see "`std::iter`" |
 | `()` | unit |
 | `Never` | code that does not come back — see "`std::panic`" |
@@ -1449,11 +1449,25 @@ involved.
 directory. `std::` never touches the filesystem, so a local `std.dt` is
 unreachable. Where ducktape cannot express the operation, a module declares a
 bodyless function bound to C (see "Native functions" below); `std::assert`,
-`std::cmp`, `std::collections`, `std::convert`, `std::ops`, `std::option`,
-`std::result`, `std::sort` and `std::text` need none, `std::io` and
-`std::panic` are nothing but, and `std::array`, `std::string`, `std::strbuf`,
-`std::char` and `std::hash` are the mixed case — a handful of natives, and
-every other function written on top of them in ducktape.
+`std::cmp`, `std::collections::hashmap`, `std::collections::hashset`,
+`std::convert`, `std::ops`, `std::option`, `std::result`, `std::sort` and
+`std::text` need none, `std::io` and `std::panic` are nothing but, and
+`std::array`, `std::string`, `std::string::buf`, `std::char` and `std::hash`
+are the mixed case — a handful of natives, and every other function written on
+top of them in ducktape.
+
+**A std module may nest.** A subdirectory of `std/` is a path segment, so
+`std/collections/hashmap.dt` is `std::collections::hashmap`, and which segments
+of a use path name the module is the *longest prefix* the library holds — the
+same question a user path asks the filesystem. A module and a group may share a
+name: `std::string` is a module and `std::string::buf` is another under it, so
+`use std::string::join;` imports an item while `use std::string::buf;` binds a
+module.
+
+A directory is only a path prefix. What makes a group nameable is an ordinary
+module beside it that `pub use`s its children — `std/collections.dt` is that
+facade, which is why `use std::collections::HashMap;` still works alongside the
+longer `use std::collections::hashmap::HashMap;`.
 
 **There is a small prelude.** Every program implicitly imports `Option` and its
 variants `Some`/`None` (`std::option`), `Result` and its variants `Ok`/`Err`
@@ -2210,7 +2224,7 @@ carries the same markers and must still work as an ordinary module. (Putting
 `@lang` on something it cannot mark — a struct, a method — is a parse error, the
 one placement it is refused everywhere.)
 
-### `std::io`, `std::array`, `std::string`, `std::strbuf`
+### `std::io`, `std::array`, `std::string`, `std::string::buf`
 
 The primitive operations are **methods** (milestone 40); a free-function line is
 a deliberate exception, marked below.
@@ -2316,13 +2330,13 @@ contract is "n values in, one out" and it has no handle on the `VariantDef` an
 enum instance needs, so a native *cannot* build an `Option` at all. Popping
 does not release capacity; the buffer is returned when the array is collected.
 
-**A `String` is built with a `StringBuf`, which lives in `std::strbuf`.** `a +
+**A `String` is built with a `StringBuf`, which lives in `std::string::buf`.** `a +
 b` allocates a new String and interns it, so growing one a piece at a time
 re-interns the whole accumulation at every step. A buffer appends in place
 instead, and `build` interns once:
 
 ```
-use std::strbuf;
+use std::string::buf;
 
 var b = StringBuf::new();
 for word in words {
@@ -2364,7 +2378,7 @@ reused across a loop. `std::string`'s `repeat` method and its free `join`,
 `concat` and `from_chars` are the String-shaped conveniences on top, built
 through the buffer, the same split `std::array` makes; `repeat` is the one that
 shows what the buffer buys — it copies bytes straight in, allocating no String
-per copy. `std::string` reaches only `std::strbuf`, which imports nothing and
+per copy. `std::string` reaches only `std::string::buf`, which imports nothing and
 ships only methods on its own `StringBuf`, so importing `std::string` hands a
 program no impls for a type it did not itself name beyond that one — the property
 that makes it safe for `std::cmp` to depend on it for `impl Ord for String`. What
@@ -2485,7 +2499,7 @@ imports `std::cmp`; and every function in `std::text` either answers with an
 import `Option` or array `push`, closing the loop `string → option → cmp →
 string` — which the dependency graph rejects outright ("module cycle"). The
 module everything else builds on cannot reach back up to them (it reaches only
-`std::strbuf`, a pure leaf below it); the operations that do live one module
+`std::string::buf`, a pure leaf below it); the operations that do live one module
 higher. This is `std::array` losing its leaf status once `pop` returned an
 `Option`, taken to the point where the split is *forced*. `std::text` uses
 `s.len()` (bytes) and `cs.len()` (elements) side by side, told apart by their
@@ -2642,12 +2656,14 @@ one call, and is what a caller that is not itself an impl wants.
 - Two natives, `hash_mix` and `hash_string` — exactly the two steps ducktape
   cannot take. Not preluded.
 
-### `std::collections`
+### `std::collections::hashmap`, `std::collections::hashset`
 
-A hash map and the set written on it.
+A hash map, and the set written on it in a sibling module. `std::collections`
+is a facade over the two, so either spelling reaches them.
 
 ```
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet};          # through the facade
+use std::collections::hashmap::HashMap;            # or the module directly
 
 var m: HashMap<String, Int> = HashMap::new();
 m.insert("one", 1);            # None — nothing was displaced
@@ -2750,7 +2766,7 @@ HashSet::with_capacity(n); s.capacity(); s.reserve(n);   # forwarded, all three
 | an array iterator detached from the array it walks | `xs.iter()` holds the array and snapshots nothing, so a `push`/`pop` mid-walk is visible (never out of bounds — see "Sources"). `xs.iter().collect()` is the copy |
 | an *inferred* trait type argument, or an equality binding that solves one side from the other | a trait's arguments are written where the trait is named, and an equality is compared rather than unified. So `T: Add<Output = T>` is a promise checked against the impl, never a way to work out what `Output` should be |
 | an associated *type* default (`type Output = Self;` in a trait) | not parsed. A trait's *type parameter* may carry a default (`Rhs = Self`), which is why the `std::ops` migration for `Rhs` was free and the one for `Output` was not: every impl states its `Output`, and every bound that wants to keep the result names it |
-| custom `==` (an `Eq` trait) | equality stays structural and import-less for every type; only ordering and arithmetic are traits. `std::collections` was the consumer this was waiting on and did not need it: a hash map resolves collisions with the structural `==` on a `K` bounded only by `Hash` |
+| custom `==` (an `Eq` trait) | equality stays structural and import-less for every type; only ordering and arithmetic are traits. `std::collections::hashmap` was the consumer this was waiting on and did not need it: a hash map resolves collisions with the structural `==` on a `K` bounded only by `Hash` |
 | a bitwise operator on a non-`Int` | refused, with no trait to appeal to: there is no `BitAnd` the way there is an `Add`, so `1.5 & 2` is a type error rather than a call. A `Float`'s bits have no spelling at all — there is no reinterpreting cast |
 | compound bitwise assignment (`&=`, `\|=`, `<<=`) | not parsed; write `x = x & y`. What it would *mean* is settled — `a op= b` is `a = a op b`, which is how `%=` joined `+= -= *= /=` — so what is missing is the spelling, and the scanning is the awkward part: `>>=` sits next to the one place in the grammar where whitespace already changes a parse (`a > > b` versus `a >> b`) |
 | unsigned integers | there is one integer type, signed `Int`. `>>>` is what stands in for an unsigned shift; a value with the top bit set prints as negative even when it is being used as a bit pattern |
@@ -2776,7 +2792,7 @@ HashSet::with_capacity(n); s.capacity(); s.reserve(n);   # forwarded, all three
 | variable shadowing diagnostics | a `var` may silently shadow an earlier one in the same scope (top-level *item* names do collide — that is an error). There is a warning severity for it to use since milestone 89; what is missing is the analysis, and the choice about whether shadowing deserves one at all |
 | seeing a warning from the standard library | warnings are advice to an author, so they are dropped for the embedded std that every program compiles from source. Naming the file (`./build/ducktape std/cmp.dt`) compiles it *as* that std module and does warn, because the root always has a reader — milestone 90, which also made all 18 files compilable that way |
 | turning a warning off, or up into an error | there is no `#[allow]`, no `-W` flag, and no `-Werror`; the two warnings that exist are always on for any module but a std dependency |
-| a **nested** std module (`use std::collections::hashmap;`) | std is flat: `use std::x::y` always reads `y` as an *item* of module `x`, because the embedded table is keyed `<std>/x.dt` with no directory in it. Your own modules do nest — a user path asks the filesystem for the longest prefix that names a file — so this is the one place module paths behave differently inside std than outside it (`roadmap.md` "Next" item 1) |
+| a directory that is a module on its own | nesting (milestone 91) makes `std/collections/` a path prefix, not a module: `use std::collections;` resolves only because `std/collections.dt` sits beside the directory and `pub use`s its children. Nothing generates that facade or checks it stays in step, so a module added under a group is reachable by its full path and invisible from the short one until someone edits the facade by hand |
 | declaring a type whose name is a builtin (`struct Range`, `struct String`) | accepted, but a builtin name is resolved before the type scope is consulted, so every mention of it means the builtin and the declaration is unreachable |
 | overlapping method names across impls of one type | rejected since milestone 68: one type spends an inherent name once, whether the two definitions sit in two impl blocks or in one. A name the impl's *trait* declares is exempt — a bound or a trait-qualified path names which body was meant, so two traits may both declare `next` for one type. Where several impls legitimately declare a name (a generic trait like `Into<Int>` / `Into<String>`), a bare path still picks the first registered impl. Milestone 70 extends the same rule to an enum's variants, which spend from the same pool: an inherent associated function under a variant's name is refused, since `Enum::name` reads the variant |
 | capturing a `for` loop variable in a closure | runs, but the closure sees the loop variable's *final* value (one shared cell), not a per-iteration copy — `runtime.md` "Closures & upvalues". A `while var` binding does *not* share this: it is pushed and closed inside the loop, so each turn's closure keeps that turn's value |

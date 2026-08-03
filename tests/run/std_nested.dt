@@ -1,0 +1,42 @@
+# std modules nest, and all three import shapes reach one: a bare module import
+# binds the module as a qualifier, a longer path takes the trailing name as an
+# item, and braces take several. The parent of a nested module may be a module
+# itself (`std::string` holds items *and* `std::string::buf`), so which segments
+# name the module is the longest prefix the embedded table answers to.
+#> 2
+#> true
+#> 7
+#> ab-c
+
+use std::io::print;
+use std::collections::hashmap;
+use std::collections::hashmap::HashMap;
+use std::collections::hashset::{HashSet};
+# the two below share a prefix and resolve differently: `buf` is a module under
+# `std::string`, `join` is an item of `std::string` itself.
+use std::string::buf;
+use std::string::join;
+
+fun main() {
+    # the bare import: the module name qualifies what it holds.
+    var counts: hashmap::HashMap<String, Int> = hashmap::HashMap::new();
+    counts.insert("a", 1);
+    counts.insert("b", 2);
+    print(counts.len());
+
+    # the item import names the same type without the qualifier.
+    var m: HashMap<Int, Int> = HashMap::new();
+    m.insert(3, 4);
+    print(m.contains_key(3));
+
+    var s: HashSet<Int> = HashSet::new();
+    s.insert(7);
+    s.insert(7);
+    print(s.to_array()[0]);
+
+    # `std::string::buf` is imported for its impls; `join` is an ordinary item.
+    var b = StringBuf::new();
+    b.push("a");
+    b.push("b");
+    print(join([b.build(), "c"], "-"));
+}

@@ -43,7 +43,7 @@
 # them is only where it comes from.
 
 use std::string;
-use std::strbuf;
+use std::string::buf;
 use std::array;
 use std::option::Option;
 use std::char;

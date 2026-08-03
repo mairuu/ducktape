@@ -33,21 +33,35 @@ const char *std_module_source(StringView name) {
 const char *std_module_names(void) {
   // built once into a static buffer: the only caller is a diagnostic, and the
   // list is fixed at compile time.
-  static char buf[256];
+  static char buf[512];
   static bool built = false;
   if (built) {
     return buf;
   }
 
+  // A nested module is *keyed* by path and *spelled* `::`, and this list is
+  // read by someone about to type one — so the separator is translated here,
+  // one byte to two, rather than the table carrying the user-facing form.
   size_t n = 0;
-  for (int i = 0; i < STD_MODULE_COUNT; i++) {
-    int written = snprintf(buf + n, sizeof(buf) - n, "%s%s", i > 0 ? ", " : "",
-                           STD_MODULES[i].name);
-    if (written < 0 || (size_t)written >= sizeof(buf) - n) {
-      break; // truncate rather than overflow; it is only a hint
+  for (int i = 0; i < STD_MODULE_COUNT && n + 1 < sizeof(buf); i++) {
+    if (i > 0) {
+      buf[n++] = ',';
+      buf[n++] = ' ';
     }
-    n += (size_t)written;
+    for (const char *c = STD_MODULES[i].name; *c != '\0'; c++) {
+      if (n + 3 >= sizeof(buf)) {
+        goto done; // truncate rather than overflow; it is only a hint
+      }
+      if (*c == '/') {
+        buf[n++] = ':';
+        buf[n++] = ':';
+      } else {
+        buf[n++] = *c;
+      }
+    }
   }
+done:
+  buf[n] = '\0';
   built = true;
   return buf;
 }

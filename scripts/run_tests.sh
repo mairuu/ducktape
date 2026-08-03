@@ -19,10 +19,12 @@
 # `main.dt`, imported modules alongside it. The flat globs are non-recursive,
 # so those siblings are never picked up as tests in their own right.
 #
-# std/*.dt is linted under the same rule as tests/pass: naming a std file
+# std/**.dt is linted under the same rule as tests/pass: naming a std file
 # compiles it as the library module it is (milestone 90), and a root always has
 # a warning audience, so std's own warnings fail the suite instead of hiding
-# behind the silence every *program* gets to keep.
+# behind the silence every *program* gets to keep. std nests (milestone 91), so
+# this glob is the one that must *not* stay flat — a missed file is a module
+# that silently stops being linted.
 set -u
 
 BIN=${1:-build/ducktape}
@@ -95,7 +97,7 @@ for f in "$ROOT"/tests/pass/*.dt "$ROOT"/tests/pass/*/main.dt; do
     check_pass "$f"
 done
 
-for f in "$ROOT"/std/*.dt; do
+for f in "$ROOT"/std/*.dt "$ROOT"/std/*/*.dt; do
     [ -e "$f" ] || continue
     check_pass "$f"
 done
@@ -122,6 +124,32 @@ check_not_adopted() {   # $1 = parent directory name, $2 = file stem
 
 check_not_adopted std mystuff   # the directory matches; `mystuff` is no std module
 check_not_adopted lib cmp       # `cmp` matches; the directory does not
+
+# Nesting only changes how much of the path the second half spans, so both
+# halves still have to be checked one level down.
+check_not_adopted std/collections mystuff   # under `std`, but no such module
+check_not_adopted lib/collections hashmap   # a real module name, no `std` above it
+
+# The same probe read the other way, and the only way to tell adoption from an
+# ordinary module that merely compiles: an adopted file gets no prelude, so a
+# preluded name it never imports must now *fail* to resolve.
+check_adopted() {   # $1 = directory chain, $2 = file stem
+    dir=$(mktemp -d)
+    mkdir -p "$dir/$1"
+    printf 'pub fun f(x: Int) -> Option<Int> { return Some(x); }\n' > "$dir/$1/$2.dt"
+    err=$("$BIN" "$dir/$1/$2.dt" 2>&1 >/dev/null)
+    code=$?
+    rm -rf "$dir"
+    if [ "$code" -ne 0 ] && [ -n "$err" ]; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1))
+        echo "FAIL (not adopted as a std module): $1/$2.dt (exit $code)"
+    fi
+}
+
+check_adopted std cmp                       # flat, as milestone 90 left it
+check_adopted std/collections hashmap       # nested, and the name spans two
 
 for f in "$ROOT"/tests/warn/*.dt "$ROOT"/tests/warn/*/main.dt; do
     [ -e "$f" ] || continue

@@ -41,7 +41,7 @@
 
 use std::io::print;
 use std::string::from_chars;
-use std::strbuf;
+use std::string::buf;
 use std::char;
 use std::cmp::{max, min};
 use std::array;

@@ -1,0 +1,8 @@
+#! expect: has no item named 'nope'
+# A group with a facade is an ordinary module, so an unknown name under it is an
+# unknown *item* rather than an unknown module — the longest prefix that
+# resolved was `std::collections`, and everything after it is read from there.
+# `std::nope::thing` still reports the module, because nothing resolved at all.
+use std::collections::nope::Thing;
+
+fun main() {}

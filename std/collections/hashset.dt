@@ -1,0 +1,88 @@
+# std::collections::hashset — a set written on `std::collections::hashmap`.
+#
+# A `HashSet<T>` is a `HashMap<T, Bool>` whose values are never read, and that
+# is a deliberate trade: it wastes one `Bool` per entry to avoid a second
+# open-addressing implementation that would differ from the first only in what a
+# slot carries. The language has no way to be generic over "a payload or none",
+# so the choice is a wasted field or a duplicated algorithm, and the field is far
+# cheaper to keep correct. Splitting the two into sibling modules is what makes
+# that relationship a dependency the compiler checks rather than a paragraph.
+
+use std::option::Option;
+use std::hash::Hash;
+use std::collections::hashmap::HashMap;
+
+pub struct HashSet<T: Hash> {
+    map: HashMap<T, Bool>,
+}
+
+impl<T: Hash> HashSet<T> {
+    fun new() -> HashSet<T> {
+        var map: HashMap<T, Bool> = HashMap::new();
+        return HashSet { map: map };
+    }
+
+    # A set that can take `n` members before it rehashes. The set forwards the
+    # whole capacity API rather than owning any of it, which is what "a set is a
+    # map whose values are never read" is supposed to mean: a member is an
+    # entry, so the units already agree and there is nothing to convert.
+    fun with_capacity(n: Int) -> HashSet<T> {
+        var map: HashMap<T, Bool> = HashMap::with_capacity(n);
+        return HashSet { map: map };
+    }
+
+    fun capacity(self) -> Int {
+        return self.map.capacity();
+    }
+
+    fun reserve(self, more: Int) {
+        self.map.reserve(more);
+    }
+
+    # Add `value`, answering whether it was *newly* added — `false` means it was
+    # already there. That is the answer a set can give and a map cannot, since
+    # the map's `insert` hands back the displaced value instead.
+    fun insert(self, value: T) -> Bool {
+        match self.map.insert(value, true) {
+            Option::Some(v) => {
+                return false;
+            },
+            Option::None => {
+                return true;
+            },
+        }
+    }
+
+    fun contains(self, value: T) -> Bool {
+        return self.map.contains_key(value);
+    }
+
+    # Take `value` out, answering whether it was there.
+    fun remove(self, value: T) -> Bool {
+        match self.map.remove(value) {
+            Option::Some(v) => {
+                return true;
+            },
+            Option::None => {
+                return false;
+            },
+        }
+    }
+
+    fun len(self) -> Int {
+        return self.map.len();
+    }
+
+    fun is_empty(self) -> Bool {
+        return self.map.is_empty();
+    }
+
+    fun clear(self) {
+        self.map.clear();
+    }
+
+    # The members, in the map's unspecified order.
+    fun to_array(self) -> [T] {
+        return self.map.keys();
+    }
+}

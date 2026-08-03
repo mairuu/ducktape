@@ -31,7 +31,7 @@
 #> true
 
 use std::io::print;
-use std::strbuf;
+use std::string::buf;
 use std::string::{join, concat};
 
 fun main() {
