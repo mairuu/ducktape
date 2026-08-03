@@ -1506,7 +1506,10 @@ keep this file small. Everything from 55 on is below.
   written for `@lang` and needing no change: a module reached through
   `use std::x` is keyed `<std>/x.dt` while the same file named on the command
   line keeps its real path — so std warns while you edit it and is silent while
-  you merely use it, with no new concept. Two things fell out of probing: a
+  you merely use it, with no new concept. **Milestone 90 corrects that last
+  step**: keeping a real path is what made the entry a *second module*, so the
+  escape hatch worked by the same accident that broke five files outright. The
+  audience is now "not std, or the root". Two things fell out of probing: a
   suppressed warning must suppress the notes that follow it, since a note
   attaches to the diagnostic before it *by position* and would otherwise orphan
   onto whatever was reported last (`DiagBag.last_dropped`); and the test harness
@@ -1515,6 +1518,29 @@ keep this file small. Everything from 55 on is below.
   The unreachable warning fired **zero** times across the suite and std, because
   milestone 86 had already deleted the dead trailing `return`s that were its
   only population; it is pinned deliberately instead.
+
+- **90. One file, two keys, two modules** (`SHA`) — `./build/ducktape std/<f>.dt`
+  lints a standard library file for real, and `make test` lints all 18. Design:
+  `architecture.md` "Naming a std file as the entry point" and "Diagnostics";
+  `CLAUDE.md` "Standard library". The finding is that **a module's identity is
+  its registry key**: the same source keyed `std/cmp.dt` and `<std>/cmp.dt` is
+  two modules, each with its own copy of every type and trait the file declares.
+  Five files said so ("conflicting definitions of method" — the ones whose
+  inherent impls land on *interned* types, `[T]`/`Char`/`String`/`StringBuf`),
+  and that visible failure was the lesser half: the six others in the prelude's
+  closure type-checked a **shadow** std against the real one and reported
+  success, because two copies of `trait Ord` are two `TraitDef`s and coherence
+  had nothing to object to. `file_path` had been answering the registry key, the
+  diagnostic label, where the source comes from *and* "is this std?" all at once
+  — split into `alias_path` (a second key the root also answers to) and
+  `std_name` (the `@lang` right, the prelude exemption, the warning audience).
+  Adoption is lexical and needs both halves — a parent component named `std` and
+  a stem the binary embeds — and the source still comes from **disk**, so a lint
+  reads the file being edited rather than the copy `make` last mirrored. It
+  cannot introduce a cycle: merging a duplicate node back into std's own import
+  graph leaves an already-acyclic graph. Measured: 18/18 lint clean with zero
+  warnings, +20 suite checks. Left over: the user-owned `std/` directory case
+  (see warts) reports the consequence and not the cause.
 
 ## Next (in recommended order)
 
@@ -1750,17 +1776,16 @@ via `Module.decl_base`) and is not part of the main line.
 - a refutable `var` binding whose column type inference never pinned down is
   accepted (the tri-state answer reports nothing) and traps at runtime via
   `OP_MATCH_FAIL` instead of at compile time
-- a warning is silenced for the *whole* embedded std, which is right for a
-  program that merely uses it and wrong for the one editing it. The std author's
-  route back is to name the file on the command line (`./build/ducktape
-  std/cmp.dt`), which works because the embedded copy is keyed `<std>/cmp.dt`
-  and the on-disk one is not — but five std files cannot be compiled that way at
-  all (below), so for those there is currently no way to see their warnings
-- `./build/ducktape std/<f>.dt` fails for `array`, `char`, `iter`, `strbuf` and
-  `string` with "conflicting definitions of method": naming the file makes a
-  second module out of source the prelude already pulled in under its `<std>/`
-  key, and the two copies' inherent impls collide. Predates milestone 89, which
-  only made it matter — that command is now also how std is linted
+- there is no way to *ask* about a warning: no `#[allow]`, no `-W`, no
+  `-Werror`. Suppression is the one built-in policy (std, unless it is the
+  root), so a warning a program has decided to live with cannot be silenced and
+  one it wants enforced cannot be made fatal
+- a directory named `std` holding a file named after a std module is compiled
+  *as* that module when named on the command line (milestone 90), so a user who
+  happens to have `std/cmp.dt` gets it checked with no prelude and `@lang`
+  honoured, which usually fails confusingly. Deliberate: `use std::cmp` is
+  intercepted before the filesystem, so such a directory was never reachable as
+  `std::` anyway — but the diagnostic does not explain what happened
 - `while true { }` still types `()`, and deliberately: its condition is an
   expression, and the checker reads types rather than values. `loop { }` is the
   spelling that asks no condition (milestone 86)

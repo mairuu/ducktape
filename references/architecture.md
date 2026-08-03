@@ -667,9 +667,9 @@ generated header lives in `build/`, so `make format` never touches it and
 The design rule is that **a std module is an ordinary `Module`**. `use std::cmp`
 resolves to a registry entry exactly like a user import does, and therefore gets
 dedup, a dependency-graph edge, cycle detection, topological order, `pub`
-checking, linking and codegen for free. `Module.file_path` is used for only
-three things — the registry key (`modreg_find`/`modreg_add`), the diagnostic
-label (`diag_report`), and `read_file` — and only the third needs a real path.
+checking, linking and codegen for free. `Module.file_path` carries the registry
+key (`modreg_find`/`modreg_add`), the diagnostic label (`diag_report`), and the
+argument to `read_file` — and only the third needs a real path.
 
 So the entire difference is **one branch in `mod_parse`**: a `<std>/…` key takes
 its source from `std_module_source`, anything else from `read_file`. Pointing
@@ -679,6 +679,45 @@ key as `<std>/<name>.dt`, and the angle brackets are what guarantee it cannot
 collide with a user path: a real one is a base dir plus identifier segments, and
 an identifier cannot contain `<`. The key also ignores `base_dir`, so two
 modules importing std from different directories dedup to one entry.
+
+#### Naming a std file as the entry point
+
+A std source file named on the command line **is** that std module (milestone
+90). Before it, the entry was keyed under its real path while the prelude
+loaded the same source under `<std>/…`, and **two keys for one file is two
+modules** — each with its own copy of every type and trait the file declares.
+Five files said so (`array`, `char`, `iter`, `strbuf`, `string`: their inherent
+impls land on interned types, so the copies collided). The other six in the
+prelude's closure were worse — `std/cmp.dt`'s `Ord` and `<std>/cmp.dt`'s `Ord`
+are different `TraitDef`s, so coherence saw nothing to object to and a *shadow*
+std type-checked against the real one and reported success.
+
+The fix splits the identity `file_path` had been carrying alone:
+
+| field | question it answers |
+| --- | --- |
+| `file_path` | registry key, diagnostic label, and — for a real path — the file to read |
+| `alias_path` | a *second* key the module also answers to; only ever an adopted root's `<std>/…` |
+| `std_name` | is this a std module: the `@lang` right, the prelude exemption, the warning audience |
+
+`std_name_for_entry` decides adoption lexically, like every other path question
+here: the parent component must be exactly `std` **and** the stem must name a
+module this binary embeds. Both halves matter, and `run_tests.sh` pins each by
+compiling a near-miss that uses a preluded name it never imports — proof it
+still got the prelude. `mod_adopt_std` sets the two fields, and `modreg_find`
+matching the alias is the whole of what discovery needs: a later `use std::cmp`
+finds the module already registered instead of minting one.
+
+The source still comes from **disk**, because `mod_parse` asks the path and not
+`std_name` — a lint has to read the file being edited, not the copy `make` last
+mirrored. Adoption cannot introduce a cycle: it merges a duplicate node back
+into std's own import graph, which is already acyclic.
+
+The cost is deliberate and narrow. A user directory named `std` holding a file
+named after a std module is now compiled *as* that module — no prelude, `@lang`
+honoured — and will usually fail confusingly. It takes away nothing that
+worked: `use std::cmp` is intercepted before the filesystem, so such a
+directory was never reachable as `std::` anyway.
 
 Every `std::` name resolves to a module or is a diagnostic listing the embedded
 ones. `std::io` used to be the exception — a no-op namespace over the builtin
@@ -957,10 +996,10 @@ matches gave:
   than a capture that silently never fires.
 - **Honoured only inside the standard library, inert elsewhere.** A user's
   `@lang` cannot claim a lang item — so it cannot hijack what `"{v}"` dispatches
-  to — but it is *not* an error, because a std file loaded by path
-  (`ducktape std/fmt.dt`) carries the same marker yet is not the embedded
-  `<std>/…` key, and "a std file is an ordinary module, directly runnable" is a
-  property worth keeping (`mod_is_std_module` is the gate). The unknown-key error
+  to — but it is *not* an error, because a marker outside std has to be able to
+  sit there harmlessly. `mod_is_std_module` is the gate, and since milestone 90
+  it is true of `ducktape std/fmt.dt` as well: that file *is* std, so its
+  markers are honoured rather than inert. The unknown-key error
   is therefore reachable only from within std, which is exactly where a typo
   would be. Milestone 77 makes the inertness matter for a *type* rather than a
   dispatch target, which is a sharper claim — a user's `@lang("option")` on its
@@ -2116,14 +2155,18 @@ phase. Phases report whether errors occurred; `main` exits 0/1 accordingly —
 **Levels.** `DIAG_ERROR` is a fact about the program. `DIAG_WARNING` is advice
 to whoever wrote it, which means it presumes an author who can act on it: the
 embedded std is compiled from source into every program and nobody using one can
-edit it, so `compiler_begin_module` calls `diag_set_warnings(!mod_is_std_module)`
+edit it, so `compiler_begin_module` calls `diag_set_warnings(module_has_audience)`
 at the head of every per-module loop, and `diag_warning` drops the message
-rather than the reporter filtering it later. The same file named on the command
-line is *not* a std module — the embedded copy is keyed `<std>/x.dt` and a path
-argument is not — so std warns for the person editing it. `DIAG_NOTE` attaches
+rather than the reporter filtering it later. The audience is **not std, or the
+root**: naming a std file on the command line makes you precisely the reader std
+lacks as a dependency, so it warns for the person editing it (milestone 90 —
+before it the root escaped suppression by not being a std module at all, which
+was the same accident that gave it a second copy of itself). `DIAG_NOTE` attaches
 to the diagnostic before it by position, so a dropped warning sets
 `last_dropped` and the notes that follow it are dropped too; otherwise they
 would orphan onto whatever was reported last.
 
 Warnings are pinned by `tests/warn/`, which asserts exit 0 *and* matching
-stderr — the combination the pass and fail buckets both exclude.
+stderr — the combination the pass and fail buckets both exclude. `run_tests.sh`
+additionally lints every `std/*.dt` under the `tests/pass` rule, so a warning in
+std fails the suite instead of keeping the silence a *program* gets.

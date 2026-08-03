@@ -78,8 +78,23 @@ typedef struct {
 
 struct Module {
   // path as given on the command line, or derived from it; used verbatim for
-  // fopen and as the registry key. null-terminated.
+  // fopen, as the diagnostic label, and as the module's registry key.
+  // null-terminated.
   StringView file_path;
+
+  // A second registry key this module also answers to. Only the root ever has
+  // one, and only when it names a standard library source file: `std/cmp.dt`
+  // on the command line and `use std::cmp` are then the *same module* rather
+  // than two copies of one file. Empty otherwise. See `mod_adopt_std`.
+  StringView alias_path;
+
+  // The std leaf name if this is a standard library module, empty if not —
+  // the `@lang` right, the prelude exemption, and the warning audience.
+  // Separate from `file_path` because an adopted root is a std module whose
+  // path is a real one; separate from where the source comes from, which
+  // `mod_parse` still reads off `file_path`.
+  StringView std_name;
+
   String source;
   Program *ast;
 
@@ -133,6 +148,19 @@ VariantImport *mod_find_variant_import(Module *m, StringView name);
 VariantImport *mod_variant_import_slot(Module *m, StringView name);
 
 Module *mod_new(StringView file_path, Allocator *al);
+
+// The std leaf name an *entry path* names, or an empty view. A standard
+// library file is `<dir>/std/<leaf>.dt` for a `<leaf>` the binary embeds; the
+// parent component has to be `std` so that only a path spelling the library
+// reaches the library. Lexical, like every other path question here.
+StringView std_name_for_entry(StringView path);
+
+// Make `m` the std module `name` while it keeps its own path. Naming a std
+// source file on the command line must compile *that file* as the library
+// module it is, or the prelude mints a second copy of it from the embedded
+// table and every nominal type in it exists twice. The real path stays the
+// diagnostic label — a lint has to point at a file a reader can open.
+void mod_adopt_std(Module *m, StringView name, Allocator *al);
 
 void mod_free(Module **m, Allocator *al);
 

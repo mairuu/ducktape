@@ -104,7 +104,9 @@ StringView mod_file_for_use(StringView base_dir, const Path *path,
 // The registry key (and diagnostic label) of an embedded std module. The
 // angle brackets are what keep it distinct from every user path: a real one is
 // a base dir plus identifier segments, and an identifier cannot contain '<'.
-// So a user file literally named `std/cmp.dt` cannot collide with `std::cmp`.
+// So a user file literally named `std/cmp.dt` cannot collide with `std::cmp` —
+// which is what `mod_adopt_std` then has to undo for the one path that *is*
+// the library, since two keys for one file is two modules.
 StringView std_mod_key(StringView name, Allocator *al) {
   const char *prefix = "<std>/";
   int prefix_len = 6;
@@ -120,26 +122,73 @@ StringView std_mod_key(StringView name, Allocator *al) {
 }
 
 // is this key one std_mod_key produced? `mod_parse` asks, to decide whether
-// the source comes from the embedded table or from the filesystem.
+// the source comes from the embedded table or from the filesystem. That is a
+// question about *where the bytes are*, and the only one still asked of the
+// path — being a std module is `Module.std_name`, which an adopted root has
+// while its path stays a real one.
 static bool is_std_key(StringView path) {
   return path.len > 6 && memcmp(path.chars, "<std>/", 6) == 0;
 }
 
-// is this the embedded std module of that name? The key is the only thing
-// that can answer it: a std Module is an ordinary Module in every other
-// respect, deliberately.
-bool mod_is_std(const Module *m, const char *name) {
-  if (!is_std_key(m->file_path)) {
-    return false;
-  }
-  StringView stem = {.chars = m->file_path.chars + 6,
-                     .len = m->file_path.len - 6 - 3}; // "<std>/" .. ".dt"
-  return sv_equal_cstr(stem, name);
+// the leaf of a `<std>/<leaf>.dt` key. Caller has checked `is_std_key`.
+static StringView std_key_leaf(StringView key) {
+  return (StringView){.chars = key.chars + 6,
+                      .len = key.len - 6 - 3}; // "<std>/" .. ".dt"
 }
 
-// is this any embedded std module? The gate for `@lang`, which is reserved for
-// the standard library — a user cannot claim a lang item.
-bool mod_is_std_module(const Module *m) { return is_std_key(m->file_path); }
+// is this the std module of that name? A std Module is an ordinary Module in
+// every other respect, deliberately.
+bool mod_is_std(const Module *m, const char *name) {
+  return sv_equal_cstr(m->std_name, name);
+}
+
+// is this any std module? The gate for `@lang`, which is reserved for the
+// standard library — a user cannot claim a lang item.
+bool mod_is_std_module(const Module *m) { return m->std_name.len > 0; }
+
+StringView std_name_for_entry(StringView path) {
+  StringView none = {0};
+  if (path.len < 4 || memcmp(path.chars + path.len - 3, ".dt", 3) != 0) {
+    return none;
+  }
+
+  // split off the leaf; a path with no '/' names no directory, so it cannot
+  // spell the library even if the stem matches.
+  int slash = -1;
+  for (int i = path.len - 1; i >= 0; i--) {
+    if (path.chars[i] == '/') {
+      slash = i;
+      break;
+    }
+  }
+  if (slash < 0) {
+    return none;
+  }
+
+  StringView stem = {.chars = path.chars + slash + 1,
+                     .len = path.len - slash - 1 - 3};
+  if (stem.len == 0 || std_module_source(stem) == NULL) {
+    return none;
+  }
+
+  // the parent component must be exactly `std`
+  StringView dir = {.chars = path.chars, .len = slash};
+  int dir_slash = -1;
+  for (int i = dir.len - 1; i >= 0; i--) {
+    if (dir.chars[i] == '/') {
+      dir_slash = i;
+      break;
+    }
+  }
+  StringView parent = {.chars = dir.chars + dir_slash + 1,
+                       .len = dir.len - dir_slash - 1};
+  return sv_equal_cstr(parent, "std") ? stem : none;
+}
+
+void mod_adopt_std(Module *m, StringView name, Allocator *al) {
+  m->std_name = name;
+  m->alias_path = std_mod_key(name, al);
+}
 
 VariantImport *mod_find_variant_import(Module *m, StringView name) {
   VariantImport *slot = mod_variant_import_slot(m, name);
@@ -163,6 +212,11 @@ VariantImport *mod_variant_import_slot(Module *m, StringView name) {
 Module *mod_new(StringView file_path, Allocator *al) {
   Module *m = al_alloc_zero_for(al, Module);
   m->file_path = file_path;
+  // a `<std>/…` key names a std module by construction; a real path only does
+  // so once `mod_adopt_std` says the entry point spelled the library.
+  if (is_std_key(file_path)) {
+    m->std_name = std_key_leaf(file_path);
+  }
   vscope_init(&m->vscope, NULL, al);
   tscope_init(&m->tscope, NULL, al);
   impl_index_init(&m->visible_impls, al);
@@ -483,7 +537,7 @@ static const PreludeEntry prelude[] = {
 // yields silently to a local decl or an explicit import of the same name.
 // Appended *after* the real imports so those link first and take priority.
 void mod_inject_prelude(Module *m, ModuleRegistry *reg, Allocator *al) {
-  if (is_std_key(m->file_path)) {
+  if (mod_is_std_module(m)) {
     return;
   }
 
@@ -525,16 +579,18 @@ void mod_inject_prelude(Module *m, ModuleRegistry *reg, Allocator *al) {
 }
 
 bool mod_parse(Module *m, DiagBag *diags, Allocator *al) {
-  // ── the one place a std module differs from any other ──────────────────────
+  // ── where the bytes come from ─────────────────────────────────────────────
   // Everything downstream of here — scanning, parsing, the dependency graph,
   // cycle detection, `pub`, linking, codegen, serialization — works off
   // `m->source` and treats `file_path` as an opaque key and a diagnostic
   // label. Pointing this branch at a directory instead of the embedded table
   // is all it would take to make std filesystem-backed.
+  //
+  // The question is the *path*, not `std_name`: an adopted root is a std
+  // module read from disk, which is what makes it a lint of the file being
+  // edited rather than of whatever `make` last mirrored.
   if (is_std_key(m->file_path)) {
-    StringView name = {.chars = m->file_path.chars + 6,
-                       .len = m->file_path.len - 6 - 3}; // "<std>/" .. ".dt"
-    const char *src = std_module_source(name);
+    const char *src = std_module_source(std_key_leaf(m->file_path));
     assert(src != NULL && "std module registered without embedded source");
     m->source = (String){.chars = (char *)src, .len = (int)strlen(src)};
   } else {
@@ -613,7 +669,12 @@ void modreg_destroy(ModuleRegistry *reg) {
 
 int modreg_find(ModuleRegistry *reg, StringView path) {
   for (int i = 0; i < reg->module_count; i++) {
-    if (sv_equal(reg->modules[i]->file_path, path)) {
+    Module *m = reg->modules[i];
+    // the alias is the whole of what adoption does to discovery: a later
+    // `use std::cmp` resolves its key here and finds the module already
+    // registered, so no second one is ever minted.
+    if (sv_equal(m->file_path, path) ||
+        (m->alias_path.len > 0 && sv_equal(m->alias_path, path))) {
       return i;
     }
   }

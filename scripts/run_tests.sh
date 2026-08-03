@@ -18,6 +18,11 @@
 # multi-file tests live in a subdirectory of any of the above, entry point
 # `main.dt`, imported modules alongside it. The flat globs are non-recursive,
 # so those siblings are never picked up as tests in their own right.
+#
+# std/*.dt is linted under the same rule as tests/pass: naming a std file
+# compiles it as the library module it is (milestone 90), and a root always has
+# a warning audience, so std's own warnings fail the suite instead of hiding
+# behind the silence every *program* gets to keep.
 set -u
 
 BIN=${1:-build/ducktape}
@@ -89,6 +94,34 @@ for f in "$ROOT"/tests/pass/*.dt "$ROOT"/tests/pass/*/main.dt; do
     [ -e "$f" ] || continue
     check_pass "$f"
 done
+
+for f in "$ROOT"/std/*.dt; do
+    [ -e "$f" ] || continue
+    check_pass "$f"
+done
+
+# Adoption is exactly "a parent component named `std` plus a stem this binary
+# embeds", and both halves matter: a file matching only one stays an ordinary
+# module. Using a preluded name it never imports is what proves that — a std
+# module gets no prelude, so an adopted file could not resolve `Option`.
+check_not_adopted() {   # $1 = parent directory name, $2 = file stem
+    dir=$(mktemp -d)
+    mkdir -p "$dir/$1"
+    printf 'pub fun f(x: Int) -> Option<Int> { return Some(x); }\n' > "$dir/$1/$2.dt"
+    err=$("$BIN" "$dir/$1/$2.dt" 2>&1 >/dev/null)
+    code=$?
+    rm -rf "$dir"
+    if [ "$code" -eq 0 ] && [ -z "$err" ]; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1))
+        echo "FAIL (wrongly adopted as a std module): $1/$2.dt (exit $code)"
+        [ -n "$err" ] && printf '%s\n' "$err" | sed 's/^/    /'
+    fi
+}
+
+check_not_adopted std mystuff   # the directory matches; `mystuff` is no std module
+check_not_adopted lib cmp       # `cmp` matches; the directory does not
 
 for f in "$ROOT"/tests/warn/*.dt "$ROOT"/tests/warn/*/main.dt; do
     [ -e "$f" ] || continue

@@ -40,12 +40,21 @@ void compiler_destroy(Compiler *c, Allocator *al) {
   arena_destroy(&c->arena);
 }
 
+// does this module's advice have anyone to act on it? An error is a fact about
+// the program and is always reported; a warning is addressed, and the embedded
+// std compiled into every program has no reader — *as a dependency*. Naming a
+// std file on the command line makes you exactly that reader, so the root
+// always warns whoever it belongs to.
+static bool module_has_audience(const Compiler *c, const Module *m) {
+  return !mod_is_std_module(m) || m == c->root_module;
+}
+
 // start a phase's work on one module: drop what the previous module left and
 // decide whether this one's warnings have an audience. Every phase loops over
 // modules this way, so it is the one place that answers "whose code is this?".
 static void compiler_begin_module(Compiler *c, Module *m) {
   diag_clear(&c->diags);
-  diag_set_warnings(&c->diags, !mod_is_std_module(m));
+  diag_set_warnings(&c->diags, module_has_audience(c, m));
 }
 
 // phase 0: discover and parse every source file reachable from the root.
@@ -59,6 +68,14 @@ static bool compiler_phase_discover(Compiler *c, const char *root_path) {
   StringView base_dir = path_dir_of(root);
 
   Module *root_mod = mod_new(root, &c->al);
+  // a root that spells a standard library file *is* that library module, and
+  // has to be registered under its `<std>/` key before anything resolves one —
+  // otherwise the prelude loads the embedded copy alongside it and every
+  // nominal type the file declares exists twice.
+  StringView std_name = std_name_for_entry(root);
+  if (std_name.len > 0) {
+    mod_adopt_std(root_mod, std_name, &c->al);
+  }
   modreg_add(&c->mod_reg, root_mod);
   c->root_module = root_mod;
 
@@ -71,7 +88,7 @@ static bool compiler_phase_discover(Compiler *c, const char *root_path) {
     Module *m = c->mod_reg.modules[i];
     // set before the parse rather than after: mod_parse clears the bag, and the
     // audience survives a clear precisely so this ordering is free.
-    diag_set_warnings(&c->diags, !mod_is_std_module(m));
+    diag_set_warnings(&c->diags, module_has_audience(c, m));
 
     if (!mod_parse(m, &c->diags, &c->al)) {
       had_errors = true;

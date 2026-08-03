@@ -55,11 +55,16 @@ short. Don't re-explain what the diff already shows.
 ## Standard library
 
 `std/*.dt` is the standard library, **written in ducktape**. Each file is an
-ordinary module (directly runnable: `./build/ducktape std/cmp.dt`) that
-`scripts/embed_std.sh` mirrors into `build/std_data.h` at build time, so
-`use std::cmp;` needs no install path and the test suite stays hermetic. Edit
-the `.dt`; never edit the generated header. Adding a file to `std/` is all it
-takes to make `use std::<name>;` resolve.
+ordinary module that `scripts/embed_std.sh` mirrors into `build/std_data.h` at
+build time, so `use std::cmp;` needs no install path and the test suite stays
+hermetic. Edit the `.dt`; never edit the generated header. Adding a file to
+`std/` is all it takes to make `use std::<name>;` resolve.
+
+**`./build/ducktape std/cmp.dt` lints one std file**: naming it compiles it as
+the library module it is, reading the source from *disk* (so you see the edit,
+not the last `make`), and a root always has a warning audience — where a
+program that merely uses std never sees its warnings. `make test` lints all of
+them under the `tests/pass` rule, so a warning in std fails the suite.
 
 ## Tests
 
