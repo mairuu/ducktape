@@ -1545,7 +1545,7 @@ keep this file small. Everything from 55 on is below.
   warnings, +20 suite checks. Left over: the user-owned `std/` directory case
   (see warts) reports the consequence and not the cause.
 
-- **91. Two resolvers, one file** (`TBD`) — std nests:
+- **91. Two resolvers, one file** (`2c0071c`) — std nests:
   `use std::collections::hashmap;`. Design: `language.md` "The standard
   library" and "`std::collections::hashmap`"; `architecture.md` "The embedded
   standard library" / "Which segments name the module"; `overview.md` layout.
