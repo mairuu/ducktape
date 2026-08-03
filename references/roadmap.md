@@ -1626,7 +1626,7 @@ keep this file small. Everything from 55 on is below.
   an `@allow` that says why. Left over: no `-W`/`-Werror`, and an allow's grain
   is a whole declaration (see warts).
 
-- **94. The declared module tree** (`SHA`) — `mod x;` / `pub mod x;` replaces
+- **94. The declared module tree** (`bc5d325`) — `mod x;` / `pub mod x;` replaces
   path resolution. Design: `language.md` "Modules" + the gaps table,
   `architecture.md` "Modules" / "The embedded standard library",
   `grammar.ebnf`, `overview.md`. All three failures in `modules-design.md` §1
