@@ -1,0 +1,15 @@
+# a program module named `Option` is invisible to the library. Every path in a
+# library module is anchored at the library root, so `std::option`'s own
+# `pub use Option::{Some, None};` still means its own enum — the program's tree
+# is not a place a library path can land, whatever it declares.
+mod Option;
+
+use Option::wrap;
+
+fun get() -> Int {
+  var v = Some(wrap(1));
+  return match v {
+    Some(n) => n,
+    None => 0,
+  };
+}

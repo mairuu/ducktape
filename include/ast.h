@@ -1280,6 +1280,7 @@ struct Stmt {
 
 typedef enum {
   DECL_USE,
+  DECL_MOD,
   DECL_STRUCT,
   DECL_ENUM,
   DECL_TRAIT,
@@ -1372,9 +1373,9 @@ typedef struct {
   // `path` is the module prefix for a braced import (`use a::b::{X, Y}`), but
   // the *whole* written path for a bare one (`use a::b;`) — because a bare use
   // is either an item import (b is an item of module a) or a module import (b
-  // is module a::b bound as a qualifier), and only file existence tells them
-  // apart. `bare` records which shape the parser saw; `mod_collect_imports`
-  // resolves the ambiguity and sets `is_module_import`.
+  // is module a::b bound as a qualifier). `bare` records which shape the parser
+  // saw; `mod_collect_imports` walks the declared tree and sets
+  // `is_module_import`.
   Path path;
   UseTarget target;
   // the enum the imported names are variants of (`use a::E::V;` → `E`), empty
@@ -1383,14 +1384,23 @@ typedef struct {
   StringView qualifier;
   bool bare;             // no `{...}` list: path includes the trailing name
   bool is_module_import; // binds a module qualifier, not items (set at collect)
-  bool is_scope_import;  // no file answered the path, so the qualifier is a
-                         // name in *this* module's type scope — its own enum,
-                         // an imported one, or a preluded one. Resolved after
-                         // this module resolves, not before (set at collect)
+  bool is_scope_import;  // the path's head names no declared module, so the
+                         // qualifier is a name in *this* module's type scope —
+                         // its own enum, an imported one, or a preluded one.
+                         // Resolved after this module resolves (set at collect)
   bool from_prelude;     // synthesised by mod_inject_prelude, not written in
                          // source: yields silently on a name collision so a
                          // local decl or explicit import always wins.
 } DeclUse;
+
+// `mod x;` / `pub mod x;` — `x` is a child module of this one: part of the
+// build unit, and a segment any absolute path may walk through. It binds `x`
+// alongside the module's items (a name is a child or an item, never both),
+// which is what lets path resolution walk greedily with no lookahead.
+typedef struct {
+  StringView name;
+  Span name_span; // the identifier alone, for the diagnostics privacy points at
+} DeclMod;
 
 typedef struct {
   StringView name;
@@ -1482,6 +1492,7 @@ struct Decl {
   Span span;
   union {
     DeclUse use_decl;
+    DeclMod mod_decl;
     DeclStruct struct_decl;
     DeclEnum enum_decl;
     DeclTrait trait_decl;

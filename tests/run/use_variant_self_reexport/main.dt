@@ -1,3 +1,5 @@
+mod lib;
+
 use std::io::print;
 use lib::{Event, A, b_name};
 

@@ -29,11 +29,6 @@ StringView path_dir_of(StringView path);
 // returns a null-terminated copy allocated from `al`.
 StringView path_normalise(StringView path, Allocator *al);
 
-// "<base_dir>" + `path`'s segments joined by '/' + ".dt", normalised.
-// `path` is a use declaration's module prefix (DeclUse.path).
-StringView mod_file_for_use(StringView base_dir, const Path *path,
-                            Allocator *al);
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // Module
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -41,7 +36,8 @@ StringView mod_file_for_use(StringView base_dir, const Path *path,
 // one resolved `use` declaration.
 typedef struct {
   Decl *decl;           // the DECL_USE node (path + aliases + spans)
-  StringView file_path; // dependency file (a `<std>/…` key for std modules)
+  StringView file_path; // the dependency's key (a `<std>/…` one for a library
+                        // module); empty when the path named no module
   int module_index;     // index into ModuleRegistry; -1 if unresolved
 } ModImport;
 
@@ -78,27 +74,49 @@ typedef struct {
   bool *origin; // the import's `used` flag, for the unused-import warning
 } VariantImport;
 
+// one `mod x;` declaration, resolved to the module it names.
+typedef struct {
+  StringView name;
+  Module *mod;
+  Decl *decl; // the DECL_MOD node — the span a privacy diagnostic points at
+} ModChild;
+
 struct Module {
-  // path as given on the command line, or derived from it; used verbatim for
-  // fopen, as the diagnostic label, and as the module's registry key.
-  // null-terminated.
+  // the module's source file: fopen argument, diagnostic header, registry key.
+  // A library module's is the synthetic `<std>/…` key its embedded source has
+  // no real path for. null-terminated.
   StringView file_path;
 
-  // A second registry key this module also answers to. Only the root ever has
-  // one, and only when it names a standard library source file: `std/cmp.dt`
-  // on the command line and `use std::cmp` are then the *same module* rather
-  // than two copies of one file. Empty otherwise. See `mod_adopt_std`.
-  StringView alias_path;
+  // the module as a `use` path spells it — `std::collections::hashmap`,
+  // `geo::shape`. Empty for the program root, which nothing names. This is
+  // what a diagnostic about *a module* prints; `file_path` is what one printed
+  // *against* a module points at.
+  StringView label;
 
-  // The std leaf name if this is a standard library module, empty if not —
-  // the `@lang` right, the prelude exemption, and the warning audience.
-  // Separate from `file_path` because an adopted root is a std module whose
-  // path is a real one; separate from where the source comes from, which
-  // `mod_parse` still reads off `file_path`.
-  StringView std_name;
+  // ── the tree ───────────────────────────────────────────────────────────────
+  Module *parent;  // NULL for a root
+  StringView name; // this module's own segment; empty for a root
+  bool is_std;     // in the library tree: the `@lang` right, no prelude, and
+                   // no warning audience unless it is the root being linted
+  bool is_pub;     // declared `pub mod`; a root is public by fiat
+  bool from_disk;  // a library module read from the filesystem instead of the
+                   // embedded table: the `--std-module` lint target
+  int reg_index;   // index in the ModuleRegistry, or -1 while unregistered
+
+  // what a child's own name is appended to. For a program module that is a
+  // directory (`tests/x/geo/`); for a library module it is the library-relative
+  // prefix the embedded table is keyed by (`collections/`). Either way
+  // source(child) = child_prefix + child->name, which is the whole of §2.2.
+  StringView child_prefix;
+  StringView
+      std_rel; // library-relative name, no extension (`collections/hashmap`)
+
+  ModChild *children;
+  int child_count, child_cap;
 
   String source;
   Program *ast;
+  bool load_failed; // parsed once and failed; do not try again
 
   ModImport *imports;
   int import_count;
@@ -149,37 +167,53 @@ VariantImport *mod_find_variant_import(Module *m, StringView name);
 // name whatever state it is in. For linking, which owns those states.
 VariantImport *mod_variant_import_slot(Module *m, StringView name);
 
-Module *mod_new(StringView file_path, Allocator *al);
+// the program root, whose source is the entry path and whose children live
+// beside it. Registered by the caller.
+Module *mod_new_program_root(StringView entry_path, Allocator *al);
 
-// The std leaf name an *entry path* names, or an empty view. A standard
-// library file is `<dir>/std/<leaf>.dt` for a `<leaf>` the binary embeds; the
-// parent component has to be `std` so that only a path spelling the library
-// reaches the library. Lexical, like every other path question here.
-StringView std_name_for_entry(StringView path);
+// the library root: `std/lib.dt`, the one statement of what `std::` names.
+Module *mod_new_std_root(Allocator *al);
 
-// Make `m` the std module `name` while it keeps its own path. Naming a std
-// source file on the command line must compile *that file* as the library
-// module it is, or the prelude mints a second copy of it from the embedded
-// table and every nominal type in it exists twice. The real path stays the
-// diagnostic label — a lint has to point at a file a reader can open.
-void mod_adopt_std(Module *m, StringView name, Allocator *al);
+// read this library module from the filesystem (`std/<rel>.dt`) instead of the
+// embedded table — the `--std-module` lint hatch, so a lint sees the edit and
+// not whatever `make` last mirrored. Its dependencies stay embedded. Must be
+// called before the module is parsed.
+void mod_read_from_disk(Module *m, Allocator *al);
+
+// the child `m` declares under `name`, or NULL. Requires m parsed.
+ModChild *mod_find_child(Module *m, StringView name);
 
 void mod_free(Module **m, Allocator *al);
 
 bool mod_parse(Module *m, DiagBag *diags, Allocator *al);
 
-// scan m->ast for DECL_USE, resolve each to a dependency file, and fill
-// m->imports. files not yet seen are registered with `reg` as unparsed stubs,
-// which is what drives discovery. emits one diagnostic per unresolvable
-// import; returns false if any failed. requires m to be parsed.
-bool mod_collect_imports(Module *m, ModuleRegistry *reg, StringView base_dir,
-                         DiagBag *diags, Allocator *al);
+// build the child modules `m`'s `mod` declarations name (§2.1–2.2). A program
+// child is registered here and so is compiled whether or not anything imports
+// it — the program's tree *is* its build unit. A library child is linked into
+// the tree and left unregistered: std is a dependency, and a dependency is
+// loaded where it is used. Reports a `mod` naming a source that does not
+// exist, once, against the declaration. Requires m parsed.
+bool mod_declare_children(Module *m, ModuleRegistry *reg, DiagBag *diags,
+                          Allocator *al);
+
+// register every module `m`'s use paths walk through, so the discovery loop
+// parses them and the tree keeps growing. Deliberately silent: a path that
+// names nothing is diagnosed by mod_collect_imports, once the tree has stopped
+// growing and the answer is final. Requires m parsed.
+void mod_reach_imports(Module *m, ModuleRegistry *reg);
+
+// resolve every `use` in m->ast against the finished tree (§3) and fill
+// m->imports. Emits one diagnostic per unresolvable import; returns false if
+// any failed. Requires m parsed and the tree built.
+bool mod_collect_imports(Module *m, ModuleRegistry *reg, DiagBag *diags,
+                         Allocator *al);
 
 // append the implicit prelude to a non-std module: synthesised imports of the
 // vocabulary and lang-item std modules, so their names and lang items are in
 // scope without an explicit `use`. A no-op for std modules (which cannot
 // import themselves). Registers any prelude module not yet seen, extending the
-// discovery worklist the same way mod_collect_imports does. Requires m parsed.
+// discovery worklist the same way mod_reach_imports does. Requires m parsed
+// and `reg->std_root` parsed.
 void mod_inject_prelude(Module *m, ModuleRegistry *reg, Allocator *al);
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -191,29 +225,39 @@ struct ModuleRegistry {
   int module_count;
   int module_cap;
 
+  // the two roots (§2). `program_root` is NULL when the compile has no program
+  // — a `--std-module` lint, whose only tree is the library's.
+  Module *program_root;
+  Module *std_root;
+
   int *topo_order; // indices into modules, in topological order
   int topo_count;
 
   Allocator *al;
 };
 
-// is this the embedded std module of that name (`mod_is_std(m, "fmt")`)?
-bool mod_is_std(const Module *m, const char *name);
+// is this any standard library module? The gate for `@lang`.
+static inline bool mod_is_std_module(const Module *m) { return m->is_std; }
 
-// is this any embedded std module? The gate for `@lang`.
-bool mod_is_std_module(const Module *m);
+// how to name this module *in* a diagnostic: the path a reader would write,
+// falling back to the file for the program root, which no path can name.
+static inline StringView mod_label(const Module *m) {
+  return m->label.len > 0 ? m->label : m->file_path;
+}
+
+// split `std::a::b` into its segments, returning the count. The one place a
+// module path arrives from outside a source file: the `--std-module` lint
+// hatch, whose descent has to load each module to see the next one's name.
+int mod_split_path(const char *path, StringView *out, int max);
 
 void modreg_init(ModuleRegistry *reg, Allocator *al);
 
 void modreg_destroy(ModuleRegistry *reg);
 
-// add a module, returning its index. if one with the same path is already
-// registered, nothing is inserted and *that* module's index comes back — the
-// dedup that makes a diamond import one Module.
+// add a module to the build, returning its index; a no-op for one already in.
+// Registration is what makes a module *compiled*: the tree can hold a library
+// module nothing has imported, and that module is never registered.
 int modreg_add(ModuleRegistry *reg, Module *m);
-
-// index of the module with this exact (normalised) path, or -1.
-int modreg_find(ModuleRegistry *reg, StringView path);
 
 static inline Module *modreg_topo(ModuleRegistry *reg, int idx) {
   return reg->modules[reg->topo_order[idx]];

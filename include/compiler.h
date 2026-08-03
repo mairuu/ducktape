@@ -21,10 +21,14 @@ void compiler_init(Compiler *c, Allocator *al);
 
 void compiler_destroy(Compiler *c, Allocator *al);
 
-// run the full compilation pipeline over `path` and every module reachable
-// from it through `use`. `path`'s directory is the module search root.
-// returns false if any phase failed
-bool compiler_run(Compiler *c, const char *path);
+// run the full compilation pipeline over the program rooted at `path`: every
+// module its tree declares, plus every library module they reach. `path`'s
+// directory holds the root's children.
+//
+// `std_module` instead compiles the library alone, with the module that path
+// names (`std::cmp`) read from disk and given the warning audience — the lint
+// hatch. Exactly one of the two is non-NULL. Returns false if any phase failed.
+bool compiler_run(Compiler *c, const char *path, const char *std_module);
 
 // compile the checked root module to bytecode and run its `main`.
 // call only after a successful compiler_run. `gc_stress` collects before

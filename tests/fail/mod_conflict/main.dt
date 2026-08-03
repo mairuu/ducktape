@@ -1,4 +1,6 @@
 #! expect: is already declared in this module
+mod lib;
+
 use lib::Point;
 
 struct Point {

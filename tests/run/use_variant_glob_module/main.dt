@@ -1,3 +1,6 @@
+mod fac;
+mod pal;
+
 use std::io::print;
 use pal::{Color, Tone};
 use pal::Color::*;      # module-qualified glob

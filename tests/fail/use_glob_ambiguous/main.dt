@@ -1,4 +1,6 @@
 #! expect: which another glob import already binds
+mod pal;
+
 use pal::{Color, Tone};
 use Color::*;
 use Tone::*;

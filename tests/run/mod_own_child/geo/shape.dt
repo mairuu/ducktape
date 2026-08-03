@@ -1,0 +1,10 @@
+pub struct Rect {
+  pub w: Int,
+  pub h: Int,
+}
+
+impl Rect {
+  fun area(self) -> Int {
+    return self.w * self.h;
+  }
+}

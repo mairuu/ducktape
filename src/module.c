@@ -70,131 +70,61 @@ StringView path_normalise(StringView path, Allocator *al) {
   return (StringView){.chars = out, .len = n};
 }
 
-StringView mod_file_for_use(StringView base_dir, const Path *path,
-                            Allocator *al) {
-  int len = base_dir.len + 3; // ".dt"
-  for (int i = 0; i < path->count; i++) {
-    len += path->segments[i].name.len + 1; // + '/' separator
-  }
+// ═══════════════════════════════════════════════════════════════════════════════
+// The module tree
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// There are exactly two trees (§2 of references/modules-design.md): the
+// program's, rooted at the entry file, and the library's, rooted at
+// `std/lib.dt` and reached through the reserved first segment `std`. Every
+// module below a root is there because some module *declared* it with `mod`,
+// so a path is walked, never guessed — nothing here asks whether a file
+// exists.
+//
+// The two trees differ in one respect, and it is the perf-shaped one: the
+// program's tree is its build unit and is registered whole, so a module
+// nothing imports is still compiled; the library's is a catalogue, and a
+// library module is registered when a path reaches it. Registering all of std
+// eagerly would compile 20 modules where the prelude closure needs 11, and the
+// prelude is already most of a trivial compile.
 
-  char *buf = al_alloc(al, sizeof(char) * (size_t)(len + 1));
-  int n = 0;
-
-  memcpy(buf + n, base_dir.chars, (size_t)base_dir.len);
-  n += base_dir.len;
-
-  for (int i = 0; i < path->count; i++) {
-    if (i > 0) {
-      buf[n++] = '/';
-    }
-    StringView seg = path->segments[i].name;
-    memcpy(buf + n, seg.chars, (size_t)seg.len);
-    n += seg.len;
-  }
-
-  memcpy(buf + n, ".dt", 3);
-  n += 3;
-  buf[n] = '\0';
-
-  // already normalised by construction: base_dir is a prefix of a normalised
-  // path, and the segments are identifiers, so no "." or ".." can appear.
-  return (StringView){.chars = buf, .len = n};
-}
-
-// The registry key (and diagnostic label) of an embedded std module. The
+// The registry key (and diagnostic header) of an embedded library module. The
 // angle brackets are what keep it distinct from every user path: a real one is
 // a base dir plus identifier segments, and an identifier cannot contain '<'.
-// So a user file literally named `std/cmp.dt` cannot collide with `std::cmp` —
-// which is what `mod_adopt_std` then has to undo for the one path that *is*
-// the library, since two keys for one file is two modules.
-//
-// `name` may nest (`collections/hashmap`), and nothing here has to know: the
-// name is already the library-relative path, so a key is still one
-// concatenation and still reads as a path.
-StringView std_mod_key(StringView name, Allocator *al) {
+// `rel` may nest (`collections/hashmap`) and nothing here has to know — it is
+// already the library-relative path the embedded table is keyed by.
+static StringView std_mod_key(StringView rel, Allocator *al) {
   const char *prefix = "<std>/";
   int prefix_len = 6;
-  int len = prefix_len + name.len + 3; // ".dt"
+  int len = prefix_len + rel.len + 3; // ".dt"
 
   char *buf = al_alloc(al, sizeof(char) * (size_t)(len + 1));
   memcpy(buf, prefix, (size_t)prefix_len);
-  memcpy(buf + prefix_len, name.chars, (size_t)name.len);
-  memcpy(buf + prefix_len + name.len, ".dt", 3);
+  memcpy(buf + prefix_len, rel.chars, (size_t)rel.len);
+  memcpy(buf + prefix_len + rel.len, ".dt", 3);
   buf[len] = '\0';
 
   return (StringView){.chars = buf, .len = len};
 }
 
-// is this key one std_mod_key produced? `mod_parse` asks, to decide whether
-// the source comes from the embedded table or from the filesystem. That is a
-// question about *where the bytes are*, and the only one still asked of the
-// path — being a std module is `Module.std_name`, which an adopted root has
-// while its path stays a real one.
-static bool is_std_key(StringView path) {
-  return path.len > 6 && memcmp(path.chars, "<std>/", 6) == 0;
-}
-
-// the module name inside a `<std>/<name>.dt` key. Caller has checked
-// `is_std_key`. A nested name keeps its '/' — the key carries the whole of it,
-// which is why nesting costs this function nothing.
-static StringView std_key_name(StringView key) {
-  return (StringView){.chars = key.chars + 6,
-                      .len = key.len - 6 - 3}; // "<std>/" .. ".dt"
-}
-
-// is this the std module of that name? A std Module is an ordinary Module in
-// every other respect, deliberately.
-bool mod_is_std(const Module *m, const char *name) {
-  return sv_equal_cstr(m->std_name, name);
-}
-
-// is this any std module? The gate for `@lang`, which is reserved for the
-// standard library — a user cannot claim a lang item.
-bool mod_is_std_module(const Module *m) { return m->std_name.len > 0; }
-
-StringView std_name_for_entry(StringView path) {
-  StringView none = {0};
-  if (path.len < 4 || memcmp(path.chars + path.len - 3, ".dt", 3) != 0) {
-    return none;
+// concatenate, null-terminated: the one shape every path here is built in.
+// An empty view may carry a NULL `chars` — the program root's label is exactly
+// that — and memcpy from NULL is undefined even for a zero count, so each part
+// is copied only when it has bytes.
+static StringView sv_concat3(StringView a, StringView b, const char *c,
+                             Allocator *al) {
+  int c_len = (int)strlen(c);
+  int len = a.len + b.len + c_len;
+  char *buf = al_alloc(al, sizeof(char) * (size_t)(len + 1));
+  if (a.len > 0) {
+    memcpy(buf, a.chars, (size_t)a.len);
   }
-  StringView rel = {.chars = path.chars, .len = path.len - 3}; // drop ".dt"
-
-  // Adoption is lexical and still needs both halves — an ancestor component
-  // spelled exactly `std`, and a name below it the binary embeds. Nesting only
-  // changes how far below: the name is everything after that `std`, which is
-  // exactly how `embed_std.sh` keys the table.
-  //
-  // Slashes are walked right to left, so the *nearest* `std` ancestor wins and
-  // a candidate name is tried shortest-first. That matters for a path that has
-  // more than one — `std/std/cmp.dt` is `cmp`, not a `std/cmp` no table holds.
-  for (int i = rel.len - 1; i > 0; i--) {
-    if (rel.chars[i] != '/') {
-      continue;
-    }
-
-    int start = 0;
-    for (int j = i - 1; j >= 0; j--) {
-      if (rel.chars[j] == '/') {
-        start = j + 1;
-        break;
-      }
-    }
-    StringView parent = {.chars = rel.chars + start, .len = i - start};
-    if (!sv_equal_cstr(parent, "std")) {
-      continue;
-    }
-
-    StringView name = {.chars = rel.chars + i + 1, .len = rel.len - i - 1};
-    if (name.len > 0 && std_module_source(name) != NULL) {
-      return name;
-    }
+  if (b.len > 0) {
+    memcpy(buf + a.len, b.chars, (size_t)b.len);
   }
-  return none;
-}
-
-void mod_adopt_std(Module *m, StringView name, Allocator *al) {
-  m->std_name = name;
-  m->alias_path = std_mod_key(name, al);
+  memcpy(buf + a.len + b.len, c, (size_t)c_len);
+  buf[len] = '\0';
+  return (StringView){.chars = buf, .len = len};
 }
 
 VariantImport *mod_find_variant_import(Module *m, StringView name) {
@@ -224,18 +154,50 @@ VariantImport *mod_variant_import_slot(Module *m, StringView name) {
   return NULL;
 }
 
-Module *mod_new(StringView file_path, Allocator *al) {
+static Module *mod_new(StringView file_path, Allocator *al) {
   Module *m = al_alloc_zero_for(al, Module);
   m->file_path = file_path;
-  // a `<std>/…` key names a std module by construction; a real path only does
-  // so once `mod_adopt_std` says the entry point spelled the library.
-  if (is_std_key(file_path)) {
-    m->std_name = std_key_name(file_path);
-  }
+  m->reg_index = -1;
+  m->is_pub = true;
   vscope_init(&m->vscope, NULL, al);
   tscope_init(&m->tscope, NULL, al);
   impl_index_init(&m->visible_impls, al);
   return m;
+}
+
+Module *mod_new_program_root(StringView entry_path, Allocator *al) {
+  Module *m = mod_new(entry_path, al);
+  // a root's children live in its own directory, which is why every existing
+  // layout already matches §2.2 and the migration moves no file.
+  m->child_prefix = path_dir_of(entry_path);
+  return m;
+}
+
+Module *mod_new_std_root(Allocator *al) {
+  StringView rel = sv_from_cstr("lib");
+  Module *m = mod_new(std_mod_key(rel, al), al);
+  m->is_std = true;
+  m->std_rel = rel;
+  m->label = sv_from_cstr("std");
+  m->child_prefix = (StringView){.chars = "", .len = 0};
+  return m;
+}
+
+void mod_read_from_disk(Module *m, Allocator *al) {
+  assert(m->is_std);
+  m->from_disk = true;
+  // the real path becomes the diagnostic header too: a lint has to point at a
+  // file its reader can open.
+  m->file_path = sv_concat3(sv_from_cstr("std/"), m->std_rel, ".dt", al);
+}
+
+ModChild *mod_find_child(Module *m, StringView name) {
+  for (int i = 0; i < m->child_count; i++) {
+    if (sv_equal(m->children[i].name, name)) {
+      return &m->children[i];
+    }
+  }
+  return NULL;
 }
 
 void mod_free(Module **m, Allocator *al) {
@@ -254,72 +216,172 @@ static bool file_exists(const char *path) {
   return true;
 }
 
-// does the file the first `count` segments of `path` name already exist (on
-// disk, or as a registry entry)? The one question that splits a use path into
-// a module prefix and what follows it.
-static bool mod_prefix_exists(ModuleRegistry *reg, StringView base_dir,
-                              const Path *path, int count, Allocator *al) {
-  Path prefix = *path;
-  prefix.count = count;
-  StringView file = mod_file_for_use(base_dir, &prefix, al);
-  return modreg_find(reg, file) >= 0 || file_exists(file.chars);
+// §2.2 in full: a child's source is its parent's child directory plus its own
+// name, and its child directory is that source without the extension. For a
+// library module the same two lines run over library-relative names, because
+// that is the shape the embedded table is keyed by.
+static Module *mod_new_child(Module *parent, Decl *decl, Allocator *al) {
+  StringView name = decl->as.mod_decl.name;
+  StringView slash = sv_from_cstr("/");
+
+  Module *m;
+  if (parent->is_std) {
+    StringView rel = sv_concat3(parent->child_prefix, name, "", al);
+    m = mod_new(std_mod_key(rel, al), al);
+    m->std_rel = rel;
+    m->child_prefix = sv_concat3(rel, slash, "", al);
+  } else {
+    m = mod_new(sv_concat3(parent->child_prefix, name, ".dt", al), al);
+    m->child_prefix = sv_concat3(parent->child_prefix, name, "/", al);
+  }
+
+  m->parent = parent;
+  m->name = name;
+  m->is_std = parent->is_std;
+  m->is_pub = decl->is_pub;
+  m->label = parent->label.len > 0
+                 ? sv_concat3(parent->label, sv_from_cstr("::"), "", al)
+                 : (StringView){0};
+  m->label = sv_concat3(m->label, name, "", al);
+  return m;
 }
 
-// The longest prefix of a `std::…` use path that names an embedded module:
-// its library-relative name, with `*count` set to how many segments it spans
-// *including* the leading `std`. A zero count means no prefix named one, and
-// the returned name is meaningless.
+static void mod_push_child(Module *parent, StringView name, Module *child,
+                           Decl *decl, Allocator *al) {
+  if (parent->child_count == parent->child_cap) {
+    int cap = parent->child_cap ? parent->child_cap * 2 : 4;
+    parent->children = al_realloc(al, parent->children,
+                                  sizeof(ModChild) * (size_t)parent->child_cap,
+                                  sizeof(ModChild) * (size_t)cap);
+    parent->child_cap = cap;
+  }
+  parent->children[parent->child_count++] =
+      (ModChild){.name = name, .mod = child, .decl = decl};
+}
+
+bool mod_declare_children(Module *m, ModuleRegistry *reg, DiagBag *diags,
+                          Allocator *al) {
+  assert(m->ast != NULL);
+
+  bool ok = true;
+  for (int i = 0; i < m->ast->decl_count; i++) {
+    Decl *decl = m->ast->decls[i];
+    if (decl->kind != DECL_MOD) {
+      continue;
+    }
+    StringView name = decl->as.mod_decl.name;
+
+    // `std` is a reserved first segment (§2): the library is addressed through
+    // it from every module, so a program cannot spend it on a child.
+    if (m == reg->program_root && sv_equal_cstr(name, "std")) {
+      diag_error(diags, decl->as.mod_decl.name_span,
+                 "'std' is reserved for the standard library and cannot name a "
+                 "module of this program");
+      ok = false;
+      continue;
+    }
+    // two `mod` declarations of one name are the ordinary duplicate-name error,
+    // reported by the checker over every declaration kind at once.
+    if (mod_find_child(m, name) != NULL) {
+      continue;
+    }
+
+    Module *child = mod_new_child(m, decl, al);
+    bool exists = m->is_std ? std_module_source(child->std_rel) != NULL
+                            : file_exists(child->file_path.chars);
+    if (!exists) {
+      // once, here, rather than once per importer: a declared module with no
+      // source is a fact about the tree, not about anyone's use of it.
+      diag_error(diags, decl->as.mod_decl.name_span,
+                 "cannot find module '" SV_FMT "'", SV_ARG(name));
+      diag_note(diags, (Span){0}, "expected file '" SV_FMT "'",
+                SV_ARG(m->is_std ? child->std_rel : child->file_path));
+      ok = false;
+    }
+    // the child goes into the tree either way, so a path through it stops at a
+    // module that is merely unloaded — and every `use` naming it stays quiet.
+    mod_push_child(m, name, child, decl, al);
+
+    // the program's tree is its build unit: a module nothing imports is still
+    // compiled, which is the whole point of declaring it.
+    if (exists && !m->is_std) {
+      modreg_add(reg, child);
+    }
+  }
+  return ok;
+}
+
+// §3 steps 1–2: anchor the path at the root its first segment names, then
+// descend while a segment names a declared child. `*consumed` comes back as the
+// number of segments eaten, counting a leading `std`. The walk is greedy and
+// cannot be ambiguous, because §2.1 forbids a name from being both a child and
+// an item.
 //
-// This is `mod_prefix_exists`' question asked of the embedded table instead of
-// the filesystem, and the two resolvers have to agree about one file. They can
-// only be made to agree by asking the same thing: longest prefix wins here as
-// it does there, so a module `std::a::b` shadows an item `b` of `std::a`, the
-// same way `a/b.dt` beats an item `b` of `a.dt` for a bare user import.
-static StringView std_module_prefix(const Path *path, int *count,
-                                    Allocator *al) {
-  *count = 0;
-  if (path->count < 2) {
-    return (StringView){0};
+// `reach` registers each module descended into — which is how a library module
+// joins the build, and why discovery iterates to a fixpoint: a child's own
+// children are only known once it has been parsed.
+static Module *mod_walk(ModuleRegistry *reg, Module *from, const Path *path,
+                        int *consumed, bool reach) {
+  bool std_rooted =
+      path->count > 0 && sv_equal_cstr(path->segments[0].name, "std");
+
+  *consumed = 0;
+  // A library module is anchored at the library root and nowhere else: `std`
+  // is where its own tree begins, and it must not be able to name a file of
+  // the program that happens to be compiling it.
+  if (!std_rooted && (from->is_std || reg->program_root == NULL)) {
+    return NULL;
   }
 
-  // The segments after `std`, joined with '/' — the shape `embed_std.sh` keys
-  // the table by. Built once at full length and grown a segment at a time,
-  // since every prefix is a prefix of these same bytes.
-  int total = 0;
-  for (int i = 1; i < path->count; i++) {
-    total += path->segments[i].name.len + (i > 1 ? 1 : 0);
-  }
-  char *buf = al_alloc(al, sizeof(char) * (size_t)(total + 1));
-  buf[total] = '\0';
+  Module *cur = std_rooted ? reg->std_root : reg->program_root;
+  int i = std_rooted ? 1 : 0;
+  *consumed = i;
 
-  StringView name = {.chars = buf, .len = 0};
-  StringView best = {0};
-  for (int i = 1; i < path->count; i++) {
-    if (i > 1) {
-      buf[name.len++] = '/';
+  while (cur->ast != NULL && i < path->count) {
+    ModChild *ch = mod_find_child(cur, path->segments[i].name);
+    if (ch == NULL) {
+      break;
     }
-    StringView seg = path->segments[i].name;
-    memcpy(buf + name.len, seg.chars, (size_t)seg.len);
-    name.len += seg.len;
-    if (std_module_source(name) != NULL) {
-      best = name;
-      *count = i + 1;
+    cur = ch->mod;
+    *consumed = ++i;
+    if (reach) {
+      modreg_add(reg, cur);
     }
   }
-  return best;
+  return cur;
+}
+
+// register the prelude's library modules. Declared here because the prelude
+// table is, but reached from mod_reach_imports: the prelude is an import
+// nobody wrote, and discovery must find it the same round it finds the others.
+static void reach_prelude(ModuleRegistry *reg);
+
+void mod_reach_imports(Module *m, ModuleRegistry *reg) {
+  assert(m->ast != NULL);
+  if (!m->is_std) {
+    reach_prelude(reg);
+  }
+  for (int i = 0; i < m->ast->decl_count; i++) {
+    Decl *decl = m->ast->decls[i];
+    if (decl->kind != DECL_USE) {
+      continue;
+    }
+    int consumed;
+    (void)mod_walk(reg, m, &decl->as.use_decl.path, &consumed, /*reach=*/true);
+  }
 }
 
 // render a use path back as `a::b` for diagnostics. exact-sized, so there is
 // no bound to juggle and nothing truncates.
-static StringView sprint_mod_path(const Path *path, Allocator *al) {
+static StringView sprint_mod_path(const Path *path, int count, Allocator *al) {
   int len = 0;
-  for (int i = 0; i < path->count; i++) {
+  for (int i = 0; i < count; i++) {
     len += path->segments[i].name.len + (i > 0 ? 2 : 0);
   }
 
   char *buf = al_alloc(al, sizeof(char) * (size_t)(len + 1));
   int n = 0;
-  for (int i = 0; i < path->count; i++) {
+  for (int i = 0; i < count; i++) {
     if (i > 0) {
       buf[n++] = ':';
       buf[n++] = ':';
@@ -332,11 +394,34 @@ static StringView sprint_mod_path(const Path *path, Allocator *al) {
   return (StringView){.chars = buf, .len = n};
 }
 
-bool mod_collect_imports(Module *m, ModuleRegistry *reg, StringView base_dir,
-                         DiagBag *diags, Allocator *al) {
+// the path named no module below its root. For the library that is the whole
+// answer; for the program the head may still be an *enum* in this module's own
+// scope, which §3.4 is about — so this reports only once that reading is out.
+static void report_no_module(const Path *path, bool std_rooted, DiagBag *diags,
+                             Allocator *al) {
+  if (std_rooted) {
+    // name what was looked for, not the whole path: with nothing resolved
+    // there is no telling how many trailing segments were meant as the module,
+    // and the first segment after `std` has to exist either way.
+    int count = path->count > 2 ? 2 : path->count;
+    diag_error(diags, path->span,
+               "there is no standard library module '" SV_FMT "'",
+               SV_ARG(sprint_mod_path(path, count, al)));
+    diag_note(diags, (Span){0}, "available: %s", std_module_names());
+    return;
+  }
+  StringView head = path->segments[0].name;
+  diag_error(diags, path->span, "cannot find module '" SV_FMT "'",
+             SV_ARG(head));
+  diag_note(diags, (Span){0}, "no 'mod " SV_FMT ";' declares it", SV_ARG(head));
+}
+
+bool mod_collect_imports(Module *m, ModuleRegistry *reg, DiagBag *diags,
+                         Allocator *al) {
   assert(m->ast != NULL);
 
-  // exact-sized: nothing appends to m->imports after this.
+  // exact-sized: nothing appends to m->imports after this except the prelude,
+  // which reallocs.
   int use_count = 0;
   for (int i = 0; i < m->ast->decl_count; i++) {
     if (m->ast->decls[i]->kind == DECL_USE) {
@@ -375,175 +460,89 @@ bool mod_collect_imports(Module *m, ModuleRegistry *reg, StringView base_dir,
 
     bool bare = decl->as.use_decl.bare;
     bool glob = decl->as.use_decl.target.is_glob;
+    bool std_rooted =
+        path->count > 0 && sv_equal_cstr(path->segments[0].name, "std");
 
-    // A glob's last segment is *always* the enum — there is no module glob, so
-    // nothing else it could be — which makes its module prefix one shorter and
-    // spares it the probing the other two shapes need.
-    if (glob) {
-      decl->as.use_decl.qualifier = path->segments[path->count - 1].name;
-    }
+    int consumed;
+    Module *cur = mod_walk(reg, m, path, &consumed, /*reach=*/false);
+    int depth = consumed - (std_rooted ? 1 : 0);
+    int rest = path->count - consumed;
 
-    // `std` names the embedded standard library. std modules nest, so which
-    // segments are the module is a lookup rather than a constant: the longest
-    // prefix the embedded table answers to. A bare `use std::cmp;` binds that
-    // module, `use std::cmp::max;` imports an item from it, and
-    // `use std::collections::hashmap::HashMap;` does the same one level down.
-    // A std module that exists is an ordinary registry entry — same dedup,
-    // same graph edge, same `pub` rules — differing from a user module *only*
-    // in where mod_parse gets its bytes. Keeping it ordinary is what makes
-    // moving std to a real directory later a one-branch change.
-    if (path->count > 0 && sv_equal_cstr(path->segments[0].name, "std")) {
-      int mlen = 0;
-      StringView mod_name = std_module_prefix(path, &mlen, al);
-      if (mlen == 0) {
-        // name what was looked for, not the whole path: the trailing segments
-        // of `use std::nope::thing` are an item spelling, and with nothing
-        // resolved there is no way to tell how many of them were meant as the
-        // module. The first segment after `std` is the part that has to exist
-        // either way.
-        Path mod_only = *path;
-        if (mod_only.count > 2) {
-          mod_only.count = 2;
-        }
-        StringView mod_path = sprint_mod_path(&mod_only, al);
-        diag_error(diags, path->span,
-                   "there is no standard library module '" SV_FMT "'",
-                   SV_ARG(mod_path));
-        diag_note(diags, (Span){0}, "available: %s", std_module_names());
-        ok = false;
+    // §3.4. A root is not addressable — the program's has no name and `std`
+    // alone names the library, not a module of it — so a walk that stayed at
+    // one found no module. The head may still be an enum already in scope,
+    // which resolves a pass later (`tc_link_scope_imports`); a `std::` path
+    // never gets that reading, since it consumed its root.
+    if (depth == 0) {
+      if (!std_rooted && rest == (bare ? 2 : 1)) {
+        decl->as.use_decl.is_scope_import = true;
+        decl->as.use_decl.qualifier = path->segments[0].name;
         continue;
       }
-
-      bool is_module = bare && path->count == mlen;
-      // with the module settled, the shape of what follows is arithmetic
-      // rather than a file question: one segment is an item, two are an enum
-      // and its variant.
-      int extra = path->count - mlen - (bare ? 1 : 0);
-      if (extra > 1) {
-        diag_error(diags, path->span,
-                   "too many segments in use path: '" SV_FMT
-                   "' names an item of a std module, or a variant of one of "
-                   "its enums",
-                   SV_ARG(sprint_mod_path(path, al)));
-        ok = false;
-        continue;
-      }
-      if (glob && extra != 1) {
-        diag_error(diags, decl->as.use_decl.target.span,
-                   "a glob import names the variants of an enum "
-                   "(`use std::<module>::<Enum>::*;`), and there is no module "
-                   "glob");
-        ok = false;
-        continue;
-      }
-      if (extra == 1) {
-        decl->as.use_decl.qualifier =
-            path->segments[path->count - 1 - (bare ? 1 : 0)].name;
-      }
-
-      decl->as.use_decl.is_module_import = is_module;
-      imp->file_path = std_mod_key(mod_name, al);
-      int dep = modreg_find(reg, imp->file_path);
-      if (dep < 0) {
-        dep = modreg_add(reg, mod_new(imp->file_path, al));
-      }
-      imp->module_index = dep;
+      report_no_module(path, std_rooted, diags, al);
+      ok = false;
       continue;
     }
 
-    // A bare use whose full path names a module file binds that module;
-    // anything else imports the trailing name from its prefix module, and one
-    // segment further back may be the enum that name is a variant of. Which is
-    // which is the same file-existence question each time, asked shortest-
-    // prefix-last so an item import keeps winning over a variant one.
-    // `module_path` is the file to load in every case.
-    // The leading segment may also name no file at all, but an *enum in this
-    // module's scope* — its own, one it imported, or a preluded one:
-    // `use Event::A;`, `use Color::Red;`, `use Option::Some;`. That is the last
-    // reading of all, taken only where no file answered, so nothing that
-    // resolved before resolves differently. It carries no dependency edge
-    // (`module_index` stays -1) and binds after this module resolves, since a
-    // scope is only complete then — `tc_link_scope_imports`.
-    int scope_prefix = bare ? 2 : 1;
-    if (path->count == scope_prefix &&
-        !mod_prefix_exists(reg, base_dir, path, path->count, al) &&
-        !mod_prefix_exists(reg, base_dir, path, 1, al)) {
-      decl->as.use_decl.is_scope_import = true;
-      decl->as.use_decl.qualifier = path->segments[0].name;
-      // the file the *module* reading would have named, for the diagnostic the
-      // link pass emits when the qualifier turns out to be no enum either.
-      Path mod_only = *path;
-      mod_only.count = 1;
-      imp->file_path = mod_file_for_use(base_dir, &mod_only, al);
+    // a declared module whose source never loaded: discovery reported it once,
+    // at the `mod`, and every use of it stays quiet.
+    if (cur->ast == NULL) {
+      imp->file_path = cur->file_path;
       continue;
     }
 
-    Path module_path = *path;
-    bool is_module = false;
-    if (glob) {
-      // the last segment is the enum, so the prefix is everything before it —
-      // and a prefix that names no file means the whole path was a module,
-      // which a glob cannot take.
-      module_path.count = path->count - 1;
-      if (!mod_prefix_exists(reg, base_dir, &module_path, module_path.count,
-                             al) &&
-          mod_prefix_exists(reg, base_dir, path, path->count, al)) {
-        diag_error(diags, decl->as.use_decl.target.span,
-                   "a glob import names the variants of an enum "
-                   "(`use <module>::<Enum>::*;`), and there is no module glob");
-        ok = false;
-        continue;
-      }
-    } else if (bare) {
-      StringView full = mod_file_for_use(base_dir, path, al);
-      if (file_exists(full.chars)) {
-        is_module = true; // the whole path is a module
-      } else if (path->count >= 2) {
-        module_path.count = path->count - 1; // trailing name is an item
-        if (path->count >= 3 &&
-            !mod_prefix_exists(reg, base_dir, path, path->count - 1, al) &&
-            mod_prefix_exists(reg, base_dir, path, path->count - 2, al)) {
-          module_path.count = path->count - 2;
-          decl->as.use_decl.qualifier = path->segments[path->count - 2].name;
-        }
-      } else {
-        // a one-segment bare use has no prefix to fall back on.
-        StringView mod_path = sprint_mod_path(path, al);
-        diag_error(diags, path->span, "cannot find module '" SV_FMT "'",
-                   SV_ARG(mod_path));
-        diag_note(diags, (Span){0}, "expected file '" SV_FMT "'", SV_ARG(full));
-        ok = false;
-        continue;
-      }
-    } else if (path->count >= 2 &&
-               !mod_prefix_exists(reg, base_dir, path, path->count, al) &&
-               mod_prefix_exists(reg, base_dir, path, path->count - 1, al)) {
-      // braced: the prefix names the file, so a trailing segment it does not
-      // account for is the enum the braced names are variants of.
-      module_path.count = path->count - 1;
-      decl->as.use_decl.qualifier = path->segments[path->count - 1].name;
+    // With the module settled, what follows it is arithmetic rather than a
+    // question about the filesystem: nothing is an item, one segment is an
+    // item, two are an enum and one of its variants.
+    if (glob && rest != 1) {
+      diag_error(diags, decl->as.use_decl.target.span,
+                 "a glob import names the variants of an enum "
+                 "(`use <module>::<Enum>::*;`), and there is no module glob");
+      ok = false;
+      continue;
+    }
+    int max_rest = bare ? 2 : 1;
+    if (rest > max_rest) {
+      diag_error(diags, path->span,
+                 "too many segments in use path: '" SV_FMT
+                 "' names an item of module '" SV_FMT
+                 "', or a variant of one of its enums",
+                 SV_ARG(sprint_mod_path(path, path->count, al)),
+                 SV_ARG(cur->label));
+      ok = false;
+      continue;
     }
 
-    decl->as.use_decl.is_module_import = is_module;
-    imp->file_path = mod_file_for_use(base_dir, &module_path, al);
-
-    int dep = modreg_find(reg, imp->file_path);
-    if (dep < 0) {
-      if (!file_exists(imp->file_path.chars)) {
-        StringView mod_path = sprint_mod_path(&module_path, al);
-        diag_error(diags, path->span, "cannot find module '" SV_FMT "'",
-                   SV_ARG(mod_path));
-        diag_note(diags, (Span){0}, "expected file '" SV_FMT "'",
-                  SV_ARG(imp->file_path));
-        ok = false;
-        continue;
-      }
-      dep = modreg_add(reg, mod_new(imp->file_path, al));
+    // the enum a variant import is qualified by is the last segment the module
+    // did not account for, whichever shape wrote it down — so it sits one past
+    // the module in every case, and only the longest shape has one at all.
+    if (rest == max_rest) {
+      decl->as.use_decl.qualifier = path->segments[consumed].name;
     }
-    imp->module_index = dep;
+    decl->as.use_decl.is_module_import = bare && rest == 0;
+
+    imp->file_path = cur->file_path;
+    imp->module_index = cur->reg_index;
+    assert(imp->module_index >= 0 && "walked to an unregistered module");
   }
 
   return ok;
+}
+
+int mod_split_path(const char *path, StringView *out, int max) {
+  StringView p = sv_from_cstr(path);
+  int n = 0;
+  int i = 0;
+  while (i <= p.len && n < max) {
+    int start = i;
+    while (i < p.len &&
+           !(p.chars[i] == ':' && i + 1 < p.len && p.chars[i + 1] == ':')) {
+      i++;
+    }
+    out[n++] = (StringView){.chars = p.chars + start, .len = i - start};
+    i += 2; // past the "::"
+  }
+  return n;
 }
 
 // ── the prelude ────────────────────────────────────────────────────────────
@@ -598,6 +597,15 @@ static const PreludeEntry prelude[] = {
 // cycle the exemption avoids), and the entries carry `from_prelude` so linking
 // yields silently to a local decl or an explicit import of the same name.
 // Appended *after* the real imports so those link first and take priority.
+static void reach_prelude(ModuleRegistry *reg) {
+  for (int i = 0; i < PRELUDE_COUNT; i++) {
+    ModChild *ch =
+        mod_find_child(reg->std_root, sv_from_cstr(prelude[i].module));
+    assert(ch != NULL && "std/lib.dt does not declare a prelude module");
+    modreg_add(reg, ch->mod);
+  }
+}
+
 void mod_inject_prelude(Module *m, ModuleRegistry *reg, Allocator *al) {
   if (mod_is_std_module(m)) {
     return;
@@ -609,11 +617,10 @@ void mod_inject_prelude(Module *m, ModuleRegistry *reg, Allocator *al) {
 
   for (int i = 0; i < PRELUDE_COUNT; i++) {
     const PreludeEntry *e = &prelude[i];
-    StringView key = std_mod_key(sv_from_cstr(e->module), al);
-    int dep = modreg_find(reg, key);
-    if (dep < 0) {
-      dep = modreg_add(reg, mod_new(key, al));
-    }
+    ModChild *ch = mod_find_child(reg->std_root, sv_from_cstr(e->module));
+    assert(ch != NULL && "std/lib.dt does not declare a prelude module");
+    int dep = ch->mod->reg_index;
+    assert(dep >= 0 && "a prelude module was never reached");
 
     int item_count = 0;
     while (e->items[item_count] != NULL) {
@@ -635,8 +642,8 @@ void mod_inject_prelude(Module *m, ModuleRegistry *reg, Allocator *al) {
       use->as.use_decl.target.aliases = aliases;
     }
 
-    m->imports[m->import_count++] =
-        (ModImport){.decl = use, .file_path = key, .module_index = dep};
+    m->imports[m->import_count++] = (ModImport){
+        .decl = use, .file_path = ch->mod->file_path, .module_index = dep};
   }
 }
 
@@ -648,11 +655,11 @@ bool mod_parse(Module *m, DiagBag *diags, Allocator *al) {
   // label. Pointing this branch at a directory instead of the embedded table
   // is all it would take to make std filesystem-backed.
   //
-  // The question is the *path*, not `std_name`: an adopted root is a std
-  // module read from disk, which is what makes it a lint of the file being
-  // edited rather than of whatever `make` last mirrored.
-  if (is_std_key(m->file_path)) {
-    const char *src = std_module_source(std_key_name(m->file_path));
+  // `from_disk` is the lint hatch, and the reason it is a flag rather than a
+  // path shape: a library module read off the filesystem is still the library
+  // module it was declared to be, so only where its bytes come from changes.
+  if (m->is_std && !m->from_disk) {
+    const char *src = std_module_source(m->std_rel);
     assert(src != NULL && "std module registered without embedded source");
     m->source = (String){.chars = (char *)src, .len = (int)strlen(src)};
   } else {
@@ -719,6 +726,8 @@ void modreg_init(ModuleRegistry *reg, Allocator *al) {
   reg->modules = NULL;
   reg->module_count = 0;
   reg->module_cap = 0;
+  reg->program_root = NULL;
+  reg->std_root = NULL;
   reg->al = al;
 }
 
@@ -729,24 +738,12 @@ void modreg_destroy(ModuleRegistry *reg) {
   al_free(reg->al, reg->modules, sizeof(Module *) * reg->module_cap);
 }
 
-int modreg_find(ModuleRegistry *reg, StringView path) {
-  for (int i = 0; i < reg->module_count; i++) {
-    Module *m = reg->modules[i];
-    // the alias is the whole of what adoption does to discovery: a later
-    // `use std::cmp` resolves its key here and finds the module already
-    // registered, so no second one is ever minted.
-    if (sv_equal(m->file_path, path) ||
-        (m->alias_path.len > 0 && sv_equal(m->alias_path, path))) {
-      return i;
-    }
-  }
-  return -1;
-}
-
 int modreg_add(ModuleRegistry *reg, Module *m) {
-  int existing = modreg_find(reg, m->file_path);
-  if (existing >= 0) {
-    return existing;
+  // the tree mints each module exactly once, so this is idempotence rather
+  // than dedup: a library module is registered by whichever path reaches it
+  // first, and every later one finds it already in the build.
+  if (m->reg_index >= 0) {
+    return m->reg_index;
   }
 
   // grow the array if needed
@@ -759,5 +756,6 @@ int modreg_add(ModuleRegistry *reg, Module *m) {
   }
 
   reg->modules[reg->module_count] = m;
+  m->reg_index = reg->module_count;
   return reg->module_count++;
 }

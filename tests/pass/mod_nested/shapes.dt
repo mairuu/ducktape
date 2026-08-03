@@ -1,0 +1,5 @@
+# a directory is not a module — this file is, and `pub mod` is what puts
+# `shapes/circle.dt` on a path. `pub` because `main.dt` is outside this
+# module's subtree.
+
+pub mod circle;

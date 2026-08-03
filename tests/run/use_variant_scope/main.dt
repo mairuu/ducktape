@@ -1,6 +1,8 @@
 # A variant import's qualifier may be any enum *in scope*, not just a file
 # path: one this file declares, one it imported, one it imported under another
 # name, or a preluded one.
+mod pal;
+
 use std::io::print;
 use pal::Color;
 use pal::Color as Hue;

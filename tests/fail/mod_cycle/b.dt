@@ -1,5 +1,5 @@
-use main::g;
+use a::f;
 
-pub fun f() -> Int {
-  return g();
+pub fun g() -> Int {
+  return f();
 }

@@ -1,5 +1,7 @@
 # Cross-module: the `pub` field reads, the private one is reachable only through
 # the type's own methods.
+mod counter;
+
 use std::io::print;
 use counter::Counter;
 

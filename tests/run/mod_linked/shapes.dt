@@ -1,0 +1,4 @@
+# the module `shapes/` belongs to: without this file nothing declares
+# `shapes::rect`, and the directory alone means nothing.
+
+pub mod rect;

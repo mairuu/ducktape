@@ -1,4 +1,8 @@
 #! expect: an applicable impl exists in module
+mod owner;
+mod shape;
+mod user;
+
 use std::io::print;
 use owner::tag;
 use user::biggest;

@@ -1,0 +1,23 @@
+# std — the library root, and the single statement of its public surface.
+#
+# A module exists because this file (or one below it) declares it. Nothing is
+# found by looking in the directory: adding `std/foo.dt` makes `use std::foo;`
+# resolve only once `pub mod foo;` appears here.
+
+pub mod array;
+pub mod assert;
+pub mod char;
+pub mod cmp;
+pub mod collections;
+pub mod convert;
+pub mod fmt;
+pub mod hash;
+pub mod io;
+pub mod iter;
+pub mod ops;
+pub mod option;
+pub mod panic;
+pub mod result;
+pub mod sort;
+pub mod string;
+pub mod text;

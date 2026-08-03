@@ -1,0 +1,3 @@
+pub fun bump(n: Int) -> Int {
+  return n + 1;
+}

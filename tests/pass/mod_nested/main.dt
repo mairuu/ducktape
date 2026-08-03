@@ -1,6 +1,10 @@
 # nested paths, brace groups, `as` aliases, a generic enum across a module
 # boundary, and a diamond (main + helper both reach util.dt).
 
+mod helper;
+mod shapes;
+mod util;
+
 use std::io::print;
 use shapes::circle::Circle;
 use util::Maybe as Opt;

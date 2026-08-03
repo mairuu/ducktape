@@ -1,10 +1,11 @@
 #! expect: circular module dependency
-use std::io::print;
-use b::f;
+# the cycle is between two children: the root itself is not addressable, so a
+# `use` can never close a loop through it.
+mod a;
+mod b;
 
-pub fun g() -> Int {
-  return 1;
-}
+use std::io::print;
+use a::f;
 
 fun main() {
   print(f());

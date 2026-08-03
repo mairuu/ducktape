@@ -77,13 +77,13 @@ static bool check_field_visible(CheckCtx *ctx, const StructDef *def,
     diag_error(
         ctx->diags, span,
         "field %d of struct '" SV_FMT "' is private in module '" SV_FMT "'",
-        field->ident.index, SV_ARG(def->name), SV_ARG(def->module->file_path));
+        field->ident.index, SV_ARG(def->name), SV_ARG(mod_label(def->module)));
   } else {
     diag_error(ctx->diags, span,
                "field '" SV_FMT "' of struct '" SV_FMT
                "' is private in module '" SV_FMT "'",
                SV_ARG(field->ident.name), SV_ARG(def->name),
-               SV_ARG(def->module->file_path));
+               SV_ARG(mod_label(def->module)));
   }
   diag_note(ctx->diags, (Span){0}, "add 'pub' to the field's declaration");
   return false;
@@ -1150,7 +1150,7 @@ static void note_unimported_impl(DiagBag *diags, ImplDef *impl) {
   diag_note(diags, (Span){0},
             "an applicable impl exists in module '" SV_FMT
             "', but this module does not import it",
-            SV_ARG(impl->module->file_path));
+            SV_ARG(mod_label(impl->module)));
 }
 
 // An impl that matched `self_type` structurally but was rejected because one
@@ -1814,6 +1814,12 @@ static bool decl_item_name(Decl *decl, StringView *out) {
   case DECL_TRAIT:
     *out = decl->as.trait_decl.name;
     return true;
+  // §2.1: a child module's name is bound alongside its parent's items, so
+  // `mod foo;` beside `fun foo()` is the ordinary duplicate-name error — and
+  // that collision is exactly what lets a path walk greedily.
+  case DECL_MOD:
+    *out = decl->as.mod_decl.name;
+    return true;
   default:
     return false;
   }
@@ -1861,6 +1867,7 @@ void tc_register_module(TypeChecker *tc, Module *m) {
       break;
     case DECL_TRAIT:
     case DECL_USE:
+    case DECL_MOD:
     case DECL_VAR:
     case DECL_POISON:
       break;
@@ -1895,6 +1902,10 @@ void tc_register_module(TypeChecker *tc, Module *m) {
     case DECL_USE:
       // imports are linked in tc_link_imports, which must run after the
       // dependency has been *resolved* — see its comment in sema.h.
+      break;
+    case DECL_MOD:
+      // membership, not a name to resolve: discovery built the child and the
+      // duplicate-name check above already saw it.
       break;
     case DECL_VAR:
       // globals have no runtime representation: every slot space the linker
@@ -1992,11 +2003,23 @@ static void link_drop_glob_binding(Module *m, StringView alias) {
   }
 }
 
-// return true if `alias` is already taken in m, reporting why.
-static bool link_name_taken(TypeChecker *tc, Module *m, UseAlias *a) {
+// return true if `alias` is already taken in m, reporting why. `own_child` is
+// the module a *module* import resolved to, and NULL for every other kind.
+static bool link_name_taken(TypeChecker *tc, Module *m, UseAlias *a,
+                            Module *own_child) {
   link_drop_glob_binding(m, a->alias);
 
-  if (mod_find_own_decl(m, a->alias) != NULL) {
+  Decl *own = mod_find_own_decl(m, a->alias);
+  // `use std::string::buf;` beside `mod buf;` is not a name declared twice: it
+  // is the two edges of the design drawn at once. `mod` says the module is
+  // part of this build; `use` asks for its qualifier and its impls, which
+  // membership deliberately withholds. Only the child's *own* name is exempt —
+  // an `as` alias onto a different child still collides.
+  if (own != NULL && own->kind == DECL_MOD && own_child != NULL &&
+      mod_find_child(m, a->alias)->mod == own_child) {
+    own = NULL;
+  }
+  if (own != NULL) {
     diag_error(tc->diags, a->span,
                "'" SV_FMT "' is already declared in this module",
                SV_ARG(a->alias));
@@ -2064,7 +2087,16 @@ static Decl *link_find_export(TypeChecker *tc, Module *dep, StringView name,
   if (d == NULL) {
     diag_error(tc->diags, span,
                "module '" SV_FMT "' has no item named '" SV_FMT "'",
-               SV_ARG(dep->file_path), SV_ARG(name));
+               SV_ARG(mod_label(dep)), SV_ARG(name));
+    return NULL;
+  }
+  if (d->kind == DECL_MOD) {
+    // a child module reached where an item was asked for: the braced form
+    // names items, so nothing here can be the module it found.
+    diag_error(tc->diags, span,
+               "'" SV_FMT "' is a module of '" SV_FMT "', not an item",
+               SV_ARG(name), SV_ARG(mod_label(dep)));
+    diag_note(tc->diags, (Span){0}, "import a module with a bare 'use'");
     return NULL;
   }
   if (!d->is_pub) {
@@ -2074,13 +2106,13 @@ static Decl *link_find_export(TypeChecker *tc, Module *dep, StringView name,
       diag_error(tc->diags, span,
                  "'" SV_FMT "' is imported by module '" SV_FMT
                  "' but not re-exported",
-                 SV_ARG(name), SV_ARG(dep->file_path));
+                 SV_ARG(name), SV_ARG(mod_label(dep)));
       diag_note(tc->diags, (Span){0}, "add 'pub' to its 'use' declaration");
       return NULL;
     }
     diag_error(tc->diags, span,
                "'" SV_FMT "' is private in module '" SV_FMT "'", SV_ARG(name),
-               SV_ARG(dep->file_path));
+               SV_ARG(mod_label(dep)));
     diag_note(tc->diags, (Span){0}, "add 'pub' to its declaration");
     return NULL;
   }
@@ -2120,7 +2152,7 @@ static VariantImport *variant_import_push(TypeChecker *tc, Module *m,
 static void link_bind_variant(TypeChecker *tc, Module *m, UseAlias *a,
                               EnumDef *enum_def, VariantDef *variant,
                               bool is_pub, bool from_prelude) {
-  if (link_name_taken(tc, m, a)) {
+  if (link_name_taken(tc, m, a, NULL)) {
     return;
   }
   VariantImport *vi =
@@ -2134,8 +2166,7 @@ static void link_bind_variant(TypeChecker *tc, Module *m, UseAlias *a,
 // rather than a `pub` export of anywhere — an own enum, an imported one, a
 // preluded one — so there is no visibility question to ask.
 static EnumDef *link_qualifier_enum(TypeChecker *tc, Module *m, Module *dep,
-                                    StringView qualifier, Span span,
-                                    StringView expected_file) {
+                                    StringView qualifier, Span span) {
   if (dep != m && link_find_export(tc, dep, qualifier, span) == NULL) {
     return NULL;
   }
@@ -2146,17 +2177,15 @@ static EnumDef *link_qualifier_enum(TypeChecker *tc, Module *m, Module *dep,
       // poisoned the decl, which was reported there.
       return NULL;
     }
-    // nothing of that name: neither a file (discovery looked) nor a type. The
-    // file it looked for is the more likely intent, so lead with that.
+    // nothing of that name: no module declared it (discovery walked the tree)
+    // and no enum in scope answers either. The module is the likelier intent,
+    // so lead with that and name the declaration it would have taken.
     diag_error(tc->diags, span, "cannot find module '" SV_FMT "'",
                SV_ARG(qualifier));
-    if (expected_file.len > 0) {
-      diag_note(tc->diags, (Span){0}, "expected file '" SV_FMT "'",
-                SV_ARG(expected_file));
-    }
-    diag_note(tc->diags, (Span){0},
-              "no enum named '" SV_FMT "' is in scope either",
+    diag_note(tc->diags, (Span){0}, "no 'mod " SV_FMT ";' declares it",
               SV_ARG(qualifier));
+    diag_note(tc->diags, (Span){0},
+              "and no enum named '" SV_FMT "' is in scope", SV_ARG(qualifier));
     return NULL;
   }
   if (te->type->kind != TY_ENUM) {
@@ -2178,8 +2207,7 @@ static void link_import_variant(TypeChecker *tc, Module *m, Module *dep,
     return;
   }
 
-  EnumDef *enum_def =
-      link_qualifier_enum(tc, m, dep, qualifier, a->span, (StringView){0});
+  EnumDef *enum_def = link_qualifier_enum(tc, m, dep, qualifier, a->span);
   if (enum_def == NULL) {
     return;
   }
@@ -2216,7 +2244,7 @@ static void link_import_item(TypeChecker *tc, Module *m, Module *dep,
       diag_error(tc->diags, a->span,
                  "'" SV_FMT "' is imported by module '" SV_FMT
                  "' but not re-exported",
-                 SV_ARG(a->name), SV_ARG(dep->file_path));
+                 SV_ARG(a->name), SV_ARG(mod_label(dep)));
       diag_note(tc->diags, (Span){0}, "add 'pub' to its 'use' declaration");
       return;
     }
@@ -2229,7 +2257,7 @@ static void link_import_item(TypeChecker *tc, Module *m, Module *dep,
     return;
   }
 
-  if (link_name_taken(tc, m, a)) {
+  if (link_name_taken(tc, m, a, NULL)) {
     return;
   }
 
@@ -2245,7 +2273,7 @@ static void link_import_item(TypeChecker *tc, Module *m, Module *dep,
 // is the only place any of them can be seen at once.
 static void link_bind_module(TypeChecker *tc, Module *m, Module *dep,
                              UseAlias *a) {
-  if (link_name_taken(tc, m, a)) {
+  if (link_name_taken(tc, m, a, dep)) {
     return;
   }
 
@@ -2322,9 +2350,7 @@ void tc_link_scope_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
     }
 
     Span span = glob ? use->target.span : use->path.span;
-    EnumDef *enum_def = link_qualifier_enum(
-        tc, m, dep, use->qualifier, span,
-        use->is_scope_import ? imp->file_path : (StringView){0});
+    EnumDef *enum_def = link_qualifier_enum(tc, m, dep, use->qualifier, span);
     if (enum_def == NULL) {
       continue;
     }
@@ -2368,7 +2394,7 @@ void tc_link_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
     if (imp->decl->as.use_decl.is_scope_import && !target->is_glob) {
       for (int j = 0; j < target->count; j++) {
         UseAlias *a = &target->aliases[j];
-        if (!link_name_taken(tc, m, a)) {
+        if (!link_name_taken(tc, m, a, NULL)) {
           variant_import_push(tc, m, a, imp->decl->is_pub, /*from_glob=*/false,
                               /*from_prelude=*/false);
         }
@@ -2553,9 +2579,9 @@ void tc_import_impls(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
           continue;
         }
         diag_note(tc->diags, (Span){0}, "  one is in module '" SV_FMT "'",
-                  SV_ARG(impl->module->file_path));
+                  SV_ARG(mod_label(impl->module)));
         diag_note(tc->diags, (Span){0}, "  the other in module '" SV_FMT "'",
-                  SV_ARG(other->module->file_path));
+                  SV_ARG(mod_label(other->module)));
         break;
       }
       impl_index_add(&m->visible_impls, impl);
@@ -3228,7 +3254,7 @@ static void resolve_impl_inherent_coherence(ResolveCtx *rctx, Decl *decl,
     } else {
       diag_note(rctx->diags, (Span){0},
                 "the other one is in module '" SV_FMT "'",
-                SV_ARG(other->module->file_path));
+                SV_ARG(mod_label(other->module)));
     }
     break;
   }
@@ -3288,7 +3314,7 @@ static void resolve_impl_decl(ResolveCtx *rctx, Decl *decl) {
                "' for type '%s'",
                SV_ARG(impl_trait_def(impl_def)->name), buf);
     diag_note(rctx->diags, (Span){0}, "the other one is in module '" SV_FMT "'",
-              SV_ARG(other->module->file_path));
+              SV_ARG(mod_label(other->module)));
     break;
   }
   impl_index_add(rctx->impls, impl_def);
@@ -4231,6 +4257,7 @@ static void resolve_decl(ResolveCtx *rctx, Decl *decl) {
     resolve_trait_decl(rctx, decl);
     break;
   case DECL_USE:
+  case DECL_MOD:
   case DECL_VAR:
   case DECL_POISON:
     break; // already diagnosed during registration
@@ -9571,6 +9598,7 @@ bool tc_check_module(TypeChecker *tc, Module *m) {
     case DECL_STRUCT:
     case DECL_ENUM:
     case DECL_USE:
+    case DECL_MOD:
     case DECL_VAR:
     case DECL_POISON:
       break;
@@ -11488,7 +11516,7 @@ static TypeEntry *module_export_lookup(PathResCtx *ctx, Module *mod,
   if (own == NULL && reexport == NULL) {
     diag_error(ctx->diags, span,
                "module '" SV_FMT "' has no item named '" SV_FMT "'",
-               SV_ARG(mod->file_path), SV_ARG(name));
+               SV_ARG(mod_label(mod)), SV_ARG(name));
     return NULL;
   }
   if (!(own ? own->is_pub : reexport->is_pub)) {
@@ -11496,12 +11524,12 @@ static TypeEntry *module_export_lookup(PathResCtx *ctx, Module *mod,
       diag_error(ctx->diags, span,
                  "'" SV_FMT "' is imported by module '" SV_FMT
                  "' but not re-exported",
-                 SV_ARG(name), SV_ARG(mod->file_path));
+                 SV_ARG(name), SV_ARG(mod_label(mod)));
       diag_note(ctx->diags, (Span){0}, "add 'pub' to its 'use' declaration");
     } else {
       diag_error(ctx->diags, span,
                  "'" SV_FMT "' is private in module '" SV_FMT "'", SV_ARG(name),
-                 SV_ARG(mod->file_path));
+                 SV_ARG(mod_label(mod)));
       diag_note(ctx->diags, (Span){0}, "add 'pub' to its declaration");
     }
     return NULL;

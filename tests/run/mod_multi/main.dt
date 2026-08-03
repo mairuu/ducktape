@@ -1,6 +1,8 @@
 # the smallest multi-module program that runs: one imported function, called
 # through the slot exe_link gave it in the program-wide globals space.
 #> 42
+mod lib;
+
 use std::io::print;
 use lib::answer;
 

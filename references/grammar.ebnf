@@ -7,8 +7,9 @@ program        = decl* ;
 
 (* ── declarations ─────────────────────────────────────────────────────── *)
 
-decl           = attribute* "pub"? ( useDecl | varDecl | funDecl | structDecl
-                                   | enumDecl | traitDecl | implDecl ) ;
+decl           = attribute* "pub"? ( useDecl | modDecl | varDecl | funDecl
+                                   | structDecl | enumDecl | traitDecl
+                                   | implDecl ) ;
                  (* a decl may carry at most one *body* attribute
                     (@native/@intrinsic, funDecl only), at most one @lang marker
                     (funDecl, traitDecl or enumDecl), and any number of @allow —
@@ -26,24 +27,37 @@ attribute      = "@" ( "native" | "intrinsic" | "lang" | "allow" )
                     over this declaration — language.md "Native functions",
                     "Lang items" and "Warnings and `@allow`" *)
 
+modDecl        = "mod" IDENT ";" ;
+                 (* declares a child module: it is part of this build unit and
+                    is compiled whether or not anything imports it. Where its
+                    source lives follows from the tree — a root's children sit
+                    beside it, a non-root module's in a directory named after
+                    it — so there is nothing else to write down. The name is
+                    bound alongside the module's items, so a name is a child or
+                    an item and never both. `pub mod` exports the child;
+                    `mod` grants no names and no impls, which is what `use` is
+                    for — language.md "Modules" *)
+
 useDecl        = "use" usePath ( "as" IDENT )? ";" ;
 usePath        = path ( "::" ( "{" useItem ( "," useItem )* ","? "}"
                              | "*" ) )? ;
 useItem        = IDENT ( "as" IDENT )? ;
-                 (* Braced: leading segments name the file, the brace group
-                    names the items. Bare (no braces): if the whole path names a
-                    module file it is a *module import* — the last segment (or
-                    the `as` alias) becomes a qualifier, so `use a::b; b::thing`
-                    names an item of b without importing it. Otherwise the last
-                    segment is a single item of the prefix module. Only file
-                    existence tells the two apart — mod_collect_imports decides.
-                    One further segment may name an *enum* whose variants the
-                    remaining names are (`use a::E::V;`, `use a::E::{V, W};`),
-                    which the same file question separates, shortest prefix
-                    last — and last of all, that enum may be one already in
+                 (* A path is ABSOLUTE: it is walked from the program root,
+                    or from the library root when its first segment is the
+                    reserved `std`, consuming a segment for as long as one
+                    names a DECLARED child. What is left over says what the
+                    import is. Braced: nothing left over means the brace group
+                    names items, one segment left names an *enum* whose
+                    variants they are. Bare (no braces): nothing left over is a
+                    *module import* — the last segment (or the `as` alias)
+                    becomes a qualifier, so `use a::b; b::thing` names an item
+                    of b without importing it; one segment left is an item, two
+                    are an enum and one of its variants. Nothing here asks
+                    whether a file exists. Where the walk consumes nothing
+                    below the root, the head is read as an enum already in
                     SCOPE, so `use E::V;` names no module at all. `*` takes
-                    every variant of it; there is no module glob, and a glob
-                    takes no `as`. `pub use` re-exports each alias —
+                    every variant of the enum; there is no module glob, and a
+                    glob takes no `as`. `pub use` re-exports each alias —
                     language.md "Modules" *)
 
 varDecl        = "var" pattern ( ":" type )? "=" expr

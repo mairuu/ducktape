@@ -3,6 +3,8 @@
 # non-std module has an author. Only the embedded std — which is compiled from
 # source into every program and which no user can edit — is silenced, so this
 # main.dt is clean while its sibling is not.
+mod helper;
+
 use helper;
 use std::io::print;
 

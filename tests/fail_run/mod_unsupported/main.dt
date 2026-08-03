@@ -1,5 +1,7 @@
 #! expect: lib.dt
 # type-checks; only --run rejects it, in the dependency rather than here.
+mod lib;
+
 use std::io::print;
 use lib::show_twice;
 

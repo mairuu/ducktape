@@ -1,0 +1,19 @@
+# A path means what the declarations say, not what the filesystem holds. Both
+# of these used to change meaning when an unrelated file appeared beside them:
+# `use a::b;` became module `a::b` the moment `a/b.dt` existed, and
+# `use Event::A;` stopped naming this file's own enum the moment `Event.dt`
+# did. Both files exist here, and neither is declared, so neither is anything.
+mod a;
+
+use a::b;
+use Event::A;
+
+pub enum Event { A, B }
+
+fun pick() -> Int {
+  var e = A;
+  return match e {
+    Event::A => b(),
+    Event::B => 0,
+  };
+}

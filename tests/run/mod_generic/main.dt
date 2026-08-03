@@ -8,6 +8,8 @@
 #> <bool true>
 #> int 7!
 #> bool true!
+mod util;
+
 use std::io::print;
 use util::{Pair, swap, tag, loud, Label};
 

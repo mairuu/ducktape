@@ -1,9 +1,15 @@
 # The declared module tree — design
 
-Status: **agreed design, not yet implemented.** Milestones 94–95 build it.
-Everything in `language.md` and `architecture.md` still describes the *current*
-system; this file is the only place that describes the intended one, and it is
-deleted once the two milestones land and those files absorb it.
+Status: **§1–§3, §5 and §7 shipped in milestone 94**; `language.md` and
+`architecture.md` now describe them and are the place to read. What is left is
+**§4 (privacy), §6 (the diagnostics the boundary makes possible) and the std
+half of §5 — milestone 95**, after which this file is deleted.
+
+Milestone 94 departed from the text in three places, all recorded in its commit
+body: discovery is a fixpoint rather than a pass; the build unit is per tree
+(the program's registered whole, the library's on demand) rather than uniform;
+and `use` naming a module's own child is exempted from the §2.1 collision, since
+`mod` and `use` are different edges and a module may want both.
 
 Written against `54426f4` (milestone 93). The measurements in §1 and §7 were
 taken at `2c0071c`, before milestones 92–93 added the unused warnings and

@@ -1,0 +1,8 @@
+#! expect: is defined multiple times in this module
+# a name in a module is a child module or an item, never both — which is what
+# lets a use path be walked greedily with no lookahead.
+mod thing;
+
+fun thing() {}
+
+fun main() {}

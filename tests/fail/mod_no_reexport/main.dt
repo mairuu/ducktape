@@ -1,4 +1,7 @@
 #! expect: but not re-exported
+mod a;
+mod b;
+
 use b::X;
 
 fun main() {}

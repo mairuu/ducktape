@@ -1,4 +1,6 @@
 #! expect: field 'h' of struct 'Rect' is private in module
+mod shape;
+
 use shape::Rect;
 use shape::square;
 

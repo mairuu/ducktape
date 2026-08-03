@@ -1,6 +1,8 @@
 # A derived impl is registered in the deriving module's *visible* set, so it
 # travels through `use` exactly like a written one — including back into the
 # module that declared the traits, whose `greet` never saw this type.
+mod traits;
+
 use std::io::print;
 use traits::{Greet, Loud, greet};
 

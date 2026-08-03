@@ -6,6 +6,8 @@
 #
 # Before reachability-based linking this failed with "the program has 261
 # functions and methods; the VM addresses at most 256".
+mod funs;
+
 use std::io::print;
 use funs::answer;
 

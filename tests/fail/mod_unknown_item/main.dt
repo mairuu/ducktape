@@ -1,4 +1,6 @@
 #! expect: has no item named 'B'
+mod lib;
+
 use lib::B;
 
 fun main() {}

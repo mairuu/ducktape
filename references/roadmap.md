@@ -1626,6 +1626,39 @@ keep this file small. Everything from 55 on is below.
   an `@allow` that says why. Left over: no `-W`/`-Werror`, and an allow's grain
   is a whole declaration (see warts).
 
+- **94. The declared module tree** (`SHA`) — `mod x;` / `pub mod x;` replaces
+  path resolution. Design: `language.md` "Modules" + the gaps table,
+  `architecture.md` "Modules" / "The embedded standard library",
+  `grammar.ebnf`, `overview.md`. All three failures in `modules-design.md` §1
+  are fixed and pinned (`tests/pass/mod_declared`, `tests/fail/mod_orphan_checked`).
+
+  The finding is that **declaring the tree deletes the questions rather than
+  answering them**: nothing in resolution asks whether a file exists, so
+  `mod_prefix_exists`, `std_module_prefix`, `std_name_for_entry`, `mod_adopt_std`,
+  `Module.alias_path` and `modreg_find` are all gone rather than rewritten, and
+  the lint hatch became a flag (`--std-module std::cmp`) with no adoption to
+  explain. What replaced them is `mod_walk`, used twice — once to *reach*
+  modules during discovery and once to *resolve* against the finished tree —
+  because two walks that must agree can only be made to by asking the same
+  question (milestone 91's lesson, applied by construction this time).
+
+  Two things the design did not say. **Discovery has to be a fixpoint**: both
+  edges out of a module live in its AST, so a path two library modules deep
+  needs the first parsed before the second can be named. And **the build unit
+  is per tree** — the program's is registered whole, so a module nothing
+  imports is still checked, while a library module joins the build when a path
+  reaches it. Eager std would compile 20 modules where the prelude closure
+  needs 11; measured, a trivial compile is unchanged.
+
+  `mod` and `use` being different edges showed up as a name collision:
+  `use std::string::buf;` beside `mod buf;` is not a redeclaration but both
+  edges drawn at once, so `link_name_taken` exempts exactly a module naming its
+  own child under its own name. The sanitizer caught `memcpy(dst, NULL, 0)` —
+  the program root's label is an empty view with a NULL pointer. Migration:
+  38 test roots, 2 new intermediate modules, `std/lib.dt`, and no file moved.
+  Left over: `pub mod` parses and is recorded but is not enforced (milestone 95,
+  see warts).
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -1648,31 +1681,21 @@ unified" limit stopped being a blocker and became a *cost*: `Output` works, it
 just has to be written down at every bound that keeps the result, because
 nothing infers one.)
 
-1. **The declared module tree — replace path resolution.** Full design in
-   `modules-design.md`; milestones 94 (the tree) and 95 (the boundary). **This
-   is the first priority and the only entry that is not a matter of appetite**,
-   because what it replaces is not missing, it is wrong.
+1. **The module boundary — milestone 95.** Milestone 94 built the tree and
+   fixed all three resolution failures; what it deliberately did not do is make
+   `pub mod` mean anything. Remaining design in `modules-design.md` §4 and §6.
+   **Still the first priority and still not a matter of appetite**, because the
+   half that landed left `pub` on a module parsed and inert, which is a claim
+   the language makes and does not keep.
 
-   Three failures, each reproduced at `2c0071c`: creating an unrelated `a/b.dt`
-   changes what an unchanged `use a::b;` *means* and breaks it; an unrelated
-   `Event.dt` breaks a `use Event::A;` that names the importing file's own enum;
-   and a `.dt` file with a type error that nothing imports is never compiled at
-   all. Underneath them: resolution probes the filesystem at three prefix
-   lengths with "shortest tried last" as a tiebreak, stores the guess in three
-   AST flags the parser could not determine, and runs as *two* resolvers that
-   have to be kept in agreement by hand — which is what milestones 90 and 91
-   were both about, and what the hand-written `std/collections.dt` facade is.
-
-   One cause: **the module tree is never declared, so every path re-derives it
-   from the filesystem.** `mod x;` / `pub mod x;` declares it, and every question
-   above becomes a lookup — plus privacy becomes expressible, so std can finally
-   hold internals, and nesting becomes a boundary rather than a namespace.
-
-   What makes it affordable: paths stay **absolute**, so the ~500 `use std::`
-   lines and ~500 single-file tests do not change, and no file moves. The
-   migration is 38 test roots gaining `mod` declarations, two new intermediate
-   modules, and a `std/lib.dt`. It also *deletes* milestone 90's adoption
-   machinery entirely rather than extending it.
+   Three parts: enforce §4 (a module is reachable from its declarer's subtree,
+   or it is `pub`), add the `orphan_module` warning for a `.dt` file no `mod`
+   claims, and spend both on std — `std::array`'s `pop_last`, `std::iter`'s
+   `char_at`/`prev_boundary` and `std::string`'s `char_width` are documented as
+   internal and reachable today, and the `pub use` facade lines drop wherever
+   `pub mod` replaces them. Privacy is an *error*, not a lint: a private module
+   named from outside is a fact about the program, not advice, so `@allow`
+   deliberately cannot reach it.
 
 2. **Growing std on top of the natives** — the mechanism landed in milestone
    16 with a deliberately small registry, and the pieces with a design question
@@ -1918,26 +1941,21 @@ via `Module.decl_base`) and is not part of the main line.
   rather than source order, so an inner block's precede an outer one's whatever
   their lines. Sorting the bag would need notes to stop attaching to the
   diagnostic before them by position (milestone 89)
-- **path resolution guesses, and the guess is observable.** Creating an
-  unrelated `a/b.dt` changes what an unchanged `use a::b;` means; an unrelated
-  `Event.dt` breaks a `use Event::A;` naming the importing file's own enum; a
-  `.dt` file nothing imports is never compiled, so there is no build unit. Under
-  those: probing at three prefix lengths, three AST flags the parser could not
-  determine, and two resolvers kept in agreement by hand. **All of it is "Next"
-  item 1** — `modules-design.md`, milestones 94–95. The three below are the same
-  wart seen from different sides and go with it:
-  - a directory named `std` holding a file named after a std module is compiled
-    *as* that module when named on the command line (milestone 90), and
-    milestone 91 widened the reach without widening the explanation. The
-    declared tree replaces adoption with an explicit `--std-module` flag
-  - a group's facade is hand-written and unchecked (milestone 91's remainder):
-    `std::collections` is a module only because `std/collections.dt` sits beside
-    the directory and `pub use`s what is under it, and nothing notices when it
-    falls behind. `pub mod` replaces it
-  - nesting made a namespace, not a boundary: every std file is permanent public
-    API, so `std::array`'s `pop_last`, `std::iter`'s `char_at`/`prev_boundary`
-    and `std::string`'s `char_width` are documented as internal and reachable
-    anyway
+- **the tree is declared but not yet a boundary** (milestone 94's remainder,
+  and all of "Next" item 1's second half). `mod` and `pub mod` both parse and
+  both are recorded, and nothing enforces the difference: every declared module
+  is reachable from every other, so every std file is still permanent public
+  API and `std::array`'s `pop_last`, `std::iter`'s `char_at`/`prev_boundary`
+  and `std::string`'s `char_width` are documented as internal and reachable
+  anyway. Milestone 95, with the two that go with it:
+  - a `.dt` file no `mod` claims is silently not part of the program. That is
+    the point — it is what makes a path's meaning independent of what is on
+    disk — but nothing says the file is dead, which is the `orphan_module`
+    warning 95 owes
+  - a group's short spellings are still hand-written `pub use` lines:
+    `pub mod hashmap;` puts `std::collections::hashmap` on a path, but
+    `use std::collections::HashMap;` works only because `std/collections.dt`
+    re-exports it by hand, and nothing notices when that falls behind
 - `while true { }` still types `()`, and deliberately: its condition is an
   expression, and the checker reads types rather than values. `loop { }` is the
   spelling that asks no condition (milestone 86)

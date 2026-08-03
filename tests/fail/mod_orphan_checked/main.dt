@@ -1,0 +1,6 @@
+#! expect: expected 'Int'
+# the build unit is everything `mod` declares, not everything something
+# imports: nothing here names `lonely`, and it is type-checked anyway.
+mod lonely;
+
+fun main() {}

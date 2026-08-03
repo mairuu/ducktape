@@ -1,0 +1,6 @@
+# `pub` because `main.dt` sits outside this module's subtree.
+pub mod shape;
+
+pub fun bump(n: Int) -> Int {
+  return n + 1;
+}

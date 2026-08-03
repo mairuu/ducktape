@@ -1,0 +1,17 @@
+# `mod` and `use` are different edges, and a module may want both of a child:
+# `mod geo;` puts it in the build, `use geo;` asks for its qualifier and the
+# impls membership deliberately withholds. Naming the child under its own name
+# is not a redeclaration.
+#> 12
+#> 7
+mod geo;
+
+use std::io::print;
+use geo;
+use geo::shape::Rect;
+
+fun main() {
+  var r = Rect { w: 3, h: 4 };
+  print(r.area());
+  print(geo::bump(6));
+}

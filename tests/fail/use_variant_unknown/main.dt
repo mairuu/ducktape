@@ -1,4 +1,6 @@
 #! expect: enum 'Color' has no variant named 'Blue'
+mod pal;
+
 use pal::Color::Blue;
 
 fun main() {}

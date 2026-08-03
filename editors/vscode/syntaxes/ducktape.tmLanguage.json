@@ -105,7 +105,7 @@
         },
         {
           "name": "keyword.other.ducktape",
-          "match": "\\b(use|pub|where|as|dyn|type)\\b"
+          "match": "\\b(use|mod|pub|where|as|dyn|type)\\b"
         },
         {
           "name": "keyword.operator.word.ducktape",

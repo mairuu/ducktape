@@ -1856,6 +1856,10 @@ void dump_decl(const Decl *d, int indent) {
     }
     break;
 
+  case DECL_MOD:
+    fprintf(stdout, "ModDecl: " SV_FMT "\n", SV_ARG(d->as.mod_decl.name));
+    break;
+
   case DECL_VAR:
     fprintf(stdout, "VarDecl\n");
     dump_pattern(d->as.var_decl.binding, indent + 1);

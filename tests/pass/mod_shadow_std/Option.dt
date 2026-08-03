@@ -1,0 +1,3 @@
+pub fun wrap(n: Int) -> Int {
+  return n + 1;
+}

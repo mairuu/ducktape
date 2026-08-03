@@ -36,6 +36,7 @@ static const char *token_type_string[] = {
     [TOKEN_IN] = "IN",
     [TOKEN_LOOP] = "LOOP",
     [TOKEN_MATCH] = "MATCH",
+    [TOKEN_MOD] = "MOD",
     [TOKEN_NOT] = "NOT",
     [TOKEN_OR] = "OR",
     [TOKEN_PUB] = "PUB",
@@ -421,8 +422,9 @@ static const Keyword kw2[] = { //
 
 static const Keyword kw3[] = { //
     {"and", TOKEN_AND}, {"dyn", TOKEN_DYN}, {"for", TOKEN_FOR},
-    {"fun", TOKEN_FUN}, {"not", TOKEN_NOT}, {"pub", TOKEN_PUB},
-    {"use", TOKEN_USE}, {"var", TOKEN_VAR}, {NULL, 0}};
+    {"fun", TOKEN_FUN}, {"mod", TOKEN_MOD}, {"not", TOKEN_NOT},
+    {"pub", TOKEN_PUB}, {"use", TOKEN_USE}, {"var", TOKEN_VAR},
+    {NULL, 0}};
 
 static const Keyword kw4[] = { //
     {"else", TOKEN_ELSE}, {"enum", TOKEN_ENUM}, {"impl", TOKEN_IMPL},

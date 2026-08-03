@@ -7,6 +7,8 @@
 # function (`io::print`), a user module's types, associated calls and free
 # functions (`geo::`), and an alias (`g`) — while the primitives' operations use
 # the method spelling the milestone gave them.
+mod geo;
+
 use std::io;
 use geo;
 use geo as g; # a module may also be bound under an alias

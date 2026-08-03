@@ -1,4 +1,6 @@
 #! expect: is private in module
+mod lib;
+
 use lib::Hidden;
 
 fun main() {}

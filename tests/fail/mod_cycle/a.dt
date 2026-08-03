@@ -1,0 +1,5 @@
+use b::g;
+
+pub fun f() -> Int {
+  return g();
+}

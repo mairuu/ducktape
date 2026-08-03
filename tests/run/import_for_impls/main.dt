@@ -7,6 +7,8 @@
 #
 # Delete the `use` and the program stops compiling: that is the negative
 # control this file exists to make cheap.
+mod ext;
+
 use std::io::print;
 use ext;
 

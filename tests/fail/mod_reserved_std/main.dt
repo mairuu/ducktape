@@ -1,0 +1,6 @@
+#! expect: 'std' is reserved
+# the library is addressed through `std` from every module, so a program cannot
+# spend that segment on a child of its own.
+mod std;
+
+fun main() {}

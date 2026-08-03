@@ -22,14 +22,14 @@ names a file, that file is the source of truth. Historical design notes live in
 | `tests/fail/` | programs that must fail; first line `#! expect: <substring>` asserts on stderr |
 | `tests/run/` | programs executed with `--run`; `#> line` comments assert on stdout |
 | `tests/fail_run/` | like `tests/fail`, but invoked with `--run` — for programs that type-check yet the VM rejects |
-| `std/` | the standard library, written in ducktape; embedded into the binary at build time. The bodies that cannot be (`print`, array/string/char primitives, hash mixing) are bodyless declarations bound to `src/native.c`. A subdirectory nests (`std/collections/hashmap.dt` is `std::collections::hashmap`, milestone 91). Naming one file compiles it *as* that std module and warns (milestone 90); `make test` lints all of them under the `tests/pass` rule |
+| `std/` | the standard library, written in ducktape; embedded into the binary at build time. The bodies that cannot be (`print`, array/string/char primitives, hash mixing) are bodyless declarations bound to `src/native.c`. `std/lib.dt` is the library root and declares the tree — a file is a module only once a `pub mod` names it. `--std-module std::cmp` compiles one *as* that module and warns; `make test` lints them all under the `tests/pass` rule |
 | `scripts/run_tests.sh` | the test runner (invoked by `make test`) |
-| `scripts/embed_std.sh` | mirrors `std/**/*.dt` into `build/std_data.h` for `src/std_src.c`, keyed by path relative to `std/` so a module may nest |
+| `scripts/embed_std.sh` | mirrors `std/**/*.dt` into `build/std_data.h` for `src/std_src.c`, keyed by path relative to `std/`. A loader, not a resolver: what exists is what `std/lib.dt` declares |
 | `editors/vscode/` | a VS Code extension: TextMate grammar + language config for `.dt` (highlighting only, no language server) |
-| `references/` | these docs + `grammar.ebnf`. `modules-design.md` is the exception to "these describe what is": it specifies the *replacement* for path resolution (milestones 94–95) and is deleted when they land |
+| `references/` | these docs + `grammar.ebnf`. `modules-design.md` is the exception to "these describe what is": milestone 94 built its tree, and it now specifies only what milestone 95 still owes (privacy, orphans) |
 
 A multi-file test is a *subdirectory* of any of the `tests/` categories, with
-`main.dt` as the entry point and its imported modules alongside. The flat
+`main.dt` as the entry point and the modules it declares alongside. The flat
 `*.dt` globs are non-recursive, so those siblings are never collected as tests
 in their own right.
 
@@ -57,15 +57,18 @@ extension.
 
 Driver: `compiler_run` in `src/compiler.c`. Phases, in order:
 
-1. **discover & parse** — a worklist rooted at the file given on the command
-   line: parse a module (`src/scanner.c` + `src/parser.c` → AST,
-   `include/ast.h`), resolve its `use` declarations to files, and continue into
-   any module that just appeared. Discovery can't precede parsing, because a
-   module's dependencies *are* its `use` declarations. Paths resolve against
-   the root file's directory, which is the one module search root — except
-   `use std::…`, which names a module embedded in the binary and takes its
-   source from there instead of the filesystem. It is an ordinary module in
-   every other respect. Each non-std module then gets the **prelude**
+1. **discover & parse** — build the two **module trees** and parse them. The
+   program's is rooted at the file given on the command line, the library's at
+   the embedded `std/lib.dt`; a module is in a tree because some module wrote
+   `mod x;`, and where its source lives follows from its place there. Parsing
+   (`src/scanner.c` + `src/parser.c` → AST, `include/ast.h`) is what reveals
+   both a module's children and its dependencies, so the phase is a fixpoint:
+   parse, let every `use` path register what it walks through, repeat until the
+   registry stops growing, then resolve every `use` against the finished tree.
+   Paths are absolute from their root, and nothing asks whether a file exists.
+   The program's tree is its **build unit** — a declared module is compiled
+   whether or not anything imports it — while a library module joins the build
+   when a path reaches it. Each non-std module then gets the **prelude**
    (`mod_inject_prelude`): synthesised imports of the vocabulary/lang-item std
    modules (`Option`, `Result`, `Ord`, `Display`, and `std::string`), so those
    names and the lang items are in scope without an explicit `use`. They are

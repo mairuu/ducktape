@@ -1,0 +1,8 @@
+#! expect: bind it with `use
+# membership is not a name: declaring a child does not bind its qualifier, so
+# reaching into it still takes a `use`.
+mod geo;
+
+fun main() {
+  var n = geo::bump(1);
+}

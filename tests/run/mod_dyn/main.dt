@@ -5,6 +5,8 @@
 #> area 6
 #> 15
 
+mod shapes;
+
 use std::io::print;
 use shapes::{Shape, Sq};
 

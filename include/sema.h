@@ -330,7 +330,7 @@ void tc_register_module(TypeChecker *tc, Module *m);
 // why linking is not a standalone pass.
 void tc_link_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg);
 
-// fill in every variant import whose qualifier is a name rather than a file
+// fill in every variant import whose qualifier names no declared module
 // (`use Event::A;`, `use Color::Red;`, `use Option::Some;`) and expand every
 // glob (`use E::*;`).
 //

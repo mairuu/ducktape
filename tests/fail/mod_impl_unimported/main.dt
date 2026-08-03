@@ -1,4 +1,8 @@
 #! expect: but this module does not import it
+mod owner;
+mod shape;
+mod user;
+
 use std::io::print;
 use owner::mk;
 use user::peek;

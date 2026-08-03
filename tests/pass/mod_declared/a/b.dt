@@ -1,0 +1,5 @@
+# nothing declares this file, so it is not module `a::b` and is not compiled at
+# all — which this error is here to prove.
+pub fun oops() -> Int {
+  return "not an Int";
+}

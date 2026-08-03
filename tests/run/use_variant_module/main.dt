@@ -1,3 +1,6 @@
+mod facade;
+mod shape;
+
 use std::io::print;
 use facade::{Shape, Rect, a_dot};
 # the enum reached through the façade still qualifies a variant import.

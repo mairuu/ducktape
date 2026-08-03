@@ -1,3 +1,6 @@
+mod pair;
+mod shape;
+
 use std::io::print;
 use shape::sum_twice;
 use pair::mk;

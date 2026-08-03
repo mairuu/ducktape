@@ -1,0 +1,8 @@
+#! expect: is a module of
+# the braced form names items, so a child module reached through it is an error
+# rather than a silent no-op.
+mod geo;
+
+use geo::{shape};
+
+fun main() {}

@@ -26,6 +26,7 @@ int main(int argc, char *argv[]) {
   bool gc_stress = false;
   const char *root_path = NULL;
   const char *emit_path = NULL;
+  const char *std_module = NULL;
   bool bad_args = false;
 
   for (int i = 1; i < argc; i++) {
@@ -39,6 +40,15 @@ int main(int argc, char *argv[]) {
         break;
       }
       emit_path = argv[i];
+    } else if (strcmp(argv[i], "--std-module") == 0) {
+      // lint one standard library module *as* that module: the tree comes from
+      // the declarations, so the module path says which one it is and nothing
+      // is inferred from the shape of a filesystem path.
+      if (++i == argc) {
+        bad_args = true;
+        break;
+      }
+      std_module = argv[i];
     } else if (root_path == NULL) {
       root_path = argv[i];
     } else {
@@ -47,10 +57,11 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  if (bad_args || root_path == NULL) {
+  if (bad_args || (root_path == NULL) == (std_module == NULL)) {
     fprintf(stderr,
-            "usage: %s [--run] [--gc-stress] [--emit-bc <out>] <file>\n",
-            argv[0]);
+            "usage: %s [--run] [--gc-stress] [--emit-bc <out>] <file>\n"
+            "       %s --std-module std::<module>\n",
+            argv[0], argv[0]);
     return 1;
   }
 
@@ -59,7 +70,7 @@ int main(int argc, char *argv[]) {
   // `--run` accepts either form, told apart by the image magic rather than by
   // an extension or a flag: running a program should not depend on how it was
   // spelled on disk.
-  if (bc_is_image(root_path)) {
+  if (root_path != NULL && bc_is_image(root_path)) {
     if (!run || emit_path != NULL) {
       fprintf(stderr, "error: '%s' is a bytecode image; only --run applies\n",
               root_path);
@@ -69,7 +80,7 @@ int main(int argc, char *argv[]) {
   }
 
   compiler_init(&compiler, &heap_al);
-  bool ok = compiler_run(&compiler, root_path);
+  bool ok = compiler_run(&compiler, root_path, std_module);
   if (ok && emit_path != NULL) {
     ok = compiler_emit(&compiler, emit_path);
   }

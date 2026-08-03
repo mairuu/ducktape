@@ -20,13 +20,17 @@
 # spec desugars into (see `check_interpol_seg`), so their meaning cannot depend
 # on what a program imported.
 #
-# `std::string` reaches only `std::strbuf` — the buffer these builders run
-# through — and `std::strbuf` imports nothing, shipping only methods on its own
+# `std::string` reaches only `std::string::buf` — the buffer these builders run
+# through — and `std::string::buf` imports nothing, shipping only methods on its own
 # `StringBuf`, so importing any of `std::string` still hands a program no impls
 # for a type it did not itself name. That is the property `std::cmp` leans on by
 # building `impl Ord for String` on `compare` here, and it is what `std::array`
 # stopped being able to promise once `pop` started answering with an `Option`.
 
+pub mod buf;
+
+# membership is not a name: `mod` puts the module in the build, and this
+# `use` is what brings the impls its builders run through.
 use std::string::buf;
 
 impl String {

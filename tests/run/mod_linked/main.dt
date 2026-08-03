@@ -8,6 +8,9 @@
 #> 24
 #> square
 #> 12
+mod scale;
+mod shapes;
+
 use std::io::print;
 use shapes::rect::{Rect, Kind};
 use scale::grow;

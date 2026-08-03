@@ -1,5 +1,7 @@
 #! expect: 'mix' is not an enum
 # the segment before the last is only a qualifier if it names an enum.
+mod pal;
+
 use pal::mix::Red;
 
 fun main() {}

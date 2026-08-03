@@ -1219,27 +1219,78 @@ characters with a native of their own.
 
 ## Modules
 
-A program is one root `.dt` file plus every file reachable from it through
-`use`. There is no `mod` keyword: `use` is what pulls a file in.
+A program is a **tree of modules**, and the tree is declared. The root is the
+`.dt` file named on the command line; every other module is there because some
+module wrote `mod`:
 
 ```
-use geometry::Point;                 # <root_dir>/geometry.dt — item Point
-use geo::point::{Point, Line};       # <root_dir>/geo/point.dt, two items
+mod util;        # a child module
+pub mod geo;     # the same, exported (see below)
+```
+
+`mod` declares **membership**: the child is part of this program, it is loaded,
+and it is type-checked whether or not anything imports it. `use` is a different
+edge — it binds names and brings impls — and a module may want both of one
+child, which is not a redeclaration:
+
+```
+mod geo;         # geo is part of this program
+use geo;         # ...and I want its qualifier and its impls
+```
+
+Where a module's source lives follows from the tree and from nothing else. A
+root's children live beside it; a non-root module's children live in a directory
+named after it:
+
+```
+main.dt      mod geo;         ->  geo.dt
+geo.dt       pub mod shape;   ->  geo/shape.dt
+```
+
+A directory alone is not a module: `geo/` means something only because `geo.dt`
+declares what is in it. A `.dt` file no `mod` names is not part of the program
+at all — it is not compiled, and no path reaches it.
+
+A child's name is bound alongside its module's items, so `mod foo;` beside
+`fun foo()` is the ordinary "defined multiple times" error. That rule is what
+makes a path unambiguous: a name in a module is a child or an item, never both.
+
+`std` is **reserved** as a first segment — it names the standard library from
+every module — so a program cannot declare a child called `std`. The library is
+a tree of the same shape, rooted at its own `std/lib.dt`, and a path written in
+a library module is anchored there rather than in the program.
+
+### Use paths
+
+**Paths are absolute.** `use geo::shape::Rect;` reads from the program root
+wherever it is written, and `use std::cmp::max;` from the library root. There is
+no `self`, no `super`, no `crate`: a path means the same thing in every file,
+and a module that moves takes its whole subtree's spelling with it.
+
+```
+use geometry::Point;                 # the item Point of the child geometry
+use geo::shape::{Point, Line};       # two items of geo::shape
 use util::Maybe as Opt;              # imported under a different name
 use std::string;                     # the *module* string, as a qualifier
 use std::option::Option::Some;       # one variant of an item — see below
 ```
 
-For a **braced** import, the leading segments name the *file* and the brace
-group names the *items*. For a **bare** import (no braces), if the whole path
-names a module file it is a *module import* — nothing is imported by name;
-instead the module is bound as a **qualifier** (see below). Otherwise the last
-segment is a single item of the prefix module. Paths are relative to the
-directory of the root file — the one search root — for every module, including
-modules that are not the root. A file reached by two different importers is
-loaded once.
+Resolution walks the path from the root it names, consuming a segment for as
+long as that segment names a declared child. What is left over decides what
+kind of import it is:
 
-One further segment may sit between the module and the names, and it is an
+| left over | bare (`use a::b;`) | braced (`use a::{X, Y};`) |
+| --- | --- | --- |
+| nothing | the module itself, bound as a qualifier | the braced names are items of it |
+| one segment | an item of the module | the braced names are variants of that enum |
+| two segments | a variant of that enum | — |
+
+Nothing in that walk asks whether a file exists, so no path changes meaning
+because an unrelated file appeared beside it, and a `mod` naming a source that
+is missing is an error at the *declaration* — reported once, rather than once
+per importer. A module reached by two importers is loaded once.
+
+So one further segment may sit between the module and the names, and it is an
 **enum whose variants are being imported**:
 
 ```
@@ -1249,9 +1300,9 @@ use std::result::Result::Ok as Yes;         # under another name
 ```
 
 The enum may equally be one **already in scope**, in which case there is no
-module in front of it at all: the `use` names no file and adds no dependency, it
-only binds names. Any enum the file can see qualifies — one it declares, one it
-imported, one it imported under an alias, or a preluded one:
+module in front of it at all: the `use` names no module and adds no dependency,
+it only binds names. Any enum the file can see qualifies — one it declares, one
+it imported, one it imported under an alias, or a preluded one:
 
 ```
 use Event::A;                # `enum Event` is declared in this same file
@@ -1272,10 +1323,11 @@ use geo::Shape::*;           # or one named by module
 There is no module glob: `*` always names an enum's variants, never a module's
 items.
 
-Which reading applies is decided by the same question throughout — does that
-prefix name a file? — and the shortest prefix is tried last, so an enum can
-never take a module's meaning away. A *scope* qualifier is the last reading of
-all, applying only where no file answered.
+That last, module-less reading is the only one decided by anything but the
+declarations, and it is still deterministic: it applies exactly when the head
+segment names no declared child of the root. Declaring a module called `Event`
+in the same module that declares `enum Event` is already an error, so the two
+can never both apply.
 
 An imported variant is written bare wherever the qualified spelling would go: as
 a constructor (`Some(v)`, `None`), and as a pattern (`match o { Some(v) => ..,
@@ -2264,8 +2316,9 @@ key names the item; an unknown key inside std is a compile error.
 
 `@lang` is for the standard library. In a user module it is **inert** — a user
 cannot claim a lang item and so cannot change what `"{v}"` or `a < b` mean — but
-it is not rejected, because a std file run directly (`ducktape std/fmt.dt`)
-carries the same markers and must still work as an ordinary module. (Putting
+it is not rejected, because a std file linted directly
+(`ducktape --std-module std::fmt`) carries the same markers and must still work
+as an ordinary module. (Putting
 `@lang` on something it cannot mark — a struct, a method — is a parse error, the
 one placement it is refused everywhere.)
 
@@ -2871,13 +2924,15 @@ See the gaps table below for what suppression still cannot do.
 | `Display` for a `HashMap` / `HashSet` | none ships; iteration order is unspecified, so a rendering would have to sort and the key would need `Ord` on top of `Hash`. `m.keys()` and `m.values()` are the arrays |
 | bare type arguments on a method call (`it.fold<Int>(0, f)`) | the turbofish is required: `it.fold::<Int>(0, f)`. The bare form parses as comparisons, so it is reported as an unknown *field* plus, usually, an undefined variable for the type name — two diagnostics for one mistake. A note on the first names the turbofish |
 | an impl overriding a defaulted method restating its `where` | conformance compares signatures, which carry no bounds, so an override may quietly add or drop one; the trait's own clause is still discharged at every call through the trait |
-| `mod` declarations | no such keyword; `use` is what pulls a file in |
-| glob imports (`use a::*`) | not parsed; name each item, or bind the module (`use a;`) and qualify |
+| glob imports (`use a::*`) | not parsed; name each item, or bind the module (`use a;`) and qualify. Nesting makes it *implementable* — it would be the natural way to write a facade — but it would be the first thing in the language to bind names nobody wrote |
 | re-exporting a module qualifier (`pub use a;`) | a qualifier is not an item; `pub use` re-exports named items only |
 | `pub` on a method | rejected — `pub fun` in an impl is "expected impl item", and `pub` is only ignored on the `impl` keyword itself. A method is as visible as the impl it sits in, which is why `std::array`'s raw `pop_last` and `std::iter`'s `char_at` are private *free functions* rather than methods. Struct **fields** do take `pub`: they are private to their module by default, and the diagnostic naming one says so |
 | overlap rules finer than "matching self types" | there is no orphan rule and no specialization: an impl may be written for any type, and two overlapping ones are simply refused wherever both are visible — a bound (`impl<T: Ord> W<T>` against `impl<T> W<T>`) or a narrower head (`impl [Int]` against `impl<T> [T]`) is not a way to win a name |
 | visibility below module granularity (`pub(crate)` &c.) | `pub` is the only modifier |
-| two spellings of one file (symlinks, unusual paths) | dedup is lexical, so the file would load twice and collide |
+| a **private** module (`mod x;` versus `pub mod x;`) | both parse and both are recorded, but the distinction is not yet enforced: every declared module is reachable from every other. Nothing a program can write means something different for it yet |
+| a warning for a `.dt` file no `mod` claims | such a file is silently not part of the program — it is not compiled and no path reaches it, which is the point, but nothing points out that it is dead |
+| relative paths (`super::`, `self::`, `crate::`) | a path is absolute from its root, so a deep module names its sibling in full |
+| two spellings of one file (symlinks, unusual paths) | a module's source is derived from its place in the tree, so the only path that can be spelled twice is the entry file's — and dedup there is lexical |
 | top-level `var` (globals) | parses, then a registration diagnostic: move it into a function |
 | a `break` that carries a value out of a `while`/`for` | `loop { break x; }` works (milestone 87), but the other two loops also leave by *finishing*, and that exit has no value to join with — so `break x` in one is an error and both stay `()` |
 | a labelled `break` | there is no `'outer:` spelling, so a break always names the innermost loop; carrying a value out of a nested loop means breaking each level or using `return` |
@@ -2885,13 +2940,13 @@ See the gaps table below for what suppression still cannot do.
 | `!` in a position asking a structural question | `if panic("x") { }`, `for x in panic("x")`, and `r?` inside a `-> Never` function are all refused: those sites ask "is it a `Bool`/an `Iterator`/the same enum?", not "does it flow here?", and `Never` answers none of them. Harmless, since the code below is unreachable either way |
 | tuple-struct struct-patterns `Pair { a, b }` | write the constructor spelling `Pair(a, b)` — "matching tuple struct with struct pattern syntax is not allowed" |
 | variable shadowing diagnostics | a `var` may silently shadow an earlier one in the same scope (top-level *item* names do collide — that is an error). There is a warning severity for it to use since milestone 89; what is missing is the analysis, and the choice about whether shadowing deserves one at all |
-| seeing a warning from the standard library | warnings are advice to an author, so they are dropped for the embedded std that every program compiles from source. Naming the file (`./build/ducktape std/cmp.dt`) compiles it *as* that std module and does warn, because the root always has a reader — milestone 90, which also made all 18 files compilable that way |
+| seeing a warning from the standard library | warnings are advice to an author, so they are dropped for the embedded std that every program compiles from source. `./build/ducktape --std-module std::cmp` compiles that module as the root, reading its source from disk, and does warn — the module path says which module it is, and nothing is inferred from the shape of a filesystem path |
 | turning a warning **up** into an error | `@allow("<lint>")` turns one off over a declaration (see "Warnings and `@allow`"), but there is no `-W` flag and no `-Werror`, so a warning a program wants enforced cannot be made fatal. Nothing asks about a lint from outside the source |
 | silencing a warning over less than a declaration | an attribute sits on a declaration, so an allow covers a whole function, impl or trait. There is no statement-level or expression-level form, and none on a trait item — a default body is covered by its trait |
 | saying that an import is wanted for its *impls* | there is no spelling. A `use` whose names go unwritten is kept silent only when the compiler can see that removing it would lose an impl that was selected — so a deliberate restatement of an import that arrives transitively anyway (`std/iter.dt` used to write `use std::string;` for exactly that reason) now reads as unused and has to go |
 | unused-warning order within a function | a binding is reported when its scope closes, so an inner block's warnings precede an outer one's regardless of line. Sorting the bag is blocked by notes, which attach to the diagnostic before them by position |
 | an unused *item* (a private `fun` or `struct` nothing calls) | not reported; only bindings and imports are. Codegen already skips it — a definition nothing reaches is never compiled |
-| a directory that is a module on its own | nesting (milestone 91) makes `std/collections/` a path prefix, not a module: `use std::collections;` resolves only because `std/collections.dt` sits beside the directory and `pub use`s its children. Nothing generates that facade or checks it stays in step, so a module added under a group is reachable by its full path and invisible from the short one until someone edits the facade by hand |
+| a directory that is a module on its own | a directory is a path prefix; the module is the `.dt` file beside it, and `pub mod` in that file is what puts anything under the directory on a path at all. So a module added under a group and not declared is unreachable rather than half-reachable — but the short spellings a facade offers (`use std::collections::HashMap;`) are still hand-written `pub use` lines that nothing checks stay in step |
 | declaring a type whose name is a builtin (`struct Range`, `struct String`) | accepted, but a builtin name is resolved before the type scope is consulted, so every mention of it means the builtin and the declaration is unreachable |
 | overlapping method names across impls of one type | rejected since milestone 68: one type spends an inherent name once, whether the two definitions sit in two impl blocks or in one. A name the impl's *trait* declares is exempt — a bound or a trait-qualified path names which body was meant, so two traits may both declare `next` for one type. Where several impls legitimately declare a name (a generic trait like `Into<Int>` / `Into<String>`), a bare path still picks the first registered impl. Milestone 70 extends the same rule to an enum's variants, which spend from the same pool: an inherent associated function under a variant's name is refused, since `Enum::name` reads the variant |
 | capturing a `for` loop variable in a closure | runs, but the closure sees the loop variable's *final* value (one shared cell), not a per-iteration copy — `runtime.md` "Closures & upvalues". A `while var` binding does *not* share this: it is pushed and closed inside the loop, so each turn's closure keeps that turn's value |

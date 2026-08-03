@@ -155,26 +155,71 @@ Three passes over each module, mirroring compiler phases:
 
 ### Modules
 
-**Discovery is fused with parsing** (`compiler_phase_discover`, `src/compiler.c`).
-It has to be: a module's dependencies are its `use` declarations, which only
-exist once it has an AST. So the phase is a worklist — parse a module, run
-`mod_collect_imports` to turn each `use` into a `ModImport` (registering any
-file not seen before), and keep going into whatever was just appended. The
-loop's bound is `mod_reg.module_count`, re-read each iteration, so those
-appends extend it. Two traps worth knowing: `reg->modules` is `al_realloc`'d as
-it grows, so the array must never be cached across iterations; and `mod_parse`
-calls `diag_clear` on entry, so a module's diagnostics must be reported before
-the next one is parsed.
+**The tree is declared, and everything else is a lookup on it.** There are
+exactly two trees: the program's, rooted at the entry file, and the library's,
+rooted at `std/lib.dt` and reached through the reserved first segment `std`.
+A module is in a tree because some module wrote `mod x;`, and where its source
+lives follows from its place there (`Module.child_prefix`, `mod_new_child`):
+source(child) = child_prefix(parent) + name, and child_prefix(child) = that
+without the extension. A root's child prefix is its own directory, which is why
+every pre-existing layout already matched and the migration moved no file. For
+a library module the same two lines run over library-relative names, because
+that is the shape `embed_std.sh` keys the embedded table by — so a library
+module's identity is its path in the tree and nothing else.
 
-Path handling (`path_dir_of`, `path_normalise`, `mod_file_for_use` in
-`src/module.c`) is **lexical, ISO-C only**. The build is `-std=c23`, which
-defines `__STRICT_ANSI__` and so hides `realpath`/`getcwd`/`PATH_MAX` behind
-glibc's feature macros — and an implicit declaration is a hard error in C23.
-Lexical normalisation is sufficient anyway: every module path is a fixed base
-dir plus identifier segments, which can't contain `.` or `..`, so two spellings
-of one file normalise to identical bytes and `modreg_find` dedups them exactly.
-It also works for files that don't exist, which is what lets the missing-module
-diagnostic name the path it looked for.
+**Nothing in resolution asks whether a file exists.** `mod_walk` anchors a path
+at the root its first segment names and descends while a segment names a
+declared child; what is left over decides the import kind by arithmetic
+(`mod_collect_imports`). The walk is greedy and cannot be ambiguous, because a
+child's name is bound alongside its parent's items — `decl_item_name` returns
+a `DECL_MOD`'s name, so `mod foo;` beside `fun foo()` is the ordinary duplicate
+error, and a name is a child or an item, never both. A `mod` whose source is
+missing is reported once, at the declaration, rather than once per importer.
+
+A library module's paths are anchored at the **library** root only
+(`from->is_std` in `mod_walk`): `std` is where its own tree begins, and it must
+not be able to name a file of the program that happens to be compiling it. That
+is what keeps `std::option`'s own `pub use Option::{Some, None};` meaning its
+own enum whatever a program declares.
+
+**Discovery is a fixpoint** (`compiler_phase_discover`, `src/compiler.c`),
+because both edges out of a module live in its AST: `mod` names its children,
+`use` names its dependencies. A path two library modules deep therefore needs
+the first parsed before the second can be *named*. So the phase parses
+everything unparsed, lets every path register what it walks through
+(`mod_reach_imports`), and repeats until the registry stops growing; then it
+resolves every `use` against the finished tree, which is the only point at
+which "this path names nothing" is a fact. Both walks are the same
+`mod_walk` — two resolvers that must agree can only be made to by asking the
+same question. Two traps worth knowing: `reg->modules` is `al_realloc`'d as it
+grows, so the array must never be cached across iterations; and `mod_parse`
+calls `diag_clear` on entry, so parsing is wrapped in its own bag cycle
+(`compiler_load_module`) and a module parsed on another's behalf cannot lose
+that other's diagnostics.
+
+**Registration is what makes a module compiled, and the two trees differ there.**
+The program's tree is its *build unit*: a child is registered when it is
+declared, so a module nothing imports is still type-checked — which is the
+whole point of declaring it. The library's tree is a *catalogue*: a library
+module is registered when a path reaches it. That asymmetry is the perf-shaped
+one. Registering all of std eagerly would compile 20 modules where the prelude
+closure needs 11, and the prelude is already most of a trivial compile; it is
+also the honest reading, since you are responsible for your own tree and std is
+a dependency.
+
+Path handling (`path_dir_of`, `path_normalise` in `src/module.c`) is **lexical,
+ISO-C only**. The build is `-std=c23`, which defines `__STRICT_ANSI__` and so
+hides `realpath`/`getcwd`/`PATH_MAX` behind glibc's feature macros — and an
+implicit declaration is a hard error in C23. It is sufficient anyway: only the
+entry path comes from outside, and every other module path is a base dir plus
+identifier segments, which can't contain `.` or `..`.
+
+**The lint hatch is a flag, not a path shape** (`--std-module std::cmp`,
+`compiler_open_std_module`). The module path says which module it is; the
+target is marked `from_disk`, so its bytes come from `std/cmp.dt` and its
+identity stays `std::cmp`, and it becomes the compile's root — which is what
+gives it a warning audience. Its dependencies stay embedded. The descent loads
+as it goes, because the lint names its target before anything has asked for it.
 
 **Cycle detection** (`compiler_phase_dep_graph`) is a tri-colour DFS over the
 `ModImport.module_index` edges, appending on post-order so `topo_order` puts
@@ -240,12 +285,14 @@ depend on a fixed set: `std::option` (`Option`), `std::result` (`Result`),
 `std::cmp` (`Ord`), `std::fmt` (`Display`), and `std::string` (capture-only, for
 the `pad_*` a width spec needs). The mechanism reuses everything above: after
 `mod_collect_imports`, the discovery loop appends **synthesised `ModImport`s** —
-ordinary `DECL_USE` nodes with `from_prelude` set — to `m->imports`, registering
-any prelude module not yet seen. The dep graph, register, resolve, and link
+ordinary `DECL_USE` nodes with `from_prelude` set — to `m->imports`. The
+modules themselves are looked up as children of the library root and registered
+a round earlier, by `reach_prelude`, so an import nobody wrote is discovered
+exactly like one somebody did. The dep graph, register, resolve, and link
 phases are untouched; they already iterate `imports[]`. Three properties make it
 safe:
 
-- **std modules are exempt** (`is_std_key`): a prelude module cannot import
+- **std modules are exempt** (`Module.is_std`): a prelude module cannot import
   itself, which is the only cycle the exemption avoids.
 - **The prelude is lowest priority.** Its entries are appended *after* a
   module's real imports, so those link first; and on a name already bound — an
@@ -274,12 +321,16 @@ changes. It splits across the same three seams every module feature does:
 
 - **Discovery decides the shape** (`mod_collect_imports`). A braced `use` is
   always an item import. A bare one is ambiguous — `use a::b;` is either item
-  `b` of module `a` or module `a::b` — and only file existence disambiguates, so
-  the parser keeps the whole path (`DeclUse.bare`) and collection resolves it:
-  if the full path names a module file it is a module import
-  (`is_module_import`), otherwise the trailing segment is an item of the prefix.
-  A std module is exactly `std::<leaf>`, so its module/item split is by segment
-  count rather than a filesystem probe.
+  `b` of module `a` or module `a::b` — so the parser keeps the whole path
+  (`DeclUse.bare`) and collection resolves it against the tree: a walk that
+  consumes every segment is a module import (`is_module_import`), one that
+  leaves a segment over is an item of what it reached.
+
+  `use` naming this module's *own* child under its own name is not a
+  redeclaration but the two edges drawn at once — `mod` is membership, `use` is
+  the qualifier and the impls membership withholds — so `link_name_taken` takes
+  the resolved module as an argument and exempts exactly that case. `std/string.dt`
+  writes both for `buf`.
 
 - **Linking binds the name** (`link_bind_module`). A module is not a value or a
   type, so it lives in neither scope: `Module.qual_modules` is its own small
@@ -307,23 +358,23 @@ changes. It splits across the same three seams every module feature does:
 each one is the same question one segment further along:
 
 - **Discovery decides the shape** (`mod_collect_imports`). The path has three
-  parts — module prefix, optional enum qualifier, names — and file existence
-  separates them, exactly as it separates a module import from an item one. A
-  bare path tries its full length (module import), then one less (item), then two
-  (`DeclUse.qualifier` is the segment in between); a braced one tries its length
-  then one less; a glob needs no probing at all, since its last segment is always
-  the enum (there is no module glob, so nothing else it could be). The longer
-  prefix always wins, so an enum can never take a module's meaning away. A std
-  module is fixed at two segments, so its split is arithmetic (`extra > 1` is an
-  error) rather than a probe.
+  parts — module prefix, optional enum qualifier, names — and the walk separates
+  them: it consumes the module, and what remains is arithmetic. One segment over
+  a bare path is an item, two are an enum and its variant (`DeclUse.qualifier`
+  is the one in between); a braced path allows one over, and a glob needs
+  exactly one, since its last segment is always the enum (there is no module
+  glob, so nothing else it could be).
 
-  When *no* file answers and the path is short enough to be one
-  (`a::V` bare, `a::{V, W}`, `a::*`), the qualifier is read as a name rather
-  than a file: `is_scope_import` is set, `module_index` stays -1 — no file, no
-  graph edge, and therefore no self-cycle to exclude — and the binding is
-  deferred. The file the *module* reading would have named is kept on the import
-  for the diagnostic, so a plain typo still reports "cannot find module" with
-  the path it looked for.
+  When the walk consumes *nothing below the root* and the path is short enough
+  to be one (`a::V` bare, `a::{V, W}`, `a::*`), the head is read as a name in
+  this module's own type scope rather than as a module: `is_scope_import` is
+  set, `module_index` stays -1 — no module, no graph edge, and therefore no
+  self-cycle to exclude — and the binding is deferred. A root is not addressable
+  (the program's has no name, and `std` alone names the library rather than a
+  module of it), so a walk that stayed at one really did find nothing. This is
+  the only reading not decided by the declarations, and it is still
+  deterministic: declaring a module `Event` beside `enum Event` is already an
+  error, so the two can never both apply.
 
 - **A scope import links a pass later** (`tc_link_scope_imports`, called from
   `compiler_phase_resolve` right *after* `tc_resolve_module`). It has to: the
@@ -665,86 +716,55 @@ generated header lives in `build/`, so `make format` never touches it and
 `make clean` removes it.
 
 A module's table name is **its path relative to `std/` with `.dt` dropped**, so
-`std/collections/hashmap.dt` is `collections/hashmap` and std nests (milestone
-91). Keeping the separator `/` rather than `::` is what makes nesting nearly
-free downstream: the name is already the shape a key wants, so `std_mod_key`
-stays one concatenation and `<std>/collections/hashmap.dt` still reads as a
-path. Only the unknown-module note translates back, `/` to `::`, because it is
-read by someone about to type the name.
+`std/collections/hashmap.dt` is `collections/hashmap`. Keeping the separator `/`
+rather than `::` is what makes nesting nearly free downstream: the name is
+already the shape a key wants, so `std_mod_key` stays one concatenation and
+`<std>/collections/hashmap.dt` still reads as a path. Only the unknown-module
+note translates back, `/` to `::`, because it is read by someone about to type
+the name.
+
+`std/lib.dt` is the **library root** and the single statement of the public
+surface: a file under `std/` is a module because `lib.dt` (or a group's own
+file, like `std/collections.dt`) declares it with `pub mod`. The embedded table
+is therefore no longer a resolver — the tree comes from the declarations and
+the table only answers "give me the bytes". A file added to `std/` and not
+declared is embedded and unreachable, which `run_tests.sh` catches: it derives
+the lint list from the files and asks the compiler for each as a module path.
 
 The design rule is that **a std module is an ordinary `Module`**. `use std::cmp`
 resolves to a registry entry exactly like a user import does, and therefore gets
-dedup, a dependency-graph edge, cycle detection, topological order, `pub`
-checking, linking and codegen for free. `Module.file_path` carries the registry
-key (`modreg_find`/`modreg_add`), the diagnostic label (`diag_report`), and the
-argument to `read_file` — and only the third needs a real path.
+a dependency-graph edge, cycle detection, topological order, `pub` checking,
+linking and codegen for free. `Module.file_path` carries the registry key, the
+diagnostic header (`diag_report`), and the argument to `read_file`; what a
+diagnostic prints *about* a module is `mod_label`, the path a reader would
+write.
 
-So the entire difference is **one branch in `mod_parse`**: a `<std>/…` key takes
-its source from `std_module_source`, anything else from `read_file`. Pointing
-that branch at a directory is all it would take to make std filesystem-backed;
-nothing else in the pipeline can tell the difference. `std_mod_key` builds the
-key as `<std>/<name>.dt`, and the angle brackets are what guarantee it cannot
-collide with a user path: a real one is a base dir plus identifier segments, and
-an identifier cannot contain `<`. The key also ignores `base_dir`, so two
-modules importing std from different directories dedup to one entry.
+So the entire difference is **one branch in `mod_parse`**: a module with
+`is_std` set and `from_disk` clear takes its source from `std_module_source`,
+anything else from `read_file`. Pointing that branch at a directory is all it
+would take to make std filesystem-backed; nothing else in the pipeline can tell
+the difference. `std_mod_key` builds the key as `<std>/<rel>.dt`, and the angle
+brackets are what guarantee it cannot collide with a user path: a real one is a
+base dir plus identifier segments, and an identifier cannot contain `<`.
 
-#### Which segments name the module
+#### Linting one std module
 
-Since std nests, `use std::a::b::c` cannot read `b` as the module by position.
-`std_module_prefix` asks the embedded table for the **longest prefix** of the
-path that names a module and returns how many segments it spans; what follows
-is an item, or an enum and a variant, exactly as before — the arithmetic is now
-measured from there instead of from a fixed two. The name is built once at full
-length and grown a segment at a time, since every prefix is a prefix of the same
-bytes.
+`--std-module std::cmp` compiles that module as the compile's root, which is
+what gives it a warning audience (a std module has none as a dependency — see
+"Warnings"). The path names the module; nothing is inferred from the shape of a
+filesystem path, so there is no adoption to explain and no way for a user
+directory named `std` to be mistaken for the library. `mod_read_from_disk` sets
+`from_disk` and swaps `file_path` for `std/cmp.dt`, so the source is the file
+being edited and the diagnostic header points at something a reader can open;
+its dependencies stay embedded, so editing `std/lib.dt` and linting without
+`make` first uses the previous tree.
 
-This is deliberately the same question `mod_prefix_exists` asks the filesystem
-for a user path, because the two resolvers have to agree about one file and the
-only way to make them agree is to ask the same thing. Longest wins on both
-sides, so a module `std::a::b` shadows an item `b` of `std::a` — which is what
-lets `std::string` hold items *and* the module `std::string::buf`.
-
-#### Naming a std file as the entry point
-
-A std source file named on the command line **is** that std module (milestone
-90). Before it, the entry was keyed under its real path while the prelude
-loaded the same source under `<std>/…`, and **two keys for one file is two
-modules** — each with its own copy of every type and trait the file declares.
-Five files said so (`array`, `char`, `iter`, `string/buf`, `string`: their
-inherent impls land on interned types, so the copies collided). The other six in the
-prelude's closure were worse — `std/cmp.dt`'s `Ord` and `<std>/cmp.dt`'s `Ord`
-are different `TraitDef`s, so coherence saw nothing to object to and a *shadow*
-std type-checked against the real one and reported success.
-
-The fix splits the identity `file_path` had been carrying alone:
-
-| field | question it answers |
-| --- | --- |
-| `file_path` | registry key, diagnostic label, and — for a real path — the file to read |
-| `alias_path` | a *second* key the module also answers to; only ever an adopted root's `<std>/…` |
-| `std_name` | is this a std module: the `@lang` right, the prelude exemption, the warning audience |
-
-`std_name_for_entry` decides adoption lexically, like every other path question
-here: an **ancestor** component must be exactly `std` **and** what follows it
-must name a module this binary embeds. Both halves matter, and `run_tests.sh`
-pins each by compiling a near-miss that uses a preluded name it never imports —
-proof it still got the prelude — plus the converse, a real name that *must* now
-fail to resolve it, since a file that merely compiles proves nothing either way.
-Slashes are walked right to left, so the nearest `std` ancestor wins and the
-candidate name is tried shortest-first. `mod_adopt_std` sets the two fields, and `modreg_find`
-matching the alias is the whole of what discovery needs: a later `use std::cmp`
-finds the module already registered instead of minting one.
-
-The source still comes from **disk**, because `mod_parse` asks the path and not
-`std_name` — a lint has to read the file being edited, not the copy `make` last
-mirrored. Adoption cannot introduce a cycle: it merges a duplicate node back
-into std's own import graph, which is already acyclic.
-
-The cost is deliberate and narrow. A user directory named `std` holding a file
-named after a std module is now compiled *as* that module — no prelude, `@lang`
-honoured — and will usually fail confusingly. It takes away nothing that
-worked: `use std::cmp` is intercepted before the filesystem, so such a
-directory was never reachable as `std::` anyway.
+This replaced milestone 90's adoption mechanism entirely — `std_name_for_entry`,
+`mod_adopt_std`, `Module.alias_path`, `modreg_find`, and the harness's
+`check_adopted`/`check_not_adopted` pairs are all gone. The problem 90 solved
+does not arise here: identity is a place in the declared tree, so one file
+cannot be two modules. Plain `./build/ducktape std/cmp.dt` is now an ordinary
+program root and fails predictably on `@lang`.
 
 Every `std::` name resolves to a module or is a diagnostic listing the embedded
 ones. `std::io` used to be the exception — a no-op namespace over the builtin
@@ -1024,9 +1044,9 @@ matches gave:
 - **Honoured only inside the standard library, inert elsewhere.** A user's
   `@lang` cannot claim a lang item — so it cannot hijack what `"{v}"` dispatches
   to — but it is *not* an error, because a marker outside std has to be able to
-  sit there harmlessly. `mod_is_std_module` is the gate, and since milestone 90
-  it is true of `ducktape std/fmt.dt` as well: that file *is* std, so its
-  markers are honoured rather than inert. The unknown-key error
+  sit there harmlessly. `mod_is_std_module` is the gate, and it is true of
+  `ducktape --std-module std::fmt` as well: that module *is* std whichever way
+  its bytes arrived, so its markers are honoured rather than inert. The unknown-key error
   is therefore reachable only from within std, which is exactly where a typo
   would be. Milestone 77 makes the inertness matter for a *type* rather than a
   dispatch target, which is a sharper claim — a user's `@lang("option")` on its

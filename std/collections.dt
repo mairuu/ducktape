@@ -1,10 +1,11 @@
-# std::collections — the group's facade.
+# std::collections — the group's module, and the group's facade.
 #
-# A directory is a path prefix, not a module: `std/collections/` alone would
-# make `use std::collections::HashMap;` an error and force every caller to name
-# the module the type happens to live in. This file sits beside that directory
-# and re-exports what is under it, which is the whole of what makes a group
-# nameable. Nothing generates it — a module added below has to be added here too
-# or it is reachable only by its full path.
+# The directory is not the module: this file is, and `pub mod` below is what
+# puts anything under `std/collections/` on a path at all. The `pub use` lines
+# beside them are the short spelling — `use std::collections::HashMap;` without
+# naming the module the type happens to live in.
+pub mod hashmap;
+pub mod hashset;
+
 pub use std::collections::hashmap::{HashMap, MapIter};
 pub use std::collections::hashset::HashSet;

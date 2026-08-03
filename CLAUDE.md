@@ -57,14 +57,17 @@ short. Don't re-explain what the diff already shows.
 `std/*.dt` is the standard library, **written in ducktape**. Each file is an
 ordinary module that `scripts/embed_std.sh` mirrors into `build/std_data.h` at
 build time, so `use std::cmp;` needs no install path and the test suite stays
-hermetic. Edit the `.dt`; never edit the generated header. Adding a file to
-`std/` is all it takes to make `use std::<name>;` resolve.
+hermetic. Edit the `.dt`; never edit the generated header. `std/lib.dt` is the
+library root and declares the tree: a new file needs a `pub mod` there (or in
+its group's file) before `use std::<name>;` resolves.
 
-**`./build/ducktape std/cmp.dt` lints one std file**: naming it compiles it as
-the library module it is, reading the source from *disk* (so you see the edit,
-not the last `make`), and a root always has a warning audience — where a
-program that merely uses std never sees its warnings. `make test` lints all of
-them under the `tests/pass` rule, so a warning in std fails the suite.
+**`./build/ducktape --std-module std::cmp` lints one std module**: it compiles
+as the library module its *path* names, reading the source from disk (so you
+see the edit, not the last `make`), and a root always has a warning audience —
+where a program that merely uses std never sees its warnings. `make test` lints
+every module under the `tests/pass` rule, so a warning in std fails the suite.
+A new file also needs a `pub mod` in `std/lib.dt` (or the group's own file);
+without one it is not a module at all.
 
 ## Tests
 

@@ -1,0 +1,5 @@
+#! expect: cannot find module 'nowhere'
+# reported once, at the declaration, rather than once per importer.
+mod nowhere;
+
+fun main() {}

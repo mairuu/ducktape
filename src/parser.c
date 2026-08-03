@@ -228,6 +228,7 @@ static void sync_to_stmt(Parser *p) {
     case TOKEN_IMPL:
     case TOKEN_PUB:
     case TOKEN_USE:
+    case TOKEN_MOD:
     case TOKEN_RBRACE: // end of the enclosing block
     case TOKEN_WHILE:
     case TOKEN_LOOP:
@@ -250,6 +251,7 @@ static void sync_to_decl(Parser *p) {
     case TOKEN_IMPL:
     case TOKEN_PUB:
     case TOKEN_USE:
+    case TOKEN_MOD:
     case TOKEN_VAR:
       return;
     default:
@@ -3041,6 +3043,33 @@ static Decl *parse_use_decl(Parser *p) {
   return decl;
 }
 
+// `mod x;` — a child module. One identifier and a semicolon: where the source
+// lives is derived from the tree, so there is nothing else to write down.
+static Decl *parse_mod_decl(Parser *p) {
+  if (!consume_tok(p, TOKEN_MOD, "expected 'mod'")) {
+    return ast_decl(DECL_POISON, current_tok_span(p), p->al);
+  }
+  Token mod_tok = *previous_tok(p);
+
+  if (!consume_tok(p, TOKEN_IDENT, "expected module name after 'mod'")) {
+    return ast_decl(DECL_POISON, token_span(&mod_tok), p->al);
+  }
+  StringView name = previous_tok(p)->lexeme;
+  Span name_span = previous_tok_span(p);
+
+  if (!consume_tok(p, TOKEN_SEMICOLON, "expected ';' after module name")) {
+    return ast_decl(DECL_POISON,
+                    span_merge(token_span(&mod_tok), previous_tok_span(p)),
+                    p->al);
+  }
+
+  Decl *decl =
+      ast_decl(DECL_MOD, span_merge(token_span(&mod_tok), name_span), p->al);
+  decl->as.mod_decl.name = name;
+  decl->as.mod_decl.name_span = name_span;
+  return decl;
+}
+
 static Decl *parse_trait_decl(Parser *p, bool is_pub) {
   if (!consume_tok(p, TOKEN_TRAIT, "expected 'trait'")) {
     return ast_decl(DECL_POISON, current_tok_span(p), p->al);
@@ -3383,6 +3412,11 @@ static Decl *parse_decl(Parser *p) {
     // `pub use` re-exports: the alias becomes an item of *this* module, so an
     // importer may name it without knowing where it originally came from.
     decl = parse_use_decl(p);
+    decl->is_pub = is_pub;
+  } else if (check_tok(p, TOKEN_MOD)) {
+    // `pub mod` exports the child: a path from outside this module's subtree
+    // may walk through it.
+    decl = parse_mod_decl(p);
     decl->is_pub = is_pub;
   } else {
     if (check_tok(p, TOKEN_VAR)) {

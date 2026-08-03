@@ -57,57 +57,136 @@ static void compiler_begin_module(Compiler *c, Module *m) {
   diag_set_warnings(&c->diags, module_has_audience(c, m));
 }
 
-// phase 0: discover and parse every source file reachable from the root.
-//
-// discovery can't precede parsing — a module's dependencies are its `use`
-// declarations, which only exist once it has an AST. So this is a worklist:
-// parse a module, collect its imports (registering any file not seen before),
-// and continue into the modules that just appeared.
-static bool compiler_phase_discover(Compiler *c, const char *root_path) {
-  StringView root = path_normalise(sv_from_cstr(root_path), &c->al);
-  StringView base_dir = path_dir_of(root);
+// parse one module and build the children it declares. Its own bag cycle, so a
+// module parsed on another's behalf cannot lose that other's diagnostics.
+static bool compiler_load_module(Compiler *c, Module *m) {
+  // set before the parse rather than after: mod_parse clears the bag, and the
+  // audience survives a clear precisely so this ordering is free.
+  diag_set_warnings(&c->diags, module_has_audience(c, m));
 
-  Module *root_mod = mod_new(root, &c->al);
-  // a root that spells a standard library file *is* that library module, and
-  // has to be registered under its `<std>/` key before anything resolves one —
-  // otherwise the prelude loads the embedded copy alongside it and every
-  // nominal type the file declares exists twice.
-  StringView std_name = std_name_for_entry(root);
-  if (std_name.len > 0) {
-    mod_adopt_std(root_mod, std_name, &c->al);
+  bool ok = mod_parse(m, &c->diags, &c->al);
+  if (ok) {
+    ok = mod_declare_children(m, &c->mod_reg, &c->diags, &c->al);
+  } else {
+    m->load_failed = true;
   }
-  modreg_add(&c->mod_reg, root_mod);
-  c->root_module = root_mod;
+  if (diag_has_diags(&c->diags)) {
+    diag_report(&c->diags, m->file_path.chars, m->source.chars, stderr);
+  }
+  return ok;
+}
 
+// the `--std-module std::a::b` lint target, made the root of the compile.
+//
+// The descent has to load as it goes: `b` is a name only `a` knows, and the
+// lint names its target before anything has asked for it, so nothing else will
+// have walked the way there.
+#define MOD_PATH_MAX 8
+static bool compiler_open_std_module(Compiler *c, const char *path) {
+  StringView segs[MOD_PATH_MAX];
+  int count = mod_split_path(path, segs, MOD_PATH_MAX);
+
+  Module *cur = c->mod_reg.std_root;
+  for (int i = 1; i < count; i++) {
+    ModChild *ch = cur->ast != NULL ? mod_find_child(cur, segs[i]) : NULL;
+    if (ch == NULL) {
+      fprintf(stderr,
+              "error: there is no standard library module '%s' ('" SV_FMT
+              "' names nothing)\n",
+              path, SV_ARG(segs[i]));
+      return false;
+    }
+    cur = ch->mod;
+    if (cur->ast == NULL && i + 1 < count) {
+      modreg_add(&c->mod_reg, cur);
+      if (!compiler_load_module(c, cur)) {
+        return false;
+      }
+    }
+  }
+  if (!sv_equal_cstr(segs[0], "std")) {
+    fprintf(stderr, "error: a module path must begin with 'std::'\n");
+    return false;
+  }
+
+  // read the target from disk, so a lint sees the edit and not whatever `make`
+  // last mirrored; its dependencies stay embedded.
+  mod_read_from_disk(cur, &c->al);
+  c->root_module = cur;
+  modreg_add(&c->mod_reg, cur);
+  return true;
+}
+
+// phase 0: build the two module trees, parse every module in them, and resolve
+// every `use` against the result.
+//
+// Discovery cannot be one pass, because both edges out of a module are things
+// only its AST holds: `mod` names its children, `use` names its dependencies.
+// A path two library modules deep therefore needs the first parsed before the
+// second can be *named*. So this is a fixpoint — parse everything unparsed,
+// let every path register what it walks through, repeat until the registry
+// stops growing — and it terminates because the tree is finite and a module
+// joins the registry once.
+static bool compiler_phase_discover(Compiler *c, const char *root_path,
+                                    const char *std_module) {
+  ModuleRegistry *reg = &c->mod_reg;
   bool had_errors = false;
 
-  // the bound is re-read each iteration: mod_collect_imports appends to the
-  // registry, and those appends are what extend the loop. reg->modules is
-  // realloc'd as it grows, so never cache the array across iterations.
-  for (int i = 0; i < c->mod_reg.module_count; i++) {
-    Module *m = c->mod_reg.modules[i];
-    // set before the parse rather than after: mod_parse clears the bag, and the
-    // audience survives a clear precisely so this ordering is free.
-    diag_set_warnings(&c->diags, module_has_audience(c, m));
+  // the library root first: it is the one statement of what `std::` names, and
+  // every module's prelude reads its children.
+  reg->std_root = mod_new_std_root(&c->al);
+  if (std_module != NULL && strcmp(std_module, "std") == 0) {
+    mod_read_from_disk(reg->std_root, &c->al);
+    c->root_module = reg->std_root;
+  }
+  modreg_add(reg, reg->std_root);
+  if (!compiler_load_module(c, reg->std_root)) {
+    return false;
+  }
 
-    if (!mod_parse(m, &c->diags, &c->al)) {
-      had_errors = true;
-      if (diag_has_diags(&c->diags)) {
-        diag_report(&c->diags, m->file_path.chars, m->source.chars, stderr);
-      }
-      continue; // no AST, so no imports to collect
+  if (std_module != NULL) {
+    if (c->root_module == NULL && !compiler_open_std_module(c, std_module)) {
+      return false;
     }
+  } else {
+    StringView root = path_normalise(sv_from_cstr(root_path), &c->al);
+    reg->program_root = mod_new_program_root(root, &c->al);
+    c->root_module = reg->program_root;
+    modreg_add(reg, reg->program_root);
+  }
 
-    had_errors |=
-        !mod_collect_imports(m, &c->mod_reg, base_dir, &c->diags, &c->al);
+  // reg->modules is realloc'd as it grows, so never cache the array; the bound
+  // is re-read on every iteration of both inner loops.
+  for (;;) {
+    int before = reg->module_count;
+    for (int i = 0; i < reg->module_count; i++) {
+      Module *m = reg->modules[i];
+      if (m->ast != NULL || m->load_failed) {
+        continue;
+      }
+      had_errors |= !compiler_load_module(c, m);
+    }
+    for (int i = 0; i < reg->module_count; i++) {
+      if (reg->modules[i]->ast != NULL) {
+        mod_reach_imports(reg->modules[i], reg);
+      }
+    }
+    if (reg->module_count == before) {
+      break;
+    }
+  }
 
-    // every non-std module implicitly depends on the prelude. Appended after
-    // its own imports (which therefore link first and win a name clash), and
-    // it may register new modules — the worklist bound is re-read each
-    // iteration, so those get discovered like any other dependency.
-    mod_inject_prelude(m, &c->mod_reg, &c->al);
-
-    // must report before the next iteration: mod_parse clears the bag.
+  // the tree is final, so a path that resolved to nothing really names nothing.
+  for (int i = 0; i < reg->module_count; i++) {
+    Module *m = reg->modules[i];
+    if (m->ast == NULL) {
+      continue;
+    }
+    compiler_begin_module(c, m);
+    had_errors |= !mod_collect_imports(m, reg, &c->diags, &c->al);
+    // every non-std module implicitly depends on the prelude, appended after
+    // its own imports so those link first and win a name clash.
+    mod_inject_prelude(m, reg, &c->al);
     if (diag_has_diags(&c->diags)) {
       diag_report(&c->diags, m->file_path.chars, m->source.chars, stderr);
     }
@@ -135,7 +214,7 @@ static void report_cycle(Compiler *c, const int *stack, int sp, int back_to,
     Module *to = (i + 1 < sp) ? c->mod_reg.modules[stack[i + 1]]
                               : c->mod_reg.modules[back_to];
     diag_note(&c->diags, (Span){0}, "  " SV_FMT " imports " SV_FMT,
-              SV_ARG(from->file_path), SV_ARG(to->file_path));
+              SV_ARG(mod_label(from)), SV_ARG(mod_label(to)));
   }
 
   diag_report(&c->diags, closer->file_path.chars, closer->source.chars, stderr);
@@ -262,8 +341,8 @@ static bool compiler_phase_check(Compiler *c) {
 }
 
 // run the full compilation pipeline
-bool compiler_run(Compiler *c, const char *path) {
-  if (!compiler_phase_discover(c, path)) {
+bool compiler_run(Compiler *c, const char *path, const char *std_module) {
+  if (!compiler_phase_discover(c, path, std_module)) {
     fprintf(stderr, "compilation failed during discovery.\n");
     return false;
   }
