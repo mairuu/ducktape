@@ -494,8 +494,11 @@ keep this file small. Everything from 55 on is below.
 
 - **A hash map (milestone 63)** — `std::hash` (`Hash`, `Hasher`, `hash_of`) and
   `std::map` (`HashMap<K, V>`, `HashSet<T>`). Two natives, no opcode, no
-  compiler change. Design: `language.md` `std::hash` / `std::map`,
-  `runtime.md` "Native functions".
+  compiler change. Design: `language.md` `std::hash` / `std::collections`,
+  `runtime.md` "Native functions". **The module is `std::collections` now**
+  (`9e821f5`+): it had held a set as well as a map since the day it shipped, so
+  `map` named one of its two types. Below this line it is still spelled
+  `std::map`, which is what it was called at the time.
 
   This was the fork the previous milestone left open — a hash map keyed by user
   types was the concrete consumer item 2 said `Eq` was waiting for — and the
@@ -689,7 +692,7 @@ keep this file small. Everything from 55 on is below.
 
 - **A masked hash table (milestone 66)** — `std::map` swaps prime capacities and
   `%` for powers of two and `h & (cap - 1)`. One `.dt` file, no compiler change.
-  Design: `language.md` `std::map`.
+  Design: `language.md` `std::collections`.
 
   The first thing milestone 65 paid for, and the smallest kind of milestone
   there is: a change that became *available* rather than one that became
@@ -996,8 +999,8 @@ keep this file small. Everything from 55 on is below.
   - **Sabotaged three ways.** Collapsing `slots_for` to `capacity_for` — the
     old, wrong conversion — fails 5 of the 10 lines of
     `tests/run/map_with_capacity.dt`. Restoring either parser cap fails
-    `wide_decls.dt`, the impl one also taking `std/map.dt` itself down with it,
-    which is the version that cannot ship silently.
+    `wide_decls.dt`, the impl one also taking `std/collections.dt` itself down
+    with it, which is the version that cannot ship silently.
 - **Every parser list grows (milestone 73)** — the ~20 fixed buffers milestone
   72 recorded as a wart, lifted together onto one facility. `PLIST` /
   `PLIST_GROW` / `PLIST_PUSH` / `PLIST_TAKE` at the top of `parser.c` back all

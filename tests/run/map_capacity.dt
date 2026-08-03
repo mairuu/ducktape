@@ -1,11 +1,11 @@
 # What a masked table has to be defensive about.
 #
-# `std::map` indexes with `h & (cap - 1)`, which is only a reduction into range
-# when `cap` is a power of two. Given 5 slots the mask would be 4, every probe
-# would visit slots 0 and 4 alone, and `(i + 1) & 4` would never leave 0 — so a
-# capacity that is not a power of two is not merely suboptimal here, it is
-# silently broken. Under the prime-and-modulo scheme it replaced, any capacity
-# at all worked.
+# `std::collections` indexes with `h & (cap - 1)`, which is only a reduction
+# into range when `cap` is a power of two. Given 5 slots the mask would be 4,
+# every probe would visit slots 0 and 4 alone, and `(i + 1) & 4` would never
+# leave 0 — so a capacity that is not a power of two is not merely suboptimal
+# here, it is silently broken. Under the prime-and-modulo scheme it replaced,
+# any capacity at all worked.
 #
 # That matters because an impl method has no visibility control: `rehash` is
 # public whether it wants to be or not, and it is also the documented way to
@@ -23,7 +23,7 @@
 #> negative hashes: 400 true
 #> presized matches grown: true
 use std::io::print;
-use std::map::HashMap;
+use std::collections::HashMap;
 use std::hash::hash_of;
 use std::array;
 use std::sort;

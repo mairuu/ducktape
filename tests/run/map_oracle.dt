@@ -10,9 +10,9 @@
 # test that writes its answers down in advance.
 #
 # So this runs a pseudo-random workload against a linear-scan association list
-# written out below: obviously correct, independent of everything `std::map`
-# does, and answering the same three questions. Every answer is compared, and
-# the count of disagreements is the whole output.
+# written out below: obviously correct, independent of everything
+# `std::collections` does, and answering the same three questions. Every answer
+# is compared, and the count of disagreements is the whole output.
 #
 # The key range is deliberately narrow (0..40) against thousands of operations,
 # so keys repeat, collide, die and come back — which is the point. A wide range
@@ -21,7 +21,7 @@
 #> mismatches: 0
 #> final agrees: true
 use std::io::print;
-use std::map::HashMap;
+use std::collections::HashMap;
 use std::array;
 
 # a deterministic stream, so a failure is reproducible rather than a story

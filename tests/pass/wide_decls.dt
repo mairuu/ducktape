@@ -3,11 +3,11 @@
 # Two fixed-size buffers were lifted for milestone 72, both reached by ordinary
 # code rather than by anything contrived:
 #
-# - **an impl's items were capped at 16**, in a stack array. `std::map`'s
-#   `HashMap` hit it by gaining a third capacity method, which is the whole
-#   story: 16 methods is not a lot for a container type. It is a diagnostic
-#   ("too many items in impl"), so it was an abort on a valid program rather
-#   than anything unsafe.
+# - **an impl's items were capped at 16**, in a stack array.
+#   `std::collections`'s `HashMap` hit it by gaining a third capacity method,
+#   which is the whole story: 16 methods is not a lot for a container type. It
+#   is a diagnostic ("too many items in impl"), so it was an abort on a valid
+#   program rather than anything unsafe.
 # - **a module's declarations were capped at 1024**, in a stack array guarded by
 #   an `assert`. An assert is not a guard: the release build defines NDEBUG, so
 #   the check vanished and a 1025th declaration wrote past the end of the array.

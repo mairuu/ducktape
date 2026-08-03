@@ -1349,8 +1349,8 @@ bucket. So the one type whose hash would otherwise be a walk over its bytes is
 the one type that costs a field read — and because interning makes two equal
 Strings one pointer, the value is consistent with `==` for exactly the reason
 the intern table already depends on. Both take Ints and Strings and return an
-Int, so neither touches the heap or the collector, and `std::map`'s whole
-open-addressed table is ordinary ducktape written on top of them.
+Int, so neither touches the heap or the collector, and `std::collections`'s
+whole open-addressed table is ordinary ducktape written on top of them.
 
 Porting `print` to this deleted `OP_PRINT`, `cg_names_builtin_print`,
 `tc_register_builtins`, the "using a builtin as a value" diagnostic, and the

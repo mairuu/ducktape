@@ -23,7 +23,7 @@
 #> presized matches grown: true
 #> set with_capacity: no rehash true, len 300
 use std::io::print;
-use std::map::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::array;
 use std::sort;
 

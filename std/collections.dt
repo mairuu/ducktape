@@ -1,4 +1,4 @@
-# std::map — a `HashMap<K, V>` and the `HashSet<T>` written on it.
+# std::collections — a `HashMap<K, V>` and the `HashSet<T>` written on it.
 #
 # Open addressing with linear probing: one array of slots, and a key that finds
 # its slot occupied walks forward until it finds a free one. The alternative —
@@ -312,7 +312,7 @@ impl<K: Hash, V> HashMap<K, V> {
             i = (i + 1) & self.mask();
             steps += 1;
         }
-        return panic("std::map: probe found no free slot — capacity is not a power of two");
+        return panic("std::collections: probe found no free slot — capacity is not a power of two");
     }
 
     # The value filed under `key`, or `None`.

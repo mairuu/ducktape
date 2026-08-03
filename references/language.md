@@ -1449,11 +1449,11 @@ involved.
 directory. `std::` never touches the filesystem, so a local `std.dt` is
 unreachable. Where ducktape cannot express the operation, a module declares a
 bodyless function bound to C (see "Native functions" below); `std::assert`,
-`std::cmp`, `std::convert`, `std::map`, `std::ops`, `std::option`, `std::result`,
-`std::sort` and `std::text` need none, `std::io` and `std::panic` are nothing
-but, and `std::array`, `std::string`, `std::strbuf`, `std::char` and
-`std::hash` are the mixed case — a handful of natives, and every other function
-written on top of them in ducktape.
+`std::cmp`, `std::collections`, `std::convert`, `std::ops`, `std::option`,
+`std::result`, `std::sort` and `std::text` need none, `std::io` and
+`std::panic` are nothing but, and `std::array`, `std::string`, `std::strbuf`,
+`std::char` and `std::hash` are the mixed case — a handful of natives, and
+every other function written on top of them in ducktape.
 
 **There is a small prelude.** Every program implicitly imports `Option` and its
 variants `Some`/`None` (`std::option`), `Result` and its variants `Ok`/`Err`
@@ -2642,12 +2642,12 @@ one call, and is what a caller that is not itself an impl wants.
 - Two natives, `hash_mix` and `hash_string` — exactly the two steps ducktape
   cannot take. Not preluded.
 
-### `std::map`
+### `std::collections`
 
 A hash map and the set written on it.
 
 ```
-use std::map::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 var m: HashMap<String, Int> = HashMap::new();
 m.insert("one", 1);            # None — nothing was displaced
@@ -2750,7 +2750,7 @@ HashSet::with_capacity(n); s.capacity(); s.reserve(n);   # forwarded, all three
 | an array iterator detached from the array it walks | `xs.iter()` holds the array and snapshots nothing, so a `push`/`pop` mid-walk is visible (never out of bounds — see "Sources"). `xs.iter().collect()` is the copy |
 | an *inferred* trait type argument, or an equality binding that solves one side from the other | a trait's arguments are written where the trait is named, and an equality is compared rather than unified. So `T: Add<Output = T>` is a promise checked against the impl, never a way to work out what `Output` should be |
 | an associated *type* default (`type Output = Self;` in a trait) | not parsed. A trait's *type parameter* may carry a default (`Rhs = Self`), which is why the `std::ops` migration for `Rhs` was free and the one for `Output` was not: every impl states its `Output`, and every bound that wants to keep the result names it |
-| custom `==` (an `Eq` trait) | equality stays structural and import-less for every type; only ordering and arithmetic are traits. `std::map` was the consumer this was waiting on and did not need it: a hash map resolves collisions with the structural `==` on a `K` bounded only by `Hash` |
+| custom `==` (an `Eq` trait) | equality stays structural and import-less for every type; only ordering and arithmetic are traits. `std::collections` was the consumer this was waiting on and did not need it: a hash map resolves collisions with the structural `==` on a `K` bounded only by `Hash` |
 | a bitwise operator on a non-`Int` | refused, with no trait to appeal to: there is no `BitAnd` the way there is an `Add`, so `1.5 & 2` is a type error rather than a call. A `Float`'s bits have no spelling at all — there is no reinterpreting cast |
 | compound bitwise assignment (`&=`, `\|=`, `<<=`) | not parsed; write `x = x & y`. What it would *mean* is settled — `a op= b` is `a = a op b`, which is how `%=` joined `+= -= *= /=` — so what is missing is the spelling, and the scanning is the awkward part: `>>=` sits next to the one place in the grammar where whitespace already changes a parse (`a > > b` versus `a >> b`) |
 | unsigned integers | there is one integer type, signed `Int`. `>>>` is what stands in for an unsigned shift; a value with the top bit set prints as negative even when it is being used as a bit pattern |

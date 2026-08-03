@@ -13,7 +13,7 @@
 #> nested generic still parses: 1
 use std::io::print;
 use std::array;
-use std::map::HashMap;
+use std::collections::HashMap;
 
 fun main() {
     print("and or xor: {12 & 10} {12 | 10} {12 ^ 10}");

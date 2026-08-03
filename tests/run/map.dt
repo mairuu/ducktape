@@ -1,4 +1,4 @@
-# `std::map`'s API, pinned.
+# `std::collections`'s API, pinned.
 #
 # What this file pins is what each call *answers*. What it deliberately does not
 # pin is iteration order — that is slot order, which is hash order, and printing
@@ -27,7 +27,7 @@
 #> point: Some(9) None
 #> point moved: Some(9)
 use std::io::print;
-use std::map::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sort;
 use std::array;
