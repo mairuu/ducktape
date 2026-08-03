@@ -40,6 +40,14 @@ void compiler_destroy(Compiler *c, Allocator *al) {
   arena_destroy(&c->arena);
 }
 
+// start a phase's work on one module: drop what the previous module left and
+// decide whether this one's warnings have an audience. Every phase loops over
+// modules this way, so it is the one place that answers "whose code is this?".
+static void compiler_begin_module(Compiler *c, Module *m) {
+  diag_clear(&c->diags);
+  diag_set_warnings(&c->diags, !mod_is_std_module(m));
+}
+
 // phase 0: discover and parse every source file reachable from the root.
 //
 // discovery can't precede parsing — a module's dependencies are its `use`
@@ -61,6 +69,9 @@ static bool compiler_phase_discover(Compiler *c, const char *root_path) {
   // realloc'd as it grows, so never cache the array across iterations.
   for (int i = 0; i < c->mod_reg.module_count; i++) {
     Module *m = c->mod_reg.modules[i];
+    // set before the parse rather than after: mod_parse clears the bag, and the
+    // audience survives a clear precisely so this ordering is free.
+    diag_set_warnings(&c->diags, !mod_is_std_module(m));
 
     if (!mod_parse(m, &c->diags, &c->al)) {
       had_errors = true;
@@ -176,7 +187,7 @@ static bool compiler_phase_register(Compiler *c) {
   bool had_errors = false;
   for (int i = 0; i < c->mod_reg.module_count; i++) {
     Module *m = modreg_topo(&c->mod_reg, i);
-    diag_clear(&c->diags);
+    compiler_begin_module(c, m);
 
     tc_register_module(&c->tc, m);
     if (diag_has_diags(&c->diags)) {
@@ -196,7 +207,7 @@ static bool compiler_phase_resolve(Compiler *c) {
   bool had_errors = false;
   for (int i = 0; i < c->mod_reg.module_count; i++) {
     Module *m = modreg_topo(&c->mod_reg, i);
-    diag_clear(&c->diags);
+    compiler_begin_module(c, m);
 
     // every dependency precedes m in topological order, so its scopes and its
     // visible impl set are already populated by the time we copy out of them.
@@ -220,7 +231,7 @@ static bool compiler_phase_check(Compiler *c) {
   bool had_errors = false;
   for (int i = 0; i < c->mod_reg.module_count; i++) {
     Module *m = modreg_topo(&c->mod_reg, i);
-    diag_clear(&c->diags);
+    compiler_begin_module(c, m);
 
     tc_check_module(&c->tc, m);
     if (diag_has_diags(&c->diags)) {
@@ -321,7 +332,7 @@ static bool compiler_codegen(Compiler *c, Executable *exe, Heap *heap,
   // against the module it was *written* in, not the one that reached it.
   bool ok = mono_seed(&mono, main_fn);
   for (Module *mod; (mod = mono_pending_module(&mono)) != NULL;) {
-    diag_clear(&c->diags);
+    compiler_begin_module(c, mod);
     ok &= mono_compile_next(&mono, &c->diags);
     if (diag_has_diags(&c->diags)) {
       diag_report(&c->diags, mod->file_path.chars, mod->source.chars, stderr);

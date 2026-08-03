@@ -18,6 +18,7 @@ names a file, that file is the source of truth. Historical design notes live in
 |---|---|
 | `src/`, `include/` | the compiler + VM, one `.c`/`.h` pair per component (incl. `object.{c,h}`: the GC heap, strings, arrays) |
 | `tests/pass/` | programs that must compile cleanly (exit 0, empty stderr) |
+| `tests/warn/` | programs that must compile *and* warn (exit 0, stderr matching the first line's `#! expect: <substring>`) |
 | `tests/fail/` | programs that must fail; first line `#! expect: <substring>` asserts on stderr |
 | `tests/run/` | programs executed with `--run`; `#> line` comments assert on stdout |
 | `tests/fail_run/` | like `tests/fail`, but invoked with `--run` — for programs that type-check yet the VM rejects |

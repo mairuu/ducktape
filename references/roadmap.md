@@ -1490,6 +1490,32 @@ keep this file small. Everything from 55 on is below.
   as `tests/run/local_slots_under_temporaries.dt` and
   `tests/run/break_under_temporaries.dt`, and both crash or hang at `7c1be4f`.
 
+- **89. Advice needs an audience** (`SHA`) — the first diagnostic below error:
+  an irrefutable `if var`/`while var` header (milestone 80's remainder) and code
+  below a diverging statement both warn. Design: `overview.md` repo layout,
+  `language.md` "`if var` and `while var`", `architecture.md` "Diagnostics".
+  The severity was already there — `DIAG_WARNING`, `diag_warning`, and the
+  "warning" branch in `diag_report` all predate this and had never been called,
+  and the pipeline already gated reporting on `diag_has_diags` and failure on
+  `diag_has_errors`, so the first warning came out working. What was missing is
+  that a warning has an **audience**: an error is a fact about the program, but
+  advice presumes someone who can act on it, and the embedded std is compiled
+  from source into every program with nobody to advise. So warnings are dropped
+  at emission for std rather than filtered at report time, which keeps
+  `diag_has_diags` honest. The predicate that decides it is `mod_is_std_module`,
+  written for `@lang` and needing no change: a module reached through
+  `use std::x` is keyed `<std>/x.dt` while the same file named on the command
+  line keeps its real path — so std warns while you edit it and is silent while
+  you merely use it, with no new concept. Two things fell out of probing: a
+  suppressed warning must suppress the notes that follow it, since a note
+  attaches to the diagnostic before it *by position* and would otherwise orphan
+  onto whatever was reported last (`DiagBag.last_dropped`); and the test harness
+  had no bucket for a warning at all — exit 0 with non-empty stderr is the one
+  cell of the matrix `tests/pass` and `tests/fail` leave out, hence `tests/warn`.
+  The unreachable warning fired **zero** times across the suite and std, because
+  milestone 86 had already deleted the dead trailing `return`s that were its
+  only population; it is pinned deliberately instead.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -1717,17 +1743,24 @@ via `Module.decl_base`) and is not part of the main line.
   struct type in struct pattern") describes the rewrite rather than the
   mistake. Rust behaves the same way; the message could be kinder
 - no shadowing diagnostics for `var` (`vscope_define` todo); top-level item
-  names do collide, but a `var` may silently shadow one in the same scope
+  names do collide, but a `var` may silently shadow one in the same scope. As of
+  milestone 89 there *is* a warning severity for this to use — what is missing
+  is now only the analysis, and the policy call about whether shadowing deserves
+  one at all (Rust does not warn on it)
 - a refutable `var` binding whose column type inference never pinned down is
   accepted (the tri-state answer reports nothing) and traps at runtime via
   `OP_MATCH_FAIL` instead of at compile time
-- the mirror of that, from milestone 80: an *irrefutable* pattern in an `if
-  var` / `while var` header is accepted silently, so the `else` is dead code
-  and `while var x = e { }` is an infinite loop with nothing said. Milestone 84
-  narrowed this to the two headers by asking the question for `var ... else`,
-  which is the same one call to `matrix_covers` — what stops it spreading is
-  that `check_cond_binding` deliberately has no matrix, and Rust *warns* here
-  where the binding forms error, a severity this compiler does not have
+- a warning is silenced for the *whole* embedded std, which is right for a
+  program that merely uses it and wrong for the one editing it. The std author's
+  route back is to name the file on the command line (`./build/ducktape
+  std/cmp.dt`), which works because the embedded copy is keyed `<std>/cmp.dt`
+  and the on-disk one is not — but five std files cannot be compiled that way at
+  all (below), so for those there is currently no way to see their warnings
+- `./build/ducktape std/<f>.dt` fails for `array`, `char`, `iter`, `strbuf` and
+  `string` with "conflicting definitions of method": naming the file makes a
+  second module out of source the prelude already pulled in under its `<std>/`
+  key, and the two copies' inherent impls collide. Predates milestone 89, which
+  only made it matter — that command is now also how std is linted
 - `while true { }` still types `()`, and deliberately: its condition is an
   expression, and the checker reads types rather than values. `loop { }` is the
   spelling that asks no condition (milestone 86)

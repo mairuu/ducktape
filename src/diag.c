@@ -9,6 +9,8 @@ void diag_init(DiagBag *db, Allocator *al) {
   db->count = 0;
   db->cap = 0;
   db->error_count = 0;
+  db->warnings_enabled = true;
+  db->last_dropped = false;
   db->al = al;
 }
 
@@ -24,6 +26,7 @@ void diag_clear(DiagBag *db) {
   }
   db->count = 0;
   db->error_count = 0;
+  db->last_dropped = false;
 }
 
 static void diag_add(DiagBag *db, DiagLevel level, Span span, const char *fmt,
@@ -35,6 +38,7 @@ static void diag_add(DiagBag *db, DiagLevel level, Span span, const char *fmt,
     db->cap = new_cap;
   }
 
+  db->last_dropped = false;
   Diag *d = &db->diags[db->count++];
   d->level = level;
   d->span = span;
@@ -58,7 +62,17 @@ void diag_error(DiagBag *db, Span span, const char *fmt, ...) {
   va_end(ap);
 }
 
+// survives diag_clear: the audience is a property of the module being compiled,
+// which outlives any one phase's bag.
+void diag_set_warnings(DiagBag *db, bool enabled) {
+  db->warnings_enabled = enabled;
+}
+
 void diag_warning(DiagBag *db, Span span, const char *fmt, ...) {
+  if (!db->warnings_enabled) {
+    db->last_dropped = true;
+    return;
+  }
   va_list ap;
   va_start(ap, fmt);
   diag_add(db, DIAG_WARNING, span, fmt, ap);
@@ -66,6 +80,9 @@ void diag_warning(DiagBag *db, Span span, const char *fmt, ...) {
 }
 
 void diag_note(DiagBag *db, Span span, const char *fmt, ...) {
+  if (db->last_dropped) {
+    return; // its subject was never reported
+  }
   va_list ap;
   va_start(ap, fmt);
   diag_add(db, DIAG_NOTE, span, fmt, ap);

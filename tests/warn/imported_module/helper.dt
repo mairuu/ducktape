@@ -1,0 +1,8 @@
+# the user's own file, merely not the one named on the command line. It warns:
+# the audience test is "did you write it", not "is it the root".
+pub fun pick(n: Int) -> Int {
+    if var m = n {
+        return m;
+    }
+    return 0;
+}

@@ -1,0 +1,22 @@
+#! expect: irrefutable pattern in an 'if var'
+# An `if var` / `while var` exists to ask a question the pattern can answer no
+# to. One that always matches is legal and does what it says — hence a warning,
+# not an error — but the plainer spelling says it better.
+use std::io::print;
+
+struct Point { x: Int, y: Int }
+
+fun main() {
+    # a binding matches anything
+    if var q = 5 { print("{q}"); } else { print("never"); }
+
+    # so does a struct pattern: every field is itself irrefutable
+    var p = Point { x: 4, y: 7 };
+    if var Point { x, y } = p { print("{x} {y}"); }
+
+    # a tuple of bindings, likewise
+    if var (a, b) = (1, 2) { print("{a} {b}"); }
+
+    # ...and a `while var` that can never fail is `loop`
+    while var n = 1 { print("{n}"); break; }
+}

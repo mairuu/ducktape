@@ -1,0 +1,9 @@
+#! expect: helper.dt
+# A warning is reported against the module it was *written* in, and every
+# non-std module has an author. Only the embedded std — which is compiled from
+# source into every program and which no user can edit — is silenced, so this
+# main.dt is clean while its sibling is not.
+use helper;
+use std::io::print;
+
+fun main() { print("{helper::pick(3)}"); }

@@ -2003,12 +2003,20 @@ resolved *before* `check_binding_pattern` runs, which is what keeps the names
 out of it: it is a block, so it pushes its own scope, and the pattern has
 simply not been walked yet.
 
-Its other requirement is that it not fall through, which is `block_diverges`
+Its other requirement is that it not fall through, which is `block_diverge_at`
 asking whether any statement is a `return`/`break`/`continue` or has type `!`.
 That predicate is also what `EXPR_BLOCK` now uses for its own type, where the
 rule had been the narrower "the last statement is a `return`" — so
 `else { panic("no"); }` diverges with the semicolon as without it, and a block
 ending in `break` types as `!` everywhere, not only here.
+
+It returns the *index* rather than a bool, because the position is the whole
+answer to two questions at once: the block diverges iff there is one, and
+everything past it is unreachable. `warn_unreachable` reports the statement
+after it — or the tail expression, which is dead in exactly the same way — once
+per block, since the rest of the dead code is the same mistake and a nested
+block reports its own. A dead tail does not change the block's *type*: what it
+would evaluate to and whether it runs are separate questions.
 
 The fourth thing that types `!` is a `loop` with no exit, and finding one is why
 `CheckCtx` keeps a **stack** of enclosing loops (`CheckLoop`, innermost first)
@@ -2045,11 +2053,16 @@ bind.
 
 ### Conditional bindings (`if var` / `while var`)
 
-The same `Pattern` once more, with the exhaustiveness question *removed*
-rather than asked: here the pattern is meant to be refutable, so
+The same `Pattern` once more, with the exhaustiveness question *turned around*
+rather than removed: here the pattern is meant to be refutable, so
 `check_cond_binding` is `check_pattern` against the subject's type, plus
-`bind_pattern_poison` on failure, and nothing else. What each form adds is the
-scope the names land in, and the two differ:
+`bind_pattern_poison` on failure, plus the one `pattern_covers` call the binding
+forms make — `EXH_YES` means the test has only one answer, which is a warning
+rather than an error because the code still means what it says. That helper is
+`matrix_covers` over a one-row, one-column matrix, shared with
+`check_binding_pattern`, so the three forms cannot disagree about what
+"irrefutable" means. What each form adds is the scope the names land in, and the
+two differ:
 
 - `if var` pushes a scope around the **then-block only**, and pops it before
   the `else` is resolved — the else is the branch where the pattern did not
@@ -2097,4 +2110,20 @@ a mark-sweep GC heap so the frontend arena can be dropped after codegen.
 
 `DiagBag` is a shared side-channel; every pass appends `Diag`s with a `Span`
 (line/col range) and the driver prints them with source context after each
-phase. Phases report whether errors occurred; `main` exits 0/1 accordingly.
+phase. Phases report whether errors occurred; `main` exits 0/1 accordingly —
+`error_count`, not `count`, so a bag holding only warnings still compiles.
+
+**Levels.** `DIAG_ERROR` is a fact about the program. `DIAG_WARNING` is advice
+to whoever wrote it, which means it presumes an author who can act on it: the
+embedded std is compiled from source into every program and nobody using one can
+edit it, so `compiler_begin_module` calls `diag_set_warnings(!mod_is_std_module)`
+at the head of every per-module loop, and `diag_warning` drops the message
+rather than the reporter filtering it later. The same file named on the command
+line is *not* a std module — the embedded copy is keyed `<std>/x.dt` and a path
+argument is not — so std warns for the person editing it. `DIAG_NOTE` attaches
+to the diagnostic before it by position, so a dropped warning sets
+`last_dropped` and the notes that follow it are dropped too; otherwise they
+would orphan onto whatever was reported last.
+
+Warnings are pinned by `tests/warn/`, which asserts exit 0 *and* matching
+stderr — the combination the pass and fail buckets both exclude.

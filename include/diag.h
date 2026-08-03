@@ -28,6 +28,16 @@ typedef struct {
   int count;
   int cap;
   int error_count;
+  // an error is a fact about the program; a warning is advice to whoever wrote
+  // it. Code with no such author — the embedded std, compiled from source into
+  // every program — has nobody to advise, so its warnings are dropped at the
+  // source rather than filtered at report time, keeping `diag_has_diags`
+  // honest.
+  bool warnings_enabled;
+  // a note attaches to the diagnostic before it by position, so dropping a
+  // warning has to drop the notes it came with or they orphan onto whatever
+  // was reported last.
+  bool last_dropped;
   Allocator *al;
 } DiagBag;
 
@@ -35,6 +45,7 @@ void diag_init(DiagBag *db, Allocator *al);
 void diag_destroy(DiagBag *db);
 
 void diag_clear(DiagBag *db);
+void diag_set_warnings(DiagBag *db, bool enabled);
 
 void diag_error(DiagBag *db, Span span, const char *fmt, ...);
 void diag_warning(DiagBag *db, Span span, const char *fmt, ...);

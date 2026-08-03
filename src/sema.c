@@ -6128,13 +6128,21 @@ static void bind_pattern_poison(CheckCtx *ctx, Pattern *pat) {
   }
 }
 
-// a `var` binding is a match with one arm and no guard, so "irrefutable" is
-// exactly "exhaustive" over a one-row matrix — the same question
-// check_match_exhaustive asks, and the same tri-state answer: a column whose
-// type inference has not pinned down reports nothing rather than guessing.
-// `has_else` turns that answer around rather than replacing it: a binding with
-// somewhere to send the values it misses wants EXH_NO, and EXH_YES means the
-// `else` can never run.
+// a binding is a match with one arm and no guard, so "irrefutable" is exactly
+// "exhaustive" over a one-row matrix — the same question check_match_exhaustive
+// asks, and the same tri-state answer: a column whose type inference has not
+// pinned down reports nothing rather than guessing.
+static Exhaustive pattern_covers(CheckCtx *ctx, Pattern *pat) {
+  Pattern **cols = al_alloc_zero(ctx->al, sizeof(Pattern *));
+  cols[0] = pat;
+  PatRow row = {.cols = cols};
+  PatMatrix m = {.rows = &row, .row_count = 1, .width = 1};
+  return matrix_covers(ctx, &m);
+}
+
+// `has_else` turns pattern_covers' answer around rather than replacing it: a
+// binding with somewhere to send the values it misses wants EXH_NO, and EXH_YES
+// means the `else` can never run.
 static void check_binding_pattern(CheckCtx *ctx, Pattern *pat, Type *init_ty,
                                   bool has_else) {
   if (type_is_poison(init_ty)) {
@@ -6149,11 +6157,7 @@ static void check_binding_pattern(CheckCtx *ctx, Pattern *pat, Type *init_ty,
     return;
   }
 
-  Pattern **cols = al_alloc_zero(ctx->al, sizeof(Pattern *));
-  cols[0] = pat;
-  PatRow row = {.cols = cols};
-  PatMatrix m = {.rows = &row, .row_count = 1, .width = 1};
-  Exhaustive covers = matrix_covers(ctx, &m);
+  Exhaustive covers = pattern_covers(ctx, pat);
 
   if (!has_else && covers == EXH_NO) {
     diag_error(ctx->diags, pat->span,
@@ -6168,14 +6172,25 @@ static void check_binding_pattern(CheckCtx *ctx, Pattern *pat, Type *init_ty,
 
 // the pattern half of an `if var` / `while var`. Unlike a `var` binding it is
 // *meant* to be refutable — the failure branch is the `else` or the loop's
-// exit — so the only question left is whether the pattern fits the subject's
-// type. Names land in the scope the caller has already pushed for the body,
-// which is also why a poisoned subject never reaches here: both callers bail
-// on one before pushing that scope.
-static bool check_cond_binding(CheckCtx *ctx, Pattern *pat, Type *subject_ty) {
+// exit — so an irrefutable one is not wrong, only pointless: the test it asks
+// for has one answer. That is a warning rather than an error because the code
+// means what it says and does it; `kw` names the construct because the simpler
+// spelling differs (a plain `var`, or m86's `loop`).
+// Names land in the scope the caller has already pushed for the body, which is
+// also why a poisoned subject never reaches here: both callers bail on one
+// before pushing that scope.
+static bool check_cond_binding(CheckCtx *ctx, Pattern *pat, Type *subject_ty,
+                               const char *kw, const char *always,
+                               const char *fix) {
   if (!check_pattern(ctx, pat, subject_ty)) {
     bind_pattern_poison(ctx, pat);
     return false;
+  }
+  if (pattern_covers(ctx, pat) == EXH_YES) {
+    diag_warning(ctx->diags, pat->span,
+                 "irrefutable pattern in %s: it matches every value of the "
+                 "subject, so %s; use %s instead",
+                 kw, always, fix);
   }
   return true;
 }
@@ -7859,26 +7874,42 @@ static TokenType compound_binary_op(TokenType op) {
   }
 }
 
-// Does control leave the block instead of running off its end? `return`,
+// Where does control leave the block instead of running off its end? `return`,
 // `break` and `continue` say so outright; a statement whose expression has type
 // `!` — a `panic` call, a `match` whose every arm diverges — says it one type
 // out, which is why this runs after the statements are resolved. Everything
-// below the first such statement is dead, so one anywhere is enough.
-static bool block_diverges(const ExprBlock *block) {
+// below the first such statement is dead, so the *index* is the whole answer:
+// the block diverges iff there is one, and anything past it is unreachable.
+// -1 for none.
+static int block_diverge_at(const ExprBlock *block) {
   for (int i = 0; i < block->stmt_count; i++) {
     const Stmt *s = block->stmts[i];
     if (s->kind == STMT_RETURN || s->kind == STMT_BREAK ||
         s->kind == STMT_CONTINUE) {
-      return true;
+      return i;
     }
     if (s->kind == STMT_EXPR) {
       Type *ty = s->as.expr_stmt.expr->resolved_type;
       if (ty != NULL && ty->kind == TY_NEVER) {
-        return true;
+        return i;
       }
     }
   }
-  return false;
+  return -1;
+}
+
+// One warning per block, anchored at the first dead statement: the rest are the
+// same mistake, and a nested block reports its own. A tail expression counts —
+// it is what the block evaluates to, and after a divergence it never runs.
+static void warn_unreachable(CheckCtx *ctx, const ExprBlock *block, int at) {
+  const Stmt *dead = (at + 1 < block->stmt_count) ? block->stmts[at + 1] : NULL;
+  if (dead == NULL && block->tail_expr == NULL) {
+    return; // the divergence is the last thing in the block, as intended
+  }
+  Span span = dead != NULL ? dead->span : block->tail_expr->span;
+  diag_warning(ctx->diags, span,
+               "unreachable code: control never reaches here");
+  diag_note(ctx->diags, (Span){0}, "everything above it leaves the block");
 }
 
 static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
@@ -7912,12 +7943,21 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       resolve_stmt(ctx, block->stmts[i]);
     }
 
+    int diverge_at = block_diverge_at(block);
+
     if (block->tail_expr != NULL) {
       result = resolve_expr(ctx, block->tail_expr, hint);
-    } else if (block_diverges(block)) {
+      // a diverging statement makes the tail dead, but the block still has the
+      // tail's type: what it would evaluate to is a separate question from
+      // whether it runs.
+    } else if (diverge_at >= 0) {
       result = ctx->tc->t_never;
     } else {
       result = ctx->tc->t_unit;
+    }
+
+    if (diverge_at >= 0) {
+      warn_unreachable(ctx, block, diverge_at);
     }
 
     ctx->vscope = vscope_pop(ctx->vscope);
@@ -8548,8 +8588,9 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     // the binding's names belong to the loop's own scope, like a `for`'s
     // variable: they are rebound from the freshly evaluated subject each turn.
     ctx->vscope = vscope_push(ctx->vscope, false, true, ctx->al);
-    bool bound =
-        wh->binding == NULL || check_cond_binding(ctx, wh->binding, cond_ty);
+    bool bound = wh->binding == NULL ||
+                 check_cond_binding(ctx, wh->binding, cond_ty, "a 'while var'",
+                                    "the loop never exits", "'loop'");
     CheckLoop frame = {.kind = CHECK_LOOP_WHILE, .parent = ctx->loops};
     ctx->loops = &frame;
     resolve_expr(ctx, wh->body, NULL);
@@ -8645,7 +8686,8 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     bool bound = true;
     if (if_->binding != NULL) {
       ctx->vscope = vscope_push(ctx->vscope, false, false, ctx->al);
-      bound = check_cond_binding(ctx, if_->binding, cond_ty);
+      bound = check_cond_binding(ctx, if_->binding, cond_ty, "an 'if var'",
+                                 "the test always succeeds", "a plain 'var'");
     }
     Type *then_ty = resolve_expr(ctx, if_->then_block, dyn_want);
     if (if_->binding != NULL) {

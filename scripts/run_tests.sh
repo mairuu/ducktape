@@ -1,6 +1,10 @@
 #!/bin/sh
 # run .dt test files against the compiler.
 #   tests/pass/*.dt      must exit 0 with empty stderr
+#   tests/warn/*.dt      must exit 0 with NON-empty stderr containing the
+#                        `#! expect: <substring>` from its first line — the one
+#                        cell of the (exit code x stderr) matrix the other
+#                        buckets leave out, and the only one a warning fits
 #   tests/fail/*.dt      must exit non-zero; if the first line is
 #                        `#! expect: <substring>` stderr must contain it
 #   tests/run/*.dt       executed with --run; must exit 0 with empty stderr and
@@ -34,6 +38,32 @@ check_pass() {
     fi
 }
 
+check_warn() {
+    f=$1
+    err=$("$BIN" "$f" 2>&1 >/dev/null)
+    code=$?
+    if [ "$code" -ne 0 ]; then
+        fail=$((fail + 1))
+        echo "FAIL (a warning must not fail the build): $f (exit $code)"
+        [ -n "$err" ] && printf '%s\n' "$err" | sed 's/^/    /'
+        return
+    fi
+    if [ -z "$err" ]; then
+        fail=$((fail + 1))
+        echo "FAIL (expected a warning, got silence): $f"
+        return
+    fi
+    expect=$(head -n1 "$f" | sed -n 's/^#! expect: //p')
+    if [ -n "$expect" ] && ! printf '%s' "$err" | grep -qF "$expect"; then
+        fail=$((fail + 1))
+        echo "FAIL (wrong warning): $f"
+        echo "    expected substring: $expect"
+        printf '%s\n' "$err" | sed 's/^/    /'
+        return
+    fi
+    pass=$((pass + 1))
+}
+
 check_fail() {          # $1 = file, $2... = extra flags for the compiler
     f=$1
     shift
@@ -58,6 +88,11 @@ check_fail() {          # $1 = file, $2... = extra flags for the compiler
 for f in "$ROOT"/tests/pass/*.dt "$ROOT"/tests/pass/*/main.dt; do
     [ -e "$f" ] || continue
     check_pass "$f"
+done
+
+for f in "$ROOT"/tests/warn/*.dt "$ROOT"/tests/warn/*/main.dt; do
+    [ -e "$f" ] || continue
+    check_warn "$f"
 done
 
 for f in "$ROOT"/tests/fail/*.dt "$ROOT"/tests/fail/*/main.dt; do

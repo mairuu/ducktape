@@ -8,7 +8,6 @@
 #> y is 2
 #> shorthand 4 7
 #> miss
-#> irrefutable 5
 #> captured 8
 #> nested 200
 use std::io::print;
@@ -45,17 +44,16 @@ fun main() {
         print("y is {yy}");
     }
     # ...the *subject*, though, is an ordinary header expression, so a struct
-    # literal there still needs a name of its own
+    # literal there still needs a name of its own. Wrapped in a variant to keep
+    # the header refutable — an irrefutable one warns, see tests/warn.
     var q2 = Point { x: 4, y: 7 };
-    if var Point { x, y } = q2 {
+    var maybe_q = option::Option::Some(q2);
+    if var option::Option::Some(Point { x, y }) = maybe_q {
         print("shorthand {x} {y}");
     }
 
     # a literal sub-pattern that does not match takes the else
     if var (9, b) = (1, 2) { print("hit {b}"); } else { print("miss"); }
-
-    # an irrefutable pattern is allowed; the else is simply unreachable
-    if var q = 5 { print("irrefutable {q}"); } else { print("never"); }
 
     # a closure may capture a bound name — the binds are closed over before
     # their slots are slid out

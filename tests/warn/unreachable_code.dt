@@ -1,0 +1,65 @@
+#! expect: unreachable code: control never reaches here
+# Anything below the statement that leaves a block is dead. One warning per
+# block, anchored at the first dead statement — a nested block reports its own.
+use std::io::print;
+use std::panic::panic;
+
+fun after_return() -> Int {
+    return 1;
+    print("dead");
+}
+
+# m86 made this reachable: before `loop` there was no way to write a statement
+# that diverges without leaving the function.
+fun after_loop() {
+    loop { }
+    print("dead");
+}
+
+fun after_panic() -> Int {
+    panic("x");
+    3               # a dead *tail* counts: it is what the block would evaluate to
+}
+
+# the divergence need not be syntactic — m85's join makes this `!` one type out
+fun after_diverging_if() -> Int {
+    if true { return 1; } else { return 2; }
+    print("dead");
+    9
+}
+
+fun in_a_loop() -> Int {
+    var i = 0;
+    while i < 3 {
+        i = i + 1;
+        continue;
+        print("dead");
+    }
+    return i;
+}
+
+# checked once at the definition, not once per impl or per instantiation:
+# monomorphisation is codegen's, and no warning is emitted there.
+trait Greet {
+    fun name(self) -> Int;
+    fun greet(self) -> Int {
+        return self.name();
+        print("dead once, not once per impl");
+    }
+}
+struct A;
+struct B;
+impl Greet for A { fun name(self) -> Int { return 1; } }
+impl Greet for B { fun name(self) -> Int { return 2; } }
+
+fun twice<T>(x: T) -> Int {
+    return 0;
+    print("dead once, not once per instantiation");
+}
+
+fun main() {
+    var s = "s";
+    var t1 = twice(1);
+    var t2 = twice(s);
+    print("{after_return()} {A.greet()} {B.greet()} {t1} {t2}");
+}
