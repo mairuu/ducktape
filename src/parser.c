@@ -1007,10 +1007,13 @@ static Expr *parse_block(Parser *p) {
       } else if (stmt->kind == STMT_EXPR && check_tok(p, TOKEN_RBRACE) &&
                  (stmt->as.expr_stmt.expr->kind == EXPR_IF ||
                   stmt->as.expr_stmt.expr->kind == EXPR_MATCH ||
-                  stmt->as.expr_stmt.expr->kind == EXPR_LOOP)) {
+                  stmt->as.expr_stmt.expr->kind == EXPR_LOOP ||
+                  stmt->as.expr_stmt.expr->kind == EXPR_BLOCK)) {
         // a value-bearing block expression just before `}` is the tail. A
         // `loop` is one of those and a `while`/`for` is not: only its breaks
-        // leave it, so only it has something other than `()` to be.
+        // leave it, so only it has something other than `()` to be. The only
+        // block that can arrive here is a *labelled* one — an unlabelled `{`
+        // is no statement head, so it reaches the tail through parse_expr.
         tail = stmt->as.expr_stmt.expr;
       } else {
         PLIST_PUSH(p, stmts, stmt);
@@ -2145,9 +2148,9 @@ static Expr *parse_primary(Parser *p) {
       return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
     }
     if (!check_tok(p, TOKEN_FOR) && !check_tok(p, TOKEN_WHILE) &&
-        !check_tok(p, TOKEN_LOOP)) {
+        !check_tok(p, TOKEN_LOOP) && !check_tok(p, TOKEN_LBRACE)) {
       error_at(p, current_tok_span(p),
-               "a label may only name a 'loop', a 'while' or a 'for'");
+               "a label may only name a 'loop', a 'while', a 'for' or a block");
       return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
     }
   }
@@ -2235,9 +2238,15 @@ static Expr *parse_primary(Parser *p) {
     return expr;
   }
 
-  // block
+  // block — labelled or not, which is the same node either way. The label was
+  // consumed above, so an ordinary block simply arrives with an empty one.
   if (check_tok(p, TOKEN_LBRACE)) {
-    return parse_block(p);
+    Expr *block = parse_block(p);
+    if (block->kind == EXPR_BLOCK) {
+      block->as.block.label = label;
+      block->span = span_merge(token_span(t), block->span);
+    }
+    return block;
   }
 
   if (check_tok(p, TOKEN_SELF)) {

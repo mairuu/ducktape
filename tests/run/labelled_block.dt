@@ -1,0 +1,159 @@
+# A labelled block is a `break` target that also leaves by finishing, so its
+# type is the join of its breaks *and* its tail. Pins that, a bare `break`
+# skipping a block to reach its loop, leaving a loop and a block at once, an
+# unwind past a pending callee and a capture, nesting, and a block every exit of
+# which is a break.
+#> negative
+#> zero
+#> positive
+#> 4
+#> 303
+#> 37
+#> 22
+#> 99
+#> 1
+#> 2
+#> 8
+#> 110
+#> 13
+#> circle
+use std::io::print;
+
+fun id(n: Int) -> Int { n }
+fun add(a: Int, b: Int) -> Int { a + b }
+
+trait Shape { fun name(self) -> String; }
+struct Sq { n: Int }
+struct Ci { n: Int }
+impl Shape for Sq { fun name(self) -> String { "square" } }
+impl Shape for Ci { fun name(self) -> String { "circle" } }
+
+# the shape the feature exists for: an early answer with no sentinel to invent
+# and no flag to check on the way out
+fun classify(n: Int) -> String {
+    'a: {
+        if n < 0 { break 'a "negative"; }
+        if n == 0 { break 'a "zero"; }
+        "positive"
+    }
+}
+
+# a bare `break` inside a labelled block names the innermost *loop*, never the
+# block — so `4` here and not `100`, which is what labelling a block would cost
+# if it took the bare break away from the loop around it
+fun bare_break_leaves_the_loop() -> Int {
+    var n = 0;
+    while n < 100 {
+        n += 1;
+        'blk: {
+            if n == 4 { break; }
+        }
+    }
+    return n;
+}
+
+# one `break` leaves the loop and the block together, with the loop's own local
+# live at the point it goes
+fun out_of_a_loop_and_a_block() -> Int {
+    'blk: {
+        for i in 0..10 {
+            var extra = i * 100;
+            if i == 3 { break 'blk extra + i; }
+        }
+        -1
+    }
+}
+
+# the value has to outlive a pending callee *and* the block's locals: `id` is
+# waiting for its argument when the break goes
+fun past_a_callee() -> Int {
+    'blk: {
+        var base = 5;
+        id({ var t = 2; break 'blk base + t + 30; });
+        0
+    }
+}
+
+# a captured local is detached by the same close-then-slide a loop's break uses
+fun capture_out() -> Int {
+    'blk: {
+        var captured = 11;
+        var get = || captured;
+        var v: Int = get();
+        if v == 11 { break 'blk v * 2; }
+        0
+    }
+}
+
+# an inner block's break passes straight through to the outer one it names
+fun nested() -> Int {
+    'outer: {
+        var a = 1;
+        'inner: {
+            if a == 1 { break 'outer 99; }
+            break 'inner 5;
+        }
+        7
+    }
+}
+
+# every exit is a break, so the block never falls through and the join is
+# theirs alone
+fun all_breaks(c: Bool) -> Int {
+    'a: {
+        if c { break 'a 1; }
+        break 'a 2;
+    }
+}
+
+# a bare `break 'a;` joins as `()`, so the block is a statement and the work
+# below it is what got skipped
+fun bare_labelled_break() -> Int {
+    var total = 0;
+    'a: {
+        total += 8;
+        if total == 8 { break 'a; }
+        total += 100;
+    }
+    return total;
+}
+
+# a block is an expression, so a labelled one can begin with a value already
+# pending — a callee waiting for its argument, an operand waiting for its
+# partner. Its breaks are measured from the *stack depth* it opened at, not
+# from the local count, which is m88's rule asked of the new target.
+fun under_a_pending_value(k: Int) -> Int {
+    var base = 100;
+    return add(7, 'blk: {
+        var local = 3;
+        if k == 0 { break 'blk base + local; }
+        1
+    }) + 'sum: { break 'sum k; };
+}
+
+# the `dyn` expectation reaches every exit, the tail included — m82's coercion
+# sites, one per exit rather than one per arm
+fun pick(c: Bool) -> String {
+    var s: dyn Shape = 'a: {
+        if c { break 'a Sq { n: 1 }; }
+        Ci { n: 2 }
+    };
+    return s.name();
+}
+
+fun main() {
+    print(classify(-3));
+    print(classify(0));
+    print(classify(7));
+    print(bare_break_leaves_the_loop());
+    print(out_of_a_loop_and_a_block());
+    print(past_a_callee());
+    print(capture_out());
+    print(nested());
+    print(all_breaks(true));
+    print(all_breaks(false));
+    print(bare_labelled_break());
+    print(under_a_pending_value(0));
+    print(under_a_pending_value(5));
+    print(pick(false));
+}

@@ -353,10 +353,21 @@ its bytes.
   and `cg_close_scope(loop->break_base)` detaches every capture on the way.
   Nothing else changed: no new opcode, no image change, and the jump is
   recorded on the named frame so it patches at that loop's landing pad.
+- A **labelled block** is the same frame with no back edge (`CgLoop.is_block`).
+  It costs `compile_block` one frame and one round of patching and nothing else,
+  because a block's ordinary exit already leaves the tail at the depth the block
+  opened at — which is exactly where a break's slide leaves its value. So the
+  landing pad *is* the block's own exit: nothing to emit there, and no jump over
+  a back edge because there is none. `is_block` also makes the frame invisible
+  to an unlabelled `break`, and that skip has to match `check_loop_target`'s to
+  the letter — two resolvers of one name agree only by asking the same question.
+  Its `continue_*` fields are never read: the checker refuses a `continue` that
+  names a block, which is the only way to reach them.
 - The one-byte operand bounds the *slot*, so `cg_add_local` checks that and not
   only the count: temporaries between locals push positions up faster than
   entries.
-- Blocks: compile stmts, compile tail (or `OP_UNIT`), then `OP_SLIDE n`.
+- Blocks: compile stmts, compile tail (or `OP_UNIT`), then `OP_SLIDE n`; a
+  labelled one patches its breaks to land right after that slide.
 - `and`/`or` compile to jump-based short-circuit; `if` always produces a
   value (`OP_UNIT` for a missing else).
 - `loop { .. }` (`compile_loop`) is `compile_while` with the condition and its

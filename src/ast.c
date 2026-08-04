@@ -1545,7 +1545,7 @@ void dump_expr(const Expr *e, int indent) {
     }
     break;
   case EXPR_BLOCK:
-    fprintf(stdout, "Block\n");
+    dump_label(e->as.block.label, "Block");
     for (int i = 0; i < e->as.block.stmt_count; i++) {
       dump_stmt(e->as.block.stmts[i], indent + 1);
     }

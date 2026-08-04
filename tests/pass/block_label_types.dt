@@ -1,0 +1,56 @@
+# What a labelled block's type is, at the ends of its range: nothing leaves it
+# at all (`Never`, like a `loop`), only breaks leave it, and a break's value
+# diverging is evidence for no type (m85's sibling rule, per exit).
+use std::panic::panic;
+
+# no exit reaches the end and there is no break, so the block is `Never` — the
+# same answer a `loop` nothing leaves gives, arrived at from the other side
+fun spin() -> Never {
+    'a: {
+        loop { }
+    }
+}
+
+fun never_falls_out() -> Never {
+    'a: {
+        return panic("gone");
+    }
+}
+
+# a break carrying a diverging value brings nothing to the join, so the tail is
+# what decides the type
+fun join_skips_a_diverging_break(c: Bool) -> Int {
+    'a: {
+        if c { break 'a panic("no answer"); }
+        7
+    }
+}
+
+# the join is over more than two exits, and a bare break contributes `()`
+fun unit_join(c: Bool) -> () {
+    'a: {
+        if c { break 'a; }
+        if not c { break 'a (); }
+    }
+}
+
+# a labelled block nests inside a loop's body without either shadowing the
+# other's name, and `continue` still reaches the loop through it
+fun mixed(xs: [Int]) -> Int {
+    var seen = 0;
+    'rows: for x in xs {
+        'cell: {
+            if x == 0 { break 'cell; }
+            if x < 0 { continue 'rows; }
+            seen += x;
+        }
+        seen += 1;
+    }
+    return seen;
+}
+
+fun main() {
+    var _a: Int = join_skips_a_diverging_break(false);
+    var _b: () = unit_join(true);
+    var _c: Int = mixed([1, 0, -1, 2]);
+}

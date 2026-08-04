@@ -510,7 +510,8 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   a labelled break's hint only matters where the value cannot type without it,
   since `check_flow_into` re-derives the coercion from the target anyway — so
   the test had to be sharpened to an `if` whose arms are two different impls.
-  Left over: no label on a plain block, and no `unused_label` lint.
+  Left over: no label on a plain block (milestone 98), and no `unused_label`
+  lint.
 
 - **97. A warning you can insist on** (`9152764`) — `-Werror`, `-Werror=<lint>`,
   `-Wno-<lint>`, `-W<lint>`. Design: `language.md` "Lint levels from the command
@@ -535,6 +536,37 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   to four: `-W<lint>` is also the "stop being fatal" spelling, so there is no
   `-Wno-error=`. Sabotage 7/7 bit. Left over: no `forbid`, and `-W` takes no
   path, so a level is all-or-nothing over a compile.
+
+- **98. The block you can leave** (`TBD`) — `'a: { .. break 'a v; .. }`.
+  Design: `language.md` "Statements and control flow" (the labelled-block
+  bullet), `architecture.md` parser notables + the `CheckLoop` section,
+  `runtime.md` `CgLoop`, `grammar.ebnf` `labelled`/`block`. Pinned by
+  `tests/run/labelled_block.dt`, `tests/pass/block_label_types.dt`, four
+  `tests/fail/block_label_*`, and a case in `tests/warn/unreachable_code.dt`.
+
+  A label may now name a block, which gives one an early exit carrying a value.
+  **THE FINDING: milestone 87's rule was never about having one exit — it was
+  about the other exit having a value to agree with.** A `while` cannot take
+  `break x` because finishing brings nothing to the join; a `loop` can because it
+  has no other exit; a block can because its other exit is its *tail*, which
+  carries one. So the tail is not a special case to be reconciled with the
+  breaks, it **is** a break — `check_join_exit` was factored out of `STMT_BREAK`
+  and the tail handed to it, after which "no exit ⇒ `!`", the `dyn` expectation
+  per exit, `!` skipped as a sibling and poison absorbing are all inherited
+  rather than restated. Codegen was the same story one level down: a block's
+  ordinary exit already leaves its value at the depth the block opened at, which
+  is where a break's slide leaves one, so the landing pad *is* the block's exit —
+  one frame, one round of patching, **no opcode, no image change, no new
+  arithmetic**. What had to be *decided* rather than derived is the two things a
+  label must not take away: an unlabelled `break` skips block frames (else
+  labelling a block steals the enclosing loop's `break`), and `continue` refuses
+  one outright (a block has no next turn). The skip is written twice, in
+  `check_loop_target` and `cg_loop_target`, which is milestone 91's "two
+  resolvers agree only by asking the same question" — and sabotaging either half
+  bites. Sabotage 7/7 bit, but **the depth one was a no-op at 612/612 first**:
+  nothing in the suite opened a labelled block with a value already pending, so
+  `break_depth = local_count` was indistinguishable from `= cg->depth` until a
+  test put one in an argument. Left over: no `unused_label` lint.
 
 ## Next (in recommended order)
 
@@ -773,11 +805,10 @@ via `Module.decl_base`) and is not part of the main line.
 - a refutable `var` binding whose column type inference never pinned down is
   accepted (the tri-state answer reports nothing) and traps at runtime via
   `OP_MATCH_FAIL` instead of at compile time
-- a label prefixes a loop and nothing else (milestone 96), so Rust's
-  `'a: { break 'a v; }` has no spelling: a plain block still has only its tail
-  expression to give a value. Nor is there an `unused_label` lint — a label
-  nothing names costs a reader the same as an unused binding, and milestone 92's
-  machinery is the shape it would take
+- there is no `unused_label` lint — a label nothing names costs a reader the
+  same as an unused binding, and milestone 92's machinery is the shape it would
+  take. Milestone 98 widened what one can name (a block as well as a loop)
+  without adding the question
 - a lint's level is **all-or-nothing over a compile**: `-W` (milestone 97) takes
   no module path, so one module cannot be held to a level the rest is not, and
   the only per-declaration control is `@allow`, which only goes downwards. Nor

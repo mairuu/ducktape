@@ -189,6 +189,38 @@ under the field's name, so ignoring one field takes the long form
   cannot escape a closure. A label an enclosing loop already declared is an
   error rather than a shadowing: the outer one would be unreachable by name,
   and there is no reason to write it.
+- A **block** may be labelled too, which is the one thing a label names that is
+  not a loop: `'a: { .. break 'a v; .. }` leaves the block early with a value.
+  A block has two kinds of exit — every `break` naming it, and running off the
+  end with the tail — and **both carry a value**, so the block's type is the
+  join of all of them:
+
+  ```
+  fun classify(n: Int) -> String {
+      'a: {
+          if n < 0 { break 'a "negative"; }
+          if n == 0 { break 'a "zero"; }
+          "positive"
+      }
+  }
+  ```
+
+  That is the difference between a block and a `while`, which also leaves by
+  finishing but brings nothing to the join: a value goes to a `loop` (no other
+  exit) or to a block (an other exit that has one), never to a `while`/`for`.
+  With every exit a `break` the tail is unreachable and warns
+  (`unreachable_code`) while still being checked; with no exit at all the block
+  is `!`, exactly as a `loop` nothing leaves is.
+
+  Two restrictions keep the feature from taking anything away. An **unlabelled**
+  `break` always names the innermost *loop* and skips any block in between, so
+  labelling a block never quietly steals the `break` of the loop around it —
+  with no loop in scope, a bare `break` inside a labelled block is still "break
+  statement not within a loop". And **`continue` cannot name a block**: a block
+  runs once, so there is no next turn to go to. Otherwise a block is an ordinary
+  target — it shares one scope with the loops, so a label a loop declared cannot
+  be reused by a block inside it or the reverse, and one `break` may leave a
+  block and several loops at once.
 - Ranges: `a..b`, `a..=b` — Int-only, first-class values (`var r = 0..10;`) of
   type `Range`, which is nameable (`fun span(r: Range)`) and carries one
   method, `r.iter()`.
@@ -2185,8 +2217,8 @@ fun serve() -> Never { while true { } }    # got '()': a `while` may always end
 An endless loop is the one form of divergence that is a *shape* rather than a
 type: `loop` takes no header, so there is no condition anything would have to
 prove constant, and the only question left is whether a `break` names this loop
-— which the checker answers while walking the body, since a `break` carries no
-label and so always means the innermost one. `while true { }` stays `()` for
+— which the checker answers while walking the body, by collecting the breaks on
+the loop's own frame rather than counting depth. `while true { }` stays `()` for
 exactly the reason `loop` was worth adding: reading it as endless would mean
 reading its condition, and the checker reads types rather than values.
 
@@ -3008,7 +3040,8 @@ See the gaps table below for what suppression still cannot do.
 | two spellings of one file (symlinks, unusual paths) | a module's source is derived from its place in the tree, so the only path that can be spelled twice is the entry file's — and dedup there is lexical |
 | top-level `var` (globals) | parses, then a registration diagnostic: move it into a function |
 | a `break` that carries a value out of a `while`/`for` | `loop { break x; }` works (milestone 87), but the other two loops also leave by *finishing*, and that exit has no value to join with — so `break x` in one is an error and both stay `()` |
-| a label on a plain block (`'a: { break 'a v; }`) | a label prefixes a loop and nothing else, so a block still has only its tail expression to give a value |
+| `continue` naming a labelled block | a block runs once, so there is no next turn to reach — a label on a block buys an exit, not an iteration |
+| a lint for a label nothing names | an unused label costs a reader what an unused binding does, and milestone 92's machinery is the shape it would take, but no `unused_label` is emitted |
 | reading `while true { }` as endless | its condition is an expression, and the checker reads types rather than values — `loop { }` is the spelling that asks no condition (milestone 86) |
 | `!` in a position asking a structural question | `if panic("x") { }`, `for x in panic("x")`, and `r?` inside a `-> Never` function are all refused: those sites ask "is it a `Bool`/an `Iterator`/the same enum?", not "does it flow here?", and `Never` answers none of them. Harmless, since the code below is unreachable either way |
 | tuple-struct struct-patterns `Pair { a, b }` | write the constructor spelling `Pair(a, b)` — "matching tuple struct with struct pattern syntax is not allowed" |

@@ -50,11 +50,15 @@ Notables:
   promoted like any other. `break 'l? expr?` needs no lookahead — a block is
   not an expression primary, so anything but `;` after it starts a value, and
   the scanner has already told a label from a character literal.
-- A label is consumed in `parse_primary` ahead of the three loop forms, and
-  whichever follows takes it; nothing else may follow one, which is what keeps
-  a label from being an expression. The one place the scanner's fork misleads
-  is an unclosed character literal (`'a;`), so a one-character label with no
-  `:` behind it gets a note naming the likelier mistake.
+- A label is consumed in `parse_primary` ahead of the three loop forms and the
+  block form, and whichever follows takes it; nothing else may follow one, which
+  is what keeps a label from being an expression. A labelled block is an
+  `EXPR_BLOCK` with its `label` set rather than a node of its own — the label
+  changes what can leave the block, not what a block is — so it is also the one
+  block that reaches `parse_stmt`, and hence the one that has to be named in the
+  tail-promotion list. The one place the scanner's fork misleads is an unclosed
+  character literal (`'a;`), so a one-character label with no `:` behind it gets
+  a note naming the likelier mistake.
 - `parse_closure` — `|params| ( -> type )? ( { block } | expr )`. The body has
   no introducer token: a `{` is read as the block form and anything else starts
   an expression, so the two are told apart by lookahead rather than by a `=>`.
@@ -2150,44 +2154,62 @@ block reports its own. A dead tail does not change the block's *type*: what it
 would evaluate to and whether it runs are separate questions.
 
 The fourth thing that types `!` is a `loop` with no exit, and finding one is why
-`CheckCtx` keeps a **stack** of enclosing loops (`CheckLoop`, innermost first)
-rather than the depth counter it used to. A depth answers "is there a loop at
-all", which is all `break`/`continue` needed; "does a `break` leave *this* one"
-needs the frame itself. `check_loop_target` turns a `break`/`continue` into the
-frame it leaves — the head of the list unlabelled, the first frame whose
-`label` matches otherwise — and everything downstream reads *that* frame rather
-than the head, which is the whole of what a label costs the checker. A frame
-with no name is only ever reachable as the head, so an unlabelled inner loop
-cannot hide an outer named one. A closure body sets the list to NULL, which is
-also why a label is out of scope inside a closure — the same boundary `break`
-could never cross anyway.
+`CheckCtx` keeps a **stack** of enclosing break targets (`CheckLoop`, innermost
+first) rather than the depth counter it used to. A depth answers "is there a
+loop at all", which is all `break`/`continue` needed; "does a `break` leave
+*this* one" needs the frame itself. `check_loop_target` turns a
+`break`/`continue` into the frame it leaves — the innermost frame that is not a
+block unlabelled, the first frame whose `label` matches otherwise — and
+everything downstream reads *that* frame rather than the head, which is the
+whole of what a label costs the checker. A frame with no name is only ever
+reachable as the innermost loop, so an unlabelled inner loop cannot hide an
+outer named one. A closure body sets the list to NULL, which is also why a label
+is out of scope inside a closure — the same boundary `break` could never cross
+anyway.
 
-`check_label_shadow` refuses a label an enclosing loop already declared, rather
-than resolving innermost-first the way a variable does: the outer loop would be
-unreachable by name from inside the inner one, and renaming is free.
+`check_label_shadow` refuses a label an enclosing target already declared, rather
+than resolving innermost-first the way a variable does: the outer one would be
+unreachable by name from inside the inner one, and renaming is free. One list
+holds loops and labelled blocks together, so the rule spans both kinds without
+knowing there are two.
 
-What the frame accumulates is `break_type`, the **join of every break's value**,
-which is the `loop`'s type — divergence and a value being the same answer read
-at two ends of the same range. Each `break` joins as siblings do (`EXPR_IF`'s
-arms, an array's elements): a `!` value is evidence for nothing and is skipped,
-so the first non-diverging break establishes the type and the rest unify into
-it; a bare `break;` joins as `()`; a poisoned one makes the join poison so a
-single bad break is a single diagnostic. `NULL` after the body means nothing
-ever leaves — no break at all, or every one of them diverging first — and that
-is the `!` case, so the node itself records nothing. The frame also carries
-`want`, the `dyn` expectation `dyn_expectation` reads off the loop's hint: a
-`loop` is a `dyn` position in exactly the way an `if` is, one arm per break.
-A labelled break takes its hint from the frame it *names*, so the target is
-resolved before the value — which matters only where the value cannot type
-without it (an `if` whose arms are two different impls), since the
-`check_flow_into` that follows re-derives the coercion from the target anyway.
+What the frame accumulates is `break_type`, the **join of every exit's value**,
+which is the target's type — divergence and a value being the same answer read
+at two ends of the same range. `check_join_exit` folds one exit in, and every
+exit goes through it: each joins as siblings do (`EXPR_IF`'s arms, an array's
+elements), so a `!` value is evidence for nothing and is skipped, the first
+non-diverging exit establishes the type and the rest unify into it; a bare
+`break;` joins as `()`; a poisoned one makes the join poison so a single bad
+exit is a single diagnostic. `NULL` after the body means nothing ever leaves —
+no exit at all, or every one of them diverging first — and that is the `!` case,
+so the node itself records nothing. The frame also carries `want`, the `dyn`
+expectation `dyn_expectation` reads off the target's hint: a `loop` is a `dyn`
+position in exactly the way an `if` is, one arm per exit. A labelled break takes
+its hint from the frame it *names*, so the target is resolved before the value —
+which matters only where the value cannot type without it (an `if` whose arms
+are two different impls), since the `check_flow_into` that follows re-derives
+the coercion from the target anyway.
 
-Only a `loop` frame accepts a value at all, which `CheckLoop.kind` says. A
-`while` or `for` leaves by finishing as well as by breaking, and that exit has
-nothing to bring to the join — so the refusal is about the *other* exit, not
-about the break, and the diagnostic names the construct that has one. With a
-label the question is asked of the named loop, so `break 'rows v` where `'rows`
-is a `for` is refused exactly as the unlabelled form is.
+Which frames take a value is what `CheckLoop.kind` is for, and the rule is about
+the target's *other* exit rather than about the break. A `while` or `for` leaves
+by finishing and that exit brings nothing to the join, so a value is refused and
+the diagnostic names the construct. A `loop` has no other exit and a labelled
+block has one that does carry a value — its tail — so both accept one. With a
+label the question is asked of the named target, so `break 'rows v` where
+`'rows` is a `for` is refused exactly as the unlabelled form is.
+
+A **labelled block** is therefore `EXPR_BLOCK` doing what it already did with one
+frame pushed around it, and its tail handed to `check_join_exit` like any other
+exit — the block's type is what comes out of the join, not what the tail said.
+Everything else follows from that: a block whose every exit is a `break` has a
+dead tail, which `warn_unreachable` reports and the join still reads (an
+unreachable exit is checked like a dead `break` already was); a block nothing
+leaves is `!` for the same reason a `loop` is. Two rules are written down rather
+than derived. An unlabelled `break` **skips block frames**, so labelling a block
+cannot take the bare `break` of the loop around it — the note on "break
+statement not within a loop" names the label when a block is the only thing in
+scope. And `continue` **refuses a block frame** outright: a block runs once, so
+`continue_*` on the codegen side is never even reached for one.
 
 When the pattern cannot be checked — a poisoned initializer, or a mismatch
 that stopped the walk partway — `bind_pattern_poison` defines the remaining

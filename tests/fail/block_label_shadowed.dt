@@ -1,0 +1,10 @@
+#! expect: label 'dup is already used by an enclosing block
+# The shadow rule spans both kinds of target: one list holds the loops and the
+# labelled blocks, so a loop cannot hide a block's name any more than a loop's.
+fun main() {
+    'dup: {
+        'dup: loop {
+            break 'dup;
+        }
+    }
+}

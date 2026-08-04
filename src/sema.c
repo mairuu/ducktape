@@ -4399,22 +4399,39 @@ static const char *check_loop_name(CheckLoopKind kind) {
     return "while";
   case CHECK_LOOP_FOR:
     return "for";
+  case CHECK_LOOP_BLOCK:
+    return "block";
   }
   return "loop";
 }
 
-// Which loop a `break`/`continue` leaves. Unlabelled it is the innermost one,
-// labelled it is whichever declared the name — so the answer is a frame rather
-// than a depth, and everything downstream reads the frame it was given instead
-// of the head of the list. NULL means the question was already answered with a
-// diagnostic.
+// what a frame is, for a message that does not care which loop form it is
+static const char *check_target_name(CheckLoopKind kind) {
+  return kind == CHECK_LOOP_BLOCK ? "block" : "loop";
+}
+
+// Which target a `break`/`continue` leaves. Unlabelled it is the innermost
+// *loop* — a labelled block in between is skipped, so naming a block never
+// takes a bare `break` away from the loop around it — and labelled it is
+// whichever declared the name. So the answer is a frame rather than a depth,
+// and everything downstream reads the frame it was given instead of the head of
+// the list. NULL means the question was already answered with a diagnostic.
 static CheckLoop *check_loop_target(CheckCtx *ctx, LoopLabel label, Span span,
                                     const char *keyword) {
   if (label.name.len == 0) {
-    if (ctx->loops == NULL) {
-      diag_error(ctx->diags, span, "%s statement not within a loop", keyword);
+    for (CheckLoop *loop = ctx->loops; loop != NULL; loop = loop->parent) {
+      if (loop->kind != CHECK_LOOP_BLOCK) {
+        return loop;
+      }
     }
-    return ctx->loops;
+    diag_error(ctx->diags, span, "%s statement not within a loop", keyword);
+    if (ctx->loops != NULL) {
+      diag_note(ctx->diags, ctx->loops->label.span,
+                "this block is labelled, but a bare '%s' names a loop: write "
+                "'%s " SV_FMT "' to leave the block",
+                keyword, keyword, SV_ARG(ctx->loops->label.name));
+    }
+    return NULL;
   }
   for (CheckLoop *loop = ctx->loops; loop != NULL; loop = loop->parent) {
     if (sv_equal(loop->label.name, label.name)) {
@@ -4424,12 +4441,12 @@ static CheckLoop *check_loop_target(CheckCtx *ctx, LoopLabel label, Span span,
   // a closure resets the list, so an enclosing loop is genuinely out of scope
   // here rather than merely unnamed — the message says "in scope" for that.
   // the lexeme keeps its leading quote, so it is never wrapped in another pair
-  diag_error(ctx->diags, label.span, "no loop labelled " SV_FMT " is in scope",
+  diag_error(ctx->diags, label.span, "nothing labelled " SV_FMT " is in scope",
              SV_ARG(label.name));
   return NULL;
 }
 
-// A label a nearer loop already declared would be unreachable by name, and
+// A label a nearer target already declared would be unreachable by name, and
 // there is no reason to write one — so this is refused outright rather than
 // resolved innermost-first the way a shadowed variable is.
 static void check_label_shadow(CheckCtx *ctx, LoopLabel label) {
@@ -4438,12 +4455,49 @@ static void check_label_shadow(CheckCtx *ctx, LoopLabel label) {
   }
   for (CheckLoop *loop = ctx->loops; loop != NULL; loop = loop->parent) {
     if (sv_equal(loop->label.name, label.name)) {
+      const char *what = check_target_name(loop->kind);
       diag_error(ctx->diags, label.span,
-                 "label " SV_FMT " is already used by an enclosing loop",
-                 SV_ARG(label.name));
-      diag_note(ctx->diags, loop->label.span, "the enclosing loop is here");
+                 "label " SV_FMT " is already used by an enclosing %s",
+                 SV_ARG(label.name), what);
+      diag_note(ctx->diags, loop->label.span, "the enclosing %s is here", what);
       return;
     }
+  }
+}
+
+// Fold one exit's value into a target's join. Every exit asks the same
+// question — a `break`'s value, a bare `break`'s implicit `()`, and a labelled
+// block's tail are three spellings of "this is what leaves here" — so they
+// share the rule rather than agreeing by hand. `value` is the expression
+// carrying it, or NULL where there is none to coerce.
+static void check_join_exit(CheckCtx *ctx, CheckLoop *loop, Expr *value,
+                            Type *val_ty, Span span) {
+  if (type_is_poison(val_ty)) {
+    loop->break_type = ctx->tc->t_poison; // absorbs, so one bad exit is one
+    return;                               // diagnostic and not a wrong type
+  }
+  if (loop->break_type != NULL && type_is_poison(loop->break_type)) {
+    return;
+  }
+  // an exit whose value diverges never reaches the target's exit, so it is
+  // evidence for no type at all — the sibling rule m85 settled, applied to
+  // however many exits one target has rather than to two arms.
+  if (val_ty->kind == TY_NEVER) {
+    return;
+  }
+  if (loop->want != NULL) {
+    bool ok =
+        value != NULL
+            ? check_flow_into(ctx, value, val_ty, loop->want, span)
+            : infer_unify(&ctx->infer, loop->want, val_ty, ctx->diags, span);
+    loop->break_type = ok ? loop->want : ctx->tc->t_poison;
+    return;
+  }
+  if (loop->break_type == NULL) {
+    loop->break_type = val_ty;
+  } else if (!infer_unify(&ctx->infer, loop->break_type, val_ty, ctx->diags,
+                          span)) {
+    loop->break_type = ctx->tc->t_poison;
   }
 }
 
@@ -4508,46 +4562,29 @@ static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
     if (loop == NULL) {
       break;
     }
-    if (value != NULL && loop->kind != CHECK_LOOP_LOOP) {
+    if (value != NULL &&
+        (loop->kind == CHECK_LOOP_WHILE || loop->kind == CHECK_LOOP_FOR)) {
       diag_error(ctx->diags, stmt->span,
                  "a '%s' loop's break cannot carry a value, because the loop "
                  "also leaves by finishing and that exit has none to agree "
-                 "with; only a 'loop' has no other way out",
+                 "with",
                  check_loop_name(loop->kind));
       break;
     }
-    if (type_is_poison(val_ty)) {
-      loop->break_type = ctx->tc->t_poison; // absorbs, so one bad break is one
-      break;                                // diagnostic and not a wrong type
-    }
-    if (loop->break_type != NULL && type_is_poison(loop->break_type)) {
-      break;
-    }
-    // a break whose value diverges never reaches the loop's exit, so it is
-    // evidence for no type at all — the sibling rule m85 settled, applied to
-    // however many breaks one loop has rather than to two arms.
-    if (val_ty->kind == TY_NEVER) {
-      break;
-    }
-    if (loop->want != NULL) {
-      bool ok = value != NULL ? check_flow_into(ctx, value, val_ty, loop->want,
-                                                stmt->span)
-                              : infer_unify(&ctx->infer, loop->want, val_ty,
-                                            ctx->diags, stmt->span);
-      loop->break_type = ok ? loop->want : ctx->tc->t_poison;
-      break;
-    }
-    if (loop->break_type == NULL) {
-      loop->break_type = val_ty;
-    } else if (!infer_unify(&ctx->infer, loop->break_type, val_ty, ctx->diags,
-                            stmt->span)) {
-      loop->break_type = ctx->tc->t_poison;
-    }
+    check_join_exit(ctx, loop, value, val_ty, stmt->span);
     break;
   }
   case STMT_CONTINUE: {
-    check_loop_target(ctx, stmt->as.continue_stmt.label, stmt->span,
-                      "continue");
+    CheckLoop *loop = check_loop_target(ctx, stmt->as.continue_stmt.label,
+                                        stmt->span, "continue");
+    // a block runs once, so there is no next turn for a `continue` to reach —
+    // the one thing a label on a block does not buy.
+    if (loop != NULL && loop->kind == CHECK_LOOP_BLOCK) {
+      diag_error(ctx->diags, stmt->span,
+                 "'continue' cannot name a block: " SV_FMT " labels a block, "
+                 "which runs once and has no next turn to go to",
+                 SV_ARG(loop->label.name));
+    }
     break;
   }
   case STMT_RETURN: {
@@ -8133,7 +8170,20 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     break;
   case EXPR_BLOCK: {
     ExprBlock *block = &expr->as.block;
+    bool labelled = block->label.name.len > 0;
     ctx->vscope = vscope_push(ctx->vscope, false, false, ctx->al);
+
+    // a labelled block is a break target, so it collects a join exactly as a
+    // `loop` does — and the hint reaches its breaks for the same reason, one
+    // `dyn` coercion site per exit (m82).
+    CheckLoop frame = {.kind = CHECK_LOOP_BLOCK,
+                       .label = block->label,
+                       .want = dyn_expectation(ctx, hint),
+                       .parent = ctx->loops};
+    if (labelled) {
+      check_label_shadow(ctx, block->label);
+      ctx->loops = &frame;
+    }
 
     for (int i = 0; i < block->stmt_count; i++) {
       resolve_stmt(ctx, block->stmts[i]);
@@ -8157,6 +8207,19 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     }
 
     ctx->vscope = vscope_pop(ctx->vscope, ctx->diags);
+
+    // The tail is the exit a `loop` has not got, and it is otherwise no
+    // different from a `break`: fold it into the same join and the block's type
+    // is what comes out. A block that diverges contributes nothing (`!` is
+    // evidence for no type), so with every exit a `break` the answer is theirs
+    // alone — and with no exit at all the block is `Never`, just like a `loop`.
+    if (labelled) {
+      ctx->loops = frame.parent;
+      Span exit_span =
+          block->tail_expr != NULL ? block->tail_expr->span : expr->span;
+      check_join_exit(ctx, &frame, block->tail_expr, result, exit_span);
+      result = frame.break_type != NULL ? frame.break_type : ctx->tc->t_never;
+    }
     break;
   }
   case EXPR_BINARY: {

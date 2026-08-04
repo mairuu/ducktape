@@ -328,6 +328,14 @@ pub fun process_data<T>(_data: T) -> Result<Int, String> {
         break -1;
     };
 
+    # a label on a block makes it a `break` target too — its type is the join of
+    # the breaks and the tail, the exit a `loop` has not got
+    var _graded = 'grade: {
+        if spins < 0 { break 'grade "impossible"; }
+        if spins > 100 { break 'grade "huge"; }
+        "ordinary"
+    };
+
     var xs = [1, 2, 3];
     var _first = xs[0];
 

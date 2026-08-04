@@ -1,0 +1,8 @@
+#! expect: 'continue' cannot name a block
+# A label on a block buys an exit, not an iteration: the block runs once, so
+# there is no next turn for a `continue` to reach.
+fun main() {
+    'blk: {
+        continue 'blk;
+    }
+}

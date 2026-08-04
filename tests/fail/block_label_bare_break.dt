@@ -1,0 +1,9 @@
+#! expect: break statement not within a loop
+# A bare `break` names the innermost loop and never a block, so labelling a
+# block cannot quietly take one over. With no loop in scope there is nothing
+# left for it to name.
+fun main() {
+    'blk: {
+        break;
+    }
+}

@@ -28,6 +28,16 @@ fun after_diverging_if() -> Int {
     9
 }
 
+# a labelled block's tail is one of its exits, so a dead one is still checked
+# and still joins with the breaks — being unreachable is what the warning is
+# for, not a reason to stop reading it
+fun dead_tail_of_a_labelled_block() -> Int {
+    'a: {
+        break 'a 1;
+        2
+    }
+}
+
 fun in_a_loop() -> Int {
     var i = 0;
     while i < 3 {

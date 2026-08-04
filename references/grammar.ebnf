@@ -185,22 +185,31 @@ assocSuffix    = ( "." IDENT )+ ;                 (* associated types *)
 block          = "{" stmt* expr? "}" ;
                  (* the trailing expr (no ";") is the block's value; a
                     trailing block-form if/match/loop also counts as the tail,
-                    a label on the loop included *)
+                    a label on the loop included, as does a labelled block —
+                    which is the only block that can reach the tail slot as a
+                    *statement*, an unlabelled `{` being no statement head.
+                    a labelled block's value is that tail joined with every
+                    `break` naming it *)
 
 stmt           = varDecl
                | "return" expr? ";"
                | "break" LABEL? expr? ";"
-                 (* the value is a `loop`'s; a while/for break may not have one.
-                    the LABEL picks which enclosing loop is left, so the rule
-                    above is judged against the *named* loop, not the innermost *)
+                 (* the value goes to a `loop` or a labelled block, the two
+                    targets whose other exit has one to agree with; a while/for
+                    break may not carry one. the LABEL picks which enclosing
+                    target is left, so the rule above is judged against the
+                    *named* one. unlabelled means the innermost loop, never a
+                    block *)
                | "continue" LABEL? ";"
+                 (* the LABEL may not name a block: it runs once *)
                | expr ";"
                | labelled | ifExpr | matchExpr | whileExpr | loopExpr | forExpr ;
                  (* block-form expressions need no ";" as statements *)
 
-labelled       = LABEL ":" ( whileExpr | loopExpr | forExpr ) ;
-                 (* a label prefixes a loop and nothing else, so it is never an
-                    expression in its own right *)
+labelled       = LABEL ":" ( whileExpr | loopExpr | forExpr | block ) ;
+                 (* a label prefixes something a `break` can leave — the three
+                    loops and a block — so it is never an expression in its own
+                    right *)
 
 (* ── expressions (lowest to highest precedence) ───────────────────────── *)
 

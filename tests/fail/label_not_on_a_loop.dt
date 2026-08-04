@@ -1,6 +1,6 @@
-#! expect: a label may only name a 'loop', a 'while' or a 'for'
-# A label declares a name for a loop and prefixes nothing else, so it is never
-# an expression in its own right.
+#! expect: a label may only name a 'loop', a 'while', a 'for' or a block
+# A label names something a `break` can leave — the three loops and a block —
+# and prefixes nothing else, so it is never an expression in its own right.
 fun main() {
     'here: if true { }
 }

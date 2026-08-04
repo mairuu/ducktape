@@ -36,7 +36,12 @@ typedef struct {
 typedef struct CgLoop {
   int start; // ip of the loop condition (OP_LOOP target for `while`)
 
-  StringView label; // the name this loop declared, or empty
+  StringView label; // the name this target declared, or empty
+
+  // a labelled block rather than a loop: no back edge, and invisible to an
+  // unlabelled `break`. Its `continue_*` fields are never read — the checker
+  // refuses a `continue` that names a block, which is the only way here.
+  bool is_block;
 
   int break_jumps[CG_MAX_BREAKS];
   int break_count;
@@ -99,15 +104,22 @@ typedef struct Cg {
   int self_slot; // -1 outside a method; the frame slot holding `self`
 } Cg;
 
-// The frame a `break`/`continue` leaves: the innermost loop unlabelled, the
+// The frame a `break`/`continue` leaves: the innermost *loop* unlabelled, the
 // one that declared the name otherwise. Everything the two statements emit is
 // already measured *from a frame* — `break_depth`, `continue_depth`, the two
-// bases — rather than from the head of the list, so leaving several loops at
+// bases — rather than from the head of the list, so leaving several targets at
 // once costs nothing beyond finding the right frame to measure against. The
 // checker has refused every name that is not here, so a miss is impossible.
+// The block skip has to match `check_loop_target`'s to the letter: two
+// resolvers of one name can only be made to agree by asking the same question.
 static CgLoop *cg_loop_target(Cg *cg, LoopLabel label) {
   if (label.name.len == 0) {
-    return cg->loop;
+    for (CgLoop *loop = cg->loop; loop != NULL; loop = loop->parent) {
+      if (!loop->is_block) {
+        return loop;
+      }
+    }
+    return NULL;
   }
   for (CgLoop *loop = cg->loop; loop != NULL; loop = loop->parent) {
     if (sv_equal(loop->label, label.name)) {
@@ -825,9 +837,27 @@ static void compile_stmt_inner(Cg *cg, Stmt *stmt) {
   }
 }
 
+// A label costs a block one frame and one round of patching, and nothing else:
+// its breaks each arrive having slid their value down to the block's entry
+// depth, which is exactly where falling off the end leaves the tail. So the
+// landing pad is the block's own exit — there is nothing to emit at it, and no
+// jump over anything, because a block has no back edge to jump over.
 static void compile_block(Cg *cg, Expr *expr) {
   ExprBlock *block = &expr->as.block;
   int saved_locals = cg->local_count;
+
+  CgLoop frame = {
+      .label = block->label.name,
+      .is_block = true,
+      .break_base = saved_locals,
+      .break_depth = cg->depth,
+      .break_takes_value = true,
+      .parent = cg->loop,
+  };
+  bool labelled = block->label.name.len > 0;
+  if (labelled) {
+    cg->loop = &frame;
+  }
 
   for (int i = 0; i < block->stmt_count; i++) {
     compile_stmt(cg, block->stmts[i]);
@@ -842,6 +872,13 @@ static void compile_block(Cg *cg, Expr *expr) {
   cg_close_scope(cg, saved_locals);
   emit_slide(cg, cg->local_count - saved_locals);
   cg->local_count = saved_locals;
+
+  if (labelled) {
+    for (int i = 0; i < frame.break_count; i++) {
+      patch_jump(cg, frame.break_jumps[i]);
+    }
+    cg->loop = frame.parent;
+  }
 }
 
 static void compile_binary(Cg *cg, Expr *expr) {

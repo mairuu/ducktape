@@ -513,32 +513,38 @@ static inline Type *rctx_resolve(ResolveCtx *ctx, TypeNode *node) {
 // CheckCtx
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// the loops enclosing the expression being checked, innermost first. An
-// unlabelled `break` names the head of this list and a labelled one searches
-// it — which is what lets a `loop` be asked whether anything leaves it. A
-// depth counter cannot answer either question, only "is there a loop at all".
+// the break targets enclosing the expression being checked, innermost first:
+// the loops, and every labelled block. An unlabelled `break` names the
+// innermost *loop* in this list and a labelled one searches all of it — which
+// is what lets a `loop` be asked whether anything leaves it. A depth counter
+// cannot answer either question, only "is there a loop at all".
 typedef enum {
   CHECK_LOOP_LOOP,
   CHECK_LOOP_WHILE,
   CHECK_LOOP_FOR,
+  CHECK_LOOP_BLOCK,
 } CheckLoopKind;
 
 typedef struct CheckLoop {
-  // Which construct this frame is. Only a `loop` leaves *solely* through its
-  // breaks, so only a `loop` has a value for one to carry; the other two also
-  // leave by finishing, and that exit brings none to the join. The name is
-  // kept so the refusal can say which construct it was.
+  // Which construct this frame is, which decides two things. A `while` or `for`
+  // also leaves by *finishing* and that exit carries nothing, so a break into
+  // one may bring no value; a `loop` (no other exit) and a labelled block (an
+  // other exit that does carry one — its tail) both take a value. And only a
+  // block is skipped by an unlabelled `break`. The name is kept so a refusal
+  // can say which construct it was.
   CheckLoopKind kind;
-  // the name this loop declared, or an empty one. A frame with no name is
-  // reachable only as the head of the list, so an inner unlabelled loop never
+  // the name this target declared, or an empty one. A frame with no name is
+  // reachable only as the innermost loop, so an inner unlabelled loop never
   // hides an outer labelled one from a `break` that names it.
   LoopLabel label;
-  // The join of every break's value so far, or NULL while none has landed —
-  // which is the whole of the loop's type. NULL after the body means nothing
+  // The join of every exit's value so far, or NULL while none has landed —
+  // which is the whole of the target's type. NULL after the body means nothing
   // leaves (no break at all, or every one of them diverging before it does),
-  // so the loop is `Never`. A bare `break` joins as `()`.
+  // so the target is `Never`. A bare `break` joins as `()`. A labelled block
+  // folds its own tail in here too: falling off the end is an exit like any
+  // other, and it is the one a `loop` does not have.
   Type *break_type;
-  Type *want; // a `dyn` expectation from the loop's hint, reaching each break
+  Type *want; // a `dyn` expectation from the target's hint, reaching each exit
   struct CheckLoop *parent;
 } CheckLoop;
 

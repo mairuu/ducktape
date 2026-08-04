@@ -1,4 +1,4 @@
-#! expect: no loop labelled 'outer is in scope
+#! expect: nothing labelled 'outer is in scope
 # A closure is its own body: the enclosing loops are not its to leave, so their
 # labels are out of scope inside it exactly as they are for a bare `break`.
 fun call(f: fun() -> Int) -> Int { f() }

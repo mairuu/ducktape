@@ -1059,7 +1059,23 @@ typedef struct {
   VariantDef *err_variant; // ...and Err(E); both NULL until resolved
 } ExprPropagate;
 
+// A loop's or labelled block's name, or `name.len == 0` when it has none.
+// Every loop form carries one, a block may, and every `break`/`continue` may
+// name one — so the pair travels together rather than being two fields repeated
+// six times. The name keeps its leading quote, so a diagnostic prints it
+// exactly as it was written.
 typedef struct {
+  StringView name;
+  Span span;
+} LoopLabel;
+
+// A label makes the block a `break` target (`'a: { .. break 'a v; .. }`) and
+// changes nothing else about it — which is why it is a field here rather than a
+// node of its own. The exits then number two kinds instead of one: every
+// `break` naming it, and running off the end with the tail. Both carry a value,
+// so the block's type is the join of all of them.
+typedef struct {
+  LoopLabel label; // absent name = an ordinary block, which nothing can break
   Stmt **stmts;
   int stmt_count;
   Expr *tail_expr;
@@ -1074,15 +1090,6 @@ typedef struct {
   Expr *then_block;
   Expr *else_branch;
 } ExprIf;
-
-// A loop's name, or `name.len == 0` when it has none. Every loop form carries
-// one and every `break`/`continue` may name one, so the pair travels together
-// rather than being two fields repeated five times. The name keeps its leading
-// quote, so a diagnostic prints it exactly as it was written.
-typedef struct {
-  StringView name;
-  Span span;
-} LoopLabel;
 
 typedef struct {
   LoopLabel label;
@@ -1267,12 +1274,14 @@ typedef struct {
   Expr *value; // NULL for bare "return;"
 } StmtReturn;
 
-// `break 'label? expr?;`. The value is the loop's, so only a `loop` accepts one
-// — a `while` or `for` also leaves by finishing, and that exit has none to
-// agree with. Unlabelled, it names the innermost loop; labelled, the loop that
-// declared the name, however many it has to leave to get there.
+// `break 'label? expr?;`. A value goes to a `loop` or a labelled block, the two
+// targets whose other exit has one to agree with — a `while` or `for` also
+// leaves by finishing, and that exit carries nothing. Unlabelled it names the
+// innermost *loop*, skipping any block between: labelling a block must not take
+// a bare `break` away from the loop around it. Labelled it names whatever
+// declared the name, however many targets it has to leave to get there.
 typedef struct {
-  LoopLabel label; // absent name = the innermost loop
+  LoopLabel label; // absent name = the innermost loop, never a block
   Expr *value;     // NULL for bare "break;"
 } StmtBreak;
 
