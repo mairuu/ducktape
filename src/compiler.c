@@ -22,6 +22,10 @@ void compiler_init(Compiler *c, Allocator *al) {
   tc_init(&c->tc, &c->diags, &c->al);
 }
 
+void compiler_set_lints(Compiler *c, const LintLevels *ls) {
+  diag_set_lints(&c->diags, ls);
+}
+
 void compiler_destroy(Compiler *c, Allocator *al) {
   (void)al;
   // every one of these owns memory *from* the arena, so the arena has to
@@ -73,7 +77,11 @@ static bool compiler_load_module(Compiler *c, Module *m) {
   if (diag_has_diags(&c->diags)) {
     diag_report(&c->diags, m->file_path.chars, m->source.chars, stderr);
   }
-  return ok;
+  // ask the bag as well as the callee: `orphan_module` is emitted here, and an
+  // escalated one is an error nothing else in this phase would notice. Every
+  // phase that can *emit* has to be the one that *asks* — the later phases
+  // already were, so this is the only place the rule was not written down.
+  return ok && !diag_has_errors(&c->diags);
 }
 
 // the `--std-module std::a::b` lint target, made the root of the compile.

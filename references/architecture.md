@@ -2291,8 +2291,39 @@ unlike a `@native` key there is nothing for a later phase to look up. It is the
 one parser error that does not enter panic mode — the attribute is well-formed
 and merely names nothing, so the declaration behind it still reads.
 
+**Levels, and `-W`.** `LintLevels` is `unsigned char level[LINT_COUNT]`, set
+once from the command line (`lint_levels_flag` parses one `-W…`; `main` owns the
+message because a bad flag is not a source diagnostic) and held in the bag,
+where it survives `diag_clear` for the reason the audience does. The level is
+**one value**, not an enabled flag beside a fatal one — which is what keeps the
+flag set to four spellings, since "stop being fatal" and "be a warning" are then
+the same request and `-W<lint>` spells both.
+
+So `diag_warning` now chooses a level rather than only whether to speak, and the
+three policies are ordered in one `if`: audience, then `@allow`, then the flag.
+The order is the whole policy. The audience outranks `-Werror` *more* strongly
+than it outranks advice — a build failing over a line in the embedded std leaves
+its author nothing to fix — so `-Werror` means "your warnings are errors". And
+`@allow` outranks it because a blanket over the compile does not know what the
+author of one declaration knew; there is no `forbid` level that would win.
+Escalation cannot make something appear that would otherwise be dropped, since
+it is chosen after the drop and in the same expression.
+
+Nothing else changed to make a warning fatal: `diag_add` already counted a
+`DIAG_ERROR` into `error_count`, and `error_count` already decided the build.
+What that *did* expose is that a phase must ask the bag rather than only its
+callees. `orphan_module` is the one lint emitted during discovery, and
+`compiler_load_module` returned what `mod_declare_children` said — so an
+escalated orphan printed `error:` and exited 0 until that function started
+folding in `diag_has_errors`. The later phases already did. A diagnostic that
+came from a lint prints its name at whatever severity it reached
+(`error[orphan_module]:`), which matters most for the escalated one, whose
+severity is a choice the reader can revisit.
+
 Warnings are pinned by `tests/warn/`, which asserts exit 0 *and* matching
-stderr — the combination the pass and fail buckets both exclude. `run_tests.sh`
+stderr — the combination the pass and fail buckets both exclude. A `#! flags:`
+line in any test file hands the compiler extra arguments, which is the only way
+a lint *level* can be tested at all, since no source can set one. `run_tests.sh`
 additionally lints every `std/**/*.dt` under the `tests/pass` rule, so a warning in
 std fails the suite instead of keeping the silence a *program* gets.
 

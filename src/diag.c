@@ -11,6 +11,7 @@ void diag_init(DiagBag *db, Allocator *al) {
   db->error_count = 0;
   db->warnings_enabled = true;
   db->allowed = 0;
+  lint_levels_init(&db->lints);
   db->last_dropped = false;
   db->al = al;
 }
@@ -48,6 +49,43 @@ const char *diag_lint_names(void) {
   }
   return buf;
 }
+
+void lint_levels_init(LintLevels *ls) {
+  for (int i = 0; i < LINT_COUNT; i++) {
+    ls->level[i] = LINT_LEVEL_WARN;
+  }
+}
+
+bool lint_levels_flag(LintLevels *ls, const char *arg) {
+  if (strncmp(arg, "-W", 2) != 0) {
+    return false;
+  }
+  const char *rest = arg + 2;
+  if (strcmp(rest, "error") == 0) {
+    for (int i = 0; i < LINT_COUNT; i++) {
+      ls->level[i] = LINT_LEVEL_ERROR;
+    }
+    return true;
+  }
+
+  LintLevel level = LINT_LEVEL_WARN;
+  if (strncmp(rest, "error=", 6) == 0) {
+    level = LINT_LEVEL_ERROR;
+    rest += 6;
+  } else if (strncmp(rest, "no-", 3) == 0) {
+    level = LINT_LEVEL_ALLOW;
+    rest += 3;
+  }
+
+  int lint = diag_lint_from_name(sv_from_cstr(rest));
+  if (lint < 0) {
+    return false;
+  }
+  ls->level[lint] = (unsigned char)level;
+  return true;
+}
+
+void diag_set_lints(DiagBag *db, const LintLevels *ls) { db->lints = *ls; }
 
 unsigned diag_push_allowed(DiagBag *db, unsigned add) {
   unsigned saved = db->allowed;
@@ -115,18 +153,31 @@ void diag_set_warnings(DiagBag *db, bool enabled) {
   db->warnings_enabled = enabled;
 }
 
-// two policies, one door: no audience to advise, or an audience that has said
-// it does not want this one. Either way the drop happens here rather than at
-// report time, so `diag_has_diags` stays honest and the notes below it go with
-// it.
+// one door, and now it decides a *level* rather than only whether to speak.
+// Three policies pass through it, in this order and no other:
+//
+//   audience — nobody can act on it, so it is not said at all. This outranks
+//     `-Werror` more strongly than it outranks advice: failing a build over a
+//     line in the embedded std leaves its author nothing to fix. `-Werror`
+//     therefore means "*your* warnings are errors", not "warnings are errors".
+//   `@allow` — the author of that declaration has already answered; a flag is
+//     a blanket and does not get to overrule one line that knew better.
+//   the flag's level — allow it away, or hand it to `diag_add` as an error,
+//     where `error_count` already decides whether the build fails.
+//
+// The drop still happens here rather than at report time, so `diag_has_diags`
+// stays honest and the notes below a dropped warning go with it.
 void diag_warning(DiagBag *db, DiagLint lint, Span span, const char *fmt, ...) {
-  if (!db->warnings_enabled || (db->allowed & LINT_BIT(lint)) != 0) {
+  LintLevel level = db->lints.level[lint];
+  if (!db->warnings_enabled || (db->allowed & LINT_BIT(lint)) != 0 ||
+      level == LINT_LEVEL_ALLOW) {
     db->last_dropped = true;
     return;
   }
   va_list ap;
   va_start(ap, fmt);
-  diag_add(db, DIAG_WARNING, lint, span, fmt, ap);
+  diag_add(db, level == LINT_LEVEL_ERROR ? DIAG_ERROR : DIAG_WARNING, lint,
+           span, fmt, ap);
   va_end(ap);
 }
 
@@ -162,11 +213,14 @@ void diag_report(const DiagBag *db, const char *source_name, const char *source,
       x /= 10;
     }
 
-    // a warning carries its lint name into the output: it is the name
-    // `@allow("…")` takes, so reading one is how you learn to silence it.
-    if (d->level == DIAG_WARNING) {
-      fprintf(sink, "warning[%s]: %s\n", diag_lint_name(d->lint),
-              d->message.chars);
+    // a diagnostic that came from a lint carries its name into the output
+    // whatever severity it ended up at: it is the name `@allow("…")` and `-W`
+    // take, so reading one is how you learn to turn it off — which matters
+    // most for the escalated one, whose severity is a choice you can revisit.
+    if (d->lint != LINT_COUNT) {
+      fprintf(sink, "%s[%s]: %s\n",
+              d->level == DIAG_ERROR ? "error" : "warning",
+              diag_lint_name(d->lint), d->message.chars);
     } else {
       fprintf(sink, "error: %s\n", d->message.chars);
     }

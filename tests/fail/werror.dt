@@ -1,0 +1,10 @@
+#! expect: error[unused_variable]: unused variable 'dropped'
+#! flags: -Werror
+# `-Werror` turns every lint up to an error, and an error fails the build. The
+# name stays in the report: the severity is a choice the reader can revisit.
+use std::io::print;
+
+fun main() {
+    var dropped = 1;
+    print("hi");
+}

@@ -28,6 +28,8 @@ int main(int argc, char *argv[]) {
   const char *emit_path = NULL;
   const char *std_module = NULL;
   bool bad_args = false;
+  LintLevels lints;
+  lint_levels_init(&lints);
 
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "--run") == 0) {
@@ -49,6 +51,17 @@ int main(int argc, char *argv[]) {
         break;
       }
       std_module = argv[i];
+    } else if (argv[i][0] == '-' && argv[i][1] == 'W') {
+      // parsed here rather than after compiler_init so a bad lint name is
+      // caught whatever else the command line turns out to mean.
+      if (!lint_levels_flag(&lints, argv[i])) {
+        fprintf(stderr,
+                "error: '%s' names no lint\n       available: %s\n"
+                "       spellings: -Werror, -Werror=<lint>, -Wno-<lint>, "
+                "-W<lint>\n",
+                argv[i], diag_lint_names());
+        return 1;
+      }
     } else if (root_path == NULL) {
       root_path = argv[i];
     } else {
@@ -59,9 +72,11 @@ int main(int argc, char *argv[]) {
 
   if (bad_args || (root_path == NULL) == (std_module == NULL)) {
     fprintf(stderr,
-            "usage: %s [--run] [--gc-stress] [--emit-bc <out>] <file>\n"
-            "       %s --std-module std::<module>\n",
-            argv[0], argv[0]);
+            "usage: %s [--run] [--gc-stress] [--emit-bc <out>] [-W…] <file>\n"
+            "       %s --std-module std::<module> [-W…]\n"
+            "       -W flags: -Werror, -Werror=<lint>, -Wno-<lint>, -W<lint>\n"
+            "       lints: %s\n",
+            argv[0], argv[0], diag_lint_names());
     return 1;
   }
 
@@ -80,6 +95,7 @@ int main(int argc, char *argv[]) {
   }
 
   compiler_init(&compiler, &heap_al);
+  compiler_set_lints(&compiler, &lints);
   bool ok = compiler_run(&compiler, root_path, std_module);
   if (ok && emit_path != NULL) {
     ok = compiler_emit(&compiler, emit_path);

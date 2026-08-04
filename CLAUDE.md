@@ -11,6 +11,8 @@ make test          # build + full test suite (must stay green)
 ./build/ducktape --run file.dt   # compile and execute main()
 ./build/ducktape --emit-bc out.dtbc file.dt   # compile to a bytecode image
 ./build/ducktape --run out.dtbc               # execute an image
+./build/ducktape -Werror file.dt              # lint levels: -Werror[=<lint>],
+                                              # -Wno-<lint>, -W<lint>
 make format        # clang-format over src/ and include/
 make sanitize      # rebuild under ASan+UBSan and run the suite
 ```
@@ -28,8 +30,9 @@ implemented, with the not-yet-implemented table), `architecture.md`
 `grammar.ebnf`. **When you change syntax, pipeline behavior, or the runtime
 subset, update the matching references/ file in the same change.** Old notes
 in `.vscode/ref/` are historical — do not trust them.
-Completed milestones through 54 are archived in `references/history/`; the
-roadmap keeps 55 on. Archive again when it passes ~150KB.
+Completed milestones through 75 are archived in `references/history/` (two
+files, split at 54); the roadmap keeps 76 on. Archive again when it passes
+~150KB.
 
 ### One narrative, one home
 
@@ -82,6 +85,9 @@ A file no `mod` declares is not a module at all, and now warns
   programs that type-check yet the VM rejects.
 - `tests/warn/*.dt` — must compile (exit 0) with *non-empty* stderr containing
   the `#! expect:` substring; the one bucket a warning fits.
+- A `#! flags: <args>` line anywhere in a pass/warn/fail file hands the
+  compiler extra arguments — how a `-W` lint level, which no source can set,
+  gets tested.
 - A multi-file test is a *subdirectory* of any of those, entry point
   `main.dt`, imported modules alongside it. The flat globs are non-recursive,
   so the siblings are never collected as tests themselves.

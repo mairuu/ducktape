@@ -1,0 +1,9 @@
+# `-Wno-<lint>` is `@allow`'s blanket twin: the same silence, asked for from
+# outside the source, so a file that cannot be edited can still be quiet.
+#! flags: -Wno-unused_variable
+use std::io::print;
+
+fun main() {
+    var dropped = 1;
+    print("hi");
+}

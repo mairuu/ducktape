@@ -1,0 +1,10 @@
+#! expect: warning[unused_variable]: unused variable 'dropped'
+#! flags: -Werror=unused_import
+# `-Werror=<lint>` names one lint and says nothing about the others: this file
+# raises the one it does not commit, so it warns and exits 0.
+use std::io::print;
+
+fun main() {
+    var dropped = 1;
+    print("hi");
+}

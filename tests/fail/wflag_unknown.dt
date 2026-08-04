@@ -1,0 +1,10 @@
+#! expect: '-Wnosuchlint' names no lint
+#! flags: -Wnosuchlint
+# A lint name indexes a table the compiler owns, so a flag naming nothing is
+# refused before any compiling — the same argument `@allow`'s typo error makes:
+# a policy that silently never fires is worse than one that says so.
+use std::io::print;
+
+fun main() {
+    print("hi");
+}

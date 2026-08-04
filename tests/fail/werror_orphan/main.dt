@@ -1,0 +1,15 @@
+#! expect: error[orphan_module]: 'tests/fail/werror_orphan/geo/stray.dt' is not a module
+#! flags: -Werror
+# `orphan_module` is the one lint emitted during *discovery*, and discovery
+# decided failure from what its callees returned rather than from the bag — so
+# escalating this one is what proved that every phase which can emit must also
+# be the phase that asks. Without that, this file printed an `error:` and
+# exited 0.
+mod geo;
+
+use std::io::print;
+use geo::shape;
+
+fun main() {
+    print("{shape::area()}");
+}

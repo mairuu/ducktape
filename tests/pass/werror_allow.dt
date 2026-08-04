@@ -1,0 +1,11 @@
+# `@allow` outranks `-Werror`: a flag is a blanket over the whole compile, and
+# the author of this declaration has already answered the question for this one
+# line. Rust's `forbid`, the level that would overrule an allow, has no spelling.
+#! flags: -Werror
+use std::io::print;
+
+@allow("unused_variable")
+fun main() {
+    var dropped = 1;
+    print("hi");
+}

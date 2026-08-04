@@ -21,6 +21,10 @@ void compiler_init(Compiler *c, Allocator *al);
 
 void compiler_destroy(Compiler *c, Allocator *al);
 
+// what the `-W…` flags asked for. Call before compiler_run; a level survives
+// the per-module clearing of the diagnostic bag.
+void compiler_set_lints(Compiler *c, const LintLevels *ls);
+
 // run the full compilation pipeline over the program rooted at `path`: every
 // module its tree declares, plus every library module they reach. `path`'s
 // directory holds the root's children.

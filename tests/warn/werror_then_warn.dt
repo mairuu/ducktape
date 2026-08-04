@@ -1,0 +1,11 @@
+#! expect: warning[unused_variable]: unused variable 'dropped'
+#! flags: -Werror -Wunused_variable
+# Flags apply left to right, last one winning. A level is one value rather than
+# an enabled flag plus a fatal one, so "stop being fatal" and "be a warning" are
+# the same request and `-W<lint>` is the only spelling either needs.
+use std::io::print;
+
+fun main() {
+    var dropped = 1;
+    print("hi");
+}

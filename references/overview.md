@@ -23,7 +23,7 @@ names a file, that file is the source of truth. Historical design notes live in
 | `tests/run/` | programs executed with `--run`; `#> line` comments assert on stdout |
 | `tests/fail_run/` | like `tests/fail`, but invoked with `--run` — for programs that type-check yet the VM rejects |
 | `std/` | the standard library, written in ducktape; embedded into the binary at build time. The bodies that cannot be (`print`, array/string/char primitives, hash mixing) are bodyless declarations bound to `src/native.c`. `std/lib.dt` is the library root and declares the tree — a file is a module only once a `mod` names it, and only public where that `mod` says `pub`. `--std-module std::cmp` compiles one *as* that module and warns; `make test` lints them all under the `tests/pass` rule |
-| `scripts/run_tests.sh` | the test runner (invoked by `make test`) |
+| `scripts/run_tests.sh` | the test runner (invoked by `make test`). A `#! flags: …` line in a test file hands the compiler extra arguments — how the `-W` levels, which no source can set, are tested |
 | `scripts/embed_std.sh` | mirrors `std/**/*.dt` into `build/std_data.h` for `src/std_src.c`, keyed by path relative to `std/`. A loader, not a resolver: what exists is what `std/lib.dt` declares |
 | `editors/vscode/` | a VS Code extension: TextMate grammar + language config for `.dt` (highlighting only, no language server) |
 | `references/` | these docs + `grammar.ebnf` |
@@ -47,11 +47,17 @@ make test          # build + run the whole test suite
 ./build/ducktape --run --gc-stress file.dt  # + collect on every allocation
 ./build/ducktape --emit-bc prog.dtbc file.dt # compile to a bytecode image
 ./build/ducktape --run prog.dtbc            # run an image (no source needed)
+./build/ducktape -Werror file.dt            # every warning becomes an error
 ```
 
 `main()` exits 0 only when every phase succeeded; diagnostics go to stderr.
 `--run` tells an image from a source file by its magic bytes, not by the
 extension.
+
+`-W` sets a lint's level for the whole compile — `-Werror`, `-Werror=<lint>`,
+`-Wno-<lint>`, `-W<lint>` — last one winning. It loses to an `@allow` on the
+declaration and never escalates a warning std would have kept to itself; see
+`language.md` "Warnings and `@allow`".
 
 ## Pipeline
 

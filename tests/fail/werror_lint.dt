@@ -1,0 +1,11 @@
+#! expect: error[unused_import]: unused import 'clamp'
+#! flags: -Werror=unused_import
+# One lint up rather than all of them. The unused variable below stays a
+# warning; `tests/warn/werror_other_lint.dt` is that half.
+use std::io::print;
+use std::cmp::clamp;
+
+fun main() {
+    var dropped = 1;
+    print("hi");
+}

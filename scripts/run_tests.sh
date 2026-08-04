@@ -12,6 +12,9 @@
 #   tests/fail_run/*.dt  like tests/fail, but invoked with --run — for things
 #                        that type-check yet the VM rejects
 #
+# a `#! flags: …` line in any of those hands the compiler extra arguments; that
+# is how the `-W` lint levels, which no source can set, get tested at all
+#
 # every tests/run program is additionally emitted as a bytecode image and
 # re-run from it, so the suite doubles as the serialization round-trip suite.
 #
@@ -34,9 +37,15 @@ ROOT=$(dirname "$0")/..
 pass=0
 fail=0
 
+# a test may name the compiler flags it needs, on any line: `#! flags: -Werror`.
+# The lint levels are what this exists for — a level set from the command line
+# is the one policy the source cannot state, so it has to come from here.
+# Deliberately unquoted at the call sites, to split into separate arguments.
+test_flags() { sed -n 's/^#! flags: //p' "$1" | head -n1; }
+
 check_pass() {
     f=$1
-    err=$("$BIN" "$f" 2>&1 >/dev/null)
+    err=$("$BIN" $(test_flags "$f") "$f" 2>&1 >/dev/null)
     code=$?
     if [ "$code" -eq 0 ] && [ -z "$err" ]; then
         pass=$((pass + 1))
@@ -49,7 +58,7 @@ check_pass() {
 
 check_warn() {
     f=$1
-    err=$("$BIN" "$f" 2>&1 >/dev/null)
+    err=$("$BIN" $(test_flags "$f") "$f" 2>&1 >/dev/null)
     code=$?
     if [ "$code" -ne 0 ]; then
         fail=$((fail + 1))
@@ -76,7 +85,7 @@ check_warn() {
 check_fail() {          # $1 = file, $2... = extra flags for the compiler
     f=$1
     shift
-    err=$("$BIN" "$@" "$f" 2>&1 >/dev/null)
+    err=$("$BIN" "$@" $(test_flags "$f") "$f" 2>&1 >/dev/null)
     code=$?
     if [ "$code" -eq 0 ]; then
         fail=$((fail + 1))

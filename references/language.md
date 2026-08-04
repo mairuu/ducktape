@@ -2881,9 +2881,9 @@ HashSet::with_capacity(n); s.capacity(); s.reserve(n);   # forwarded, all three
 
 ## Warnings and `@allow`
 
-A warning is advice, so it never fails the build: the compiler exits 0 and the
-program runs. There are five, and each has a **name**, which is both what the
-report prints and what silences it:
+A warning is advice, so by default it never fails the build: the compiler exits
+0 and the program runs. There are five, and each has a **name**, which is what
+the report prints, what silences it, and what a `-W` flag takes:
 
 | Lint | What it says |
 |---|---|
@@ -2930,6 +2930,38 @@ ask about this function".
 
 Warnings are dropped entirely for the embedded standard library, which has no
 reader to advise; naming a std file on the command line makes you that reader.
+
+### Lint levels from the command line
+
+A lint has a **level** — allow, warn, or error — and `-W` sets it for the whole
+compile:
+
+| Flag | Effect |
+|---|---|
+| `-Werror` | every lint becomes an error |
+| `-Werror=<lint>` | that one does |
+| `-Wno-<lint>` | that one is silent, `@allow`'s blanket twin |
+| `-W<lint>` | that one is a warning again |
+
+Flags apply left to right and the last wins, so `-Werror -Wunused_variable`
+means "all of them fatal except that one". A level is a single value rather
+than an enabled flag plus a fatal flag, which is why the fourth row is all that
+"stop being fatal" needs — there is no `-Wno-error=` to write. A flag naming no
+lint is refused before any compiling, listing the names.
+
+An escalated warning keeps its name in the report: `error[unused_variable]:`,
+since a severity a flag chose is one the reader can revisit.
+
+Two things outrank a flag, in this order:
+
+- **The audience.** Std's warnings are dropped rather than filtered, so
+  `-Werror` never escalates one: a build that failed over a line in the
+  embedded standard library would leave its author nothing to fix. `-Werror`
+  means "*your* warnings are errors", not "warnings are errors".
+- **`@allow`.** The author of that declaration has already answered for that
+  line, and a blanket over the whole compile does not get to overrule it. Rust
+  spells the level that would (`forbid`); ducktape has no such spelling.
+
 See the gaps table below for what suppression still cannot do.
 
 ## Not yet implemented
@@ -2981,8 +3013,9 @@ See the gaps table below for what suppression still cannot do.
 | `!` in a position asking a structural question | `if panic("x") { }`, `for x in panic("x")`, and `r?` inside a `-> Never` function are all refused: those sites ask "is it a `Bool`/an `Iterator`/the same enum?", not "does it flow here?", and `Never` answers none of them. Harmless, since the code below is unreachable either way |
 | tuple-struct struct-patterns `Pair { a, b }` | write the constructor spelling `Pair(a, b)` — "matching tuple struct with struct pattern syntax is not allowed" |
 | variable shadowing diagnostics | a `var` may silently shadow an earlier one in the same scope (top-level *item* names do collide — that is an error). There is a warning severity for it to use since milestone 89; what is missing is the analysis, and the choice about whether shadowing deserves one at all |
-| seeing a warning from the standard library | warnings are advice to an author, so they are dropped for the embedded std that every program compiles from source. `./build/ducktape --std-module std::cmp` compiles that module as the root, reading its source from disk, and does warn — the module path says which module it is, and nothing is inferred from the shape of a filesystem path |
-| turning a warning **up** into an error | `@allow("<lint>")` turns one off over a declaration (see "Warnings and `@allow`"), but there is no `-W` flag and no `-Werror`, so a warning a program wants enforced cannot be made fatal. Nothing asks about a lint from outside the source |
+| seeing a warning from the standard library | warnings are advice to an author, so they are dropped for the embedded std that every program compiles from source — which is also why `-Werror` cannot escalate one. `./build/ducktape --std-module std::cmp` compiles that module as the root, reading its source from disk, and does warn — the module path says which module it is, and nothing is inferred from the shape of a filesystem path |
+| a level that `@allow` cannot overrule (Rust's `forbid`) | `-Werror` loses to an `@allow` on the declaration, deliberately, and there is no fourth level that wins. A build that must not be silenced anywhere has to grep for the attribute |
+| a lint level over less than the whole compile | `-W` is a blanket: it takes no path, so one module cannot be held to a level the rest is not. `@allow` is the only per-declaration control, and it only goes downwards |
 | silencing a warning over less than a declaration | an attribute sits on a declaration, so an allow covers a whole function, impl or trait. There is no statement-level or expression-level form, and none on a trait item — a default body is covered by its trait |
 | saying that an import is wanted for its *impls* | there is no spelling. A `use` whose names go unwritten is kept silent only when the compiler can see that removing it would lose an impl that was selected — so a deliberate restatement of an import that arrives transitively anyway (`std/iter.dt` used to write `use std::string;` for exactly that reason) now reads as unused and has to go |
 | unused-warning order within a function | a binding is reported when its scope closes, so an inner block's warnings precede an outer one's regardless of line. Sorting the bag is blocked by notes, which attach to the diagnostic before them by position |
