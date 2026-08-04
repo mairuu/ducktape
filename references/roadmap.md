@@ -537,7 +537,7 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   `-Wno-error=`. Sabotage 7/7 bit. Left over: no `forbid`, and `-W` takes no
   path, so a level is all-or-nothing over a compile.
 
-- **98. The block you can leave** (`TBD`) — `'a: { .. break 'a v; .. }`.
+- **98. The block you can leave** (`d7b207f`) — `'a: { .. break 'a v; .. }`.
   Design: `language.md` "Statements and control flow" (the labelled-block
   bullet), `architecture.md` parser notables + the `CheckLoop` section,
   `runtime.md` `CgLoop`, `grammar.ebnf` `labelled`/`block`. Pinned by
