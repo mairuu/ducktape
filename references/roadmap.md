@@ -1684,7 +1684,7 @@ keep this file small. Everything from 55 on is below.
   written one file up, on the `mod` that gave the directory an owner, because
   the file it is about is not part of the program and has nothing to mark.
 
-- **96. The loop you can name** (`TBD`) — `'outer: loop`, `break 'outer v;`,
+- **96. The loop you can name** (`f5c97e7`) — `'outer: loop`, `break 'outer v;`,
   `continue 'rows;`. Design: `language.md` (the expression list + the syntax
   summary), `architecture.md` (the scanner's fork, `check_loop_target`),
   `runtime.md` (`cg_loop_target`), `grammar.ebnf`. Pinned by
