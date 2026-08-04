@@ -513,10 +513,10 @@ static inline Type *rctx_resolve(ResolveCtx *ctx, TypeNode *node) {
 // CheckCtx
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// the loops enclosing the expression being checked, innermost first. A `break`
-// carries no label, so it always names the head of this list — which is what
-// lets a `loop` be asked whether anything leaves it. A depth counter cannot
-// answer that question, only "is there a loop at all".
+// the loops enclosing the expression being checked, innermost first. An
+// unlabelled `break` names the head of this list and a labelled one searches
+// it — which is what lets a `loop` be asked whether anything leaves it. A
+// depth counter cannot answer either question, only "is there a loop at all".
 typedef enum {
   CHECK_LOOP_LOOP,
   CHECK_LOOP_WHILE,
@@ -529,6 +529,10 @@ typedef struct CheckLoop {
   // leave by finishing, and that exit brings none to the join. The name is
   // kept so the refusal can say which construct it was.
   CheckLoopKind kind;
+  // the name this loop declared, or an empty one. A frame with no name is
+  // reachable only as the head of the list, so an inner unlabelled loop never
+  // hides an outer labelled one from a `break` that names it.
+  LoopLabel label;
   // The join of every break's value so far, or NULL while none has landed —
   // which is the whole of the loop's type. NULL after the body means nothing
   // leaves (no break at all, or every one of them diverging before it does),

@@ -75,6 +75,8 @@ xs[i] = v;  t.0 *= 2;         # a struct is a shared reference, so this mutates
 return expr;  return;         # bare return means ()
 break;  continue;             # inside loops only
 break x;                      # ... and the value form only inside a `loop`
+'outer: for x in xs { .. }    # a loop may be named
+break 'outer;  continue 'outer;   # ... and then left from any depth inside it
 ```
 
 Blocks are expressions: the trailing expression without `;` is the block's
@@ -175,6 +177,18 @@ under the field's name, so ignoring one field takes the long form
   has no value to agree with, so `break x` in one is an error and both still
   evaluate to `()`. A `loop` at the end of a block is that block's tail
   expression, as an `if` or `match` is.
+- Any loop may be **labelled** — `'outer: loop`, `'rows: while c`, `'grid: for
+  x in xs` — and a `break`/`continue` may then name it: `break 'outer;`,
+  `break 'outer v;`, `continue 'rows;`. Unlabelled, both still name the
+  innermost loop, so a label is only ever needed to reach past one. The rules
+  above are judged against the loop that was *named*: `break 'rows v` where
+  `'rows` is a `while` is the same error as an unlabelled one, and a value
+  carried out of a labelled `loop` joins with that loop's other breaks however
+  many loops it had to leave. A label is in scope inside the loop it names and
+  nowhere else — a closure body cannot see one, exactly as a bare `break`
+  cannot escape a closure. A label an enclosing loop already declared is an
+  error rather than a shadowing: the outer one would be unreachable by name,
+  and there is no reason to write it.
 - Ranges: `a..b`, `a..=b` — Int-only, first-class values (`var r = 0..10;`) of
   type `Range`, which is nameable (`fun span(r: Range)`) and carries one
   method, `r.iter()`.
@@ -2958,13 +2972,11 @@ See the gaps table below for what suppression still cannot do.
 | `pub` on a method | rejected — `pub fun` in an impl is "expected impl item", and `pub` is only ignored on the `impl` keyword itself. A method is as visible as the impl it sits in, which is why `std::array`'s raw `pop_last` and `std::iter`'s `char_at` are private *free functions* rather than methods. Struct **fields** do take `pub`: they are private to their module by default, and the diagnostic naming one says so |
 | overlap rules finer than "matching self types" | there is no orphan rule and no specialization: an impl may be written for any type, and two overlapping ones are simply refused wherever both are visible — a bound (`impl<T: Ord> W<T>` against `impl<T> W<T>`) or a narrower head (`impl [Int]` against `impl<T> [T]`) is not a way to win a name |
 | visibility below module granularity (`pub(crate)` &c.) | `pub` is the only modifier |
-| a **private** module (`mod x;` versus `pub mod x;`) | both parse and both are recorded, but the distinction is not yet enforced: every declared module is reachable from every other. Nothing a program can write means something different for it yet |
-| a warning for a `.dt` file no `mod` claims | such a file is silently not part of the program — it is not compiled and no path reaches it, which is the point, but nothing points out that it is dead |
 | relative paths (`super::`, `self::`, `crate::`) | a path is absolute from its root, so a deep module names its sibling in full |
 | two spellings of one file (symlinks, unusual paths) | a module's source is derived from its place in the tree, so the only path that can be spelled twice is the entry file's — and dedup there is lexical |
 | top-level `var` (globals) | parses, then a registration diagnostic: move it into a function |
 | a `break` that carries a value out of a `while`/`for` | `loop { break x; }` works (milestone 87), but the other two loops also leave by *finishing*, and that exit has no value to join with — so `break x` in one is an error and both stay `()` |
-| a labelled `break` | there is no `'outer:` spelling, so a break always names the innermost loop; carrying a value out of a nested loop means breaking each level or using `return` |
+| a label on a plain block (`'a: { break 'a v; }`) | a label prefixes a loop and nothing else, so a block still has only its tail expression to give a value |
 | reading `while true { }` as endless | its condition is an expression, and the checker reads types rather than values — `loop { }` is the spelling that asks no condition (milestone 86) |
 | `!` in a position asking a structural question | `if panic("x") { }`, `for x in panic("x")`, and `r?` inside a `-> Never` function are all refused: those sites ask "is it a `Bool`/an `Iterator`/the same enum?", not "does it flow here?", and `Never` answers none of them. Harmless, since the code below is unreachable either way |
 | tuple-struct struct-patterns `Pair { a, b }` | write the constructor spelling `Pair(a, b)` — "matching tuple struct with struct pattern syntax is not allowed" |

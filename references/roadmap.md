@@ -1684,6 +1684,28 @@ keep this file small. Everything from 55 on is below.
   written one file up, on the `mod` that gave the directory an owner, because
   the file it is about is not part of the program and has nothing to mark.
 
+- **96. The loop you can name** (`TBD`) — `'outer: loop`, `break 'outer v;`,
+  `continue 'rows;`. Design: `language.md` (the expression list + the syntax
+  summary), `architecture.md` (the scanner's fork, `check_loop_target`),
+  `runtime.md` (`cg_loop_target`), `grammar.ebnf`. Pinned by
+  `tests/run/labelled_break.dt` and six `tests/fail/label_*`.
+
+  The finding is that **milestone 88 had already paid for this**: it made an
+  unwind target a *depth* rather than a count of locals, and a depth belongs to
+  a frame — so `cg->depth - loop->break_depth` counts everything stacked since
+  *that* loop began whichever frame it is handed. Codegen's whole cost was
+  choosing the frame; the arithmetic, the close-then-slide, the opcodes and the
+  image are untouched. The scanner paid instead: a quote opens two tokens and
+  only one closes, so `'a'` and `'a` are told apart by the character *after* an
+  identifier, with `'ab'` left on the character branch so it still reports the
+  one-character rule. A shadowed label is an **error**, not innermost-first
+  resolution — the outer loop would be unreachable by name and renaming is free.
+  Sabotage 5/5 bit, but **the first attempt at the fourth was a no-op** (597/597):
+  a labelled break's hint only matters where the value cannot type without it,
+  since `check_flow_into` re-derives the coercion from the target anyway — so
+  the test had to be sharpened to an `if` whose arms are two different impls.
+  Left over: no label on a plain block, and no `unused_label` lint.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -1921,6 +1943,11 @@ via `Module.decl_base`) and is not part of the main line.
 - a refutable `var` binding whose column type inference never pinned down is
   accepted (the tri-state answer reports nothing) and traps at runtime via
   `OP_MATCH_FAIL` instead of at compile time
+- a label prefixes a loop and nothing else (milestone 96), so Rust's
+  `'a: { break 'a v; }` has no spelling: a plain block still has only its tail
+  expression to give a value. Nor is there an `unused_label` lint — a label
+  nothing names costs a reader the same as an unused binding, and milestone 92's
+  machinery is the shape it would take
 - a warning can be turned **off** and not **up**: `@allow` is milestone 93, but
   there is still no `-W` and no `-Werror`, so a lint a program wants enforced
   cannot be made fatal and nothing outside the source can ask about one. The

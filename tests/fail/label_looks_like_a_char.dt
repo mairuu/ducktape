@@ -1,0 +1,6 @@
+#! expect: a character literal needs its closing quote: 'a'
+# The one place the quote's fork misleads: an unclosed character literal scans
+# as a label, so the parser names the likelier mistake.
+fun main() {
+    var c = 'a;
+}

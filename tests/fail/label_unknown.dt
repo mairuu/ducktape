@@ -1,0 +1,8 @@
+#! expect: no loop labelled 'nope is in scope
+# A label is not a name a `break` may invent: it has to have been declared by
+# an enclosing loop.
+fun main() {
+    'outer: for i in 0..3 {
+        if i == 1 { break 'nope; }
+    }
+}

@@ -969,7 +969,18 @@ static bool is_pure_stmt(Parser *p) {
          check_tok(p, TOKEN_BREAK) || check_tok(p, TOKEN_CONTINUE) ||
          check_tok(p, TOKEN_IF) || check_tok(p, TOKEN_FOR) ||
          check_tok(p, TOKEN_MATCH) || check_tok(p, TOKEN_WHILE) ||
-         check_tok(p, TOKEN_LOOP);
+         check_tok(p, TOKEN_LOOP) || check_tok(p, TOKEN_LABEL);
+}
+
+// One token, and the caller decides what may legally follow it: a `:` and a
+// loop where it declares a name, nothing at all where it uses one.
+static LoopLabel parse_opt_label(Parser *p) {
+  if (!check_tok(p, TOKEN_LABEL)) {
+    return (LoopLabel){0};
+  }
+  Token *tok = peek_tok(p);
+  advance_tok(p);
+  return (LoopLabel){.name = tok->lexeme, .span = token_span(tok)};
 }
 
 static Expr *parse_block(Parser *p) {
@@ -2115,6 +2126,32 @@ static Expr *parse_primary(Parser *p) {
     return expr;
   }
 
+  // A label declares a name for the loop it prefixes and can prefix nothing
+  // else, so it is consumed here, ahead of the three loop forms, and whichever
+  // one follows takes it. Refusing everything else at this point is what keeps
+  // a label from ever being an expression in its own right.
+  LoopLabel label = {0};
+  if (check_tok(p, TOKEN_LABEL)) {
+    label = parse_opt_label(p);
+    if (!consume_tok(p, TOKEN_COLON, "expected ':' after a loop label")) {
+      // the two spellings differ only in the closing quote, so a one-character
+      // label with no `:` behind it is far more likely a character literal
+      // that was never closed — which is the one place the fork misleads.
+      if (label.name.len == 2) {
+        diag_note(p->diags, label.span,
+                  "a character literal needs its closing quote: " SV_FMT "'",
+                  SV_ARG(label.name));
+      }
+      return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
+    }
+    if (!check_tok(p, TOKEN_FOR) && !check_tok(p, TOKEN_WHILE) &&
+        !check_tok(p, TOKEN_LOOP)) {
+      error_at(p, current_tok_span(p),
+               "a label may only name a 'loop', a 'while' or a 'for'");
+      return ast_expr(EXPR_POISON, current_tok_span(p), p->al);
+    }
+  }
+
   // for
   if (match_tok(p, TOKEN_FOR)) {
     if (!consume_tok(p, TOKEN_IDENT, "expected loop variable name")) {
@@ -2143,6 +2180,7 @@ static Expr *parse_primary(Parser *p) {
         EXPR_FOR, span_merge(token_span(previous_tok(p)), previous_tok_span(p)),
         p->al);
     expr->as.for_expr = (ExprFor){
+        .label = label,
         .var_name = var_tok->lexeme,
         .var_span = token_span(var_tok),
         .iterable = iterable,
@@ -2175,6 +2213,7 @@ static Expr *parse_primary(Parser *p) {
 
     Expr *expr = ast_expr(
         EXPR_WHILE, span_merge(token_span(t), previous_tok_span(p)), p->al);
+    expr->as.while_expr.label = label;
     expr->as.while_expr.condition = cond;
     expr->as.while_expr.binding = binding;
     expr->as.while_expr.body = block;
@@ -2191,6 +2230,7 @@ static Expr *parse_primary(Parser *p) {
 
     Expr *expr = ast_expr(
         EXPR_LOOP, span_merge(token_span(t), previous_tok_span(p)), p->al);
+    expr->as.loop_expr.label = label;
     expr->as.loop_expr.body = block;
     return expr;
   }
@@ -2346,8 +2386,10 @@ Stmt *parse_stmt(Parser *p) {
 
   if (match_tok(p, TOKEN_BREAK)) {
     Span break_span = token_span(previous_tok(p));
-    // no lookahead needed, and no ambiguity to resolve: a block is not an
-    // expression primary here, so the only thing that can follow is a value.
+    // still no ambiguity to resolve: a block is not an expression primary
+    // here, and the scanner has already settled `'a'` against `'a`, so a label
+    // and a value can be told apart by token type alone.
+    LoopLabel label = parse_opt_label(p);
     Expr *value = NULL;
     if (!check_tok(p, TOKEN_SEMICOLON)) {
       value = parse_expr(p);
@@ -2357,6 +2399,7 @@ Stmt *parse_stmt(Parser *p) {
       }
     }
     Stmt *stmt = ast_stmt(STMT_BREAK, break_span, p->al);
+    stmt->as.break_stmt.label = label;
     stmt->as.break_stmt.value = value;
     if (!consume_tok(p, TOKEN_SEMICOLON, "expected ';' after 'break'")) {
       return ast_stmt(STMT_POISON, span_merge(start_span, current_tok_span(p)),
@@ -2367,6 +2410,7 @@ Stmt *parse_stmt(Parser *p) {
 
   if (match_tok(p, TOKEN_CONTINUE)) {
     Stmt *stmt = ast_stmt(STMT_CONTINUE, token_span(previous_tok(p)), p->al);
+    stmt->as.continue_stmt.label = parse_opt_label(p);
     if (!consume_tok(p, TOKEN_SEMICOLON, "expected ';' after 'continue'")) {
       return ast_stmt(STMT_POISON, span_merge(start_span, current_tok_span(p)),
                       p->al);
@@ -2382,7 +2426,7 @@ Stmt *parse_stmt(Parser *p) {
 
   if (check_tok(p, TOKEN_MATCH) || check_tok(p, TOKEN_IF) ||
       check_tok(p, TOKEN_FOR) || check_tok(p, TOKEN_WHILE) ||
-      check_tok(p, TOKEN_LOOP)) {
+      check_tok(p, TOKEN_LOOP) || check_tok(p, TOKEN_LABEL)) {
     Expr *expr = parse_primary(p);
     if (expr->kind == EXPR_POISON) {
       return ast_stmt(STMT_POISON, span_merge(start_span, expr->span), p->al);

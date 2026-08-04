@@ -317,6 +317,17 @@ pub fun process_data<T>(_data: T) -> Result<Int, String> {
         if spins > 5 { break spins * 2; }
     };
 
+    # a label lets a `break`/`continue` name a loop other than the innermost
+    var _pair = 'hunt: loop {
+        'rows: for a in 0..4 {
+            for b in 0..4 {
+                if a + b == 5 { break 'hunt a * 10 + b; }
+                if b == 2 { continue 'rows; }
+            }
+        }
+        break -1;
+    };
+
     var xs = [1, 2, 3];
     var _first = xs[0];
 

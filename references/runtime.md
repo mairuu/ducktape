@@ -345,6 +345,14 @@ its bytes.
   `continue_depth`) rather than to a count of locals, since a loop body can
   reach one with temporaries pushed that are no one's local. The local bases
   stay beside them for `cg_close_scope`, which is a question about locals.
+- Because the unwind is measured **from a frame**, a *labelled* break costs
+  codegen only the choice of frame: `cg_loop_target` walks `CgLoop.parent` for
+  the matching `label` and hands the same four numbers to the same arithmetic,
+  so `cg->depth - loop->break_depth` counts everything stacked since *that*
+  loop began — inner loops, their locals and any pending temporaries included —
+  and `cg_close_scope(loop->break_base)` detaches every capture on the way.
+  Nothing else changed: no new opcode, no image change, and the jump is
+  recorded on the named frame so it patches at that loop's landing pad.
 - The one-byte operand bounds the *slot*, so `cg_add_local` checks that and not
   only the count: temporaries between locals push positions up faster than
   entries.

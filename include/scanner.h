@@ -12,6 +12,7 @@ typedef enum {
   TOKEN_FLOAT,
   TOKEN_STRING,
   TOKEN_CHAR,
+  TOKEN_LABEL, // 'outer — lexeme keeps the quote, so it prints as written
   TOKEN_INTERPOLATION,
   TOKEN_TRUE,
   TOKEN_FALSE,

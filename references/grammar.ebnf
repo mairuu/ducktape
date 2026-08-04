@@ -184,16 +184,23 @@ assocSuffix    = ( "." IDENT )+ ;                 (* associated types *)
 
 block          = "{" stmt* expr? "}" ;
                  (* the trailing expr (no ";") is the block's value; a
-                    trailing block-form if/match/loop also counts as the tail *)
+                    trailing block-form if/match/loop also counts as the tail,
+                    a label on the loop included *)
 
 stmt           = varDecl
                | "return" expr? ";"
-               | "break" expr? ";"
-                 (* the value is a `loop`'s; a while/for break may not have one *)
-               | "continue" ";"
+               | "break" LABEL? expr? ";"
+                 (* the value is a `loop`'s; a while/for break may not have one.
+                    the LABEL picks which enclosing loop is left, so the rule
+                    above is judged against the *named* loop, not the innermost *)
+               | "continue" LABEL? ";"
                | expr ";"
-               | ifExpr | matchExpr | whileExpr | loopExpr | forExpr ;
+               | labelled | ifExpr | matchExpr | whileExpr | loopExpr | forExpr ;
                  (* block-form expressions need no ";" as statements *)
+
+labelled       = LABEL ":" ( whileExpr | loopExpr | forExpr ) ;
+                 (* a label prefixes a loop and nothing else, so it is never an
+                    expression in its own right *)
 
 (* ── expressions (lowest to highest precedence) ───────────────────────── *)
 
@@ -314,6 +321,12 @@ formatSpec     = ":" ( CHAR? ( "<" | ">" | "^" ) INT ( "." INT )?
                     std::fmt::float; the fill CHAR defaults to ' '. A width
                     and precision written together ("8.3") lex as one FLOAT. *)
 
+LABEL          = "'" IDENT ;
+                 (* a quote opens two tokens and only one of them closes, so
+                    the scanner forks on the character *after* an identifier:
+                    "'a'" is a CHAR, "'a" is a LABEL. "'ab'" deliberately takes
+                    the CHAR branch so it still reports the one-character rule
+                    rather than splitting into a LABEL and a stray quote *)
 CHAR           = "'" ( UTF8CHAR | CHARESCAPE ) "'" ;
 CHARESCAPE     = "\" ( "n" | "t" | "r" | "\\" | "'" | '"' )
                | "\u{" HEXDIGIT{1,6} "}" ;

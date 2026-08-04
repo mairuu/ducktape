@@ -36,6 +36,8 @@ typedef struct {
 typedef struct CgLoop {
   int start; // ip of the loop condition (OP_LOOP target for `while`)
 
+  StringView label; // the name this loop declared, or empty
+
   int break_jumps[CG_MAX_BREAKS];
   int break_count;
   int continue_jumps[CG_MAX_BREAKS];
@@ -96,6 +98,24 @@ typedef struct Cg {
 
   int self_slot; // -1 outside a method; the frame slot holding `self`
 } Cg;
+
+// The frame a `break`/`continue` leaves: the innermost loop unlabelled, the
+// one that declared the name otherwise. Everything the two statements emit is
+// already measured *from a frame* — `break_depth`, `continue_depth`, the two
+// bases — rather than from the head of the list, so leaving several loops at
+// once costs nothing beyond finding the right frame to measure against. The
+// checker has refused every name that is not here, so a miss is impossible.
+static CgLoop *cg_loop_target(Cg *cg, LoopLabel label) {
+  if (label.name.len == 0) {
+    return cg->loop;
+  }
+  for (CgLoop *loop = cg->loop; loop != NULL; loop = loop->parent) {
+    if (sv_equal(loop->label, label.name)) {
+      return loop;
+    }
+  }
+  return NULL;
+}
 
 // the one wording for every VM limitation. `what` names the construct.
 static void cg_unsupported(DiagBag *diags, Span span, const char *what) {
@@ -743,7 +763,7 @@ static void compile_stmt_inner(Cg *cg, Stmt *stmt) {
   }
 
   case STMT_BREAK: {
-    CgLoop *loop = cg->loop;
+    CgLoop *loop = cg_loop_target(cg, stmt->as.break_stmt.label);
     assert(loop && "break outside loop got past the checker");
     if (loop->break_count >= CG_MAX_BREAKS) {
       diag_error(cg->diags, stmt->span, "too many breaks in one loop");
@@ -779,7 +799,7 @@ static void compile_stmt_inner(Cg *cg, Stmt *stmt) {
   }
 
   case STMT_CONTINUE: {
-    CgLoop *loop = cg->loop;
+    CgLoop *loop = cg_loop_target(cg, stmt->as.continue_stmt.label);
     assert(loop && "continue outside loop got past the checker");
     int n = cg->depth - loop->continue_depth;
     if (n > 0) {
@@ -1159,6 +1179,7 @@ static void compile_while(Cg *cg, Expr *expr) {
   }
 
   CgLoop loop = {
+      .label = expr->as.while_expr.label.name,
       .start = cg->chunk->count,
       .continue_is_backward = true,
       .continue_base = cg->local_count,
@@ -1197,6 +1218,7 @@ static void compile_while(Cg *cg, Expr *expr) {
 // value" invariant true for one byte.
 static void compile_loop(Cg *cg, Expr *expr) {
   CgLoop loop = {
+      .label = expr->as.loop_expr.label.name,
       .start = cg->chunk->count,
       .continue_is_backward = true,
       .continue_base = cg->local_count,
@@ -1239,6 +1261,7 @@ static void compile_for_range(Cg *cg, Expr *expr) {
   int body_depth = cg->depth;
 
   CgLoop loop = {
+      .label = expr->as.for_expr.label.name,
       .continue_is_backward = false, // continue jumps forward to the increment
       .continue_base = cg->local_count,
       .break_base = saved_locals,
@@ -1301,6 +1324,7 @@ static void compile_for_array(Cg *cg, Expr *expr) {
   int body_depth = cg->depth;
 
   CgLoop loop = {
+      .label = expr->as.for_expr.label.name,
       .continue_is_backward = false, // continue jumps forward to the increment
       .continue_base = cg->local_count,
       .break_base = saved_locals,
@@ -1413,6 +1437,7 @@ static void compile_for_iter(Cg *cg, Expr *expr) {
   int body_depth = cg->depth;
 
   CgLoop loop = {
+      .label = expr->as.for_expr.label.name,
       .continue_is_backward = true, // `continue` re-drives next()
       .continue_base = cg->local_count,
       .break_base = saved_locals,
@@ -2484,6 +2509,7 @@ static void compile_while_binding(Cg *cg, Expr *expr) {
   int saved_outer = cg->local_count;
 
   CgLoop loop = {
+      .label = expr->as.while_expr.label.name,
       .start = cg->chunk->count,
       .continue_is_backward = true,
       .continue_base = saved_outer,

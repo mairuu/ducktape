@@ -1206,6 +1206,16 @@ static void ind(int indent) {
   }
 }
 
+// the node's own line, with its label appended when it has one. Callers have
+// already indented, so this only finishes the line.
+static void dump_label(LoopLabel label, const char *kind) {
+  if (label.name.len > 0) {
+    fprintf(stdout, "%s " SV_FMT "\n", kind, SV_ARG(label.name));
+  } else {
+    fprintf(stdout, "%s\n", kind);
+  }
+}
+
 static void dump_typenode(const TypeNode *tn, int indent);
 
 static void dump_path(const Path *path, int indent) {
@@ -1603,7 +1613,7 @@ void dump_expr(const Expr *e, int indent) {
     }
     break;
   case EXPR_FOR: {
-    fprintf(stdout, "For\n");
+    dump_label(e->as.for_expr.label, "For");
     ind(indent + 1);
     fprintf(stdout, "Variable: " SV_FMT "\n", SV_ARG(e->as.for_expr.var_name));
     ind(indent + 1);
@@ -1615,7 +1625,7 @@ void dump_expr(const Expr *e, int indent) {
     break;
   }
   case EXPR_WHILE: {
-    fprintf(stdout, "While\n");
+    dump_label(e->as.while_expr.label, "While");
     if (e->as.while_expr.binding) {
       ind(indent + 1);
       fprintf(stdout, "Binding:\n");
@@ -1630,7 +1640,7 @@ void dump_expr(const Expr *e, int indent) {
     break;
   }
   case EXPR_LOOP: {
-    fprintf(stdout, "Loop\n");
+    dump_label(e->as.loop_expr.label, "Loop");
     dump_expr(e->as.loop_expr.body, indent + 1);
     break;
   }
@@ -1747,13 +1757,13 @@ void dump_stmt(const Stmt *s, int indent) {
     }
     break;
   case STMT_BREAK:
-    fprintf(stdout, "BreakStmt\n");
+    dump_label(s->as.break_stmt.label, "BreakStmt");
     if (s->as.break_stmt.value) {
       dump_expr(s->as.break_stmt.value, indent + 1);
     }
     break;
   case STMT_CONTINUE:
-    fprintf(stdout, "ContinueStmt\n");
+    dump_label(s->as.continue_stmt.label, "ContinueStmt");
     break;
   case STMT_POISON:
     fprintf(stdout, "<POISON STMT>\n");

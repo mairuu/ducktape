@@ -1,0 +1,6 @@
+#! expect: a label may only name a 'loop', a 'while' or a 'for'
+# A label declares a name for a loop and prefixes nothing else, so it is never
+# an expression in its own right.
+fun main() {
+    'here: if true { }
+}

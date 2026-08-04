@@ -1,0 +1,134 @@
+# A labelled `break`/`continue` names an enclosing loop rather than the
+# innermost one. Pins leaving two loops at once, carrying a value out of a
+# `loop` from inside a nested one, labelled `continue`, an unwind that spans a
+# pending callee and two loops, closing a capture on the way out, and the
+# scanner's fork between `'a'` and `'a`.
+#> 23
+#> 14
+#> 8
+#> 42
+#> 21
+#> a
+#> 3
+#> square
+#> circle
+use std::io::print;
+
+fun id(n: Int) -> Int { n }
+
+trait Shape { fun name(self) -> String; }
+struct Sq { n: Int }
+struct Ci { n: Int }
+impl Shape for Sq { fun name(self) -> String { "square" } }
+impl Shape for Ci { fun name(self) -> String { "circle" } }
+
+# the shape the feature exists for: the answer is found in the inner loop and
+# both loops have to end for it to be used
+fun first_pair_with_product(target: Int) -> Int {
+    var found = -1;
+    'outer: for i in 0..5 {
+        for j in 0..5 {
+            if i * j == target {
+                found = i * 10 + j;
+                break 'outer;
+            }
+        }
+    }
+    return found;
+}
+
+# the value goes to the *named* loop, so a `loop` can be left from inside a
+# `for` nested in it
+fun doubled_seventh() -> Int {
+    'search: loop {
+        for k in 0..10 {
+            if k == 7 { break 'search k * 2; }
+        }
+        break 0;
+    }
+}
+
+# `continue 'rows` abandons the rest of the inner loop and the rest of the
+# outer turn's body, which an unlabelled `continue` cannot do
+fun count_before_the_third_column() -> Int {
+    var total = 0;
+    'rows: for i in 0..4 {
+        for j in 0..4 {
+            if j == 2 { continue 'rows; }
+            total += i * 0 + 1;
+        }
+    }
+    return total;
+}
+
+# the unwind spans a temporary *and* two loops at once: `id`'s callee is
+# pushed, the `while` is live, and the break's value has to outlive all of it
+fun break_two_loops_past_a_callee() -> Int {
+    'outer: loop {
+        var guard = 0;
+        while guard < 100 {
+            guard += 1;
+            id({ var b = 3; break 'outer b + 39; });
+        }
+    }
+}
+
+# a local captured by a closure is detached by the same close-then-slide, now
+# reaching across both loops' scopes
+fun capture_across_two_loops() -> Int {
+    var total = 0;
+    'outer: loop {
+        for i in 0..3 {
+            var captured = i + 10;
+            var get = || captured;
+            total += get();
+            if i == 1 { break 'outer total; }
+        }
+    }
+}
+
+# a quote opens a label or a character literal, and only lookahead tells them
+# apart — here both spellings meet on one line
+fun label_beside_a_char() -> Char {
+    'scan: for c in "xay".chars() { if c == 'a' { break 'scan; } }
+    return 'a';
+}
+
+# a label may name the innermost loop, where it says nothing an unlabelled
+# `break` would not — the lookup still has to find it
+fun redundant_label() -> Int {
+    var n = 0;
+    'only: while n < 100 {
+        n += 1;
+        if n == 3 { break 'only; }
+    }
+    return n;
+}
+
+# the `dyn` expectation belongs to the loop the break *names*, so it has to
+# reach across the inner loop to get there — m82's coercion sites, per break.
+# The value is an `if` whose arms are different types, which is what makes the
+# hint load-bearing rather than merely redundant with the check that follows.
+fun pick(target: Int) -> String {
+    var s: dyn Shape = 'outer: loop {
+        for i in 0..3 {
+            if i == target {
+                break 'outer if i == 0 { Sq { n: 0 } } else { Ci { n: i } };
+            }
+        }
+        break Ci { n: 0 };
+    };
+    return s.name();
+}
+
+fun main() {
+    print(first_pair_with_product(6));
+    print(doubled_seventh());
+    print(count_before_the_third_column());
+    print(break_two_loops_past_a_callee());
+    print(capture_across_two_loops());
+    print(label_beside_a_char());
+    print(redundant_label());
+    print(pick(0));
+    print(pick(2));
+}

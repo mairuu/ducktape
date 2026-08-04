@@ -21,6 +21,17 @@ wrong with it, so the scanner reports and the parser re-reads a lexeme it knows
 is good. The alternative — a payload field on `Token` for one token kind —
 would widen every token in the array to carry a value only this one has.
 
+A quote also opens a **loop label** (`TOKEN_LABEL`), and only one of the two
+tokens it can open ever closes — so the scanner cannot decide on the opening
+character and forks on lookahead instead (`quote_opens_label`): a quote
+followed by an identifier is a label *unless* a second quote follows that
+identifier. `'a'` is a character, `'a` is a label. `'ab'` deliberately takes
+the character branch, so it still reports the one-character rule rather than
+degrading into a label plus a stray quote; `'\n'` never reaches the question,
+since a backslash cannot start an identifier. The lexeme keeps its leading
+quote, which is what lets a diagnostic print a label exactly as written
+without wrapping it in a second pair.
+
 ## Parser (`src/parser.c`)
 
 Recursive descent with a precedence ladder:
@@ -30,12 +41,20 @@ field/tuple access, indexing, `as`, `?`.
 
 Notables:
 - `parse_block` — statements vs. tail expression. `is_pure_stmt` routes
-  `var/return/break/continue/if/for/match/while/loop` through `parse_stmt`, but a
-  parsed `if`/`match`/`loop` statement immediately before `}` is unwrapped into
-  the block's tail (that's what makes `{ if c { 1 } else { 2 } }` an `Int`
-  block). `while` and `for` are not on that list: they are always `()`, so
-  there would be nothing to promote. `break expr?` needs no lookahead — a block
-  is not an expression primary, so anything but `;` after it starts a value.
+  `var/return/break/continue/if/for/match/while/loop` and a leading label
+  through `parse_stmt`, but a parsed `if`/`match`/`loop` statement immediately
+  before `}` is unwrapped into the block's tail (that's what makes
+  `{ if c { 1 } else { 2 } }` an `Int` block). `while` and `for` are not on
+  that list: they are always `()`, so there would be nothing to promote. A
+  label lands on the node rather than around it, so a labelled `loop` is
+  promoted like any other. `break 'l? expr?` needs no lookahead — a block is
+  not an expression primary, so anything but `;` after it starts a value, and
+  the scanner has already told a label from a character literal.
+- A label is consumed in `parse_primary` ahead of the three loop forms, and
+  whichever follows takes it; nothing else may follow one, which is what keeps
+  a label from being an expression. The one place the scanner's fork misleads
+  is an unclosed character literal (`'a;`), so a one-character label with no
+  `:` behind it gets a note naming the likelier mistake.
 - `parse_closure` — `|params| ( -> type )? ( { block } | expr )`. The body has
   no introducer token: a `{` is read as the block form and anything else starts
   an expression, so the two are told apart by lookahead rather than by a `=>`.
@@ -2134,9 +2153,18 @@ The fourth thing that types `!` is a `loop` with no exit, and finding one is why
 `CheckCtx` keeps a **stack** of enclosing loops (`CheckLoop`, innermost first)
 rather than the depth counter it used to. A depth answers "is there a loop at
 all", which is all `break`/`continue` needed; "does a `break` leave *this* one"
-needs the frame itself, and since a `break` carries no label the frame it marks
-is always the head of the list. A closure body sets the list to NULL, the same
-boundary `break` could never cross anyway.
+needs the frame itself. `check_loop_target` turns a `break`/`continue` into the
+frame it leaves — the head of the list unlabelled, the first frame whose
+`label` matches otherwise — and everything downstream reads *that* frame rather
+than the head, which is the whole of what a label costs the checker. A frame
+with no name is only ever reachable as the head, so an unlabelled inner loop
+cannot hide an outer named one. A closure body sets the list to NULL, which is
+also why a label is out of scope inside a closure — the same boundary `break`
+could never cross anyway.
+
+`check_label_shadow` refuses a label an enclosing loop already declared, rather
+than resolving innermost-first the way a variable does: the outer loop would be
+unreachable by name from inside the inner one, and renaming is free.
 
 What the frame accumulates is `break_type`, the **join of every break's value**,
 which is the `loop`'s type — divergence and a value being the same answer read
@@ -2149,11 +2177,17 @@ ever leaves — no break at all, or every one of them diverging first — and th
 is the `!` case, so the node itself records nothing. The frame also carries
 `want`, the `dyn` expectation `dyn_expectation` reads off the loop's hint: a
 `loop` is a `dyn` position in exactly the way an `if` is, one arm per break.
+A labelled break takes its hint from the frame it *names*, so the target is
+resolved before the value — which matters only where the value cannot type
+without it (an `if` whose arms are two different impls), since the
+`check_flow_into` that follows re-derives the coercion from the target anyway.
 
 Only a `loop` frame accepts a value at all, which `CheckLoop.kind` says. A
 `while` or `for` leaves by finishing as well as by breaking, and that exit has
 nothing to bring to the join — so the refusal is about the *other* exit, not
-about the break, and the diagnostic names the construct that has one.
+about the break, and the diagnostic names the construct that has one. With a
+label the question is asked of the named loop, so `break 'rows v` where `'rows`
+is a `for` is refused exactly as the unlabelled form is.
 
 When the pattern cannot be checked — a poisoned initializer, or a mismatch
 that stopped the walk partway — `bind_pattern_poison` defines the remaining

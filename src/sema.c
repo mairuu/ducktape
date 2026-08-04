@@ -4403,6 +4403,50 @@ static const char *check_loop_name(CheckLoopKind kind) {
   return "loop";
 }
 
+// Which loop a `break`/`continue` leaves. Unlabelled it is the innermost one,
+// labelled it is whichever declared the name — so the answer is a frame rather
+// than a depth, and everything downstream reads the frame it was given instead
+// of the head of the list. NULL means the question was already answered with a
+// diagnostic.
+static CheckLoop *check_loop_target(CheckCtx *ctx, LoopLabel label, Span span,
+                                    const char *keyword) {
+  if (label.name.len == 0) {
+    if (ctx->loops == NULL) {
+      diag_error(ctx->diags, span, "%s statement not within a loop", keyword);
+    }
+    return ctx->loops;
+  }
+  for (CheckLoop *loop = ctx->loops; loop != NULL; loop = loop->parent) {
+    if (sv_equal(loop->label.name, label.name)) {
+      return loop;
+    }
+  }
+  // a closure resets the list, so an enclosing loop is genuinely out of scope
+  // here rather than merely unnamed — the message says "in scope" for that.
+  // the lexeme keeps its leading quote, so it is never wrapped in another pair
+  diag_error(ctx->diags, label.span, "no loop labelled " SV_FMT " is in scope",
+             SV_ARG(label.name));
+  return NULL;
+}
+
+// A label a nearer loop already declared would be unreachable by name, and
+// there is no reason to write one — so this is refused outright rather than
+// resolved innermost-first the way a shadowed variable is.
+static void check_label_shadow(CheckCtx *ctx, LoopLabel label) {
+  if (label.name.len == 0) {
+    return;
+  }
+  for (CheckLoop *loop = ctx->loops; loop != NULL; loop = loop->parent) {
+    if (sv_equal(loop->label.name, label.name)) {
+      diag_error(ctx->diags, label.span,
+                 "label " SV_FMT " is already used by an enclosing loop",
+                 SV_ARG(label.name));
+      diag_note(ctx->diags, loop->label.span, "the enclosing loop is here");
+      return;
+    }
+  }
+}
+
 static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
   switch (stmt->kind) {
   case STMT_EXPR: {
@@ -4449,8 +4493,12 @@ static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
     break;
   }
   case STMT_BREAK: {
-    CheckLoop *loop = ctx->loops;
-    Expr *value = stmt->as.break_stmt.value;
+    StmtBreak *br = &stmt->as.break_stmt;
+    // the target settles first because it is what supplies the hint: a
+    // labelled break is checked against the loop it names, not the one it sits
+    // in.
+    CheckLoop *loop = check_loop_target(ctx, br->label, stmt->span, "break");
+    Expr *value = br->value;
     // resolved before the position is judged, so a bad value in a `while`
     // still reports its own errors rather than being skipped over.
     Type *val_ty = value != NULL
@@ -4458,7 +4506,6 @@ static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
                        : ctx->tc->t_unit;
 
     if (loop == NULL) {
-      diag_error(ctx->diags, stmt->span, "break statement not within a loop");
       break;
     }
     if (value != NULL && loop->kind != CHECK_LOOP_LOOP) {
@@ -4499,10 +4546,8 @@ static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
     break;
   }
   case STMT_CONTINUE: {
-    if (ctx->loops == NULL) {
-      diag_error(ctx->diags, stmt->span,
-                 "continue statement not within a loop");
-    }
+    check_loop_target(ctx, stmt->as.continue_stmt.label, stmt->span,
+                      "continue");
     break;
   }
   case STMT_RETURN: {
@@ -8742,7 +8787,9 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     bool bound = wh->binding == NULL ||
                  check_cond_binding(ctx, wh->binding, cond_ty, "a 'while var'",
                                     "the loop never exits", "'loop'");
-    CheckLoop frame = {.kind = CHECK_LOOP_WHILE, .parent = ctx->loops};
+    check_label_shadow(ctx, wh->label);
+    CheckLoop frame = {
+        .kind = CHECK_LOOP_WHILE, .label = wh->label, .parent = ctx->loops};
     ctx->loops = &frame;
     resolve_expr(ctx, wh->body, NULL);
     ctx->vscope = vscope_pop(ctx->vscope, ctx->diags);
@@ -8758,7 +8805,9 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     // body's block pushes one like any other. The hint reaches the breaks
     // because they are where the value is: a `loop` is a `dyn` position in
     // exactly the way an `if`'s arms are (m82), one arm per break.
+    check_label_shadow(ctx, lp->label);
     CheckLoop frame = {.kind = CHECK_LOOP_LOOP,
+                       .label = lp->label,
                        .want = dyn_expectation(ctx, hint),
                        .parent = ctx->loops};
     ctx->loops = &frame;
@@ -8798,7 +8847,9 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     ctx->vscope = vscope_push(ctx->vscope, false, true, ctx->al);
     vscope_define(ctx->vscope, for_->var_name, item_ty, ctx->diags,
                   for_->var_span, NULL);
-    CheckLoop frame = {.kind = CHECK_LOOP_FOR, .parent = ctx->loops};
+    check_label_shadow(ctx, for_->label);
+    CheckLoop frame = {
+        .kind = CHECK_LOOP_FOR, .label = for_->label, .parent = ctx->loops};
     ctx->loops = &frame;
     resolve_expr(ctx, for_->body, NULL);
     ctx->vscope = vscope_pop(ctx->vscope, ctx->diags);

@@ -1,0 +1,11 @@
+#! expect: a 'for' loop's break cannot carry a value
+# The label picks which loop the value is being handed to, so the rule that
+# only a `loop` accepts one is judged against the *named* loop, not the
+# innermost.
+fun main() {
+    'outer: for i in 0..3 {
+        loop {
+            if i == 1 { break 'outer 5; }
+        }
+    }
+}

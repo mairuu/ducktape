@@ -1075,7 +1075,17 @@ typedef struct {
   Expr *else_branch;
 } ExprIf;
 
+// A loop's name, or `name.len == 0` when it has none. Every loop form carries
+// one and every `break`/`continue` may name one, so the pair travels together
+// rather than being two fields repeated five times. The name keeps its leading
+// quote, so a diagnostic prints it exactly as it was written.
 typedef struct {
+  StringView name;
+  Span span;
+} LoopLabel;
+
+typedef struct {
+  LoopLabel label;
   StringView var_name;
   Span var_span;
   Expr *iterable;
@@ -1093,6 +1103,7 @@ typedef struct {
 // same reading of `condition` as `ExprIf`: with a `binding` the loop runs for
 // as long as the re-evaluated subject keeps matching.
 typedef struct {
+  LoopLabel label;
   Expr *condition;
   Pattern *binding; // NULL for a plain `while`
   Expr *body;
@@ -1105,6 +1116,7 @@ typedef struct {
 // join the checker accumulates on its `CheckLoop` frame, so the node itself
 // records nothing.
 typedef struct {
+  LoopLabel label;
   Expr *body;
 } ExprLoop;
 
@@ -1255,12 +1267,18 @@ typedef struct {
   Expr *value; // NULL for bare "return;"
 } StmtReturn;
 
-// `break expr?;`. The value is the loop's, so only a `loop` accepts one — a
-// `while` or `for` also leaves by finishing, and that exit has none to agree
-// with.
+// `break 'label? expr?;`. The value is the loop's, so only a `loop` accepts one
+// — a `while` or `for` also leaves by finishing, and that exit has none to
+// agree with. Unlabelled, it names the innermost loop; labelled, the loop that
+// declared the name, however many it has to leave to get there.
 typedef struct {
-  Expr *value; // NULL for bare "break;"
+  LoopLabel label; // absent name = the innermost loop
+  Expr *value;     // NULL for bare "break;"
 } StmtBreak;
+
+typedef struct {
+  LoopLabel label;
+} StmtContinue;
 
 struct Stmt {
   StmtKind kind;
@@ -1271,6 +1289,7 @@ struct Stmt {
     StmtVar var_stmt;
     StmtReturn return_stmt;
     StmtBreak break_stmt;
+    StmtContinue continue_stmt;
   } as;
 };
 

@@ -16,6 +16,7 @@ static const char *token_type_string[] = {
     [TOKEN_FLOAT] = "FLOAT",
     [TOKEN_STRING] = "STRING",
     [TOKEN_CHAR] = "CHAR",
+    [TOKEN_LABEL] = "LABEL",
     [TOKEN_INTERPOLATION] = "INTERPOLATION",
     [TOKEN_TRUE] = "TRUE",
     [TOKEN_FALSE] = "FALSE",
@@ -330,6 +331,30 @@ const char *char_literal_value(StringView lexeme, uint32_t *out) {
   return NULL;
 }
 
+// A quote opens two different tokens, and only one of them ever closes. The
+// fork is decided by lookahead alone, on the character *after* an identifier:
+// `'a'` is a character, `'a` is a label. `'ab'` deliberately takes the
+// character branch so it still reports "a character literal holds exactly one
+// character" rather than splitting into a label and a stray quote, and
+// `'\n'` never reaches here since a backslash cannot start an identifier.
+static bool quote_opens_label(const Scanner *s) {
+  const char *p = s->current; // already past the opening quote
+  if (!isalpha((unsigned char)*p) && *p != '_') {
+    return false;
+  }
+  while (isalnum((unsigned char)*p) || *p == '_') {
+    p++;
+  }
+  return *p != '\'';
+}
+
+static Token scan_label(Scanner *s) {
+  while (isalnum((unsigned char)peek(s)) || peek(s) == '_') {
+    advance(s);
+  }
+  return make_token(s, TOKEN_LABEL);
+}
+
 // Finding the end is the scanner's whole job here — an escape is what makes
 // that more than "scan to the next quote", since `'\''` holds one. What is
 // *inside* is `char_literal_value`'s business, so the syntax of a character
@@ -497,7 +522,7 @@ Token scanner_next_token(Scanner *s) {
   if (c == '"')
     return scan_string(s);
   if (c == '\'')
-    return scan_char(s);
+    return quote_opens_label(s) ? scan_label(s) : scan_char(s);
 
   switch (c) {
   case '(':

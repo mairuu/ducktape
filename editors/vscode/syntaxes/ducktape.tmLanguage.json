@@ -6,6 +6,7 @@
     { "include": "#comment" },
     { "include": "#attribute" },
     { "include": "#char" },
+    { "include": "#label" },
     { "include": "#string" },
     { "include": "#number" },
     { "include": "#keyword" },
@@ -61,6 +62,12 @@
           ]
         }
       ]
+    },
+
+    "label": {
+      "comment": "a loop label; listed after #char so 'a' stays a character",
+      "name": "entity.name.label.ducktape",
+      "match": "'[A-Za-z_][A-Za-z0-9_]*(?!')"
     },
 
     "char": {

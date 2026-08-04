@@ -1,0 +1,10 @@
+#! expect: label 'dup is already used by an enclosing loop
+# Unlike a variable, a shadowed label is unreachable by name from the loop that
+# hides it — so the shadowing is refused rather than resolved innermost-first.
+fun main() {
+    'dup: for i in 0..3 {
+        'dup: for j in 0..3 {
+            if i + j == 2 { break 'dup; }
+        }
+    }
+}
