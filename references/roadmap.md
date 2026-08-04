@@ -512,7 +512,7 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   the test had to be sharpened to an `if` whose arms are two different impls.
   Left over: no label on a plain block, and no `unused_label` lint.
 
-- **97. A warning you can insist on** (`PENDING`) — `-Werror`, `-Werror=<lint>`,
+- **97. A warning you can insist on** (`9152764`) — `-Werror`, `-Werror=<lint>`,
   `-Wno-<lint>`, `-W<lint>`. Design: `language.md` "Lint levels from the command
   line", `architecture.md` Diagnostics, `overview.md` (the CLI + the `#! flags:`
   directive). Pinned by four `tests/{fail,warn}/werror*`, two `tests/pass`, and
