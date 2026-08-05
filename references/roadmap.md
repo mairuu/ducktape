@@ -568,7 +568,7 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   `break_depth = local_count` was indistinguishable from `= cg->depth` until a
   test put one in an argument. Left over: no `unused_label` lint.
 
-- **99. The types you cannot name** (`SHA`) — `int`/`float`/`bool`/`char`; `()`
+- **99. The types you cannot name** (`f4dec6d`) — `int`/`float`/`bool`/`char`; `()`
   and `!`. Design: `language.md` "Types" (the case rule, the two punctuation
   types, the reserved-name rule), `architecture.md` `type_named_builtin`,
   `grammar.ebnf` `type`. Pinned by `tests/pass/reclaimed_type_names.dt`, four
