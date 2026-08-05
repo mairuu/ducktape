@@ -509,7 +509,7 @@ static Value r_const(BcReader *r) {
     return val_bool(r_u8(r) != 0);
   case BC_C_CHAR: {
     // validated rather than trusted: every other tag's payload is total over
-    // its bits, and this one is not — a Char is a scalar value everywhere
+    // its bits, and this one is not — a char is a scalar value everywhere
     // else in the runtime, so an image may not be the one place it is not.
     uint32_t cp = r_u32(r);
     if (r->ok && !utf8_is_scalar(cp)) {

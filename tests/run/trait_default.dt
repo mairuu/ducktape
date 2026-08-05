@@ -24,16 +24,16 @@ fun pair_up<T>(a: T, b: T) -> (T, T) {
 trait Show {
     type Label;
 
-    fun show(self) -> Int;
+    fun show(self) -> int;
     fun label(self) -> Self.Label;
 
     # calls a required method through `Self`'s own bound
-    fun twice(self) -> Int {
+    fun twice(self) -> int {
         return self.show() + self.show();
     }
 
     # one default calling another
-    fun quad(self) -> Int {
+    fun quad(self) -> int {
         return self.twice() + self.twice();
     }
 
@@ -50,14 +50,14 @@ trait Show {
 
     # `Self` as a type argument: which copy of `pair_up` this reaches is
     # decided per receiver type, from inside a body that is itself a copy
-    fun doubled(self) -> Int {
+    fun doubled(self) -> int {
         var (x, y) = pair_up(self, self);
         return x.show() + y.show();
     }
 
     # `Self` in argument and return position, and captured by a closure
     fun bigger(self, other: Self) -> Self {
-        var pick: fun() -> Bool = || self.show() >= other.show();
+        var pick: fun() -> bool = || self.show() >= other.show();
         if pick() {
             return self;
         }
@@ -65,12 +65,12 @@ trait Show {
     }
 }
 
-struct Count(Int)
+struct Count(int)
 
 impl Show for Count {
     type Label = String;
 
-    fun show(self) -> Int {
+    fun show(self) -> int {
         return self.0;
     }
 
@@ -81,30 +81,30 @@ impl Show for Count {
 
 struct Boxed<T> {
     item: T,
-    size: Int,
+    size: int,
 }
 
 # a generic impl: one instantiation of the default body per type argument
 impl<T> Show for Boxed<T> {
-    type Label = Int;
+    type Label = int;
 
-    fun show(self) -> Int {
+    fun show(self) -> int {
         return self.size;
     }
 
-    fun label(self) -> Int {
+    fun label(self) -> int {
         return self.size * 10;
     }
 
     # an impl that writes the method itself wins over the default
-    fun quad(self) -> Int {
+    fun quad(self) -> int {
         return 0;
     }
 }
 
 # dispatch through a bound: which body runs is only known once T is concrete,
 # and it may be an impl's method or the trait's default
-fun sum_twice<T: Show>(a: T, b: T) -> Int {
+fun sum_twice<T: Show>(a: T, b: T) -> int {
     return a.twice() + b.quad();
 }
 

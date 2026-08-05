@@ -6,7 +6,7 @@
 # hand-written `Result` with `?`.
 enum Option<T> { Some(T), None, Nothing }
 
-fun describe(o: Option<Int>) -> Int {
+fun describe(o: Option<int>) -> int {
     match o {
         Option::Some(v) => { return v; },
         Option::None => { return 0; },

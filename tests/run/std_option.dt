@@ -19,7 +19,7 @@ use std::io::print;
 use std::option::Option;
 use std::cmp::min;
 
-fun halve(n: Int) -> Option<Int> {
+fun halve(n: int) -> Option<int> {
     if n % 2 == 0 {
         return Option::Some(n / 2);
     }
@@ -27,7 +27,7 @@ fun halve(n: Int) -> Option<Int> {
     return Option::None;
 }
 
-fun takes(o: Option<Int>) -> Int {
+fun takes(o: Option<int>) -> int {
     return o.unwrap_or(7);
 }
 
@@ -40,7 +40,7 @@ fun main() {
     # inferred from the parameter type of a non-generic function
     print(takes(Option::None));
     # ... and from the annotation
-    var none: Option<Int> = Option::None;
+    var none: Option<int> = Option::None;
     print(none.unwrap_or_else(|| 9));
 
     print(some.map(|x| x * 2).unwrap_or(0));

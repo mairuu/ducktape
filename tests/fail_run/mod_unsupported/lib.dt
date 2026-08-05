@@ -2,9 +2,9 @@
 # instantiation, and those copies are compiled after every module has been
 # walked. The diagnostic must still come from *this* file, the one the body
 # was written in, not from the module that instantiated it.
-pub fun show_twice<T>(v: T) -> Int {
+pub fun show_twice<T>(v: T) -> int {
   # a call to `print` lowers to an opcode, so the builtin has no body and no
   # global slot: naming it as a value is a construct the VM refuses.
-  var p: fun(Int) -> () = print;
+  var p: fun(int) -> () = print;
   return 1;
 }

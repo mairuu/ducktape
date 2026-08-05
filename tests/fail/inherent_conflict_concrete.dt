@@ -1,12 +1,12 @@
-#! expect: conflicting definitions of method 'push' for type '[Int]'
+#! expect: conflicting definitions of method 'push' for type '[int]'
 # The other direction of the overlap test: here the *existing* impl is the
 # generic one (std::array's `impl<T> [T]`) and the new one is concrete, so
 # matching the new impl against std's self type gets nowhere — only asking
-# whether std's applies to `[Int]` finds it. A narrower receiver is no more a
+# whether std's applies to `[int]` finds it. A narrower receiver is no more a
 # way to win a name than a bound is.
 
-impl [Int] {
-  fun push(self, v: Int) {
+impl [int] {
+  fun push(self, v: int) {
     return;
   }
 }

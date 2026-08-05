@@ -24,14 +24,14 @@ pub struct Point<T> {
     y: T,
 }
 
-struct Wrapper<T>(T, Int)
+struct Wrapper<T>(T, int)
 
 trait Drawable {
     type Color;
 
     fun draw(self) -> Self.Color;
 
-    fun is_visible(self) -> Bool {
+    fun is_visible(self) -> bool {
         return true;
     }
 }
@@ -44,15 +44,15 @@ impl<T> Drawable for Point<T> {
     }
 }
 
-impl Point<Int> {
-    fun new(x: Int, y: Int) -> Self {
+impl Point<int> {
+    fun new(x: int, y: int) -> Self {
         return Point { x: x, y: y };
     }
 }
 
 # a type deciding how it renders: `"{p}"` on anything but a primitive is
 # checked against `Display` and compiled as the call `p.to_string()`.
-impl Display for Point<Int> {
+impl Display for Point<int> {
     fun to_string(self) -> String {
         return "({self.x}, {self.y})";
     }
@@ -63,27 +63,27 @@ impl Display for Point<Int> {
 # all, so it needs no bindings — the two spellings are the same rule, since the
 # binding list is one entry per associated type the trait declares.
 trait Weigh {
-    fun weight(self) -> Int;
+    fun weight(self) -> int;
 
-    fun heavy(self) -> Bool {
+    fun heavy(self) -> bool {
         return self.weight() > 10;
     }
 }
 
-struct Brick { kg: Int }
-struct Feather { grams: Int }
+struct Brick { kg: int }
+struct Feather { grams: int }
 
 impl Weigh for Brick {
-    fun weight(self) -> Int { self.kg }
+    fun weight(self) -> int { self.kg }
 }
 
 impl Weigh for Feather {
-    fun weight(self) -> Int { 1 }
-    fun heavy(self) -> Bool { false }
+    fun weight(self) -> int { 1 }
+    fun heavy(self) -> bool { false }
 }
 
 # one collection, several concrete types — what static dispatch cannot express
-pub fun total_weight(items: [dyn Weigh]) -> Int {
+pub fun total_weight(items: [dyn Weigh]) -> int {
     var sum = 0;
     for item in items {
         if item.heavy() {
@@ -98,7 +98,7 @@ pub fun total_weight(items: [dyn Weigh]) -> Int {
 # identity — a table is memoised per (trait reference, concrete type) — so it
 # needs no runtime type tag, and it can only name a type that implements the
 # trait, since otherwise there would be no table to recognise.
-pub fun bricks_only(items: [dyn Weigh]) -> Int {
+pub fun bricks_only(items: [dyn Weigh]) -> int {
     var kg = 0;
     for item in items {
         match item as? Brick {
@@ -114,14 +114,14 @@ pub fun bricks_only(items: [dyn Weigh]) -> Int {
 # runtime. It is still a table swap rather than a re-reading, because the two
 # tables are laid out over two different closures.
 trait Crated: Weigh {
-    fun crates(self) -> Int;
+    fun crates(self) -> int;
 }
 
 impl Crated for Brick {
-    fun crates(self) -> Int { 1 }
+    fun crates(self) -> int { 1 }
 }
 
-pub fun crated_weight(c: dyn Crated) -> Int {
+pub fun crated_weight(c: dyn Crated) -> int {
     var one: dyn Weigh = c;
     return one.weight() * c.crates();
 }
@@ -129,11 +129,11 @@ pub fun crated_weight(c: dyn Crated) -> Int {
 # every branch of an `if` or a `match` is a coercion site of its own, so the
 # arms need not agree on a concrete type — and a body's tail expression is one
 # too, which is the `return` below written without the keyword.
-pub fun heavier(kg: Int) -> dyn Weigh {
+pub fun heavier(kg: int) -> dyn Weigh {
     if kg > 10 { Brick { kg: kg } } else { Feather { grams: kg } }
 }
 
-pub fun by_name(which: Int) -> dyn Weigh {
+pub fun by_name(which: int) -> dyn Weigh {
     match which {
         0 => Feather { grams: 1 },
         _ => Brick { kg: 3 },
@@ -143,7 +143,7 @@ pub fun by_name(which: Int) -> dyn Weigh {
 # `a op= b` is `a = a op b`, so the operator is the one the operands' types
 # decide: an opcode for two numbers, `a.add(b)` for a type with an impl. The
 # place is compiled once either way, so `bricks[pick()]` picks once.
-pub fun stacked(bricks: [Brick], pick: fun() -> Int) -> Int {
+pub fun stacked(bricks: [Brick], pick: fun() -> int) -> int {
     var total = 0;
     total += bricks[pick()].kg;
     total %= 100;
@@ -155,24 +155,24 @@ pub fun stacked(bricks: [Brick], pick: fun() -> Int) -> Int {
 # a trait reference is what carries them, so the signatures a trait declares
 # are generic over them exactly as a function's are over its own.
 trait Pack<T> {
-    fun pack(self, item: T) -> Int;
+    fun pack(self, item: T) -> int;
 
-    fun pack_two(self, a: T, b: T) -> Int {
+    fun pack_two(self, a: T, b: T) -> int {
         return self.pack(a) + self.pack(b);
     }
 }
 
-impl Pack<Int> for Brick {
-    fun pack(self, item: Int) -> Int { self.kg + item }
+impl Pack<int> for Brick {
+    fun pack(self, item: int) -> int { self.kg + item }
 }
 
 # `Brick` implements the trait twice, at two different arguments: the
 # reference is what tells them apart, so coherence lets both stand.
 impl Pack<String> for Brick {
-    fun pack(self, _item: String) -> Int { self.kg }
+    fun pack(self, _item: String) -> int { self.kg }
 }
 
-pub fun packed<P: Pack<Int>>(packer: P) -> Int {
+pub fun packed<P: Pack<int>>(packer: P) -> int {
     return packer.pack_two(1, 2);
 }
 
@@ -182,47 +182,47 @@ pub fun packed<P: Pack<Int>>(packer: P) -> Int {
 # as a method call on a bounded receiver does.
 trait Mark {
     fun blank() -> Self;
-    fun weight(self) -> Int;
+    fun weight(self) -> int;
 }
 
 impl Mark for Brick {
     fun blank() -> Brick { return Brick { kg: 0 }; }
-    fun weight(self) -> Int { return self.kg; }
+    fun weight(self) -> int { return self.kg; }
 }
 
-pub fun blank_weight<M: Mark>() -> Int {
+pub fun blank_weight<M: Mark>() -> int {
     var m: M = M::blank();
     return m.weight();
 }
 
-# `Float::from(7)` — a builtin type qualifies a path like a declared one, which
+# `float::from(7)` — a builtin type qualifies a path like a declared one, which
 # is what makes the conversions `std::convert` ships for the primitives
 # reachable by name as well as through `into`.
-pub fun widened(n: Int) -> Float {
-    return Float::from(n);
+pub fun widened(n: int) -> float {
+    return float::from(n);
 }
 
 # two `From` impls for one type: the qualified call reads its *argument* to pick
-# between them (milestone 30), where the single-impl `Float::from` above has
+# between them (milestone 30), where the single-impl `float::from` above has
 # nothing to choose. Neither the self type nor a written reference tells them
 # apart — only `5` vs `true` does.
-struct Tick { at: Int }
-impl From<Int> for Tick { fun from(v: Int) -> Tick { return Tick { at: v }; } }
-impl From<Bool> for Tick { fun from(_v: Bool) -> Tick { return Tick { at: 0 }; } }
+struct Tick { at: int }
+impl From<int> for Tick { fun from(v: int) -> Tick { return Tick { at: v }; } }
+impl From<bool> for Tick { fun from(_v: bool) -> Tick { return Tick { at: 0 }; } }
 
-pub fun ticks() -> Int {
-    var a = Tick::from(5);    # the Int impl
-    var b = Tick::from(true); # the Bool impl, chosen by the argument
+pub fun ticks() -> int {
+    var a = Tick::from(5);    # the int impl
+    var b = Tick::from(true); # the bool impl, chosen by the argument
     return a.at + b.at;
 }
 
 # the receiver-side dual (milestone 31): `Brick` implements `Pack` twice, and a
 # bare `brick.pack(..)` cannot say which — the receiver is `Brick` either way.
 # The trait reference qualifying the call is what tells them apart, the same
-# `(self type, trait reference)` pair `impl Pack<Int> for Brick` is filed under.
-pub fun packs() -> Int {
+# `(self type, trait reference)` pair `impl Pack<int> for Brick` is filed under.
+pub fun packs() -> int {
     var brick = Brick { kg: 10 };
-    var by_int = Pack::<Int>::pack(brick, 5);      # the Int impl: 10 + 5
+    var by_int = Pack::<int>::pack(brick, 5);      # the int impl: 10 + 5
     var by_str = Pack::<String>::pack(brick, "x"); # the String impl: 10
     return by_int + by_str;
 }
@@ -240,12 +240,12 @@ pub fun render_dyn(item: dyn Drawable<Color = String>) -> String {
     return item.draw();
 }
 
-pub fun process_data<T>(_data: T) -> Result<Int, String> {
+pub fun process_data<T>(_data: T) -> Result<int, String> {
     var p = Point::new(10, 20);
     var _shown: String = render(p);
     # `is_visible` has a default body the impl omits — inherited from the trait
-    var _visible: Bool = p.is_visible();
-    var _packed_kg: Int = packed(Brick { kg: 5 });
+    var _visible: bool = p.is_visible();
+    var _packed_kg: int = packed(Brick { kg: 5 });
     # a `var` binding is an irrefutable pattern: tuples, named-field structs,
     # tuple structs, nesting and `_` all bind the same way a match arm does
     var (a, b) = (1, 2.5);
@@ -253,9 +253,9 @@ pub fun process_data<T>(_data: T) -> Result<Int, String> {
     var Wrapper(_inner, tag) = Wrapper(true, 7);
     var (_nested, (_deep, _)) = (a, (px, tag));
     var _unit_val: () = ();
-    # a Char is a primitive like Int or Bool: a literal, an annotation, an
+    # a char is a primitive like int or bool: a literal, an annotation, an
     # equality, and interpolation with no `Display` impl in sight
-    var initial: Char = 'd';
+    var initial: char = 'd';
     var _newline = '\n';
     var snowman = '\u{2603}';
     var _greeting = "{initial}{snowman} is a {initial == 'd'}";
@@ -276,16 +276,16 @@ pub fun process_data<T>(_data: T) -> Result<Int, String> {
     var _r1 = 1..10;
     var _r2 = 0..=100;
 
-    var inline_adder: fun(Int, Int) -> Int = |x, y| x + y;
+    var inline_adder: fun(int, int) -> int = |x, y| x + y;
     var closure_res = inline_adder(1, 2);
 
     # closure capturing an enclosing local (upvalue)
     var captured_base = 10;
-    var add_base: fun(Int) -> Int = |x| x + captured_base;
+    var add_base: fun(int) -> int = |x| x + captured_base;
     var _captured_res = add_base(closure_res);
 
     var _drawn = p.draw();
-    var _casted = 10 as Float;
+    var _casted = 10 as float;
 
     var _if_val = if logic {
         1
@@ -349,7 +349,7 @@ pub fun process_data<T>(_data: T) -> Result<Int, String> {
         (_val_a, _val_b) => "bound",
     };
 
-    var seed: Result<Int, String> = Result::Ok(5);
+    var seed: Result<int, String> = Result::Ok(5);
     var _enum_match = match seed {
         Result::Ok(v) => v,
         Result::Err(_) => 0,
@@ -373,7 +373,7 @@ pub fun process_data<T>(_data: T) -> Result<Int, String> {
     var Result::Ok(unwrapped) = seed else { return Result::Err("no seed"); };
     var _after_else = unwrapped + 1;
 
-    var _helper = || -> Result<Int, String> {
+    var _helper = || -> Result<int, String> {
         var val = process_data(10)?;
         return Result::Ok(val);
     };
@@ -385,15 +385,15 @@ pub fun process_data<T>(_data: T) -> Result<Int, String> {
 # until `None`. The cursor is a private field that advances in place (milestones
 # 43/44); `Iterator`, `Option`, and the loop's unwrap are all lang items the
 # program never spells — and all preluded, so none is imported.
-pub struct Countdown { n: Int, stop: Int }
+pub struct Countdown { n: int, stop: int }
 
 impl Countdown {
-    fun from(n: Int) -> Countdown { Countdown { n: n, stop: 0 } }
+    fun from(n: int) -> Countdown { Countdown { n: n, stop: 0 } }
 }
 
 impl Iterator for Countdown {
-    type Item = Int;
-    fun next(self) -> Option<Int> {
+    type Item = int;
+    fun next(self) -> Option<int> {
         if self.n <= self.stop { return Option::None; }
         var cur = self.n;
         self.n -= 1;
@@ -409,7 +409,7 @@ impl Iterator for Countdown {
 # Countdown` above exists. Unlike `Iterator` it is not a lang item, so it is
 # imported by name.
 impl DoubleEnded for Countdown {
-    fun next_back(self) -> Option<Int> {
+    fun next_back(self) -> Option<int> {
         if self.n <= self.stop { return Option::None; }
         self.stop += 1;
         return Option::Some(self.stop);
@@ -462,12 +462,12 @@ fun main() {
     # a Display impl reached by interpolation, beside a primitive segment
     var _shown = "{Point::new(1, 2)} #{n}";
     # an associated function through a bound, and the conversion the blanket
-    # `impl<T, U: From<T>> Into<U> for T` supplies — pinned by the annotation,
+    # `impl<T, U: From<T>> into<U> for T` supplies — pinned by the annotation,
     # since a conversion is the one call its receiver cannot decide
     var _blank = blank_weight::<Brick>();
-    var wide: Float = 7.into();
+    var wide: float = 7.into();
     # a format spec (milestone 35): a width aligns a Display value, a precision
-    # fixes a Float's decimals — both desugar to std::string::pad_* / fmt::float
+    # fixes a float's decimals — both desugar to std::string::pad_* / fmt::float
     var _padded = "{Point::new(1, 2):>12} {wide:.2}";
     # a user Iterator driven by `for`: next() advances a private cursor to None
     var acc = 0;
@@ -494,7 +494,7 @@ fun main() {
     # iterator and yields those end to end — its adapter's `Item` is `J.Item`,
     # a projection over a type *parameter*, which is what milestone 50 unblocked
     var _flat = Countdown::from(3).flat_map(|k| Countdown::from(k)).skip(1).collect();
-    # the associated-type bound discharged: `Countdown.Item` is `Int`, which is
+    # the associated-type bound discharged: `Countdown.Item` is `int`, which is
     # `Ord`, so `largest`'s `where` is satisfied at this call
     var _peak = largest(Countdown::from(4).filter(|k| k % 2 == 0));
     # the same bound on a trait *method's* signature (milestone 53), which is
@@ -541,6 +541,6 @@ fun main() {
 }
 
 # a range as a parameter rather than only a loop header
-fun span_len(r: Range) -> Int {
+fun span_len(r: Range) -> int {
     return r.iter().count();
 }

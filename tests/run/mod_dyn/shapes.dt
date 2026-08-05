@@ -1,12 +1,12 @@
 pub trait Shape {
-    fun area(self) -> Int;
+    fun area(self) -> int;
     fun describe(self) -> String {
         return "area {self.area()}";
     }
 }
 
-pub struct Sq { pub s: Int }
+pub struct Sq { pub s: int }
 
 impl Shape for Sq {
-    fun area(self) -> Int { self.s * self.s }
+    fun area(self) -> int { self.s * self.s }
 }

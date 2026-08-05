@@ -214,10 +214,10 @@ static Value n_sort_by(NativeCtx *ctx, Value *args, int argc) {
 // std::char
 // ───────────────────────────────────────────────────────────────────────────────
 
-// The one thing a `Char` cannot express about itself is its number, so these
+// The one thing a `char` cannot express about itself is its number, so these
 // two are the whole of `std::char`'s C surface. `is_digit`, `to_upper` and the
 // rest are ordinary ducktape arithmetic on top of them — milestone 23's rule,
-// and here it cuts deeper than usual, because a code point *is* an Int and
+// and here it cuts deeper than usual, because a code point *is* an int and
 // every classification is a range test over one.
 
 static Value n_char_code(NativeCtx *ctx, Value *args, int argc) {
@@ -226,7 +226,7 @@ static Value n_char_code(NativeCtx *ctx, Value *args, int argc) {
   return val_int(args[0].as.c);
 }
 
-// The inverse, and the only place a Char can be conjured from nothing, so it
+// The inverse, and the only place a char can be conjured from nothing, so it
 // is where the scalar-value invariant is enforced: a surrogate half and
 // anything past U+10FFFF are not characters, and letting one through would
 // mean `utf8_encode` could fail somewhere that cannot report it.
@@ -244,7 +244,7 @@ static Value n_char_from_code(NativeCtx *ctx, Value *args, int argc) {
 // std::fmt
 // ───────────────────────────────────────────────────────────────────────────────
 
-// A Float to a fixed number of decimals. This is the one rendering decision
+// A float to a fixed number of decimals. This is the one rendering decision
 // the language cannot express: `value_format_float` picks the shortest decimal
 // that round-trips, which is the right default and the only thing `"{f}"` can
 // say. Allocating, so `args` staying on the VM stack is what roots the
@@ -285,14 +285,14 @@ static Value n_fmt_float(NativeCtx *ctx, Value *args, int argc) {
 // twin is what keeps an optimisation from quietly becoming a black box.
 
 // Fold `value` into `state`, one round. `value` is finalised through a
-// splitmix64 step first so that a low-entropy Int (0, 1, 2 — the commonest keys
+// splitmix64 step first so that a low-entropy int (0, 1, 2 — the commonest keys
 // there are) still lands spread across all 64 bits, then FNV-1a's prime carries
 // the accumulation and a last shift-xor moves the high bits down. That last
 // step is what `%` needs: an unfinalised FNV state has its best entropy at the
 // top, and the reduction to a slot index reads the bottom.
 //
 // Wrapping is intentional and every multiply here relies on it — unsigned in C
-// so it is defined rather than merely what the hardware does; the Int the
+// so it is defined rather than merely what the hardware does; the int the
 // language hands back wraps the same way (`2^62 * 4 == 0`).
 static Value n_hash_mix(NativeCtx *ctx, Value *args, int argc) {
   (void)ctx;
@@ -313,7 +313,7 @@ static Value n_hash_mix(NativeCtx *ctx, Value *args, int argc) {
 // type that costs nothing — and `impl Hash for String` is the cheapest impl in
 // std rather than the dearest.
 //
-// It is a `uint32_t` widened into an Int, so it is always non-negative here;
+// It is a `uint32_t` widened into an int, so it is always non-negative here;
 // the sign only appears once `hash_mix` has folded it. The value is FNV-1a over
 // the bytes, so equal Strings hash equal because they are the same pointer, and
 // unequal ones by the same argument the intern table already relies on.
@@ -380,7 +380,7 @@ static Value n_string_cmp(NativeCtx *ctx, Value *args, int argc) {
   return val_int(order < 0 ? -1 : 1);
 }
 
-// The crossing between the two views of text: a String is bytes, a Char is a
+// The crossing between the two views of text: a String is bytes, a char is a
 // scalar value, and these are where one becomes the other. The crossing is a
 // *walk* rather than an index — `std::iter`'s `CharIter` is the only
 // caller of the two below, and it is what keeps the byte offsets they speak in
@@ -388,12 +388,12 @@ static Value n_string_cmp(NativeCtx *ctx, Value *args, int argc) {
 // for `range_start`'s reason).
 //
 // Neither allocates, so neither has anything to say about the calling
-// convention: a Char is a value and an offset is an Int.
+// convention: a char is a value and an offset is an int.
 
 // The character beginning at byte offset `at`. A runtime error if `at` is
 // outside the string or does not start a well-formed sequence — the second is
 // reachable from ducktape, since `slice` cuts at byte offsets and can halve a
-// multi-byte sequence. A String is a byte string; only a Char promises to be a
+// multi-byte sequence. A String is a byte string; only a char promises to be a
 // scalar value.
 static Value n_string_char_at(NativeCtx *ctx, Value *args, int argc) {
   (void)argc;
@@ -515,17 +515,17 @@ static Value n_strbuf_push(NativeCtx *ctx, Value *args, int argc) {
   return val_unit();
 }
 
-// Append one Char's UTF-8 bytes. This is the append a `[String]` of parts
+// Append one char's UTF-8 bytes. This is the append a `[String]` of parts
 // could never have offered — the reason a buffer was worth a new object kind
 // at all — since it puts bytes in without interning a String to hold them.
 // It is also what lets `from_chars` be ordinary ducktape rather than a fifth
-// native: a String is built out of Chars the same way it is built out of
+// native: a String is built out of chars the same way it is built out of
 // anything else.
 static Value n_strbuf_push_char(NativeCtx *ctx, Value *args, int argc) {
   (void)argc;
   ObjStrBuf *buf = val_as_strbuf(args[0]);
   char bytes[UTF8_MAX_BYTES];
-  int n = utf8_encode(args[1].as.c, bytes); // a Char is always a scalar value
+  int n = utf8_encode(args[1].as.c, bytes); // a char is always a scalar value
   heap_strbuf_reserve(ctx->heap, buf, buf->len + n);
   memcpy(buf->bytes + buf->len, bytes, (size_t)n);
   buf->len += n;
@@ -551,7 +551,7 @@ static Value n_strbuf_clear(NativeCtx *ctx, Value *args, int argc) {
   return val_unit();
 }
 
-// Append an Int's decimal digits. Without it a number has to be interned first
+// Append an int's decimal digits. Without it a number has to be interned first
 // (`push(b, "{n}")` builds a throwaway String), which is exactly the
 // re-interning a buffer exists to avoid; here the digits go straight in, like
 // `push_char`. `snprintf` cannot overrun `buf` — an int64_t is at most 20

@@ -13,38 +13,38 @@
 use std::io::print;
 
 trait Make {
-    fun make(n: Int) -> Self;
+    fun make(n: int) -> Self;
     fun blank() -> Self;
-    fun value(self) -> Int;
+    fun value(self) -> int;
 
     # a default body over an associated function: `Self` is an ordinary type
     # parameter here, so this is a call through a bound like any other.
-    fun doubled(n: Int) -> Self {
+    fun doubled(n: int) -> Self {
         return Self::make(n + n);
     }
 }
 
-struct Box { n: Int }
+struct Box { n: int }
 
 impl Make for Box {
-    fun make(n: Int) -> Box { return Box { n: n }; }
+    fun make(n: int) -> Box { return Box { n: n }; }
     fun blank() -> Box { return Box { n: 0 }; }
-    fun value(self) -> Int { return self.n; }
+    fun value(self) -> int { return self.n; }
 }
 
 # the whole shape: no argument mentions `T`, so the bound and the turbofish are
 # the only things that decide which impl this compiles against.
-fun built<T: Make>(n: Int) -> Int {
+fun built<T: Make>(n: int) -> int {
     var v: T = T::make(n);
     return v.value();
 }
 
-fun blank_value<T: Make>() -> Int {
+fun blank_value<T: Make>() -> int {
     return T::blank().value();
 }
 
 # through the trait's *default* body, which the impl above does not override.
-fun doubled_value<T: Make>(n: Int) -> Int {
+fun doubled_value<T: Make>(n: int) -> int {
     var v: T = T::doubled(n);
     return v.value();
 }
@@ -52,7 +52,7 @@ fun doubled_value<T: Make>(n: Int) -> Int {
 # a method reached by the same spelling, with the receiver passed explicitly:
 # a method is an associated function whose first parameter is `self`, and the
 # path form is where that is visible.
-fun explicit<T: Make>(v: T) -> Int {
+fun explicit<T: Make>(v: T) -> int {
     return T::value(v);
 }
 

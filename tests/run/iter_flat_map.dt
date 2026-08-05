@@ -12,15 +12,15 @@ use std::iter::Iterator;
 use std::option::Option;
 use std::io::print;
 
-struct Counter { n: Int, max: Int }
+struct Counter { n: int, max: int }
 
 impl Counter {
-    fun to(max: Int) -> Counter { Counter { n: 0, max: max } }
+    fun to(max: int) -> Counter { Counter { n: 0, max: max } }
 }
 
 impl Iterator for Counter {
-    type Item = Int;
-    fun next(self) -> Option<Int> {
+    type Item = int;
+    fun next(self) -> Option<int> {
         if self.n >= self.max { return Option::None; }
         var v = self.n;
         self.n += 1;
@@ -29,7 +29,7 @@ impl Iterator for Counter {
 }
 
 # a source of Strings, so the flattened element type is visibly not the source's
-struct Words { i: Int }
+struct Words { i: int }
 
 impl Iterator for Words {
     type Item = String;
@@ -83,7 +83,7 @@ fun main() {
 #> 4
 
     # the flattened element type is the *inner* iterator's, not the source's:
-    # an Int source with a String inner yields Strings
+    # an int source with a String inner yields Strings
     print(Counter::to(2).flat_map(|_n| Words { i: 0 }).collect());
 #> [ab, , c, ab, , c]
 

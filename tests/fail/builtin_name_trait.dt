@@ -1,0 +1,6 @@
+#! expect: 'float' is a builtin type name
+# A trait declared under a builtin name compiles but can never be named as a
+# bound, which is the whole of what a trait is for.
+trait float { fun f(self); }
+
+fun main() { }

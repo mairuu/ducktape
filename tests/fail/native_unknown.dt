@@ -2,6 +2,6 @@
 # the attribute is a key into C's registry, resolved by the checker so an
 # unknown name reports against a real span.
 @native("no_such_native")
-pub fun nope(x: Int) -> Int;
+pub fun nope(x: int) -> int;
 
 fun main() {}

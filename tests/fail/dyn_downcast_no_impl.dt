@@ -6,13 +6,13 @@
 
 
 trait Shape {
-    fun area(self) -> Int;
+    fun area(self) -> int;
 }
 
-struct Sq { side: Int }
-struct Circle { r: Int }
+struct Sq { side: int }
+struct Circle { r: int }
 impl Shape for Sq {
-    fun area(self) -> Int { self.side * self.side }
+    fun area(self) -> int { self.side * self.side }
 }
 
 fun main() {

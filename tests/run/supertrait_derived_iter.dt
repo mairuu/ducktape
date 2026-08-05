@@ -6,19 +6,19 @@
 use std::io::print;
 use std::iter::{Iterator, DoubleEnded};
 
-struct Span { lo: Int, hi: Int }
+struct Span { lo: int, hi: int }
 
 impl DoubleEnded for Span {
-    type Item = Int;
+    type Item = int;
 
-    fun next(self) -> Option<Int> {
+    fun next(self) -> Option<int> {
         if self.lo >= self.hi { return Option::None; }
         var v = self.lo;
         self.lo = self.lo + 1;
         return Option::Some(v);
     }
 
-    fun next_back(self) -> Option<Int> {
+    fun next_back(self) -> Option<int> {
         if self.lo >= self.hi { return Option::None; }
         self.hi = self.hi - 1;
         return Option::Some(self.hi);
@@ -50,7 +50,7 @@ fun main() {
 
     # a `dyn` over the sub lays its vtable out over the closure, so the derived
     # impl has to fill the super's slots.
-    var it: dyn Iterator<Item = Int> = Span { lo: 7, hi: 9 };
+    var it: dyn Iterator<Item = int> = Span { lo: 7, hi: 9 };
     print("{it.next()}");
 #> Some(7)
     print("{it.next()}");

@@ -5,7 +5,7 @@
 # because the vtable was the only way in.
 #
 # It is not. An excluded method is a generic function over `Self`, so codegen
-# instantiates its body at `Self = dyn Iterator<Item = Int>` exactly as it
+# instantiates its body at `Self = dyn Iterator<Item = int>` exactly as it
 # would at any other receiver, and the `self.next()` inside it dispatches
 # through the table on its own. So the object-safe subset governs the vtable,
 # not the bound — and `map` runs here.
@@ -18,11 +18,11 @@ use std::iter::Iterator;
 use std::option::Option;
 use std::io::print;
 
-struct Counter { n: Int, max: Int }
+struct Counter { n: int, max: int }
 
 impl Iterator for Counter {
-    type Item = Int;
-    fun next(self) -> Option<Int> {
+    type Item = int;
+    fun next(self) -> Option<int> {
         if self.n >= self.max { return Option::None; }
         var v = self.n;
         self.n += 1;
@@ -30,14 +30,14 @@ impl Iterator for Counter {
     }
 }
 
-fun doubled<I: Iterator<Item = Int>>(it: I) -> [Int] {
+fun doubled<I: Iterator<Item = int>>(it: I) -> [int] {
     return it.map(|x| x * 2).collect();
 }
 
 fun main() {
-    var d: dyn Iterator<Item = Int> = Counter { n: 0, max: 3 };
+    var d: dyn Iterator<Item = int> = Counter { n: 0, max: 3 };
     print(d.map(|x| x * 2).collect());
 
-    var e: dyn Iterator<Item = Int> = Counter { n: 0, max: 3 };
+    var e: dyn Iterator<Item = int> = Counter { n: 0, max: 3 };
     print(doubled(e));
 }

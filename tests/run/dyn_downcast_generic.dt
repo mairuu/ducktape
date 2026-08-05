@@ -2,7 +2,7 @@
 # whether the vtable is a good enough identity: two instantiations of one
 # generic struct.
 #
-# Structs are not monomorphised — `Box<Int>` and `Box<String>` share a single
+# Structs are not monomorphised — `Box<int>` and `Box<String>` share a single
 # `StructDef` — so the runtime value carries nothing that tells them apart. The
 # vtable does: it is keyed by the *interned* self type, and those are two
 # distinct types, so they are two tables. Erasure never happens, because the
@@ -11,39 +11,39 @@ use std::io::print;
 use std::iter::Iterator;
 
 trait Tag {
-    fun tag(self) -> Int;
+    fun tag(self) -> int;
 }
 
 struct Box<T> { v: T }
 impl<T> Tag for Box<T> {
-    fun tag(self) -> Int { 0 }
+    fun tag(self) -> int { 0 }
 }
 
-struct Plain { n: Int }
+struct Plain { n: int }
 impl Tag for Plain {
-    fun tag(self) -> Int { self.n }
+    fun tag(self) -> int { self.n }
 }
 
 trait Kin {
-    fun mark(self) -> Int;
+    fun mark(self) -> int;
 
     # `Self` is an abstract target here, and the default body is instantiated
     # once per impl — so this asks "is that object my own type?" and each copy
     # compares against its own table. Note the asymmetry with the coercion:
     # `self` inside a default body cannot be *made* into a trait object, but a
     # trait object can be recognised as it.
-    fun kin(self, other: dyn Kin) -> Bool {
+    fun kin(self, other: dyn Kin) -> bool {
         return (other as? Self).is_some();
     }
 }
 
-struct Red { n: Int }
-struct Blue { n: Int }
+struct Red { n: int }
+struct Blue { n: int }
 impl Kin for Red {
-    fun mark(self) -> Int { self.n }
+    fun mark(self) -> int { self.n }
 }
 impl Kin for Blue {
-    fun mark(self) -> Int { self.n }
+    fun mark(self) -> int { self.n }
 }
 
 # `T` is abstract here: the bound answers the checker, and the instantiation
@@ -53,7 +53,7 @@ fun recover<T: Tag>(d: dyn Tag) -> Option<T> {
     return d as? T;
 }
 
-fun tag_of<T: Tag>(d: dyn Tag, fallback: Int) -> Int {
+fun tag_of<T: Tag>(d: dyn Tag, fallback: int) -> int {
     match d as? T {
         Option::Some(v) => v.tag(),
         Option::None => fallback,
@@ -63,38 +63,38 @@ fun tag_of<T: Tag>(d: dyn Tag, fallback: Int) -> Int {
 # and a projection is the same situation one step along: `I.Item` is abstract
 # here and collapses at the instantiation exactly as a type parameter does, so
 # it is a usable target where the coercion's list would have refused it.
-fun of_item<I: Iterator>(d: dyn Tag) -> Bool where I.Item: Tag {
+fun of_item<I: Iterator>(d: dyn Tag) -> bool where I.Item: Tag {
     return (d as? I.Item).is_some();
 }
 
-struct Plains { left: Int }
+struct Plains { left: int }
 impl Iterator for Plains {
     type Item = Plain;
     fun next(self) -> Option<Plain> { return Option::None; }
 }
 
-struct Boxes { left: Int }
+struct Boxes { left: int }
 impl Iterator for Boxes {
-    type Item = Box<Int>;
-    fun next(self) -> Option<Box<Int>> { return Option::None; }
+    type Item = Box<int>;
+    fun next(self) -> Option<Box<int>> { return Option::None; }
 }
 
 fun main() {
-    var ints: dyn Tag = Box::<Int> { v: 7 };
+    var ints: dyn Tag = Box::<int> { v: 7 };
     var strs: dyn Tag = Box::<String> { v: "seven" };
 
     # one StructDef, two self types, two tables — so two answers
-    print((ints as? Box<Int>).unwrap().v);
+    print((ints as? Box<int>).unwrap().v);
 #> 7
     print((ints as? Box<String>).is_some());
 #> false
     print((strs as? Box<String>).unwrap().v);
 #> seven
-    print((strs as? Box<Int>).is_some());
+    print((strs as? Box<int>).is_some());
 #> false
 
     # the target arriving as a type parameter, at two instantiations
-    print(recover::<Box<Int>>(ints).is_some());
+    print(recover::<Box<int>>(ints).is_some());
 #> true
     print(recover::<Plain>(ints).is_some());
 #> false
@@ -105,7 +105,7 @@ fun main() {
 
     # a downcast site is an ordinary vtable requester: `Plain` is never coerced
     # to a `dyn Tag` anywhere above, and asking about it still compiles
-    var only_asked: dyn Tag = Box::<Int> { v: 1 };
+    var only_asked: dyn Tag = Box::<int> { v: 1 };
     print((only_asked as? Plain).is_none());
 #> true
 

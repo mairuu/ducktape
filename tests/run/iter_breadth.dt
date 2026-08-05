@@ -11,15 +11,15 @@ use std::iter::Iterator;
 use std::option::Option;
 use std::io::print;
 
-struct Span { lo: Int, hi: Int }
+struct Span { lo: int, hi: int }
 
 impl Span {
-    fun of(lo: Int, hi: Int) -> Span { Span { lo: lo, hi: hi } }
+    fun of(lo: int, hi: int) -> Span { Span { lo: lo, hi: hi } }
 }
 
 impl Iterator for Span {
-    type Item = Int;
-    fun next(self) -> Option<Int> {
+    type Item = int;
+    fun next(self) -> Option<int> {
         if self.lo >= self.hi { return Option::None; }
         var v = self.lo;
         self.lo += 1;
@@ -29,11 +29,11 @@ impl Iterator for Span {
 
 # a source that says what it has been asked for, so "stopped early" is an
 # output diff rather than a claim
-struct Noisy { n: Int, max: Int }
+struct Noisy { n: int, max: int }
 
 impl Iterator for Noisy {
-    type Item = Int;
-    fun next(self) -> Option<Int> {
+    type Item = int;
+    fun next(self) -> Option<int> {
         if self.n >= self.max { return Option::None; }
         var v = self.n;
         self.n += 1;
@@ -144,14 +144,14 @@ fun main() {
     # `Self`-shaped type, has a type parameter of its own, or bounds the
     # element. `find`'s `Option<Self.Item>` is a projection the object pins,
     # exactly as `collect`'s `[Self.Item]` is.
-    var d: dyn Iterator<Item = Int> = Span::of(0, 6);
+    var d: dyn Iterator<Item = int> = Span::of(0, 6);
     print(d.any(|x| x == 2));
 #> true
     # the cursor was left at 3, so the same object answers from there
     print(d.count());
 #> 3
 
-    var e: dyn Iterator<Item = Int> = Span::of(0, 6);
+    var e: dyn Iterator<Item = int> = Span::of(0, 6);
     print(e.position(|x| x > 3));
 #> Some(4)
 
@@ -159,10 +159,10 @@ fun main() {
     # return `TakeWhile<Self>` — and are still callable, because an excluded
     # provided method is a generic function over `Self` that monomorphises at
     # `Self = dyn Iterator` instead of dispatching (milestone 56)
-    var f: dyn Iterator<Item = Int> = Span::of(0, 8);
+    var f: dyn Iterator<Item = int> = Span::of(0, 8);
     print(f.take_while(|x| x < 3).collect());
 #> [0, 1, 2]
-    var g: dyn Iterator<Item = Int> = Span::of(0, 6);
+    var g: dyn Iterator<Item = int> = Span::of(0, 6);
     print(g.skip_while(|x| x < 3).collect());
 #> [3, 4, 5]
 }

@@ -1,7 +1,7 @@
 pub struct Rank {
-  v: Int,
+  v: int,
 }
 
-pub fun mk(v: Int) -> Rank {
+pub fun mk(v: int) -> Rank {
   return Rank { v: v };
 }

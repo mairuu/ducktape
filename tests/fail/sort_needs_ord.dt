@@ -8,7 +8,7 @@
 # needs no `Ord` at all.
 use std::sort;
 
-struct P { n: Int }
+struct P { n: int }
 
 fun main() {
     var ps = [P { n: 2 }, P { n: 1 }];

@@ -4,11 +4,11 @@ enum Result<T, E> {
     Err(E),
 }
 
-fun get() -> Result<Int, String> {
+fun get() -> Result<int, String> {
     Result::Ok(1)
 }
 
-fun bad() -> Int {
+fun bad() -> int {
     var n = get()?;
     n
 }

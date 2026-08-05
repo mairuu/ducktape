@@ -1,20 +1,20 @@
-#! expect: does not implement trait 'Into<String>'
+#! expect: does not implement trait 'into<String>'
 # A trait's type arguments are part of what a bound asks for: implementing
-# `Into<Int>` does not answer `T: Into<String>`. Trait references are interned,
+# `into<int>` does not answer `T: into<String>`. Trait references are interned,
 # so the bound check is the same pointer comparison it always was — the
 # arguments come along for free.
 
-trait Into<T> {
+trait into<T> {
     fun into(self) -> T;
 }
 
-struct S { n: Int }
+struct S { n: int }
 
-impl Into<Int> for S {
-    fun into(self) -> Int { self.n }
+impl into<int> for S {
+    fun into(self) -> int { self.n }
 }
 
-fun want<T: Into<String>>(v: T) -> String {
+fun want<T: into<String>>(v: T) -> String {
     return v.into();
 }
 

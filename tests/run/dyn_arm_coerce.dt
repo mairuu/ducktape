@@ -9,18 +9,18 @@ use std::iter::{Iterator, DoubleEnded};
 trait Shape { fun name(self) -> String; }
 struct Sq;
 struct Tri;
-struct Circle { r: Int }
+struct Circle { r: int }
 impl Shape for Sq { fun name(self) -> String { return "sq"; } }
 impl Shape for Tri { fun name(self) -> String { return "tri"; } }
 impl Shape for Circle { fun name(self) -> String { return "circle{self.r}"; } }
 
 # an `else if` chain: the else branch is an `if`, so the expectation threads
 # down it by the same recursion that carried it into the arms.
-fun pick_if(n: Int) -> dyn Shape {
+fun pick_if(n: int) -> dyn Shape {
     if n == 0 { Sq } else if n == 1 { Tri } else { Circle { r: n } }
 }
 
-fun pick_match(n: Int) -> dyn Shape {
+fun pick_match(n: int) -> dyn Shape {
     match n {
         0 => Sq,
         1 => Tri,
@@ -30,7 +30,7 @@ fun pick_match(n: Int) -> dyn Shape {
 
 # the arm's concrete type is a type *parameter*: codegen substitutes it before
 # building the vtable, exactly as it does at any other coercion.
-fun wrap<T: Shape>(v: T, c: Bool) -> dyn Shape {
+fun wrap<T: Shape>(v: T, c: bool) -> dyn Shape {
     if c { v } else { Sq }
 }
 
@@ -40,10 +40,10 @@ fun takes(s: dyn Shape) -> String { return s.name(); }
 
 # an upcast in the arms: both branches are already trait objects, of a
 # subtrait, so each arm swaps tables rather than building one.
-struct Span { lo: Int, hi: Int }
+struct Span { lo: int, hi: int }
 impl Iterator for Span {
-    type Item = Int;
-    fun next(self) -> Option<Int> {
+    type Item = int;
+    fun next(self) -> Option<int> {
         if self.lo >= self.hi { return None; }
         var v = self.lo;
         self.lo += 1;
@@ -51,22 +51,22 @@ impl Iterator for Span {
     }
 }
 impl DoubleEnded for Span {
-    fun next_back(self) -> Option<Int> {
+    fun next_back(self) -> Option<int> {
         if self.lo >= self.hi { return None; }
         self.hi -= 1;
         return Some(self.hi);
     }
 }
-struct Once { v: Int, done: Bool }
+struct Once { v: int, done: bool }
 impl Iterator for Once {
-    type Item = Int;
-    fun next(self) -> Option<Int> {
+    type Item = int;
+    fun next(self) -> Option<int> {
         if self.done { return None; }
         self.done = true;
         return Some(self.v);
     }
 }
-fun span(lo: Int, hi: Int) -> dyn DoubleEnded<Item = Int> { Span { lo: lo, hi: hi } }
+fun span(lo: int, hi: int) -> dyn DoubleEnded<Item = int> { Span { lo: lo, hi: hi } }
 
 fun main() {
     for i in 0..4 { print(pick_if(i).name()); }
@@ -102,7 +102,7 @@ fun main() {
 #> circle2
 
     # a closure body, a struct field, an argument
-    var f: fun(Bool) -> dyn Shape = |b| if b { Sq } else { Tri };
+    var f: fun(bool) -> dyn Shape = |b| if b { Sq } else { Tri };
     print(f(false).name());
 #> tri
     var h = Holder { s: if c { Sq } else { Tri } };
@@ -118,11 +118,11 @@ fun main() {
 #> circle7
 
     # both arms upcast from `dyn DoubleEnded` to `dyn Iterator`
-    var a: dyn Iterator<Item = Int> = if c { span(0, 3) } else { span(5, 9) };
+    var a: dyn Iterator<Item = int> = if c { span(0, 3) } else { span(5, 9) };
     print(a.next());
 #> Some(5)
     # one arm upcasts, the other builds a table from a concrete type
-    var d: dyn Iterator<Item = Int> = if c { span(7, 9) } else { Once { v: 42, done: false } };
+    var d: dyn Iterator<Item = int> = if c { span(7, 9) } else { Once { v: 42, done: false } };
     print(d.next());
 #> Some(42)
 

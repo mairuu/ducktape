@@ -1,17 +1,17 @@
-# `Never` is nameable in a signature. It was always the type `return` and
+# `!` is nameable in a signature. It was always the type `return` and
 # `break` gave an expression; naming it is what lets a function *promise* it
 # does not come back, which is the whole of `panic`'s contract.
 #
-# Because `infer_unify` lets `Never` stand in for any type, one diverging
+# Because `infer_unify` lets `!` stand in for any type, one diverging
 # helper satisfies every return type without a cast.
 use std::panic::panic;
 use std::option::Option;
 
-fun unreachable() -> Never {
+fun unreachable() -> ! {
     return panic("unreachable");
 }
 
-fun an_int() -> Int {
+fun an_int() -> int {
     return unreachable();
 }
 
@@ -19,7 +19,7 @@ fun a_string() -> String {
     return unreachable();
 }
 
-fun an_option<T>(present: Bool, v: T) -> Option<T> {
+fun an_option<T>(present: bool, v: T) -> Option<T> {
     if present {
         return Option::Some(v);
     }
@@ -29,13 +29,13 @@ fun an_option<T>(present: Bool, v: T) -> Option<T> {
 # The other way to keep the promise: a `loop` nothing breaks out of has no exit,
 # so it needs no `panic` to end in. A `while true` would not do — its condition
 # is an expression the checker does not read, so the loop is always able to end.
-fun serve() -> Never {
+fun serve() -> ! {
     loop { }
 }
 
 # A `break` names the innermost loop only, so none of these three is an exit
 # from the outer one and it still diverges.
-fun serve_nested() -> Never {
+fun serve_nested() -> ! {
     loop {
         loop { break; }
         for _i in 0..3 { break; }

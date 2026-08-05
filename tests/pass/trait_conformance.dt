@@ -2,29 +2,29 @@
 # associated type and every required method with a matching signature; methods
 # with a default body may be omitted.
 struct Circle {
-    radius: Int,
+    radius: int,
 }
 
 trait Shape {
     type Unit;
 
-    fun area(self) -> Int;
-    fun scaled(self, factor: Int) -> Self.Unit;
+    fun area(self) -> int;
+    fun scaled(self, factor: int) -> Self.Unit;
 
     # default method — impls may omit it
-    fun describe(self) -> Bool {
+    fun describe(self) -> bool {
         return true;
     }
 }
 
 impl Shape for Circle {
-    type Unit = Int;
+    type Unit = int;
 
-    fun area(self) -> Int {
+    fun area(self) -> int {
         self.radius * self.radius * 3
     }
 
-    fun scaled(self, factor: Int) -> Self.Unit {
+    fun scaled(self, factor: int) -> Self.Unit {
         self.radius * factor
     }
 }

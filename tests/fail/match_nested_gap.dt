@@ -7,7 +7,7 @@ enum Opt<T> {
     None,
 }
 
-fun pick(o: Opt<Bool>) -> Int {
+fun pick(o: Opt<bool>) -> int {
     return match o {
         Opt::Some(true) => 1,
         Opt::None => 0,

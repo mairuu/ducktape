@@ -35,12 +35,12 @@ use std::string::buf;
 
 impl String {
     @native("string_len")
-    fun len(self) -> Int;
+    fun len(self) -> int;
 
     # `self[from..to)`, indexed in bytes. A runtime error if the range is not
     # within the string.
     @native("string_slice")
-    fun slice(self, from: Int, to: Int) -> String;
+    fun slice(self, from: int, to: int) -> String;
 
     # Byte order: <0 if `self` sorts before `other`, 0 if equal, >0 if after.
     # This is what `impl Ord for String` is written on, and it has to be a native
@@ -49,11 +49,11 @@ impl String {
     # `slice`, and comparing two one-byte slices needs string ordering, which is
     # what was being defined.
     #
-    # Interning contributes nothing here beyond the equal case, which is the
+    # interning contributes nothing here beyond the equal case, which is the
     # limit of the gift it made to `==`: two equal strings are one pointer, but
     # pointer order is allocation order.
     @native("string_cmp")
-    fun compare(self, other: String) -> Int;
+    fun compare(self, other: String) -> int;
 
     # `s.chars()` — the crossing between the two views of text the language has,
     # bytes here and scalar values in `std::char` — is **not** in this module: it
@@ -70,7 +70,7 @@ impl String {
     # `n` copies of `self`. Nothing here allocates a String per copy — the bytes
     # go straight into the buffer — which is the difference a buffer makes that
     # an array of parts could not.
-    fun repeat(self, n: Int) -> String {
+    fun repeat(self, n: int) -> String {
         var b = StringBuf::new();
         var i = 0;
         while i < n {
@@ -85,7 +85,7 @@ impl String {
 #
 # The buffer these build through lives in `std::strbuf`; here they are only the
 # String-shaped conveniences on top of it. They stay free functions because the
-# thing they operate on is a `[String]` / `[Char]`, not a `String`.
+# thing they operate on is a `[String]` / `[char]`, not a `String`.
 
 # `sep` between each pair of parts. The buffer is what makes this one pass:
 # the same loop written with `+` would intern every prefix along the way.
@@ -108,9 +108,9 @@ pub fun concat(parts: [String]) -> String {
 
 # `chars` the other way round. Ordinary ducktape rather than a fifth native,
 # because `push_char` already put the one operation a buffer could not express
-# within reach: a String is built out of Chars exactly the way it is built out
+# within reach: a String is built out of chars exactly the way it is built out
 # of anything else.
-pub fun from_chars(cs: [Char]) -> String {
+pub fun from_chars(cs: [char]) -> String {
     var b = StringBuf::new();
     for c in cs {
         b.push_char(c);
@@ -145,15 +145,15 @@ pub fun from_chars(cs: [Char]) -> String {
 # something: the pads are lang items, so they live here where the format spec's
 # desugaring can find them, and here cannot reach `CharIter`. What it needs is
 # not the characters but *how many*, so what it keeps is a counter — one
-# validating pass that allocates nothing, where the old `[Char]` conversion
+# validating pass that allocates nothing, where the old `[char]` conversion
 # built a whole array to take its length. A runtime error if `s` is not valid
 # UTF-8, which is why padding still refuses a string `slice` cut in half.
 @native("string_char_count")
-fun char_width(s: String) -> Int;
+fun char_width(s: String) -> int;
 
 # `s` at the left of a `width`-wide field, `fill` on the right (left-aligned).
 @lang("pad_end")
-pub fun pad_end(s: String, width: Int, fill: Char) -> String {
+pub fun pad_end(s: String, width: int, fill: char) -> String {
     var cur = char_width(s);
     if cur >= width {
         return s;
@@ -168,7 +168,7 @@ pub fun pad_end(s: String, width: Int, fill: Char) -> String {
 
 # `fill` on the left, `s` at the right of a `width`-wide field (right-aligned).
 @lang("pad_start")
-pub fun pad_start(s: String, width: Int, fill: Char) -> String {
+pub fun pad_start(s: String, width: int, fill: char) -> String {
     var cur = char_width(s);
     if cur >= width {
         return s;
@@ -185,7 +185,7 @@ pub fun pad_start(s: String, width: Int, fill: Char) -> String {
 # the right, so `pad_center("x", 4, '-')` is `-x--`: the text sits left of centre
 # when it cannot sit on it, which is the convention a reader expects for a label.
 @lang("pad_center")
-pub fun pad_center(s: String, width: Int, fill: Char) -> String {
+pub fun pad_center(s: String, width: int, fill: char) -> String {
     var cur = char_width(s);
     if cur >= width {
         return s;

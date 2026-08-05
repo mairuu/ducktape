@@ -1,4 +1,4 @@
 #! expect: type mismatch
 fun main() {
-    var x: Int = true;
+    var x: int = true;
 }

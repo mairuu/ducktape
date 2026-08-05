@@ -1,5 +1,5 @@
 # A trait object's arguments are unified, not merely compared: `dyn Src<T>`
-# takes a `dyn Src<Int>` and solves `T` from it, and so does the associated
+# takes a `dyn Src<int>` and solves `T` from it, and so does the associated
 # binding one bracket list out (`dyn Bag<Item = T>`).
 use std::io::print;
 
@@ -11,10 +11,10 @@ struct Five;
 struct Word;
 struct Nums;
 
-impl Src<Int> for Five { fun get(self) -> Int { return 5; } }
-impl Twice<Int> for Five { fun again(self) -> Int { return 10; } }
+impl Src<int> for Five { fun get(self) -> int { return 5; } }
+impl Twice<int> for Five { fun again(self) -> int { return 10; } }
 impl Src<String> for Word { fun get(self) -> String { return "w"; } }
-impl Bag for Nums { type Item = Int; fun one(self) -> Int { return 7; } }
+impl Bag for Nums { type Item = int; fun one(self) -> int { return 7; } }
 
 fun pull<T>(s: dyn Src<T>) -> T { return s.get(); }
 fun both<T>(_a: dyn Src<T>, b: dyn Src<T>) -> T { return b.get(); }
@@ -24,9 +24,9 @@ fun peek<T>(b: dyn Bag<Item = T>) -> T { return b.one(); }
 fun relay<U>(s: dyn Src<U>) -> U { return pull(s); }
 
 fun main() {
-    var s: dyn Src<Int> = Five;
+    var s: dyn Src<int> = Five;
     var w: dyn Src<String> = Word;
-    var t: dyn Twice<Int> = Five;
+    var t: dyn Twice<int> = Five;
 
     print(pull(s));
 #> 5
@@ -38,7 +38,7 @@ fun main() {
 #> w
 
     # the associated-type binding, solved the same way
-    var b: dyn Bag<Item = Int> = Nums;
+    var b: dyn Bag<Item = int> = Nums;
     print(peek(b));
 #> 7
 
@@ -46,7 +46,7 @@ fun main() {
     print(pull(Word));
 #> w
 
-    # the upcast is untouched: `Twice<Int>`'s closure is what solves `T` when
+    # the upcast is untouched: `Twice<int>`'s closure is what solves `T` when
     # the traits differ, and unification is what solves it when they agree
     print(pull(t));
 #> 5

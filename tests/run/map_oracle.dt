@@ -24,7 +24,7 @@ use std::io::print;
 use std::collections::HashMap;
 
 # a deterministic stream, so a failure is reproducible rather than a story
-fun lcg(seed: Int) -> Int {
+fun lcg(seed: int) -> int {
     return (seed * 1103515245 + 12345) % 2147483648;
 }
 
@@ -36,7 +36,7 @@ fun lcg(seed: Int) -> Int {
 # to say it was not testing the map at all; a deliberately broken `remove` still
 # passed it. Dividing first throws the bad bits away, and division is how a
 # language with no shift operator spells that.
-fun pick(seed: Int, n: Int) -> Int {
+fun pick(seed: int, n: int) -> int {
     var v = (seed / 2048) % n;
     if v < 0 {
         v += n;
@@ -52,7 +52,7 @@ fun pick(seed: Int, n: Int) -> Int {
 # is ever present. The scan only ever considers present entries, so that costs
 # memory and nothing else.
 
-fun o_find(keys: [Int], present: [Bool], k: Int) -> Int {
+fun o_find(keys: [int], present: [bool], k: int) -> int {
     var i = 0;
     while i < keys.len() {
         if present[i] and keys[i] == k {
@@ -63,7 +63,7 @@ fun o_find(keys: [Int], present: [Bool], k: Int) -> Int {
     return 0 - 1;
 }
 
-fun o_len(present: [Bool]) -> Int {
+fun o_len(present: [bool]) -> int {
     var n = 0;
     var i = 0;
     while i < present.len() {
@@ -75,9 +75,9 @@ fun o_len(present: [Bool]) -> Int {
     return n;
 }
 
-# `Option<Int>` flattened to an Int, so the two sides can be compared with one
+# `Option<int>` flattened to an int, so the two sides can be compared with one
 # `==`. -1 never occurs as a value in this workload, every value being a square.
-fun flatten(o: Option<Int>) -> Int {
+fun flatten(o: Option<int>) -> int {
     match o {
         Option::Some(v) => {
             return v;
@@ -89,10 +89,10 @@ fun flatten(o: Option<Int>) -> Int {
 }
 
 fun main() {
-    var m: HashMap<Int, Int> = HashMap::new();
-    var keys: [Int] = [];
-    var vals: [Int] = [];
-    var present: [Bool] = [];
+    var m: HashMap<int, int> = HashMap::new();
+    var keys: [int] = [];
+    var vals: [int] = [];
+    var present: [bool] = [];
 
     var seed = 20260728;
     var ops = 4000;

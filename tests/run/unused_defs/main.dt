@@ -11,7 +11,7 @@ mod funs;
 use std::io::print;
 use funs::answer;
 
-struct Point { x: Int }
+struct Point { x: int }
 
 fun show(p: Point) { print(p.x); }
 

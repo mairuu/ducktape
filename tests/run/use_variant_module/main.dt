@@ -7,7 +7,7 @@ use facade::{Shape, Rect, a_dot};
 use facade::Shape::Circle as Round;
 use shape::Shape::Dot;
 
-fun area(s: Shape) -> Int {
+fun area(s: Shape) -> int {
   match s {
     Dot => { return 0; },
     Round(r) => { return 3 * r * r; },

@@ -4,12 +4,12 @@
 #> 3
 #> n=3
 #> ok
-#> Int(7)
-#> Bool(false)
+#> int(7)
+#> bool(false)
 #> Point(1, 2)
-#> Int(9) / Int(9)
+#> int(9) / int(9)
 #> Point(4, 5) / Point(4, 5)
-#> Int(42)
+#> int(42)
 
 use std::io::print;
 
@@ -18,19 +18,19 @@ trait Show {
 }
 
 struct Point {
-  x: Int,
-  y: Int,
+  x: int,
+  y: int,
 }
 
-impl Show for Int {
+impl Show for int {
   fun show(self) -> String {
-    return "Int({self})";
+    return "int({self})";
   }
 }
 
-impl Show for Bool {
+impl Show for bool {
   fun show(self) -> String {
-    return "Bool({self})";
+    return "bool({self})";
   }
 }
 
@@ -79,13 +79,13 @@ impl<T: Show> Box<T> {
 }
 
 fun main() {
-  var a = Box::<Int>::new(3);
+  var a = Box::<int>::new(3);
   print(a.get());
 
   var b = a.map(|x| "n={x}");
   print(b.get());
 
-  var c = Box::<Bool>::new(true);
+  var c = Box::<bool>::new(true);
   print(c.map(|_x| "ok").get());
 
   print(describe(7));
@@ -95,5 +95,5 @@ fun main() {
   print(describe_twice(9));
   print(describe_twice(Point { x: 4, y: 5 }));
 
-  print(Box::<Int>::new(42).render());
+  print(Box::<int>::new(42).render());
 }

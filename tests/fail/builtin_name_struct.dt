@@ -1,0 +1,6 @@
+#! expect: 'int' is a builtin type name
+# A builtin name is answered before any scope, so a type declared under one is
+# unreachable rather than shadowing: refused at the declaration.
+struct int { v: int }
+
+fun main() { }

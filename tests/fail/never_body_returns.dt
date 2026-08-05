@@ -1,9 +1,9 @@
-#! expect: expected 'Never', which only diverging code produces, but got 'Int'
-# `return` in a `-> Never` body is the same broken promise, one construct in.
-fun evil() -> Never {
+#! expect: expected '!', which only diverging code produces, but got 'int'
+# `return` in a `-> !` body is the same broken promise, one construct in.
+fun evil() -> ! {
     return 3;
 }
 
 fun main() {
-    var x: Int = evil();
+    var x: int = evil();
 }

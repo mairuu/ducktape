@@ -1,4 +1,4 @@
-# `Ord for Float` is a *total* order: NaN sorts after every real number and all
+# `Ord for float` is a *total* order: NaN sorts after every real number and all
 # NaNs are equal to each other, so `cmp` is transitive and `max`/`min` give the
 # same answer whichever argument the NaN is. Before this the naive three-branch
 # `cmp` returned 0 for `NaN.cmp(x)` at every `x`, so `max(nan, 1.0)` and
@@ -30,7 +30,7 @@ fun main() {
     print(min(nan, 1.5));
     print(min(1.5, nan));
 
-    # a real Float pair still orders as before — the NaN branches are inert.
+    # a real float pair still orders as before — the NaN branches are inert.
     print(min(0 - 2.5, 3.5));
     print(max(0 - 2.5, 3.5));
 }

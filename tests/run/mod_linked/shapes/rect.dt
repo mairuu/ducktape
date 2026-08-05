@@ -3,8 +3,8 @@
 # *this* module's chunks (interpolation text segments).
 
 pub struct Rect {
-  pub w: Int,
-  pub h: Int,
+  pub w: int,
+  pub h: int,
 }
 
 pub enum Kind {
@@ -13,11 +13,11 @@ pub enum Kind {
 }
 
 impl Rect {
-  fun new(w: Int, h: Int) -> Rect {
+  fun new(w: int, h: int) -> Rect {
     return Rect { w: w, h: h };
   }
 
-  fun area(self) -> Int {
+  fun area(self) -> int {
     return self.w * self.h;
   }
 

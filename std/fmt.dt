@@ -7,8 +7,8 @@
 # happens to be in scope. So `"{v}"` on anything but a primitive is checked
 # against this trait and rewritten into the call `v.to_string()`.
 #
-# The primitives are not routed through it: the VM has always rendered an Int,
-# Float, Bool and String itself, which is what lets a program interpolate one
+# The primitives are not routed through it: the VM has always rendered an int,
+# float, bool and String itself, which is what lets a program interpolate one
 # without importing anything. The impls below exist for the *other* direction —
 # so a `T: Display` generic can be instantiated at a primitive — and each is
 # written by interpolating `self`, which is that same built-in path. That makes
@@ -24,25 +24,25 @@ pub trait Display {
   fun to_string(self) -> String;
 }
 
-impl Display for Int {
+impl Display for int {
   fun to_string(self) -> String {
     return "{self}";
   }
 }
 
-impl Display for Float {
+impl Display for float {
   fun to_string(self) -> String {
     return "{self}";
   }
 }
 
-impl Display for Bool {
+impl Display for bool {
   fun to_string(self) -> String {
     return "{self}";
   }
 }
 
-impl Display for Char {
+impl Display for char {
   fun to_string(self) -> String {
     return "{self}";
   }
@@ -104,9 +104,9 @@ pub fun to_string<T: Display>(value: T) -> String {
 }
 
 # `value` to a fixed number of decimal places, which interpolation cannot ask
-# for: `"{f}"` renders the shortest decimal that reads back as the same Float,
+# for: `"{f}"` renders the shortest decimal that reads back as the same float,
 # and that is the *only* rendering the VM has. A negative precision is a
 # runtime error.
 @native("fmt_float")
 @lang("float")
-pub fun float(value: Float, precision: Int) -> String;
+pub fun float(value: float, precision: int) -> String;

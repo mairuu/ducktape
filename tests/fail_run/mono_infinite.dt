@@ -1,10 +1,10 @@
 #! expect: generic instantiation is more than 32 levels deep
-# type-checks fine — `grow` returns Int at every level — but each level names a
+# type-checks fine — `grow` returns int at every level — but each level names a
 # different instantiation, one array deeper than the last, so monomorphisation
 # never converges. Caught in codegen, not by the checker.
 use std::io::print;
 
-fun grow<T>(v: T) -> Int {
+fun grow<T>(v: T) -> int {
   return grow([v]);
 }
 

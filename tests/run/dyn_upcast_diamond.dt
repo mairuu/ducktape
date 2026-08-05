@@ -5,22 +5,22 @@
 # the upcast swaps to a table built for the super, rather than reusing a prefix.
 use std::io::print;
 
-trait Base { fun tag(self) -> Int; }
-trait Left: Base { fun left(self) -> Int; }
-trait Right: Base { fun right(self) -> Int; }
-trait Both: Left + Right { fun both(self) -> Int; }
+trait Base { fun tag(self) -> int; }
+trait Left: Base { fun left(self) -> int; }
+trait Right: Base { fun right(self) -> int; }
+trait Both: Left + Right { fun both(self) -> int; }
 
-struct P { n: Int }
-impl Base for P { fun tag(self) -> Int { return self.n; } }
-impl Left for P { fun left(self) -> Int { return self.n + 10; } }
-impl Right for P { fun right(self) -> Int { return self.n + 20; } }
-impl Both for P { fun both(self) -> Int { return self.n + 30; } }
+struct P { n: int }
+impl Base for P { fun tag(self) -> int { return self.n; } }
+impl Left for P { fun left(self) -> int { return self.n + 10; } }
+impl Right for P { fun right(self) -> int { return self.n + 20; } }
+impl Both for P { fun both(self) -> int { return self.n + 30; } }
 
-struct Q { n: Int }
-impl Base for Q { fun tag(self) -> Int { return self.n * 2; } }
-impl Left for Q { fun left(self) -> Int { return self.n * 3; } }
-impl Right for Q { fun right(self) -> Int { return self.n * 4; } }
-impl Both for Q { fun both(self) -> Int { return self.n * 5; } }
+struct Q { n: int }
+impl Base for Q { fun tag(self) -> int { return self.n * 2; } }
+impl Left for Q { fun left(self) -> int { return self.n * 3; } }
+impl Right for Q { fun right(self) -> int { return self.n * 4; } }
+impl Both for Q { fun both(self) -> int { return self.n * 5; } }
 
 fun show_right(r: dyn Right) { print(r.right()); }
 fun show_base(b: dyn Base) { print(b.tag()); }

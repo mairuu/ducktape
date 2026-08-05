@@ -1,5 +1,5 @@
 # exhaustiveness accepts coverage the checker has to reason about structurally:
-# both Bool constructors, a payload covered through a generic instantiation,
+# both bool constructors, a payload covered through a generic instantiation,
 # nested struct/tuple columns, and a variant pattern that names no fields.
 #> 1
 #> 2
@@ -10,8 +10,8 @@
 use std::io::print;
 
 struct Pair {
-    x: Bool,
-    y: Bool,
+    x: bool,
+    y: bool,
 }
 
 enum Opt<T> {
@@ -19,16 +19,16 @@ enum Opt<T> {
     None,
 }
 
-fun flag(b: Bool) -> Int {
+fun flag(b: bool) -> int {
     return match b {
         true => 1,
         false => 0,
     };
 }
 
-# the payload type is `T` on the definition, `Bool` at this call — coverage has
+# the payload type is `T` on the definition, `bool` at this call — coverage has
 # to read the instantiated type off the pattern, not the field declaration.
-fun pick(o: Opt<Bool>) -> Int {
+fun pick(o: Opt<bool>) -> int {
     return match o {
         Opt::Some(true) => 1,
         Opt::Some(false) => 2,
@@ -36,7 +36,7 @@ fun pick(o: Opt<Bool>) -> Int {
     };
 }
 
-fun corner(p: Pair) -> Int {
+fun corner(p: Pair) -> int {
     return match p {
         Pair { x: true, y: true } => 1,
         Pair { x: true, y: false } => 2,
@@ -44,7 +44,7 @@ fun corner(p: Pair) -> Int {
     };
 }
 
-fun tup(t: (Bool, Bool)) -> Int {
+fun tup(t: (bool, bool)) -> int {
     return match t {
         (true, _) => 1,
         (false, true) => 2,
@@ -53,7 +53,7 @@ fun tup(t: (Bool, Bool)) -> Int {
 }
 
 # `Opt::Some` binds nothing but still names its variant, so with None it covers.
-fun tally(o: Opt<Int>) -> Int {
+fun tally(o: Opt<int>) -> int {
     return match o {
         Opt::Some => 1,
         Opt::None => 0,
@@ -63,7 +63,7 @@ fun tally(o: Opt<Int>) -> Int {
 fun main() {
     print(pick(Opt::Some(true)));
     print(pick(Opt::Some(false)));
-    var none = Opt::<Bool>::None;
+    var none = Opt::<bool>::None;
     print(pick(none));
     print(corner(Pair { x: true, y: false }));
     print(tup((true, true)));

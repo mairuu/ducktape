@@ -1,4 +1,4 @@
-#! expect: cannot index a value of type 'Int'
+#! expect: cannot index a value of type 'int'
 fun main() {
     var x = 1[0];
 }

@@ -1,14 +1,14 @@
-#! expect: expected 'Int' but got 'Float'
-# The bitwise operators are Int-only, and unlike `+` or `<` there is no trait
-# behind them to give a non-Int operand a meaning. A `Float` is refused rather
+#! expect: expected 'int' but got 'float'
+# The bitwise operators are int-only, and unlike `+` or `<` there is no trait
+# behind them to give a non-int operand a meaning. A `float` is refused rather
 # than routed through `std::ops`, because a bit pattern is not an abstraction a
-# type supplies its own version of the way an order or a sum is — and a Float's
+# type supplies its own version of the way an order or a sum is — and a float's
 # bits are not what its value means, which is the same argument that leaves it
 # without an `impl Hash`.
 #
 # The diagnostic comes from unification rather than from a hand-written check:
 # these operators know their operand type before they look at the operands, so
-# they unify with `Int` instead of testing for it. That is also what lets
+# they unify with `int` instead of testing for it. That is also what lets
 # `|x| x | 1` infer where `|x| x + 1` cannot.
 use std::io::print;
 

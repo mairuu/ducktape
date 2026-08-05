@@ -1,15 +1,15 @@
-#! expect: type mismatch: expected 'Int' but got 'String'
+#! expect: type mismatch: expected 'int' but got 'String'
 # default method bodies are checked once, against the abstract Self.
 trait Named {
     fun name(self) -> String;
 
-    fun id(self) -> Int {
+    fun id(self) -> int {
         return self.name();
     }
 }
 
 struct P {
-    x: Int,
+    x: int,
 }
 
 impl Named for P {

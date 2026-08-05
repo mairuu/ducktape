@@ -5,10 +5,10 @@
 # owns, and there is nowhere to record what the impl must bind `Item` to.
 #
 # Milestone 76 lifted the same rejection one position over — a binding whose
-# subject is a *projection* (`where I.Item: Iterator<Item = Int>`) does have a
+# subject is a *projection* (`where I.Item: Iterator<Item = int>`) does have a
 # place to live now, on the projection's own entry. This is what is left.
 use std::iter::Iterator;
 
-pub trait Pairs: Iterator<Item = Int> {
-    fun pair_count(self) -> Int;
+pub trait Pairs: Iterator<Item = int> {
+    fun pair_count(self) -> int;
 }

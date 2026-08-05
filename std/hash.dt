@@ -1,7 +1,7 @@
-# std::hash — turning a value into an Int a table can index with.
+# std::hash — turning a value into an int a table can index with.
 #
 # The trait here is shaped differently from every other trait in std. A
-# `fun hash(self) -> Int` would make every implementor supply a mixer, which
+# `fun hash(self) -> int` would make every implementor supply a mixer, which
 # means every implementor writing a bad one. So `Hash` **writes into a
 # `Hasher`** instead, and an impl only says *which parts of me matter*, never
 # how they are combined. The combining lives in one object, and being one place
@@ -36,8 +36,8 @@
 # name. `std::collections` imports it, so `use std::collections;` is enough to
 # get the impls below by the usual transitive visibility.
 
-# `std::char` for `c.code()`, which is the whole of `impl Hash for Char`. It is
-# an impl-poor module — one inherent `impl Char` and nothing else — so the
+# `std::char` for `c.code()`, which is the whole of `impl Hash for char`. It is
+# an impl-poor module — one inherent `impl char` and nothing else — so the
 # transitive impl visibility this hands every dependent costs about as little as
 # an import can. `std::string` is deliberately *not* imported: a String's hash
 # comes from the native below, which needs no method on the type.
@@ -49,7 +49,7 @@ use std::char;
 # module, so naming `OP_LEN` a second time depends on nothing and cannot close a
 # cycle in the import graph.
 @intrinsic("array_len")
-fun len<T>(xs: [T]) -> Int;
+fun len<T>(xs: [T]) -> int;
 
 # ── the two steps worth taking in C ───────────────────────────────────────────
 
@@ -63,14 +63,14 @@ fun len<T>(xs: [T]) -> Int;
 # of milestone 65; `tests/run/bitwise_mixer.dt` writes it out and checks the two
 # agree, which is what keeps this an optimisation rather than a black box.
 @native("hash_mix")
-fun mix(state: Int, value: Int) -> Int;
+fun mix(state: int, value: int) -> int;
 
 # A String's hash, which the heap computed when it interned the bytes and kept
 # in order to find the string's bucket. So this is a **field read**, and the one
 # type whose hash would otherwise be a walk over its bytes is the one type here
 # that costs nothing.
 @native("hash_string")
-fun string_hash(s: String) -> Int;
+fun string_hash(s: String) -> int;
 
 # ── the accumulator ───────────────────────────────────────────────────────────
 
@@ -80,13 +80,13 @@ fun string_hash(s: String) -> Int;
 # assigning to `self.state` is assigning to the caller's `Hasher`. Milestone 43
 # made the field mutable; nothing else was needed.
 pub struct Hasher {
-    state: Int,
+    state: int,
 }
 
 impl Hasher {
     # A fresh hasher. The seed is 0, so the hash of *nothing written* is 0 —
     # unremarkable, and not worth a magic constant to avoid: FNV's real offset
-    # basis is 14695981039346656037, which is past `Int`'s maximum and has no
+    # basis is 14695981039346656037, which is past `int`'s maximum and has no
     # spelling here anyway (no hex literals, and the decimal does not fit). The
     # mixing does not need a seed to avalanche, because `mix` finalises each
     # incoming value before folding it.
@@ -94,9 +94,9 @@ impl Hasher {
         return Hasher { state: 0 };
     }
 
-    # Fold one Int in. Every other `write_*` is written in terms of this one, so
+    # Fold one int in. Every other `write_*` is written in terms of this one, so
     # `mix` is called from exactly one place per value kind.
-    fun write_int(self, n: Int) {
+    fun write_int(self, n: int) {
         self.state = mix(self.state, n);
     }
 
@@ -104,7 +104,7 @@ impl Hasher {
         self.state = mix(self.state, string_hash(s));
     }
 
-    fun write_bool(self, b: Bool) {
+    fun write_bool(self, b: bool) {
         if b {
             self.write_int(1);
         } else {
@@ -112,19 +112,19 @@ impl Hasher {
         }
     }
 
-    fun write_char(self, c: Char) {
+    fun write_char(self, c: char) {
         self.write_int(c.code());
     }
 
     # The accumulated hash. Non-destructive — a `Hasher` may be written to again
     # afterwards, and the next `finish` answers for everything written so far.
     #
-    # The result spans the whole of `Int`, **negative values included**, which is
+    # The result spans the whole of `int`, **negative values included**, which is
     # a caller's problem and not a bug: `%` in ducktape keeps the sign of its
     # left operand (`(0 - 17) % 5` is `-2`), so a slot index needs the sign
     # folded away rather than assumed absent. `std::collections` does that in
     # one place.
-    fun finish(self) -> Int {
+    fun finish(self) -> int {
         return self.state;
     }
 }
@@ -147,8 +147,8 @@ pub trait Hash {
     fun hash(self, h: Hasher);
 }
 
-impl Hash for Int {
-    # An Int *is* its own bit pattern; `mix` does the spreading, so there is
+impl Hash for int {
+    # An int *is* its own bit pattern; `mix` does the spreading, so there is
     # nothing for this impl to add. That is the shape every impl below has —
     # naming the parts, never combining them.
     fun hash(self, h: Hasher) {
@@ -162,30 +162,30 @@ impl Hash for String {
     }
 }
 
-impl Hash for Bool {
+impl Hash for bool {
     fun hash(self, h: Hasher) {
         h.write_bool(self);
     }
 }
 
-impl Hash for Char {
+impl Hash for char {
     fun hash(self, h: Hasher) {
         h.write_char(self);
     }
 }
 
-# **There is deliberately no `impl Hash for Float.`** Two reasons, and the first
+# **There is deliberately no `impl Hash for float.`** Two reasons, and the first
 # is fatal on its own: `NaN != NaN`, so a NaN key could never be found again in
 # any table that resolves collisions with `==` — it would not match itself. The
-# second is that hashing a Float honestly means reading its bits, and the only
-# Int a Float can reach here is `f as Int`, which truncates: every value in
+# second is that hashing a float honestly means reading its bits, and the only
+# int a float can reach here is `f as int`, which truncates: every value in
 # `[1.0, 2.0)` would hash alike. That is *permitted* (equal values still hash
-# equal, so the contract holds) but it makes a Float-keyed table a linear scan.
+# equal, so the contract holds) but it makes a float-keyed table a linear scan.
 #
-# This is the same NaN wart `impl Ord for Float` had to rule on, and it is
+# This is the same NaN wart `impl Ord for float` had to rule on, and it is
 # answered the other way round for a good reason: an order has to put NaN
 # *somewhere*, so `Ord` picked a place. A table does not have to accept every
-# key, so `Hash` declines instead. A program that really wants Float keys can
+# key, so `Hash` declines instead. A program that really wants float keys can
 # say what it means by wrapping one in a struct of its own.
 
 # ── the containers ────────────────────────────────────────────────────────────
@@ -226,7 +226,7 @@ impl<A: Hash, B: Hash> Hash for (A, B) {
 # The whole of `Hash` in one call, for a caller that wants a number rather than
 # to feed an accumulator — which is every caller that is not itself an impl.
 # `std::collections` indexes with this and nothing else.
-pub fun hash_of<T: Hash>(value: T) -> Int {
+pub fun hash_of<T: Hash>(value: T) -> int {
     var h = Hasher::new();
     value.hash(h);
     return h.finish();

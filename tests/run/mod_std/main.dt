@@ -1,6 +1,6 @@
 # std imported from two modules at once. `<std>/cmp.dt` is a registry key like
 # any other, and it does not depend on the importing module's base directory —
-# so the diamond dedups to one Module, registering `impl Ord for Int` once and
+# so the diamond dedups to one Module, registering `impl Ord for int` once and
 # taking one set of slots, exactly as a shared user module would.
 #> 8
 #> 2

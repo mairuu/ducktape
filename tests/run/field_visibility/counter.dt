@@ -3,22 +3,22 @@
 # of the public surface. This is the shape field visibility exists for — the
 # honest version of a hand-written iterator.
 pub struct Counter {
-  n: Int,        # private: the cursor, mutated only through tick
-  pub limit: Int,
+  n: int,        # private: the cursor, mutated only through tick
+  pub limit: int,
 }
 
 impl Counter {
-  fun new(limit: Int) -> Counter {
+  fun new(limit: int) -> Counter {
     return Counter { n: 0, limit: limit };
   }
 
   # writes the private field within its own module (milestone 43's `+=`).
-  fun tick(self) -> Int {
+  fun tick(self) -> int {
     self.n += 1;
     return self.n;
   }
 
-  fun done(self) -> Bool {
+  fun done(self) -> bool {
     return self.n >= self.limit;
   }
 }

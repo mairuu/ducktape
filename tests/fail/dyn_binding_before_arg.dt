@@ -1,7 +1,7 @@
 #! expect: type arguments come before its associated-type bindings
 # One bracket list after a `dyn` carries two different things: the trait's own
 # type arguments, which are positional, and its associated-type bindings, which
-# are named. Interleaving them would leave the positional half ambiguous, so
+# are named. interleaving them would leave the positional half ambiguous, so
 # the order is a grammar rule and not a style question.
 
 trait Pipe<T> {
@@ -9,7 +9,7 @@ trait Pipe<T> {
     fun pipe(self, v: T) -> Self.Out;
 }
 
-fun run(p: dyn Pipe<Out = Int, String>) -> Int {
+fun run(p: dyn Pipe<Out = int, String>) -> int {
     return p.pipe("x");
 }
 

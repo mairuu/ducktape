@@ -3,16 +3,16 @@
 # reachable through the concrete trait-qualified path — it needs the same
 # bound dispatch a receiver call has. The diagnostic names the workaround.
 trait Greet<T> {
-    fun greet(self) -> Int {
+    fun greet(self) -> int {
         return 7;
     }
 }
 
-struct P { n: Int }
+struct P { n: int }
 
-impl Greet<Int> for P {}
+impl Greet<int> for P {}
 
 fun main() {
     var p = P { n: 1 };
-    var g = Greet::<Int>::greet(p);
+    var g = Greet::<int>::greet(p);
 }

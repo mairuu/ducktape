@@ -19,15 +19,15 @@
 use std::io::print;
 
 # a private advancing cursor a `pub` type keeps hidden (milestones 43/44)
-pub struct Counter { n: Int, max: Int }
+pub struct Counter { n: int, max: int }
 
 impl Counter {
-    fun to(max: Int) -> Counter { Counter { n: 0, max: max } }
+    fun to(max: int) -> Counter { Counter { n: 0, max: max } }
 }
 
 impl Iterator for Counter {
-    type Item = Int;
-    fun next(self) -> Option<Int> {
+    type Item = int;
+    fun next(self) -> Option<int> {
         if self.n >= self.max { return Option::None; }
         self.n += 1;
         return Option::Some(self.n);
@@ -35,10 +35,10 @@ impl Iterator for Counter {
 }
 
 # a second iterator whose Item is a String, proving the element type is general
-pub struct Repeat { s: String, left: Int }
+pub struct Repeat { s: String, left: int }
 
 impl Repeat {
-    fun times(n: Int) -> Repeat { Repeat { s: "", left: n } }
+    fun times(n: int) -> Repeat { Repeat { s: "", left: n } }
 }
 
 impl Iterator for Repeat {

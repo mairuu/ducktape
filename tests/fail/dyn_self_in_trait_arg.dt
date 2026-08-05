@@ -1,19 +1,19 @@
 #! expect: 'Self' appears in its signature outside the receiver
 # Object safety asks whether a signature still means something once the
 # concrete type is gone, and a `Self` hidden inside another trait's type
-# argument (`dyn Into<Self>`) is as unrecoverable as one written directly.
+# argument (`dyn into<Self>`) is as unrecoverable as one written directly.
 # The trait's *own* parameters cost it nothing, since whoever writes the `dyn`
 # supplies them — they were never erased.
 
-trait Into<T> {
+trait into<T> {
     fun into(self) -> T;
 }
 
 trait Bad {
-    fun make(self) -> dyn Into<Self>;
+    fun make(self) -> dyn into<Self>;
 }
 
-fun run(v: dyn Bad) -> Int {
+fun run(v: dyn Bad) -> int {
     return 1;
 }
 

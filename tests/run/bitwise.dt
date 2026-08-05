@@ -56,7 +56,7 @@ fun main() {
 
     # a type closing with `>>` must not lex as a shift — the reason the scanner
     # leaves angle brackets alone and the parser fuses them instead
-    var m: HashMap<String, Option<Int>> = HashMap::new();
+    var m: HashMap<String, Option<int>> = HashMap::new();
     m.insert("a", Option::Some(1));
     print("nested generic still parses: {m.len()}");
 }

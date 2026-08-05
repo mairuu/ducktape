@@ -2,6 +2,6 @@
 # module is under `geo`, so the path is open here and closed at the root.
 use geo::internal::hidden;
 
-pub fun area() -> Int {
+pub fun area() -> int {
     return hidden() + 1;
 }

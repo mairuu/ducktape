@@ -1,1 +1,1 @@
-pub struct Rect { pub w: Int }
+pub struct Rect { pub w: int }

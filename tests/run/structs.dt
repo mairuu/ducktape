@@ -12,11 +12,11 @@
 use std::io::print;
 
 struct Point {
-    x: Int,
-    y: Int,
+    x: int,
+    y: int,
 }
 
-struct Wrapper(Int, Int)
+struct Wrapper(int, int)
 
 fun main() {
     var p = Point { x: 1, y: 2 };

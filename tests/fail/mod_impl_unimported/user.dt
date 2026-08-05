@@ -2,6 +2,6 @@
 # `impl Show for S` does not apply here.
 use shape::{Show, S};
 
-pub fun peek(s: S) -> Int {
+pub fun peek(s: S) -> int {
   return s.show();
 }

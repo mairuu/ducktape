@@ -6,7 +6,7 @@
 # the compiler can name the trait; the parameter simply is not bound by it.
 use std::cmp::Ord;
 
-fun less<T>(a: T, b: T) -> Bool {
+fun less<T>(a: T, b: T) -> bool {
     return a < b;
 }
 

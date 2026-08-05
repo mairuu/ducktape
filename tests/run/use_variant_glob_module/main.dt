@@ -7,7 +7,7 @@ use pal::Color::*;      # module-qualified glob
 use Tone::Warm;         # a name written wins over the glob, in either order
 use fac::Green;         # the same variant, through the re-export
 
-fun shade(c: Color) -> Int {
+fun shade(c: Color) -> int {
   match c {
     Red => { return 1; },
     Green => { return 2; },

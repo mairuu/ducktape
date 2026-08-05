@@ -1,24 +1,24 @@
 #! expect: type 'Q' does not implement trait 'A'
 # an explicitly written type argument must satisfy the parameter's bounds too.
 trait A {
-    fun a(self) -> Int;
+    fun a(self) -> int;
 }
 
 struct P {
-    x: Int,
+    x: int,
 }
 
 struct Q {
-    y: Int,
+    y: int,
 }
 
 impl A for P {
-    fun a(self) -> Int {
+    fun a(self) -> int {
         self.x
     }
 }
 
-fun need_a<T: A>(t: T) -> Int {
+fun need_a<T: A>(t: T) -> int {
     0
 }
 

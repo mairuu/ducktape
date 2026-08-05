@@ -1,7 +1,7 @@
-#! expect: cannot apply '+' to a value of type 'Char': it does not implement 'Add'
+#! expect: cannot apply '+' to a value of type 'char': it does not implement 'Add'
 # The arithmetic opcodes read their operands as numbers with no tag test, so
 # the operator must be asked before one is emitted. This used to compile and
-# print a reinterpreted bit pattern as a Float.
+# print a reinterpreted bit pattern as a float.
 use std::io::print;
 
 fun main() {

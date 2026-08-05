@@ -1,7 +1,7 @@
 struct Hidden {
-  x: Int,
+  x: int,
 }
 
-pub fun visible() -> Int {
+pub fun visible() -> int {
   return 1;
 }

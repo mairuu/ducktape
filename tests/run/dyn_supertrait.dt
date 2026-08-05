@@ -4,7 +4,7 @@
 # The vtable is laid out over the trait's supertrait closure — `Iterator`'s
 # slots first, then `DoubleEnded`'s — so `d.next()` dispatches through the same
 # table `d.next_back()` does, and the associated-type binding written as
-# `<Item = Int>` names `Iterator`'s `Item` through the sub.
+# `<Item = int>` names `Iterator`'s `Item` through the sub.
 #
 # One flat numbering is enough because a trait object always carries the table
 # of the trait it was *written* as, and every dispatch on it indexes that same
@@ -14,12 +14,12 @@ use std::iter::{Iterator, DoubleEnded};
 use std::option::Option;
 use std::io::print;
 
-struct Span { lo: Int, hi: Int }
-struct Steps { at: Int, by: Int, left: Int }
+struct Span { lo: int, hi: int }
+struct Steps { at: int, by: int, left: int }
 
 impl Iterator for Span {
-    type Item = Int;
-    fun next(self) -> Option<Int> {
+    type Item = int;
+    fun next(self) -> Option<int> {
         if self.lo >= self.hi { return Option::None; }
         var v = self.lo;
         self.lo += 1;
@@ -27,7 +27,7 @@ impl Iterator for Span {
     }
 }
 impl DoubleEnded for Span {
-    fun next_back(self) -> Option<Int> {
+    fun next_back(self) -> Option<int> {
         if self.lo >= self.hi { return Option::None; }
         self.hi -= 1;
         return Option::Some(self.hi);
@@ -35,8 +35,8 @@ impl DoubleEnded for Span {
 }
 
 impl Iterator for Steps {
-    type Item = Int;
-    fun next(self) -> Option<Int> {
+    type Item = int;
+    fun next(self) -> Option<int> {
         if self.left <= 0 { return Option::None; }
         self.left -= 1;
         var v = self.at;
@@ -45,7 +45,7 @@ impl Iterator for Steps {
     }
 }
 impl DoubleEnded for Steps {
-    fun next_back(self) -> Option<Int> {
+    fun next_back(self) -> Option<int> {
         if self.left <= 0 { return Option::None; }
         self.left -= 1;
         return Option::Some(self.at + self.by * self.left);
@@ -65,8 +65,8 @@ fun drain<I: Iterator>(it: I) -> [I.Item] {
 }
 
 fun main() {
-    var a: dyn DoubleEnded<Item = Int> = Span { lo: 0, hi: 4 };
-    var b: dyn DoubleEnded<Item = Int> = Steps { at: 5, by: 10, left: 3 };
+    var a: dyn DoubleEnded<Item = int> = Span { lo: 0, hi: 4 };
+    var b: dyn DoubleEnded<Item = int> = Steps { at: 5, by: 10, left: 3 };
 
     # a supertrait's method, dispatched through the sub's vtable
     print(a.next());
@@ -78,7 +78,7 @@ fun main() {
 #> [1, 2]
 
     # one array, two concrete types, both reversible
-    var ends: [dyn DoubleEnded<Item = Int>] = [b, Span { lo: 100, hi: 103 }];
+    var ends: [dyn DoubleEnded<Item = int>] = [b, Span { lo: 100, hi: 103 }];
     for it in ends {
         print(it.next_back());
     }

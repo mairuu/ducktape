@@ -1,0 +1,13 @@
+# `Unit` and `Never` are no longer names the compiler knows, so both are
+# ordinary declarable identifiers again — the unit type is spelled `()` and the
+# never type `!`, and neither has a second spelling to collide with.
+struct Unit;
+struct Never { v: int }
+
+fun nothing() -> () { }
+
+fun main() {
+    var _u = Unit;
+    var _n = Never { v: 1 };
+    nothing();
+}

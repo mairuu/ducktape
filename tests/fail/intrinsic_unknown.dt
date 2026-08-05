@@ -1,5 +1,5 @@
 #! expect: no intrinsic named 'no_such_op'
 @intrinsic("no_such_op")
-pub fun nope(x: Int) -> Int;
+pub fun nope(x: int) -> int;
 
 fun main() {}

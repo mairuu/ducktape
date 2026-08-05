@@ -1,5 +1,5 @@
 # minimal program exercising already-working checker features
-fun add(a: Int, b: Int) -> Int {
+fun add(a: int, b: int) -> int {
     a + b
 }
 
@@ -12,6 +12,6 @@ fun main() {
     }
 }
 
-fun not_used(n: Int) -> Bool {
+fun not_used(n: int) -> bool {
     n > 0
 }

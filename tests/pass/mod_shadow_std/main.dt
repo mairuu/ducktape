@@ -6,7 +6,7 @@ mod Option;
 
 use Option::wrap;
 
-fun get() -> Int {
+fun get() -> int {
   var v = Some(wrap(1));
   return match v {
     Some(n) => n,

@@ -19,18 +19,18 @@
 #> circle
 use std::io::print;
 
-fun id(n: Int) -> Int { n }
-fun add(a: Int, b: Int) -> Int { a + b }
+fun id(n: int) -> int { n }
+fun add(a: int, b: int) -> int { a + b }
 
 trait Shape { fun name(self) -> String; }
-struct Sq { n: Int }
-struct Ci { n: Int }
+struct Sq { n: int }
+struct Ci { n: int }
 impl Shape for Sq { fun name(self) -> String { "square" } }
 impl Shape for Ci { fun name(self) -> String { "circle" } }
 
 # the shape the feature exists for: an early answer with no sentinel to invent
 # and no flag to check on the way out
-fun classify(n: Int) -> String {
+fun classify(n: int) -> String {
     'a: {
         if n < 0 { break 'a "negative"; }
         if n == 0 { break 'a "zero"; }
@@ -41,7 +41,7 @@ fun classify(n: Int) -> String {
 # a bare `break` inside a labelled block names the innermost *loop*, never the
 # block — so `4` here and not `100`, which is what labelling a block would cost
 # if it took the bare break away from the loop around it
-fun bare_break_leaves_the_loop() -> Int {
+fun bare_break_leaves_the_loop() -> int {
     var n = 0;
     while n < 100 {
         n += 1;
@@ -54,7 +54,7 @@ fun bare_break_leaves_the_loop() -> Int {
 
 # one `break` leaves the loop and the block together, with the loop's own local
 # live at the point it goes
-fun out_of_a_loop_and_a_block() -> Int {
+fun out_of_a_loop_and_a_block() -> int {
     'blk: {
         for i in 0..10 {
             var extra = i * 100;
@@ -66,7 +66,7 @@ fun out_of_a_loop_and_a_block() -> Int {
 
 # the value has to outlive a pending callee *and* the block's locals: `id` is
 # waiting for its argument when the break goes
-fun past_a_callee() -> Int {
+fun past_a_callee() -> int {
     'blk: {
         var base = 5;
         id({ var t = 2; break 'blk base + t + 30; });
@@ -75,18 +75,18 @@ fun past_a_callee() -> Int {
 }
 
 # a captured local is detached by the same close-then-slide a loop's break uses
-fun capture_out() -> Int {
+fun capture_out() -> int {
     'blk: {
         var captured = 11;
         var get = || captured;
-        var v: Int = get();
+        var v: int = get();
         if v == 11 { break 'blk v * 2; }
         0
     }
 }
 
 # an inner block's break passes straight through to the outer one it names
-fun nested() -> Int {
+fun nested() -> int {
     'outer: {
         var a = 1;
         'inner: {
@@ -99,7 +99,7 @@ fun nested() -> Int {
 
 # every exit is a break, so the block never falls through and the join is
 # theirs alone
-fun all_breaks(c: Bool) -> Int {
+fun all_breaks(c: bool) -> int {
     'a: {
         if c { break 'a 1; }
         break 'a 2;
@@ -108,7 +108,7 @@ fun all_breaks(c: Bool) -> Int {
 
 # a bare `break 'a;` joins as `()`, so the block is a statement and the work
 # below it is what got skipped
-fun bare_labelled_break() -> Int {
+fun bare_labelled_break() -> int {
     var total = 0;
     'a: {
         total += 8;
@@ -122,7 +122,7 @@ fun bare_labelled_break() -> Int {
 # pending — a callee waiting for its argument, an operand waiting for its
 # partner. Its breaks are measured from the *stack depth* it opened at, not
 # from the local count, which is m88's rule asked of the new target.
-fun under_a_pending_value(k: Int) -> Int {
+fun under_a_pending_value(k: int) -> int {
     var base = 100;
     return add(7, 'blk: {
         var local = 3;
@@ -133,7 +133,7 @@ fun under_a_pending_value(k: Int) -> Int {
 
 # the `dyn` expectation reaches every exit, the tail included — m82's coercion
 # sites, one per exit rather than one per arm
-fun pick(c: Bool) -> String {
+fun pick(c: bool) -> String {
     var s: dyn Shape = 'a: {
         if c { break 'a Sq { n: 1 }; }
         Ci { n: 2 }

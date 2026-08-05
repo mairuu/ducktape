@@ -31,11 +31,11 @@ trait Pack<T> {
     }
 }
 
-struct Box1 { v: Int }
+struct Box1 { v: int }
 struct Box2 { v: String }
 
-impl Pack<Int> for Box1 {
-    fun one(self) -> Int { return self.v; }
+impl Pack<int> for Box1 {
+    fun one(self) -> int { return self.v; }
 }
 
 impl Pack<String> for Box2 {

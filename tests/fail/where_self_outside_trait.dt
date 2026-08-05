@@ -5,6 +5,6 @@
 # without a word — which is the failure mode the parser refuses here.
 use std::cmp::Ord;
 
-fun f<T>(x: T) -> Int where Self.Item: Ord {
+fun f<T>(x: T) -> int where Self.Item: Ord {
     return 1;
 }

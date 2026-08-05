@@ -14,8 +14,8 @@ use std::fmt::Display;
 use std::assert::{assert, assert_with, assert_else, assert_eq, assert_ne};
 
 struct Point {
-    x: Int,
-    y: Int,
+    x: int,
+    y: int,
 }
 
 impl Display for Point {

@@ -1,11 +1,11 @@
 use shape::P;
 
 impl P {
-  fun area(self) -> Int {
+  fun area(self) -> int {
     return self.v;
   }
 }
 
-pub fun from_tall() -> Int {
+pub fun from_tall() -> int {
   return 2;
 }

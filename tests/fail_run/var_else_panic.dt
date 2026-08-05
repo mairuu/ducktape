@@ -1,12 +1,12 @@
 #! expect: expected a rect
 # `panic` is the third way out of an `else`, and the one that needs no
-# surrounding function or loop to leave: its `-> Never` return type is what
+# surrounding function or loop to leave: its `-> !` return type is what
 # makes the statement — semicolon and all — diverge.
 use std::panic::panic;
 
-enum Shape { Circle(Int), Rect(Int, Int) }
+enum Shape { Circle(int), Rect(int, int) }
 
-fun area(s: Shape) -> Int {
+fun area(s: Shape) -> int {
     var Shape::Rect(w, h) = s else { panic("expected a rect"); };
     return w * h;
 }

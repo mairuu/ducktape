@@ -14,12 +14,12 @@ stdout in `tests/run` files) — the language itself treats them as comments.
 use std::io::print;                  # `std::` is the embedded library
 use geometry::Point;                 # loads geometry.dt — see "Modules"
 
-fun add(a: Int, b: Int) -> Int {     # return type via ->, omitted = ()
+fun add(a: int, b: int) -> int {     # return type via ->, omitted = ()
     a + b                            # last expression is the return value
 }
 
 pub struct Point<T> { pub x: T, pub y: T, }  # pub struct; pub fields exposed too
-struct Pair(Int, Int)                # tuple struct
+struct Pair(int, int)                # tuple struct
 struct Unit;                         # unit struct
 
 enum Result<T, E> { Ok(T), Err(E), }
@@ -27,18 +27,18 @@ enum Result<T, E> { Ok(T), Err(E), }
 trait Drawable {                     # item signatures are resolved & checked
     type Color;                      # against impls (conformance)
     fun draw(self) -> Self.Color;    # `Self.Color` = abstract projection
-    fun visible(self) -> Bool { return true; }  # default; impls may omit it
+    fun visible(self) -> bool { return true; }  # default; impls may omit it
 }
 
 trait Into<T> {                      # a trait may take type parameters
     fun into(self) -> T;             # supplied wherever the trait is named
 }
 
-impl Drawable for Point<Int> { ... } # trait impl
+impl Drawable for Point<int> { ... } # trait impl
 impl<T> Box<T> { ... }               # generic inherent impl
-impl Point<Int> {
+impl Point<int> {
     type Color = String;             # associated type
-    fun new(x: Int, y: Int) -> Self { Point { x: x, y: y } }
+    fun new(x: int, y: int) -> Self { Point { x: x, y: y } }
 }
 ```
 
@@ -49,24 +49,51 @@ case for it) — declare variables inside functions only.
 
 | Syntax | Meaning |
 |---|---|
-| `Int` `Float` `Bool` `String` | primitives |
-| `Char` | one Unicode scalar value — see "`std::char`" |
+| `int` `float` `bool` `String` | primitives |
+| `char` | one Unicode scalar value — see "`std::char`" |
 | `StringBuf` | a growable text buffer — see "`std::string::buf`" |
 | `Range` | what `a..b` / `a..=b` evaluate to — see "`std::iter`" |
 | `()` | unit |
-| `Never` | code that does not come back — see "`std::panic`" |
+| `!` | code that does not come back — see "`std::panic`" |
 | `(A, B)` | tuple |
 | `[T]` | array of `T` |
 | `fun(A, B) -> R` | function type |
-| `Point<Int>` | generic instance |
-| `dyn Drawable`, `dyn Into<Int>`, `dyn Iterator<Item = Int>` | trait object — see "Trait objects" |
+| `Point<int>` | generic instance |
+| `dyn Drawable`, `dyn Into<int>`, `dyn Iterator<Item = int>` | trait object — see "Trait objects" |
 | `Self`, `Self.Color`, `Point.Color` | self type, associated types |
+
+The case tells you where a type comes from. **Lowercase** is the language's
+own — `int`, `float`, `bool`, `char` — and **PascalCase** is a type someone
+declared or a parameter standing for one, which is why `String`, `StringBuf`
+and `Range` keep theirs: each has an impl block and a method API, so the
+capital is telling the truth about it.
+
+The two types you cannot hold a value of are **punctuation**: `()` and `!` are
+parsed as types of their own rather than resolved as names, so neither can be
+qualified and neither has a second spelling. `Unit` and `Never` are not type
+names — they are ordinary identifiers, free for a program to declare.
+
+A builtin name is answered before any scope is consulted, so a declaration
+under one would not shadow it but be **unreachable** — every later mention of
+the name means the builtin. That is refused rather than left to rot, wherever a
+type name is bound:
+
+```
+struct int { v: int }        # error: 'int' is a builtin type name
+enum char { A, B }           # ... and at an enum,
+trait float { .. }           # a trait,
+fun id<int>(v: int) -> int   # and a type parameter
+```
+
+A `fun` or a `var` may still take one: a value lookup answers those before the
+builtin is asked, so `fun int(v: int) -> int` costs nothing and works. So may a
+`mod` — see the gaps table for what that does and does not buy.
 
 ## Statements and blocks
 
 ```
 var x = 1;                    # inferred; no `let`, no `mut` — all vars mutable
-var y: [Int] = [1, 2, 3];     # annotated
+var y: [int] = [1, 2, 3];     # annotated
 var (a, b) = (1, 2.5);        # destructuring — the binding is a pattern
 var Point { x: px, y } = p;   # ... any irrefutable one, nested freely
 x = 2;  x += 1;               # assignment / compound assignment (+= -= *= /= %=)
@@ -81,7 +108,7 @@ break 'outer;  continue 'outer;   # ... and then left from any depth inside it
 
 Blocks are expressions: the trailing expression without `;` is the block's
 value; otherwise the block is `()`. A trailing block-form `if`/`match`/`loop`
-counts as the tail (`fun abs(n: Int) -> Int { if n < 0 { -n } else { n } }`).
+counts as the tail (`fun abs(n: int) -> int { if n < 0 { -n } else { n } }`).
 A block ending in `return` has type `!` (never), which unifies with anything.
 
 A binding nothing ever names **warns** — a `var`, a pattern binding, a
@@ -103,10 +130,10 @@ under the field's name, so ignoring one field takes the long form
 
 ## Expressions
 
-- Number literals: `12`, `2.5`, and an exponent form that is a `Float` with or
+- Number literals: `12`, `2.5`, and an exponent form that is a `float` with or
   without a point (`1e-7`, `3E2`, `1.5e+10`). `1e` with no digits after it is
-  the `Int` `1` followed by the identifier `e`.
-- Arithmetic `+ - * / %` on numerics; `Int op Float` widens to `Float`.
+  the `int` `1` followed by the identifier `e`.
+- Arithmetic `+ - * / %` on numerics; `int op float` widens to `float`.
   `+` also concatenates `String`s. Two numeric operands stay a built-in opcode
   (no import, no frame); a non-numeric operand desugars to `std::ops`, so
   `a + b` becomes `a.add(b)` — see `std::ops` below. On an unbounded generic
@@ -115,24 +142,24 @@ under the field's name, so ignoring one field takes the long form
 - Comparison `< <= > >=`: numeric operands stay a built-in opcode (no import,
   no frame); a non-numeric operand desugars to `std::cmp::Ord`, so `a < b`
   becomes `a.cmp(b) < 0`, dispatched by the ordinary method machinery. A `Point`
-  with `impl Ord for Point`, a bounded `T: Ord`, a `Char`, a `String` — all
+  with `impl Ord for Point`, a bounded `T: Ord`, a `char`, a `String` — all
   compare with the operator. Without `std::cmp` in the program the operator has
   no trait to name (the diagnostic says so), and on an unbounded generic it asks
   for the `T: Ord` bound. Only `cmp` is named by the rewrite, so `lt`/`le`/`gt`/
   `ge` are not lang items; `Ord` is one (keyed on `std::cmp`, like `Display`).
 - `== !=` (structural: any two values of the same static type, including a
   generic `T` — the runtime compares them the way it compares two structs, so
-  `a == b` on a generic yields `Bool`). Unlike ordering, equality is *never* a
+  `a == b` on a generic yields `bool`). Unlike ordering, equality is *never* a
   trait: it is a free, import-less, universal primitive, and routing it through
   an `Eq` would make the commonest operation depend on an import.
 - Logic: keywords `and`, `or` (short-circuit), `not`. There is no `&&`/`||`.
-- Bitwise `& | ^ << >> >>>` and unary `~`, **`Int` only**. Unlike `+` and `<`,
-  a non-Int operand is not routed through a trait — there is no `BitAnd` to
+- Bitwise `& | ^ << >> >>>` and unary `~`, **`int` only**. Unlike `+` and `<`,
+  a non-int operand is not routed through a trait — there is no `BitAnd` to
   implement, because a bit pattern is not an abstraction a type supplies its own
-  version of. `Float` is refused for the reason it has no `impl Hash`: its bits
+  version of. `float` is refused for the reason it has no `impl Hash`: its bits
   are not what its value means, and there is no reinterpreting cast to ask for
   them.
-  - **`>>` propagates the sign, `>>>` shifts in zeros.** `Int` is signed and
+  - **`>>` propagates the sign, `>>>` shifts in zeros.** `int` is signed and
     there is no unsigned type, so the two shifts are spellings rather than
     types: `-8 >> 1` is `-4` and stays division by two, `-8 >>> 1` is a large
     positive. Bit-twiddling wants `>>>`; halving wants `>>`.
@@ -141,7 +168,7 @@ under the field's name, so ignoring one field takes the long form
     `x`; an out-of-range index already reports here rather than guessing.
   - **`<<`, `>>` and `>>>` are runs of adjacent angle brackets, not tokens.**
     The scanner cannot fuse them, because a nested generic closes with a run of
-    `>` (`HashMap<String, Option<Int>>`); the parser fuses them instead, and
+    `>` (`HashMap<String, Option<int>>`); the parser fuses them instead, and
     requires that no whitespace separate them. `a > > b` is therefore two
     comparisons and `a >> b` is a shift — the one place in the grammar where
     whitespace changes a parse.
@@ -151,9 +178,9 @@ under the field's name, so ignoring one field takes the long form
     half of C's ordering worth keeping.
   - They are the only binary operators whose operand type is known before the
     operands are, so they **drive** inference instead of merely checking it:
-    `|x| x | 1` solves `x` where `|x| x + 1` cannot (`+` might be Int, Float,
+    `|x| x | 1` solves `x` where `|x| x + 1` cannot (`+` might be int, float,
     String, or a call to `Add`).
-- `Int` arithmetic **wraps** silently on overflow, two's complement
+- `int` arithmetic **wraps** silently on overflow, two's complement
   (`4611686018427387904 * 4` is `0`). There is no checked or saturating form.
 - `%` keeps the **sign of its left operand**: `(0 - 17) % 5` is `-2`, not `3`.
   Anything using `%` to pick an array index has to fold the sign itself.
@@ -167,8 +194,8 @@ under the field's name, so ignoring one field takes the long form
   an array, a range, or any type that implements `Iterator` (see below).
 - `loop { .. }` has no header, and that is the whole of what it buys: with
   nothing to test there is nothing to prove, so a `loop` no `break` leaves types
-  `!` rather than `()` and may end a `-> Never` body. See "Divergence and
-  `Never`".
+  `!` rather than `()` and may end a `-> !` body. See "Divergence and
+  `!`".
 - Because a `loop`'s breaks are its only exits, they are also its **value**:
   `break x;` leaves the loop with `x`, and the loop's type is the join of every
   break in it — `var n = loop { i += 1; if i > 3 { break i * 2; } };`. A bare
@@ -196,7 +223,7 @@ under the field's name, so ignoring one field takes the long form
   join of all of them:
 
   ```
-  fun classify(n: Int) -> String {
+  fun classify(n: int) -> String {
       'a: {
           if n < 0 { break 'a "negative"; }
           if n == 0 { break 'a "zero"; }
@@ -221,20 +248,20 @@ under the field's name, so ignoring one field takes the long form
   target — it shares one scope with the loops, so a label a loop declared cannot
   be reused by a block inside it or the reverse, and one `break` may leave a
   block and several loops at once.
-- Ranges: `a..b`, `a..=b` — Int-only, first-class values (`var r = 0..10;`) of
+- Ranges: `a..b`, `a..=b` — int-only, first-class values (`var r = 0..10;`) of
   type `Range`, which is nameable (`fun span(r: Range)`) and carries one
   method, `r.iter()`.
-- Casts: `x as T` — only `Int`↔`Float` and identity casts. The separate `x as?
+- Casts: `x as T` — only `int`↔`float` and identity casts. The separate `x as?
   T` is the fallible **downcast** of a trait object (see "Trait objects"),
   which yields an `Option<T>` rather than a `T`.
-- String interpolation: `"x = {x}"` — a primitive segment (Int/Float/Bool/
+- String interpolation: `"x = {x}"` — a primitive segment (int/float/bool/
   String) renders itself; anything else must implement `std::fmt::Display`. A
   `:` format spec (`"{v:>8}"`, `"{f:.3}"`) is sugar for the `std::string::pad_*`
   and `std::fmt::float` calls — see `std::fmt`.
 - Calls: `f(a, b)`; functions are first-class (`var g = f; g(1)`).
-- Closures use pipes: `|x, y| x + y`, `|n: Int| -> Int { return n * 2; }`.
+- Closures use pipes: `|x, y| x + y`, `|n: int| -> int { return n * 2; }`.
   Unannotated params infer from a function-typed hint
-  (`var f: fun(Int) -> Int = |x| x + 1;`) or from use; a closure whose
+  (`var f: fun(int) -> int = |x| x + 1;`) or from use; a closure whose
   types can't be pinned down is an error. `break` cannot escape a closure.
 - A unit struct is a value under its bare name: `struct Marker;` then
   `var m = Marker;`, no `{}` suffix. The name is looked up in the value scope
@@ -244,7 +271,7 @@ under the field's name, so ignoring one field takes the long form
   arguments from the *expected* type: an annotation, a parameter type, the
   enclosing function's return type, a field, or an array/tuple element. With
   no expected type there is nothing to go on and it is an error asking for an
-  annotation; a turbofish (`Opt::<Int>::None`) still overrides
+  annotation; a turbofish (`Opt::<int>::None`) still overrides
   (`tests/run/unit_variant_infer.dt`). The expected type may name type
   *parameters* rather than concrete types, including parameters spelled the
   same as the constructor's own — inside `fun f<T>(xs: [Opt<T>])`,
@@ -252,11 +279,11 @@ under the field's name, so ignoring one field takes the long form
   Seeding pins the fields to exactly those parameters, so a payload given in
   the wrong order is a mismatch rather than a pair of agreeable unknowns.
 - Paths: `Result::Ok(5)`, `Point::new(..)`. Explicit type arguments use
-  turbofish in expression position: `Point::<Int>::new(1, 2)`. A bare
+  turbofish in expression position: `Point::<int>::new(1, 2)`. A bare
   `Point::new(..)` on a generic type selects the impl by method name and
   infers the type arguments from the call (first name match wins if several
   impls define the same name). A builtin type qualifies a path like any
-  declared one (`Float::from(7)`, `Int::from('A')`), which is what makes an
+  declared one (`float::from(7)`, `int::from('A')`), which is what makes an
   impl written for a primitive reachable by name. An **enum** qualifies one
   too: `Opt::none()` reads as a variant first and as an associated function
   when no variant answers to the name, so an enum's impls are reachable the
@@ -273,8 +300,8 @@ under the field's name, so ignoring one field takes the long form
   explicitly (`T::value(v)`), since a method is an associated function whose
   first parameter is `self` (`tests/run/assoc_bound_call.dt`).
 - A call may also be qualified by a **fully applied trait reference**:
-  `Into::<Fahrenheit>::into(c)`. When a type implements one generic trait
-  several times (`Celsius` goes `Into<Fahrenheit>` *and* `Into<Kelvin>`), a bare
+  `into::<Fahrenheit>::into(c)`. When a type implements one generic trait
+  several times (`Celsius` goes `into<Fahrenheit>` *and* `into<Kelvin>`), a bare
   `c.into()` cannot say which; naming the trait does. The receiver is passed
   positionally (`Trait::<Args>::method(recv, ..)`), and its type together with
   the reference selects the impl — so this reads the *receiver* to disambiguate
@@ -293,21 +320,21 @@ under the field's name, so ignoring one field takes the long form
   and return position — so calls on `self` see exactly the trait's own
   methods, whichever impl ends up inheriting it.
 - A method call's own type arguments take the **turbofish**, the same `::<..>`
-  an expression path requires: `it.fold::<Int>(0, f)`,
-  `lo.pick::<[Int]>(xs, xs)` (`tests/run/method_type_args.dt`). They are legal
+  an expression path requires: `it.fold::<int>(0, f)`,
+  `lo.pick::<[int]>(xs, xs)` (`tests/run/method_type_args.dt`). They are legal
   only immediately before the `(` of the call they belong to. The `::` is what
   makes them unambiguous — without it a `<` after a field or method access
   could open a type-argument list or be the less-than operator, and nothing at
   the `<` itself says which. So a bare `<` there is **always** the operator:
-  `self.n < xs.len()` compares, and `h.pick<Int>(7, 9)` is not a call at all
+  `self.n < xs.len()` compares, and `h.pick<int>(7, 9)` is not a call at all
   but a comparison against the field `pick`, reported as an unknown field with
   a note naming the turbofish. Type *positions* are unaffected — a type is
-  never an expression, so `Point<Int>` stays bare there.
+  never an expression, so `Point<int>` stays bare there.
 - Trait bounds on type parameters are written inline (`fun f<T: A + B>(..)`),
   in a `where` clause (`fun f<T>(..) -> R where T: B`), or both — they merge.
   A bound must name a trait. Bounds are *enforced*: instantiating a bounded
   parameter with a type that has no `impl Trait for T` is an error
-  ("type 'Int' does not implement trait 'Named'"), reported at the call site
+  ("type 'int' does not implement trait 'Named'"), reported at the call site
   once inference has solved the parameter — including for an explicitly
   written type argument (`need_a::<Q>(q)`). Inside the generic body the bound
   *is* what makes the trait's methods callable: `t.draw()` on a `T: Drawable`
@@ -333,7 +360,7 @@ under the field's name, so ignoring one field takes the long form
   the body the projection then satisfies those traits — `v > b` on two
   `I.Item`s resolves, and `I.Item` can be passed to another generic wanting
   `Ord`. The promise is discharged at the *instantiation*: `largest(counter)`
-  is where `I` becomes `Counter`, so `Counter.Item` becomes `Int` and the
+  is where `I` becomes `Counter`, so `Counter.Item` becomes `int` and the
   question becomes an ordinary one about a real type ("type 'Widgets' does not
   satisfy 'I.Item: Ord': its 'Item' is 'Widget', which does not implement
   'Ord'"). Handing a bounded projection to something wanting the same bound
@@ -384,11 +411,11 @@ under the field's name, so ignoring one field takes the long form
   constraint goes on it (`where I.Item: Ord`) and writing `where J.Item: Ord`
   is an error naming the spelling to use. And the promise has to hold: it is
   discharged where the parameter is bound, both at a call ("type 'Words' does
-  not satisfy 'J.Item = Int': its 'Item' is 'String', not 'Int'") and at impl
+  not satisfy 'J.Item = int': its 'Item' is 'String', not 'int'") and at impl
   selection, so an adapter built from mismatched sources finds no impl rather
   than compiling one element type as another.
 
-  The type it names need not be another projection: `I: Iterator<Item = Int>`
+  The type it names need not be another projection: `I: Iterator<Item = int>`
   reads as "an iterator of Ints", and a body may then use its elements as the
   Ints they are without bounding them further.
 
@@ -402,15 +429,15 @@ under the field's name, so ignoring one field takes the long form
   The binding names an associated type the trait declares and may not be
   repeated with two different types *for that trait*. Two traits declaring the
   same name are two different projections, so
-  `T: Add<Output = T> + Mul<Output = Int>` binds both and is not a
+  `T: Add<Output = T> + Mul<Output = int>` binds both and is not a
   contradiction (`tests/run/assoc_binding_two_traits.dt`). It may only be
   written where there is something to constrain — not on a supertrait
-  (`trait Pairs: Iterator<Item = Int>`), which bounds every future impl's
+  (`trait Pairs: Iterator<Item = int>`), which bounds every future impl's
   `Self` rather than a parameter this declaration owns.
 - A bound may name an *earlier* type parameter of the same list
   (`fun conv<T, U: Into<T>>(v: U) -> T`), which is what a generic trait is for.
   The bound is opened alongside the parameter it mentions, so what gets
-  checked once inference settles is `Into<Int>` and not the literal `Into<T>`
+  checked once inference settles is `into<int>` and not the literal `into<T>`
   (`tests/fail/trait_bound_arg_forwarded.dt`). Left to right: a bound cannot
   name a parameter declared after it.
 
@@ -453,14 +480,14 @@ So one block can be the whole story:
 
 ```rust
 impl DoubleEnded for Span {
-    type Item = Int;
-    fun next(self) -> Option<Int> { .. }
-    fun next_back(self) -> Option<Int> { .. }
+    type Item = int;
+    fun next(self) -> Option<int> { .. }
+    fun next_back(self) -> Option<int> { .. }
 }
 ```
 
 and `for x in span`, `span.map(f)`, `span.rev()` and a
-`dyn Iterator<Item = Int>` all work, because what is derived is a *real* impl —
+`dyn Iterator<Item = int>` all work, because what is derived is a *real* impl —
 registered in the module's visible set, travelling through `use` like any
 other, and monomorphised per instantiation. An associated type has no default,
 so the block is its only source; a method the super defaults may be omitted, or
@@ -496,7 +523,7 @@ A trait may not be its own supertrait, directly or through a chain
 (`tests/fail/supertrait_cycle.dt`).
 
 `dyn Sub` works, and carries the supers: its vtable is laid out over the
-closure, so `d.next()` on a `dyn DoubleEnded<Item = Int>` dispatches through
+closure, so `d.next()` on a `dyn DoubleEnded<Item = int>` dispatches through
 the same table `d.next_back()` does, and the `<Item = ..>` binding names a
 supertrait's associated type through the sub. Object safety is decided over the
 closure too — a *required* method a vtable cannot carry is fatal wherever it
@@ -524,14 +551,14 @@ impl Into<String>     for Celsius { fun into(self) -> String { .. } }
 They behave as ordinary generic parameters of every signature the trait
 declares — including its default bodies, which are compiled once per
 `(Self, arguments)` pair like any other generic function. A trait *reference*
-(`Into<Int>`) is what supplies them, and one is written at each of the three
+(`into<int>`) is what supplies them, and one is written at each of the three
 places a trait can be named: an impl head, a bound, and a `dyn`. They are
 never inferred there, so the argument count is checked at each
 (`tests/fail/trait_type_args.dt`, `tests/fail/trait_missing_type_args.dt`) —
-a bare `Into` is not a usable reference, since it has said nothing about what
+a bare `into` is not a usable reference, since it has said nothing about what
 it converts to.
 
-The arguments are part of what a bound asks for: `impl Into<Int> for S` does
+The arguments are part of what a bound asks for: `impl Into<int> for S` does
 not answer `T: Into<String>` (`tests/fail/trait_type_arg_unsatisfied.dt`).
 They are equally part of coherence, so one type may implement one trait
 several times as long as the arguments differ — `Celsius` above is two impls,
@@ -542,7 +569,7 @@ decide: `c.into()` has two bodies to choose from. Three things break the tie,
 in this order:
 
 1. **The arguments**, when the candidates disagree about what they take:
-   `v.scale(10)` and `v.scale(w)` reach `Scale<Int>` and `Scale<V2>`. This is
+   `v.scale(10)` and `v.scale(w)` reach `Scale<int>` and `Scale<V2>`. This is
    the same selector a qualified `Steps::from(v)` uses (see "Selection by
    argument type"), and it runs only when the candidate signatures differ in
    their *parameters* — two that take the same arguments cannot be told apart
@@ -557,7 +584,7 @@ declared once per type, so nothing else can reach this state (see "Impl
 blocks" below).
 
 An argument no candidate accepts is a failure of *selection*, and says so —
-`no implementation of 'scale' for 'V2' takes arguments (V2, Bool)`, with a note
+`no implementation of 'scale' for 'V2' takes arguments (V2, bool)`, with a note
 naming each candidate and what it does take
 (`tests/fail/method_arg_select_none.dt`).
 
@@ -574,7 +601,7 @@ trait Scale<K = Self> {
 }
 
 impl Scale      for V2 { fun scale(self, k: V2)  -> V2 { .. } }  # Scale<V2>
-impl Scale<Int> for V2 { fun scale(self, k: Int) -> V2 { .. } }
+impl Scale<int> for V2 { fun scale(self, k: int) -> V2 { .. } }
 
 fun square<T: Scale>(v: T) -> T { v.scale(v) }                   # T: Scale<T>
 ```
@@ -638,7 +665,7 @@ Each **branch** of an `if` or a `match` is its own such position, so the arms
 need not agree on a concrete type:
 
 ```rust
-fun heavier(kg: Int) -> dyn Weigh {
+fun heavier(kg: int) -> dyn Weigh {
     if kg > 10 { Brick { kg: kg } } else { Feather { grams: kg } }
 }
 ```
@@ -705,15 +732,15 @@ travels with the value, so it meets the bound naming that trait — it *is* the
 trait, rather than implementing it:
 
 ```
-fun total<I: Iterator<Item = Int>>(it: I) -> Int { .. }
+fun total<I: Iterator<Item = int>>(it: I) -> int { .. }
 
-var d: dyn Iterator<Item = Int> = Counter { n: 0, max: 3 };
+var d: dyn Iterator<Item = int> = Counter { n: 0, max: 3 };
 print(total(d));   # 3
 ```
 
 It satisfies that trait and no other: a `dyn Display` still fails a `T: Ord`
 bound. Its associated bindings are part of the type, so they are checked
-against the bound's own clauses — a `dyn Iterator<Item = Int>` does not satisfy
+against the bound's own clauses — a `dyn Iterator<Item = int>` does not satisfy
 `I: Iterator<Item = String>` — and they are what a `where I.Item: Ord`
 discharges against. See `tests/run/dyn_bound.dt`,
 `tests/fail/dyn_bound_wrong_trait.dt` and
@@ -727,7 +754,7 @@ trait Iterator {
     fun next(self) -> Self.Item;
 }
 
-var it: dyn Iterator<Item = Int> = Counter { n: 41 };
+var it: dyn Iterator<Item = int> = Counter { n: 41 };
 print(it.next());                              # 42
 ```
 
@@ -739,7 +766,7 @@ declares. Every one is **required**, whether or not a method mentions it:
 `dyn Iterator` on its own is not an under-checked type, it is not a type
 (`tests/fail/dyn_assoc_missing.dt`).
 
-The binding is part of the type. `dyn Iterator<Item = Int>` and
+The binding is part of the type. `dyn Iterator<Item = int>` and
 `dyn Iterator<Item = String>` are two types; a default body reached through
 each is a separate instantiation, and coercing to one needs an impl that
 binds the same type — implementing the trait is no longer enough
@@ -749,8 +776,8 @@ it. See `tests/run/dyn_assoc.dt`.
 
 The bracket list carries **two different things**: the trait's own type
 arguments, which are positional, and its associated-type bindings, which are
-named — `dyn Into<Int>`, `dyn Iterator<Item = Int>`, or
-`dyn Pipe<String, Out = Int>` for a trait with both. Arguments come first
+named — `dyn Into<int>`, `dyn Iterator<Item = int>`, or
+`dyn Pipe<String, Out = int>` for a trait with both. Arguments come first
 (`tests/fail/dyn_binding_before_arg.dt`). A trait argument may also be left to
 the impl to solve (`[dyn Into<T>]`), which works exactly when one visible impl
 answers: a type implementing the trait at two different arguments is a
@@ -759,11 +786,11 @@ question only the source can settle
 
 The other thing that can solve one is **another trait object**: within a single
 trait, two `dyn`s differ only in the ordinary types beside it, so they unify
-the way `Box<T>` and `Box<Int>` do. A `fun pull<T>(s: dyn Src<T>) -> T` takes a
-`dyn Src<Int>` and answers `Int`, a `dyn Bag<Item = T>` solves its binding the
+the way `Box<T>` and `Box<int>` do. A `fun pull<T>(s: dyn Src<T>) -> T` takes a
+`dyn Src<int>` and answers `int`, a `dyn Bag<Item = T>` solves its binding the
 same way, and two parameters of one `T` must then agree
 (`tests/run/dyn_trait_arg_infer.dt`, `tests/fail/dyn_trait_arg_disagree.dt`).
-Across *two* traits nothing decomposes — a `dyn Twice<Int>` reaching a
+Across *two* traits nothing decomposes — a `dyn Twice<int>` reaching a
 `dyn Src<T>` is the upcast below, and it is the source trait's supertrait
 closure, not unification, that reads `T` off it.
 
@@ -810,11 +837,11 @@ and still could never be behind *this* trait object
 
 Two consequences of the identity being the vtable rather than a runtime tag:
 
-- **Generic types keep their arguments.** A `Box<Int>` behind a `dyn Tag` is
+- **Generic types keep their arguments.** A `Box<int>` behind a `dyn Tag` is
   not a `Box<String>`, even though the two share one definition at runtime —
   the tables are keyed by the type, which still exists where the table is
   built.
-- **The trait argument is part of the key.** `dyn Sink<Int>` and
+- **The trait argument is part of the key.** `dyn Sink<int>` and
   `dyn Sink<String>` over one self type are two tables, and a downcast asks
   through whichever reference its operand was written as, so one type can be
   recognised through either.
@@ -841,8 +868,8 @@ concrete type and unlike `as?`: `trait Sub: Super` plus the impl that discharged
 it are already the proof, so there is nothing to test and no `Option`.
 
 ```
-trait Base { fun tag(self) -> Int; }
-trait Both: Left + Right { fun both(self) -> Int; }
+trait Base { fun tag(self) -> int; }
+trait Both: Left + Right { fun both(self) -> int; }
 
 var b: dyn Both = P { n: 1 };
 var r: dyn Right = b;      # upcast; `r.right()` dispatches through Right's table
@@ -855,7 +882,7 @@ inner value rather than copying it, so the upcast object and the original are
 the same object, and `as?` still recovers the concrete type through either.
 
 A supertrait is matched **restated in the source's type arguments**: a
-`dyn Twice<Int>` is a `dyn Src<Int>` and not a `dyn Src<String>`
+`dyn Twice<int>` is a `dyn Src<int>` and not a `dyn Src<String>`
 (`tests/fail/dyn_upcast_wrong_arg.dt`). Associated-type bindings carry across
 and must agree (`tests/fail/dyn_upcast_assoc_mismatch.dt`); an unrelated trait
 is an ordinary type mismatch (`tests/fail/dyn_upcast_unrelated.dt`). See
@@ -882,7 +909,7 @@ literal sub-patterns `x: 10`). A tuple struct is written with its constructor
 spelling, `Pair(a, b)`, in a pattern as in an expression, and so is a unit
 struct: a bare `Marker` is a test for that struct, not a binding. The cost is
 that a unit struct's name can no longer be bound as a variable — `var Marker =
-7;` is a struct pattern against an `Int` and is rejected.
+7;` is a struct pattern against an `int` and is rejected.
 
 The same patterns are the binding form of `var`, restricted to the
 irrefutable ones — a `var` binding is a match with one arm and no guard, so
@@ -893,7 +920,7 @@ would reach no arm; use `match`, or the `else` below.
 Matches must be **exhaustive**; a gap is a compile error naming the missing
 enum variant where it can (`match is not exhaustive: 'Shape::Point' is not
 covered`). A guarded arm never counts towards coverage — whether it matches is
-a runtime question. Types with no enumerable domain (`Int`, `Float`, `String`)
+a runtime question. Types with no enumerable domain (`int`, `float`, `String`)
 therefore always need a `_` or a binding arm.
 
 ### `if var` and `while var`
@@ -912,7 +939,7 @@ while var Opt::Some(v) = cursor.next() {
 
 A conditional binding is a `match` with one arm written where a condition
 would go: the header's expression is the **subject**, of any type at all rather
-than a `Bool`, and the branch is taken exactly when it has the pattern's shape.
+than a `bool`, and the branch is taken exactly when it has the pattern's shape.
 Every pattern `match` accepts is accepted here, nested as freely, and the
 pattern is *meant* to be refutable — that is the whole construct. An
 irrefutable one is allowed and simply makes the failure branch unreachable, so
@@ -942,7 +969,7 @@ still needs a name of its own, exactly as in a plain `if`.
 ### `var ... else`
 
 ```
-fun area(s: Shape) -> Int {
+fun area(s: Shape) -> int {
     var Shape::Rect(w, h) = s else { panic("expected a rect"); };
     return w * h;              # `w` and `h` are ordinary locals from here on
 }
@@ -954,7 +981,7 @@ stays at the statement level instead of nesting inside an `if var`. The names
 are in scope for the rest of the enclosing block, like any `var`.
 
 The `else` block **must not fall through** — it has to `return`, `break`,
-`continue`, or call something that returns `Never` (`panic`) — because below
+`continue`, or call something that returns `!` (`panic`) — because below
 the statement the binding is in scope unconditionally, so there is no answer
 for a failure that carries on. A block diverges when any of its statements
 does, so `else { panic("no"); }` counts with the semicolon as without it.
@@ -1001,11 +1028,11 @@ private, so the cursor is hidden), which is why an iterator is usually a small
 struct with a mutable position:
 
 ```
-pub struct Counter { n: Int, max: Int }
-impl Counter { fun to(max: Int) -> Counter { Counter { n: 0, max: max } } }
+pub struct Counter { n: int, max: int }
+impl Counter { fun to(max: int) -> Counter { Counter { n: 0, max: max } } }
 impl Iterator for Counter {
-    type Item = Int;
-    fun next(self) -> Option<Int> {
+    type Item = int;
+    fun next(self) -> Option<int> {
         if self.n >= self.max { return Option::None; }
         self.n += 1;
         return Option::Some(self.n);
@@ -1028,12 +1055,12 @@ The iterable may also be a **bounded generic** or a **trait object**, not just a
 concrete type:
 
 ```
-fun count<I: Iterator>(it: I) -> Int {   # driven through the `I: Iterator` bound
+fun count<I: Iterator>(it: I) -> int {   # driven through the `I: Iterator` bound
     var n = 0;
     for x in it { n += 1; }
     return n;
 }
-var d: dyn Iterator<Item = Int> = Counter::to(5);
+var d: dyn Iterator<Item = int> = Counter::to(5);
 for x in d { print(x); }                 # driven through the vtable
 ```
 
@@ -1099,7 +1126,7 @@ difference from `filter`: over `0,1,2,3,0,1` the first yields `[0,1,2]` and the
 second `[0,1,2,0,1]`. Its mirror `skip_while` *yields* the element that ended
 the skipping rather than dropping it.
 
-`for_each`'s closure returns `Unit`, and there is no discard coercion — a
+`for_each`'s closure returns `()`, and there is no discard coercion — a
 shorthand closure *is* its expression, so `|x| f(x)` fits only when `f`
 returns nothing. `|x| { f(x); }` is the way round it, the trailing `;` doing
 the dropping by the ordinary block rule
@@ -1118,7 +1145,7 @@ dispatchable, so the trait keeps them *and* stays usable as `dyn`. The closures
 are typed by the source's element: `map`'s `|x| ...` sees `x` at the
 iterator's `Item` type — including through a *pass-through* adapter, where that
 element is a projection over a projection (`Filter<Counter>.Item` is
-`Counter.Item` is `Int`), which the checker now collapses so a chain like
+`Counter.Item` is `int`), which the checker now collapses so a chain like
 `filter(p).map(f)` type-checks. They are ordinary library code — an adapter is a
 struct with a `fun(..)` field and an `impl Iterator`, nothing built into the
 language.
@@ -1210,8 +1237,8 @@ a `String`:
 
 ```
 xs.iter()        # -> ArrayIter<T>, Item = T
-(0..n).iter()    # -> RangeIter,    Item = Int
-s.chars()        # -> CharIter,     Item = Char
+(0..n).iter()    # -> RangeIter,    Item = int
+s.chars()        # -> CharIter,     Item = char
 ```
 
 All three are `Iterator` *and* `DoubleEnded`, so the whole vocabulary applies:
@@ -1418,8 +1445,8 @@ quiet about it:
 Items are **private by default**; `pub` makes one importable:
 
 ```
-pub struct Point { pub x: Int, pub y: Int }  # importable, both fields exposed
-fun helper() -> Int { 1 }                    # private: `use m::helper;` is an error
+pub struct Point { pub x: int, pub y: int }  # importable, both fields exposed
+fun helper() -> int { 1 }                    # private: `use m::helper;` is an error
 ```
 
 A struct's **fields carry their own visibility**, and it too is private by
@@ -1431,8 +1458,8 @@ invariant behind a private field and expose it only through its methods:
 
 ```
 pub struct Counter {
-  n: Int,          # private: only this module touches the cursor
-  pub limit: Int,  # public
+  n: int,          # private: only this module touches the cursor
+  pub limit: int,  # public
 }
 # elsewhere: `c.limit` reads, but `c.n` and `Counter { n: 0, .. }` are errors,
 # as is a pattern `Counter { n, .. }` — the field is named either way.
@@ -1440,7 +1467,7 @@ pub struct Counter {
 
 Enum variants have no field-level visibility: a `pub enum`'s variants and their
 payloads are as visible as the enum itself. `pub` on a tuple-struct field
-(`struct P(pub Int, Int)`) works the same way as on a named one.
+(`struct P(pub int, int)`) works the same way as on a named one.
 
 A plain `use` does not re-export. If `b.dt` does `use a::X;`, then `use b::X;`
 from a third module is an error — "imported by module 'b.dt' but not
@@ -1473,7 +1500,7 @@ unused, and the question asked instead is whether removing the line would lose
 an impl that was actually selected:
 
 ```
-use ext;              # never spelled `ext::`, but the only source of `impl Int`
+use ext;              # never spelled `ext::`, but the only source of `impl int`
 var n = 21;  n.doubled();     # ... so it is load-bearing, and silent
 
 use std::array;       # its impls also arrive through the preluded std::iter,
@@ -1537,7 +1564,7 @@ which is worth knowing before writing your own method on a primitive: `use
 std::array;` reaches `std::option` (that is what `pop` returns), and so
 `std::fmt` and `std::cmp` beyond it, and `std::string` beyond *that* — so every
 impl those modules ship is visible too, and since milestone 40 that includes
-inherent methods on the primitives (`impl<T> [T]`, `impl String`, `impl Char`,
+inherent methods on the primitives (`impl<T> [T]`, `impl String`, `impl char`,
 `impl StringBuf`). Importing `std::array` therefore also means you cannot add
 your own inherent `[T]` method of a name it already spends (`len`, `push`, …) —
 since milestone 68 that is an error where the impl is written, rather than the
@@ -1546,17 +1573,17 @@ silent loss it used to be.
 That chain is why the direction of a std module's own imports is a design
 decision rather than bookkeeping: what an import costs its dependents is the
 *impls* the imported module ships, not its size. `std::cmp` imports
-`std::string` and `std::char` for `impl Ord for String` / `impl Ord for Char`,
-and the cost it passes on is those modules' own `impl String` / `impl Char` —
+`std::string` and `std::char` for `impl Ord for String` / `impl Ord for char`,
+and the cost it passes on is those modules' own `impl String` / `impl char` —
 one type's methods each, on a type the importer did not itself define, rather
 than a trait impl coherence could take away.
 
 Two implementations of **the same trait for overlapping types** may not be
-visible at once. Writing `impl Ord for Int` in a module that also imports
+visible at once. Writing `impl Ord for int` in a module that also imports
 `std::cmp` is an error, not a silent override:
 
 ```
-error: conflicting implementations of trait 'Ord' for type 'Int'
+error: conflicting implementations of trait 'Ord' for type 'int'
 > note: the other one is in module '<std>/cmp.dt'
 ```
 
@@ -1578,7 +1605,7 @@ Two definitions in one block report separately ("method 'get' is defined twice
 in this impl block"), and the cross-module pair reports at the `use`, like the
 trait case. Overlap is asked with bounds ignored and from both sides, so a
 bound (`impl<T: Ord> W<T>` against `impl<T> W<T>`) and a narrower head
-(`impl [Int]` against `impl<T> [T]`) are both refused — the language has no
+(`impl [int]` against `impl<T> [T]`) are both refused — the language has no
 specialization, so neither is a way to win a name from a wider impl.
 
 *Inherent* means reached by the receiver alone, which includes the extra
@@ -1661,9 +1688,9 @@ module that does not exist is an error listing the ones that do.
 ### `std::assert`
 
 ```
-pub fun assert(condition: Bool)                       # "assertion failed"
-pub fun assert_with(condition: Bool, message: String)
-pub fun assert_else(condition: Bool, message: fun() -> String)
+pub fun assert(condition: bool)                       # "assertion failed"
+pub fun assert_with(condition: bool, message: String)
+pub fun assert_else(condition: bool, message: fun() -> String)
 pub fun assert_eq<T: Display>(left: T, right: T)      # "assertion failed: 1 == 2"
 pub fun assert_ne<T: Display>(left: T, right: T)
 ```
@@ -1673,7 +1700,7 @@ rather than behaviour.
 
 **An assertion cannot name itself.** Rust's `assert!` is a *macro* so that a
 failure can quote the source text back — `assertion failed: a == b`, copied
-from the call. ducktape has no macros, and a function receives a `Bool`, not
+from the call. ducktape has no macros, and a function receives a `bool`, not
 the expression that produced it, so `assert`'s message is the fixed string and
 can never be more. `assert_with` is the way round it, and that is exactly the
 `unwrap`/`expect` split one section down, forced by the same absence.
@@ -1695,7 +1722,7 @@ it has one (`tests/fail/assert_eq_needs_display.dt`).
 **The module is separate from `std::panic` for one reason**: `Display` brings
 `std::fmt`'s impls, impl visibility is transitive, and a program that only
 wanted `panic("...")` must not inherit them — nor coherence's refusal to let it
-write its own `impl Display for Int`. Same argument `std::cmp` makes about
+write its own `impl Display for int`. Same argument `std::cmp` makes about
 where `impl Ord for String` belongs; the dependency points at the impl-poor
 module, so `assert` imports `panic` and never the reverse.
 
@@ -1707,8 +1734,8 @@ release build: an `assert` in a hot loop is a branch in a hot loop
 
 ```
 pub trait Ord {
-    fun cmp(self, other: Self) -> Int;      # <0 before, 0 equal, >0 after
-    fun lt(self, other: Self) -> Bool       # defaults, derived from cmp
+    fun cmp(self, other: Self) -> int;      # <0 before, 0 equal, >0 after
+    fun lt(self, other: Self) -> bool       # defaults, derived from cmp
     fun gt / le / ge
 }
 
@@ -1717,7 +1744,7 @@ pub fun min<T: Ord>(a: T, b: T) -> T
 pub fun clamp<T: Ord>(v: T, lo: T, hi: T) -> T
 ```
 
-`Ord` is implemented for `Int`, `Float`, `Char` and `String`, which is the point worth
+`Ord` is implemented for `int`, `float`, `char` and `String`, which is the point worth
 noticing: **a trait can be implemented for a primitive**, so the standard
 library extends the built-in types with exactly the machinery user code uses.
 Your own types join the same trait and `max`/`min` work on them unchanged
@@ -1769,29 +1796,29 @@ method `compare` (`a.compare(b)`), and it has to be a native for the same reason
 `push` is: the finest handle ducktape has on a String's contents is `slice`, and
 comparing two one-byte slices would need the ordering being defined.
 
-`Char` is ordered the same way, and by the same rule about where the impl
+`char` is ordered the same way, and by the same rule about where the impl
 goes: `std::cmp` imports `std::char` for it. That one needs no native at all —
-`c.code()` hands the comparison two Ints, and `<` on an Int is an opcode —
+`c.code()` hands the comparison two Ints, and `<` on an int is an opcode —
 which is the difference between ordering a character and ordering a string of
 them.
 
 The impl lives in `std::cmp`, beside the trait, so `std::cmp` imports
 `std::string` (and `std::char`) rather than the other way round. That direction
 is deliberate: impl visibility is transitive through `use`, so importing them
-brings their `impl String` / `impl Char` (the methods `compare` and `code` live
+brings their `impl String` / `impl char` (the methods `compare` and `code` live
 on) into every `use std::cmp::…` — one type's methods each, and nothing a
 program did not already reach through `std::cmp`.
 Putting the impl in `std::string` would have handed a program that only wanted
 `len` every `Ord` impl — and with them coherence's refusal to let it write
-its own `impl Ord for Int`. **An import's cost is measured in impls, not in
+its own `impl Ord for int`. **An import's cost is measured in impls, not in
 code.** `impl Display for String` living in `std::fmt` sets the same precedent.
 
-`Float` is ordered by IEEE comparison, which is *not* a total order: every
+`float` is ordered by IEEE comparison, which is *not* a total order: every
 `<`/`>`/`==` involving a NaN is false. `Ord` promises a total order, so the impl
 decides where NaN goes — **NaN sorts after every real number, and all NaNs are
 equal to each other** (`self != self` is the NaN test, since only NaN is unequal
 to itself). So `max(nan, x)` is NaN whichever argument the NaN is, and a
-`[Float]` with a NaN in it has a defined sort (`tests/run/float_nan.dt`). The
+`[float]` with a NaN in it has a defined sort (`tests/run/float_nan.dt`). The
 sign bit and payload are ignored, so a `-NaN` and a `+NaN` are one order —
 deliberately coarser than Rust's `total_cmp`.
 
@@ -1807,13 +1834,13 @@ pub trait Into<T> { fun into(self) -> T; }
 
 impl<T, U: From<T>> Into<U> for T { .. }        # the blanket
 
-impl From<Int> for Float                        # widening
-impl From<Char> for Int                         # the scalar value
+impl From<int> for float                        # widening
+impl From<char> for int                         # the scalar value
 ```
 
-Two traits and one relation: a type that can be made *from* an `Int` is an
-`Int` that goes *into* it. **A program writes `From` impls and never writes
-`Into`** — the blanket supplies the other direction for every one of them.
+Two traits and one relation: a type that can be made *from* an `int` is an
+`int` that goes *into* it. **A program writes `From` impls and never writes
+`into`** — the blanket supplies the other direction for every one of them.
 
 ```
 use std::convert::{From, Into};
@@ -1830,14 +1857,14 @@ produces, so nothing else has to say what the conversion is. `into` is a
 method whose *receiver cannot decide the answer* — `7.into()` could produce
 anything — so the impl is pinned by the type the result flows into: an
 annotation, a parameter, a return type. With none of those it is an error
-("no method named 'into' found for type 'Int'",
+("no method named 'into' found for type 'int'",
 `tests/fail/into_without_expected_type.dt`); a bound that names the reference
-(`fun scaled<T: Into<Float>>`) needs no hint at all, since the reference is
+(`fun scaled<T: Into<float>>`) needs no hint at all, since the reference is
 written down.
 
 When a type is the target of **more than one `From`**, the qualified call reads
-its argument to choose (milestone 30): with `impl From<Int> for Steps` and
-`impl From<Char> for Steps` both in scope, `Steps::from(26)` and
+its argument to choose (milestone 30): with `impl From<int> for Steps` and
+`impl From<char> for Steps` both in scope, `Steps::from(26)` and
 `Steps::from('a')` reach different impls, and an argument that fits none names
 what it could not satisfy and lists what each candidate takes
 (`tests/run/assoc_select.dt`, `tests/fail/assoc_select_no_impl.dt`). The
@@ -1846,20 +1873,20 @@ need the impl chosen first — `Steps::from(None)` — cannot be disambiguated.
 
 Milestone 75 gave the same selector to the **receiver** spelling, which is what
 a heterogeneous operator needed (`a * b` desugars to `a.mul(b)`): `v.scale(10)`
-and `v.scale(w)` reach `Scale<Int>` and `Scale<V2>`. It runs only where the
+and `v.scale(w)` reach `Scale<int>` and `Scale<V2>`. It runs only where the
 candidates disagree about their arguments, so the return-type hint still
 decides for `c.into()` (`tests/run/method_arg_select.dt`).
 
 The receiver-side mirror is a **trait-qualified call** (milestone 31): where the
-expected type is unavailable or a type goes `Into` several ways, name the trait
-and the receiver settles the rest. `Into::<Fahrenheit>::into(c)` and
-`Into::<Kelvin>::into(c)` reach different impls of a `Celsius` that has both, and
+expected type is unavailable or a type goes `into` several ways, name the trait
+and the receiver settles the rest. `into::<Fahrenheit>::into(c)` and
+`into::<Kelvin>::into(c)` reach different impls of a `Celsius` that has both, and
 neither needs an annotation — the reference is written down. It reads the
 receiver to choose where `Steps::from` reads the argument, the two ends of one
 selection (`tests/run/trait_qualified_call.dt`). See "Paths" above for the rules
 that bound it.
 
-Importing the module **costs a program its own `Into` impls**: coherence is
+Importing the module **costs a program its own `into` impls**: coherence is
 blind to an impl's bounds, so the blanket overlaps every `impl Into<X> for Y`
 that could be written (`tests/fail/into_impl_conflicts_with_blanket.dt`).
 The reflexive `impl<T> From<T> for T` is deliberately absent for the same
@@ -1869,9 +1896,9 @@ nobody could implement.
 Only two conversions ship, and the restraint is the point: an import's cost is
 measured in impls (see `std::cmp`). Both are lossless. There is no
 `From<T> for String` — rendering is `Display`'s question and `to_string`
-already answers it — and no `From<Float> for Int`, since `as Int` truncates
+already answers it — and no `From<float> for int`, since `as int` truncates
 and which way it should round is a question a fallible conversion would have
-to ask. `From` is not object-safe (it produces a `Self`), while `Into` is; see
+to ask. `From` is not object-safe (it produces a `Self`), while `into` is; see
 `tests/run/convert.dt`.
 
 ### `std::fmt`
@@ -1882,9 +1909,9 @@ pub trait Display {
 }
 
 pub fun to_string<T: Display>(value: T) -> String
-pub fun float(value: Float, precision: Int) -> String   # @native
+pub fun float(value: float, precision: int) -> String   # @native
 
-impl Display for Int / Float / Bool / String
+impl Display for int / float / bool / String
 impl<T: Display> Display for [T]
 impl<A: Display, B: Display> Display for (A, B)
 ```
@@ -1896,7 +1923,7 @@ means, and that cannot be left to whatever happens to be in scope.
 
 So `"{v}"` splits in two:
 
-- a **primitive** segment (Int, Float, Bool, String) renders itself. This is
+- a **primitive** segment (int, float, bool, String) renders itself. This is
   the path the VM has always had, and it is what lets a program interpolate a
   number without importing anything.
 - **anything else** must implement `Display`, and the segment *is* the call
@@ -1968,7 +1995,7 @@ needs a trait.
 
 `float` is the one rendering interpolation cannot ask for on its own: `"{f}"`
 gives the shortest decimal that round-trips, which is the only rendering the VM
-has. `float` renders a `Float` to a fixed precision, and `std::string`'s
+has. `float` renders a `float` to a fixed precision, and `std::string`'s
 `pad_start`/`pad_end`/`pad_center` lay a rendered string out to a width. Width
 there is a *character* count, not bytes, since alignment is a display question;
 the value has to be rendered to a `String` first, which is exactly why these are
@@ -1991,7 +2018,7 @@ sugar and nothing more: the checker rewrites the segment into the same `pad_*`
 and `float` calls you could write by hand, so codegen, the VM and the image
 format never see a spec. The value is rendered to a `String` first (a primitive
 via the VM, a `Display` type via `to_string`), which is why a width applies to
-anything renderable while a precision applies only to a `Float`. Because the
+anything renderable while a precision applies only to a `float`. Because the
 compiler generates the `pad_*`/`float` calls, it must resolve those names
 itself — so they are lang items like `Display`, and a spec needs its module
 (`std::string` for a width, `std::fmt` for a precision) present in the program,
@@ -2014,7 +2041,7 @@ means, so `a + b` on a non-numeric operand is the call `a.add(b)`, rewritten by
 the checker (`tests/run/ops_operators.dt`).
 
 ```
-struct V2 { x: Int, y: Int }
+struct V2 { x: int, y: int }
 impl Add for V2 {
     type Output = V2;
     fun add(self, other: V2) -> V2 {
@@ -2030,7 +2057,7 @@ var c = V2 { x: 1, y: 2 } + V2 { x: 10, y: 20 };   # (11, 22)
 var d = -c;                                        # (-11, -22)
 
 fun twice<T: Add<Output = T>>(v: T) -> T { return v + v; }
-print(twice(3));                                   # 6      — via impl Add for Int
+print(twice(3));                                   # 6      — via impl Add for int
 print(twice("ab"));                                # abab   — via impl Add for String
 ```
 
@@ -2038,8 +2065,8 @@ Three things are worth knowing about the shape:
 
 - **A numeric operand never reaches for these.** `1 + 2` is still `OP_ADD` — no
   import, no frame, no impl lookup — exactly as `1 < 2` stays an opcode and
-  `"{1}"` stays the VM's own rendering. The impls `std::ops` ships for `Int`,
-  `Float` and `String` are not what makes `1 + 2` work; they exist so a generic
+  `"{1}"` stays the VM's own rendering. The impls `std::ops` ships for `int`,
+  `float` and `String` are not what makes `1 + 2` work; they exist so a generic
   bounded `T: Add` can instantiate at a primitive, and each of their bodies is
   the built-in path (`return self + other;` on two Ints is the opcode, so it
   does not call itself).
@@ -2047,15 +2074,15 @@ Three things are worth knowing about the shape:
 
   ```
   impl Mul        for V2 { fun mul(self, k: V2)    -> V2 { .. } }  # Mul<V2>
-  impl Mul<Float> for V2 { fun mul(self, k: Float) -> V2 { .. } }
+  impl Mul<float> for V2 { fun mul(self, k: float) -> V2 { .. } }
 
   var a = v * w;     # Mul<V2>
-  var b = v * 2.0;   # Mul<Float>
+  var b = v * 2.0;   # Mul<float>
   ```
 
   The operator has both operand types in hand, so the argument a trait
   reference is never allowed to *infer* is one the rewrite simply writes down:
-  `v * 2.0` asks whether `V2` implements `Mul<Float>`. `Rhs` defaults to `Self`,
+  `v * 2.0` asks whether `V2` implements `Mul<float>`. `Rhs` defaults to `Self`,
   so a bare `Mul` still means `Mul<V2>` and every homogeneous impl and `T: Add`
   bound reads exactly as before. `Neg` has no right operand and no parameter.
   A pair no impl heads says so — `cannot apply '*' to 'V2' and 'String': 'V2'
@@ -2066,8 +2093,8 @@ Three things are worth knowing about the shape:
 - **The result is an associated type**, so it need not be either operand:
 
   ```
-  impl Mul       for V2    { type Output = Float; .. }   # a dot product
-  impl Mul<V2>   for Float { type Output = V2;    .. }   # 2.0 * v
+  impl Mul       for V2    { type Output = float; .. }   # a dot product
+  impl Mul<V2>   for float { type Output = V2;    .. }   # 2.0 * v
   ```
 
   Neither has a `-> Self` spelling — the first returns neither operand's type,
@@ -2090,7 +2117,7 @@ Three things are worth knowing about the shape:
 
 All six are preluded, so `impl Add for Point` and a `T: Add` bound need no
 `use`. As with `Display` and `Ord`, that also means the impls for the primitives
-are always visible, so a program cannot write its own `impl Add for Int` —
+are always visible, so a program cannot write its own `impl Add for int` —
 coherence rejects the pair.
 
 **A compound assignment reaches them too**, because `a op= b` *is* `a = a op b`
@@ -2106,9 +2133,9 @@ v %= V2 { x: 10, y: 10 };
 Two consequences follow from that sentence, and both are the operator's rules
 rather than the assignment's. The result must fit the place, so `Add for Meters`
 whose `Output` is a `Feet` cannot be compounded into a `Meters`, and `i += 1.5`
-is rejected on an `Int` for the reason `i = i + 1.5` is — while `f += 1` on a
-`Float` is *accepted*, since `f + 1` widens. And the right operand is not
-inferred from the left: `|n| { total += n; }` needs `|n: Int|`, exactly as
+is rejected on an `int` for the reason `i = i + 1.5` is — while `f += 1` on a
+`float` is *accepted*, since `f + 1` widens. And the right operand is not
+inferred from the left: `|n| { total += n; }` needs `|n: int|`, exactly as
 `total = total + n` does, because which operator `+` even means depends on the
 operand types (see "the right operand may differ" above).
 
@@ -2122,15 +2149,15 @@ time — on both the opcode and the call path. `%=` is included; the compound
 pub enum Option<T> { Some(T), None }
 
 impl<T> Option<T> {
-    fun is_some(self) -> Bool
-    fun is_none(self) -> Bool
+    fun is_some(self) -> bool
+    fun is_none(self) -> bool
     fun unwrap(self) -> T                # panics on None
     fun expect(self, message: String) -> T
     fun unwrap_or(self, fallback: T) -> T
     fun unwrap_or_else(self, fallback: fun() -> T) -> T
     fun map<U>(self, f: fun(T) -> U) -> Option<U>
     fun and_then<U>(self, f: fun(T) -> Option<U>) -> Option<U>
-    fun filter(self, pred: fun(T) -> Bool) -> Option<T>
+    fun filter(self, pred: fun(T) -> bool) -> Option<T>
     fun otherwise(self, other: Option<T>) -> Option<T>
 }
 
@@ -2159,15 +2186,15 @@ it against a program's own import of `std::cmp` (`tests/run/std_option.dt`).
 
 ```
 @native("panic_abort")
-pub fun panic(message: String) -> Never;
+pub fun panic(message: String) -> !;
 ```
 
-`panic` is the only std function that promises never to come back, and `Never`
+`panic` is the only std function that promises never to come back, and `!`
 is the type that says so. It is not a new type — it is the one `return` and
 `break` already gave an expression — but until this module nothing could *name*
 it in a signature.
 
-Naming it is what makes the promise usable. `Never` is the **bottom type**: it
+Naming it is what makes the promise usable. `!` is the **bottom type**: it
 flows out of diverging code into any expectation at all, so `return panic(msg)`
 satisfies any return type:
 
@@ -2183,23 +2210,23 @@ fun unwrap(self) -> T {
 That single rule is the whole of what `std::result` and `Option::unwrap` needed
 (`tests/pass/never_type.dt`).
 
-Nothing flows the other way. No value has type `Never`, so an expectation of
-`Never` is a promise to diverge, and only diverging code keeps it: a body
-annotated `-> Never` must not run off its end or `return` a value, and
-`var x: Never = 5;` is refused like any other mismatch.
+Nothing flows the other way. No value has type `!`, so an expectation of
+`!` is a promise to diverge, and only diverging code keeps it: a body
+annotated `-> !` must not run off its end or `return` a value, and
+`var x: ! = 5;` is refused like any other mismatch.
 
 ```
-fun evil() -> Never { }          # error: expected 'Never', which only
+fun evil() -> ! { }          # error: expected '!', which only
                                  # diverging code produces, but got '()'
 ```
 
 A body diverges when it ends in `return`/`break`/`continue`, or in anything
-typed `Never` — `panic("...")`, a `loop` nothing breaks out of, or a `match`
+typed `!` — `panic("...")`, a `loop` nothing breaks out of, or a `match`
 whose every arm diverges. This is the same rule a `var ... else` block is held
 to, and anything written *below* such a statement is dead code, which warns:
 
 ```
-fun f() -> Int {
+fun f() -> int {
     return 1;
     print("dead");   # warning: unreachable code: control never reaches here
 }
@@ -2209,9 +2236,9 @@ One warning per block, at the first dead statement — a dead tail expression
 counts, since it is what the block would evaluate to and it never runs.
 
 ```
-fun serve() -> Never { loop { } }          # no exit, so nothing follows it
-fun serve() -> Never { loop { break; } }   # got '()': the break is an exit
-fun serve() -> Never { while true { } }    # got '()': a `while` may always end
+fun serve() -> ! { loop { } }          # no exit, so nothing follows it
+fun serve() -> ! { loop { break; } }   # got '()': the break is an exit
+fun serve() -> ! { while true { } }    # got '()': a `while` may always end
 ```
 
 An endless loop is the one form of divergence that is a *shape* rather than a
@@ -2226,14 +2253,14 @@ Divergence and a `loop`'s value are the same answer at two ends of one range,
 since both are read off the breaks: no break that leaves gives `!`, and breaks
 that leave give their join. A break whose *value* diverges never reaches the
 exit, so it says nothing about the type and a loop made only of those is `!`
-again — `fun boom() -> Never { loop { break panic("gone"); } }` compiles.
+again — `fun boom() -> ! { loop { break panic("gone"); } }` compiles.
 
 Because divergence is not *evidence* about a type, it also solves no type
 variable: `first(panic("x"), 4)` leaves `T` for the second argument to decide
 (`tests/run/never_flows.dt`). And where two positions are **siblings** rather
 than a value and an expectation — the arms of an `if` or a `match`, an array's
 elements — the diverging one joins into the other instead of imposing itself,
-which is what makes `if c { return 1; } else { 2 }` an `Int`.
+which is what makes `if c { return 1; } else { 2 }` an `int`.
 
 **There is no unwinding and no `catch`.** A panic sets the same error a failing
 native sets, so the VM reports it at the call site, prints the frames beneath
@@ -2252,8 +2279,8 @@ from the caller.
 pub enum Result<T, E> { Ok(T), Err(E) }
 
 impl<T, E> Result<T, E> {
-    fun is_ok(self) -> Bool
-    fun is_err(self) -> Bool
+    fun is_ok(self) -> bool
+    fun is_err(self) -> bool
     fun ok(self) -> Option<T>            # discard the error
     fun err(self) -> Option<E>
     fun unwrap(self) -> T                # panics on Err
@@ -2288,7 +2315,7 @@ implementation:
 
 ```
 @native("io_print")     pub fun print<T>(value: T);
-@intrinsic("array_len") pub fun len<T>(xs: [T]) -> Int;
+@intrinsic("array_len") pub fun len<T>(xs: [T]) -> int;
 ```
 
 The *signature* is ordinary ducktape and goes through the ordinary checker;
@@ -2319,10 +2346,10 @@ spelled `s.len()` rather than as a free `string::len(s)`:
 
 ```
 impl String {
-    @native("string_len") fun len(self) -> Int;
+    @native("string_len") fun len(self) -> int;
 }
 impl<T> [T] {
-    @intrinsic("array_len") fun len(self) -> Int;   # lowers to OP_LEN inline
+    @intrinsic("array_len") fun len(self) -> int;   # lowers to OP_LEN inline
 }
 ```
 
@@ -2336,7 +2363,7 @@ generic over `Self` — so the attribute is accepted on a top-level `fun` and on
 an impl method only. **Since milestone 40 the standard library uses this**: the
 primitive modules spell their operations as methods (`s.len()`, `xs.push(v)`,
 `c.code()`), with constructors as associated functions (`StringBuf::new()`,
-`Char::from_code(n)`). What stays a free function is the exceptions the design
+`char::from_code(n)`). What stays a free function is the exceptions the design
 forces — a *builder* whose receiver is a collection not the primitive
 (`std::string`'s `join`/`concat`/`from_chars`), a lang item the compiler
 desugars into (`pad_*`, `float`), a private raw native or intrinsic (`array`'s
@@ -2368,9 +2395,9 @@ standard library marks them with a third attribute, `@lang("…")`:
 
 ```
 @lang("display") pub trait Display { fun to_string(self) -> String; }
-@lang("ord")     pub trait Ord     { fun cmp(self, other: Self) -> Int; }
+@lang("ord")     pub trait Ord     { fun cmp(self, other: Self) -> int; }
 @lang("add")     pub trait Add     { type Output; fun add(self, o: Self) -> Self.Output; }
-@native("fmt_float") @lang("float") pub fun float(v: Float, p: Int) -> String;
+@native("fmt_float") @lang("float") pub fun float(v: float, p: int) -> String;
 ```
 
 The six operator traits are one key each (`add`/`sub`/`mul`/`div`/`rem`/`neg`),
@@ -2402,63 +2429,63 @@ a deliberate exception, marked below.
 ```
 std::io      print<T>(value: T)                     # @native, free (see below)
 
-impl<T> [T]  self.len() -> Int                      # @intrinsic (OP_LEN)
+impl<T> [T]  self.len() -> int                      # @intrinsic (OP_LEN)
              self.push(value: T)                    # @native
              self.pop() -> Option<T>
              self.first() -> Option<T>
              self.last() -> Option<T>
-             self.is_empty() -> Bool
+             self.is_empty() -> bool
              self.clear()
              (std::array also: private free `pop_last<T>(xs)`, the raw @native)
              self.iter() -> ArrayIter<T>            # lives in std::iter
-             self.sort_by(cmp: fun(T, T) -> Int)    # lives in std::sort
+             self.sort_by(cmp: fun(T, T) -> int)    # lives in std::sort
              self.sort()                            # std::sort, needs T: Ord
-             self.is_sorted() -> Bool               # std::sort, needs T: Ord
-             self.lower_bound(target: T) -> Int     # std::sort, needs T: Ord
-             self.binary_search(target: T) -> Option<Int>   # std::sort, T: Ord
+             self.is_sorted() -> bool               # std::sort, needs T: Ord
+             self.lower_bound(target: T) -> int     # std::sort, needs T: Ord
+             self.binary_search(target: T) -> Option<int>   # std::sort, T: Ord
 
 impl Range   self.iter() -> RangeIter               # lives in std::iter
              (std::iter also: private free `range_start`/`range_stop`,
               the two @intrinsics that read a range's bounds)
 
-impl String  self.len() -> Int                      # @native, in bytes
-             self.slice(from: Int, to: Int) -> String         # @native
-             self.compare(other: String) -> Int     # @native
+impl String  self.len() -> int                      # @native, in bytes
+             self.slice(from: int, to: int) -> String         # @native
+             self.compare(other: String) -> int     # @native
              self.chars() -> CharIter               # lives in std::iter
-             self.repeat(n: Int) -> String
+             self.repeat(n: int) -> String
              (std::iter also: private free `char_at`/`prev_boundary`, the two
               @natives a character walk needs; std::string keeps a private
               free `char_width`, the @native the pad_* lang items count with)
              std::string free: join(parts: [String], sep: String) -> String
                               concat(parts: [String]) -> String
-                              from_chars(cs: [Char]) -> String
+                              from_chars(cs: [char]) -> String
                               pad_start/pad_end/pad_center(s, width, fill)  # lang items
 
 impl StringBuf  StringBuf::new() -> StringBuf        # @native (associated)
              self.push(s: String)                   # @native
-             self.push_char(c: Char)                # @native
-             self.push_int(n: Int)                  # @native
-             self.len() -> Int                      # @native
+             self.push_char(c: char)                # @native
+             self.push_int(n: int)                  # @native
+             self.len() -> int                      # @native
              self.clear()                           # @native
              self.build() -> String                 # @native
-             self.is_empty() -> Bool
+             self.is_empty() -> bool
 
-impl Char    self.code() -> Int                     # @native
-             Char::from_code(n: Int) -> Char        # @native (associated)
-             self.is_ascii/is_digit/is_lower/is_upper() -> Bool
-             self.is_alpha/is_alnum/is_whitespace() -> Bool
-             self.to_upper() -> Char                # ASCII only
-             self.to_lower() -> Char                # ASCII only
-             self.to_digit() -> Int
+impl char    self.code() -> int                     # @native
+             char::from_code(n: int) -> char        # @native (associated)
+             self.is_ascii/is_digit/is_lower/is_upper() -> bool
+             self.is_alpha/is_alnum/is_whitespace() -> bool
+             self.to_upper() -> char                # ASCII only
+             self.to_lower() -> char                # ASCII only
+             self.to_digit() -> int
 
-std::fmt     float(value: Float, precision: Int) -> String   # @native, free (lang item)
+std::fmt     float(value: float, precision: int) -> String   # @native, free (lang item)
 ```
 
 `print` stays a free function because it is a general operation over any `T`,
 not a method on one type; the `pad_*` and `float` functions stay free because
 they are lang items the `{v:>8}` / `{f:.3}` format spec desugars into, so their
 meaning cannot depend on what a program imported; `join`/`concat`/`from_chars`
-stay free because their receiver is a `[String]` / `[Char]`, not a `String`.
+stay free because their receiver is a `[String]` / `[char]`, not a `String`.
 
 **`print` is not a builtin and is not in scope by default** — `use
 std::io::print;` is a real import of a real module, and forgetting it is an
@@ -2475,7 +2502,7 @@ when it is full; an array literal starts exact-fit, so `[1, 2, 3]` and `[]` are
 both ordinary starting points:
 
 ```
-var xs: [Int] = [];
+var xs: [int] = [];
 xs.push(1);
 xs.push(2);
 print(xs.pop().unwrap());   # 2
@@ -2540,7 +2567,7 @@ Two smaller consequences, both visible from a program:
   debug view says which of the two kinds it is looking at.
 
 Seven of `StringBuf`'s methods are written in C — existing (the associated
-`new`), growing (from a String, a Char or an Int's digits), emptying, its
+`new`), growing (from a String, a char or an int's digits), emptying, its
 length, and becoming a String — and `is_empty` is ducktape on `len`. `push_int`
 puts a number's digits in without interning a `"{n}"` String to carry them, and
 `clear` drops the length to zero while keeping the capacity, so one buffer can be
@@ -2556,15 +2583,15 @@ that makes it safe for `std::cmp` to depend on it for `impl Ord for String`. Wha
 cycle `string → option → cmp → string`; the buffer is a pure leaf below it, so
 the edge to it is free.
 
-A `Float` prints — and interpolates — as the shortest decimal that reads back
+A `float` prints — and interpolates — as the shortest decimal that reads back
 as the same double, always carrying a `.` or an exponent so it is never
-mistaken for an `Int`: `1.0`, `0.3333333333333333`, `300.0`, `1e+18`, `1e-07`,
+mistaken for an `int`: `1.0`, `0.3333333333333333`, `300.0`, `1e+18`, `1e-07`,
 `-0.0`, `inf`, `-inf`, `NaN`. Exponent form takes over below `1e-5` and at
 `1e17`; every form printed is also a literal the scanner accepts.
 
 ### `std::char`, and what a `String` is made of
 
-A `Char` is **one Unicode scalar value** — a code point that is not a surrogate
+A `char` is **one Unicode scalar value** — a code point that is not a surrogate
 half — written between single quotes:
 
 ```
@@ -2579,13 +2606,13 @@ has no interpolation, and a quote is what closes it. `\u{…}` takes one to six
 hex digits. A literal holding no character (`''`), more than one (`'ab'`), or a
 value that is not a scalar value (`'\u{D800}'`) is a scanner error.
 
-A `Char` is a **primitive**, so it behaves like an `Int` throughout: it is a
+A `char` is a **primitive**, so it behaves like an `int` throughout: it is a
 value rather than a heap object, `==` compares scalar values, `"{c}"` renders
 it with no `Display` impl involved, and `match c { 'q' => …, _ => … }` works
-the way an `Int` match does — a wildcard is required, since the domain is far
+the way an `int` match does — a wildcard is required, since the domain is far
 too large to enumerate.
 
-**A `String` is bytes and a `Char` is a character, and the language keeps the
+**A `String` is bytes and a `char` is a character, and the language keeps the
 two apart.** `s.len()` counts *bytes*, `s.slice(..)` cuts at *byte* offsets, and
 `s.compare(..)` walks bytes; `s.chars()` is the only crossing:
 
@@ -2599,7 +2626,7 @@ from_chars(s.chars().collect()) == s;   # true
 
 **`chars` is a walk, not a conversion** (milestone 61): it answers a `CharIter`,
 the `std::iter` source described under "Sources" below, so `count`, `rev`,
-`take` and every other combinator apply and the `[Char]` is what `collect` is
+`take` and every other combinator apply and the `[char]` is what `collect` is
 for. Nothing is decoded until something pulls.
 
 There is deliberately **no `char_at(s, i)`**. The index would be a byte offset,
@@ -2611,7 +2638,7 @@ possible.
 
 Walking is a **runtime error if the string is not valid UTF-8**, which a
 program can provoke: `slice` cuts at byte offsets, so it can halve a multi-byte
-sequence. A String is a byte string; only a `Char` promises to be a character.
+sequence. A String is a byte string; only a `char` promises to be a character.
 Because the walk is lazy the error belongs to the `next()` that reaches those
 bytes rather than to `chars()` itself, so a pipeline that stops earlier
 (`s.chars().take(2)`) never provokes it. The `pad_*` lang items still reject a
@@ -2619,15 +2646,15 @@ halved string outright: they count characters with a native of their own, in
 one validating pass.
 
 Everything else in `std::char` is ordinary ducktape over `code`/`from_code`
-(methods on `Char`, `from_code` the associated constructor) — the one thing a
-Char cannot say about itself is its number, and once it can, every
+(methods on `char`, `from_code` the associated constructor) — the one thing a
+char cannot say about itself is its number, and once it can, every
 classification is a range test and every case conversion is an addition. **The
 classifications are ASCII-only**: `'é'.is_alpha()` is false and `'é'.to_upper()`
 is `'é'` unchanged. Full Unicode case mapping is a table, not a range test, and
 shipping a range test under that name would be right for English and quietly
 wrong elsewhere.
 
-`impl Ord for Char` (in `std::cmp`, beside the trait) is code-point order, so
+`impl Ord for char` (in `std::cmp`, beside the trait) is code-point order, so
 `'Z'` sorts before `'a'` — the same order `impl Ord for String` gives, since
 UTF-8 byte order and code-point order agree. As with `String`, ordering is the
 trait and not the operator: `'a' < 'b'` is still "comparison requires numeric
@@ -2700,7 +2727,7 @@ one more piece than there were separators, so a leading, trailing, or doubled
 separator each produces an empty piece. `parse_int` accepts an optional leading
 `+`/`-` then one or more digits and nothing else — an empty string, a bare sign,
 or a stray character is `None`, not a partial parse — and does **not** detect
-overflow: a value past what an `Int` holds wraps.
+overflow: a value past what an `int` holds wraps.
 
 ### `std::sort`
 
@@ -2771,12 +2798,12 @@ name to a program that never asked for this module.
 
 ### `std::hash`
 
-Turning a value into an Int a table can index with.
+Turning a value into an int a table can index with.
 
 ```
 use std::hash::{Hash, Hasher, hash_of};
 
-hash_of(7);                 # an Int, spanning the whole range — negatives too
+hash_of(7);                 # an int, spanning the whole range — negatives too
 hash_of("alpha");
 hash_of((1, "a"));
 hash_of([[1], [2]]);
@@ -2789,12 +2816,12 @@ impl Hash for Point {
 }
 ```
 
-`Hash` ships for `Int`, `String`, `Bool`, `Char`, `[T: Hash]` and
+`Hash` ships for `int`, `String`, `bool`, `char`, `[T: Hash]` and
 `(A: Hash, B: Hash)`. `Hasher` offers `new`, `write_int`, `write_string`,
 `write_bool`, `write_char` and `finish`; `hash_of(v)` is the whole of a hash in
 one call, and is what a caller that is not itself an impl wants.
 
-- **`hash` writes into a `Hasher` rather than returning an Int**, so an impl
+- **`hash` writes into a `Hasher` rather than returning an int**, so an impl
   only ever says *which parts of me matter*. This was originally forced: before
   milestone 65 there were no bitwise operators, so a mixing function could not
   be written in ducktape at all and the one an implementor *could* write was
@@ -2818,9 +2845,9 @@ one call, and is what a caller that is not itself an impl wants.
   cheapest one here.
 - **`impl Hash for [T]` writes the length first.** Without it, `[[1], [2]]` and
   `[[1, 2]]` would write the same sequence and hash alike.
-- **There is deliberately no `impl Hash for Float`**: `NaN != NaN`, so such a key
+- **There is deliberately no `impl Hash for float`**: `NaN != NaN`, so such a key
   could never be found again in a table that resolves collisions with `==`, and
-  the only Int a Float can reach is a truncating `as`. `Ord for Float` had to
+  the only int a float can reach is a truncating `as`. `Ord for float` had to
   place NaN *somewhere* because an order is total; a table may simply decline
   the key.
 - Two natives, `hash_mix` and `hash_string` — exactly the two steps ducktape
@@ -2835,7 +2862,7 @@ is a facade over the two, so either spelling reaches them.
 use std::collections::{HashMap, HashSet};          # through the facade
 use std::collections::hashmap::HashMap;            # or the module directly
 
-var m: HashMap<String, Int> = HashMap::new();
+var m: HashMap<String, int> = HashMap::new();
 m.insert("one", 1);            # None — nothing was displaced
 m.insert("one", 11);           # Some(1) — the value it replaced
 m.get("one");                  # Some(11)
@@ -2847,11 +2874,11 @@ var ks = m.keys();  ks.sort();    # [K], in no particular order until sorted
 var vs = m.values();
 for pair in m.iter() { ... }      # (K, V), an ordinary Iterator
 
-var p: HashMap<Int, Int> = HashMap::with_capacity(1000);   # room for 1000
+var p: HashMap<int, int> = HashMap::with_capacity(1000);   # room for 1000
 p.capacity();                  # 1536 — entries it holds before it rehashes
 p.reserve(500);                # room for 500 *more* than it now holds
 
-var s: HashSet<Int> = HashSet::new();
+var s: HashSet<int> = HashSet::new();
 s.insert(4);                   # true — newly added
 s.insert(4);                   # false — already there
 s.contains(4); s.remove(4); s.to_array();
@@ -2905,8 +2932,8 @@ HashSet::with_capacity(n); s.capacity(); s.reserve(n);   # forwarded, all three
   mid-walk leaves the walk on the old array rather than corrupting it. That is
   `CharIter`'s choice rather than `ArrayIter`'s, and it is forced: a rehash
   moves every entry, so an index into the old table means nothing in the new.
-- **`HashSet<T>` is a `HashMap<T, Bool>`** whose values are never read — one
-  wasted Bool per entry, traded against a second copy of the algorithm, since
+- **`HashSet<T>` is a `HashMap<T, bool>`** whose values are never read — one
+  wasted bool per entry, traded against a second copy of the algorithm, since
   nothing can be generic over "a payload or none".
 - No natives and no language change; `std::hash` is the only thing it needed.
   Not preluded.
@@ -2938,7 +2965,7 @@ use std::string;              # imported for its impls, not its name
 
 @allow("unused_variable")
 impl Walker {                 # covers every method in the block
-    fun step(self) -> Int { var spare = 1; return self.at; }
+    fun step(self) -> int { var spare = 1; return self.at; }
 }
 ```
 
@@ -3011,7 +3038,7 @@ See the gaps table below for what suppression still cannot do.
 | a `String` that is guaranteed valid UTF-8 | it is a byte string — `slice` cuts at byte offsets, so a walk over a halved sequence reports a runtime error when it reaches it (`chars()` itself never does: it is lazy) |
 | a *dynamic* width or precision in a format spec (`{v:>{n}}`) | the width and precision in a `{v:>8}` / `{f:.3}` spec are literals; a runtime value there has no spelling. The spec itself is sugar for `std::string::pad_*` / `std::fmt::float` (milestone 35) |
 | a downcast to a type that does not implement the trait, or binds a different associated type | rejected, rather than compiled as an always-`None` test: the identity is the vtable, and such a type has no table to recognise |
-| a trait's type arguments at a *bare* method call | the expected type breaks the tie between two impls of one generic trait, and pins an impl parameter the receiver cannot reach (`impl<T, U: From<T>> Into<U> for T`); with no expected type the first impl wins — or, where the parameter was only pinnable that way, no impl applies at all. The trait-qualified spelling (`Into::<Fahrenheit>::into(c)`) settles it explicitly without an expected type |
+| a trait's type arguments at a *bare* method call | the expected type breaks the tie between two impls of one generic trait, and pins an impl parameter the receiver cannot reach (`impl<T, U: From<T>> Into<U> for T`); with no expected type the first impl wins — or, where the parameter was only pinnable that way, no impl applies at all. The trait-qualified spelling (`into::<Fahrenheit>::into(c)`) settles it explicitly without an expected type |
 | disambiguating a qualified selection whose *argument is itself unresolved* (`Steps::from(None)`) | the argument (for `from`) or the receiver (for a trait-qualified `into`) must type on its own to choose the impl, so a value that would need the impl chosen first cannot be disambiguated |
 | a bound naming a *later* type parameter (`fun f<U: Into<T>, T>`) | "unknown type: T" — bounds resolve left to right |
 | an equality binding between two *projections* (`J: Iterator<Item = I.Item2>` where both sides are abstract) | works, and is compared exactly — but only because a projection over a parameter is interned like any type; there is no unification, so nothing *solves* one side from the other |
@@ -3022,19 +3049,19 @@ See the gaps table below for what suppression still cannot do.
 | an *inferred* trait type argument, or an equality binding that solves one side from the other | a trait's arguments are written where the trait is named, and an equality is compared rather than unified. So `T: Add<Output = T>` is a promise checked against the impl, never a way to work out what `Output` should be |
 | an associated *type* default (`type Output = Self;` in a trait) | not parsed. A trait's *type parameter* may carry a default (`Rhs = Self`), which is why the `std::ops` migration for `Rhs` was free and the one for `Output` was not: every impl states its `Output`, and every bound that wants to keep the result names it |
 | custom `==` (an `Eq` trait) | equality stays structural and import-less for every type; only ordering and arithmetic are traits. `std::collections::hashmap` was the consumer this was waiting on and did not need it: a hash map resolves collisions with the structural `==` on a `K` bounded only by `Hash` |
-| a bitwise operator on a non-`Int` | refused, with no trait to appeal to: there is no `BitAnd` the way there is an `Add`, so `1.5 & 2` is a type error rather than a call. A `Float`'s bits have no spelling at all — there is no reinterpreting cast |
+| a bitwise operator on a non-`int` | refused, with no trait to appeal to: there is no `BitAnd` the way there is an `Add`, so `1.5 & 2` is a type error rather than a call. A `float`'s bits have no spelling at all — there is no reinterpreting cast |
 | compound bitwise assignment (`&=`, `\|=`, `<<=`) | not parsed; write `x = x & y`. What it would *mean* is settled — `a op= b` is `a = a op b`, which is how `%=` joined `+= -= *= /=` — so what is missing is the spelling, and the scanning is the awkward part: `>>=` sits next to the one place in the grammar where whitespace already changes a parse (`a > > b` versus `a >> b`) |
-| unsigned integers | there is one integer type, signed `Int`. `>>>` is what stands in for an unsigned shift; a value with the top bit set prints as negative even when it is being used as a bit pattern |
-| checked or saturating integer arithmetic | `Int` wraps silently, two's complement; `%` keeps the sign of its left operand, so `(0 - 17) % 5` is `-2` |
-| hashing a `Float`, and so a `Float` map key | no `impl Hash for Float`: `NaN != NaN` makes such a key unfindable in a table that compares with `==`, and the only Int a Float reaches is a truncating `as`. Wrap one in a struct and say what equality means |
+| unsigned integers | there is one integer type, signed `int`. `>>>` is what stands in for an unsigned shift; a value with the top bit set prints as negative even when it is being used as a bit pattern |
+| checked or saturating integer arithmetic | `int` wraps silently, two's complement; `%` keeps the sign of its left operand, so `(0 - 17) % 5` is `-2` |
+| hashing a `float`, and so a `float` map key | no `impl Hash for float`: `NaN != NaN` makes such a key unfindable in a table that compares with `==`, and the only int a float reaches is a truncating `as`. Wrap one in a struct and say what equality means |
 | an `entry`-style API on a map (`or_insert`, in-place update) | `get` then `insert`, which probes twice. Nothing can hold a slot open between the two |
 | `Display` for a `HashMap` / `HashSet` | none ships; iteration order is unspecified, so a rendering would have to sort and the key would need `Ord` on top of `Hash`. `m.keys()` and `m.values()` are the arrays |
-| bare type arguments on a method call (`it.fold<Int>(0, f)`) | the turbofish is required: `it.fold::<Int>(0, f)`. The bare form parses as comparisons, so it is reported as an unknown *field* plus, usually, an undefined variable for the type name — two diagnostics for one mistake. A note on the first names the turbofish |
+| bare type arguments on a method call (`it.fold<int>(0, f)`) | the turbofish is required: `it.fold::<int>(0, f)`. The bare form parses as comparisons, so it is reported as an unknown *field* plus, usually, an undefined variable for the type name — two diagnostics for one mistake. A note on the first names the turbofish |
 | an impl overriding a defaulted method restating its `where` | conformance compares signatures, which carry no bounds, so an override may quietly add or drop one; the trait's own clause is still discharged at every call through the trait |
 | glob imports (`use a::*`) | not parsed; name each item, or bind the module (`use a;`) and qualify. Nesting makes it *implementable* — it would be the natural way to write a facade — but it would be the first thing in the language to bind names nobody wrote |
 | re-exporting a module qualifier (`pub use a;`) | a qualifier is not an item; `pub use` re-exports named items only |
 | `pub` on a method | rejected — `pub fun` in an impl is "expected impl item", and `pub` is only ignored on the `impl` keyword itself. A method is as visible as the impl it sits in, which is why `std::array`'s raw `pop_last` and `std::iter`'s `char_at` are private *free functions* rather than methods. Struct **fields** do take `pub`: they are private to their module by default, and the diagnostic naming one says so |
-| overlap rules finer than "matching self types" | there is no orphan rule and no specialization: an impl may be written for any type, and two overlapping ones are simply refused wherever both are visible — a bound (`impl<T: Ord> W<T>` against `impl<T> W<T>`) or a narrower head (`impl [Int]` against `impl<T> [T]`) is not a way to win a name |
+| overlap rules finer than "matching self types" | there is no orphan rule and no specialization: an impl may be written for any type, and two overlapping ones are simply refused wherever both are visible — a bound (`impl<T: Ord> W<T>` against `impl<T> W<T>`) or a narrower head (`impl [int]` against `impl<T> [T]`) is not a way to win a name |
 | visibility below module granularity (`pub(crate)` &c.) | `pub` is the only modifier |
 | relative paths (`super::`, `self::`, `crate::`) | a path is absolute from its root, so a deep module names its sibling in full |
 | two spellings of one file (symlinks, unusual paths) | a module's source is derived from its place in the tree, so the only path that can be spelled twice is the entry file's — and dedup there is lexical |
@@ -3043,7 +3070,7 @@ See the gaps table below for what suppression still cannot do.
 | `continue` naming a labelled block | a block runs once, so there is no next turn to reach — a label on a block buys an exit, not an iteration |
 | a lint for a label nothing names | an unused label costs a reader what an unused binding does, and milestone 92's machinery is the shape it would take, but no `unused_label` is emitted |
 | reading `while true { }` as endless | its condition is an expression, and the checker reads types rather than values — `loop { }` is the spelling that asks no condition (milestone 86) |
-| `!` in a position asking a structural question | `if panic("x") { }`, `for x in panic("x")`, and `r?` inside a `-> Never` function are all refused: those sites ask "is it a `Bool`/an `Iterator`/the same enum?", not "does it flow here?", and `Never` answers none of them. Harmless, since the code below is unreachable either way |
+| `!` in a position asking a structural question | `if panic("x") { }`, `for x in panic("x")`, and `r?` inside a `-> !` function are all refused: those sites ask "is it a `bool`/an `Iterator`/the same enum?", not "does it flow here?", and `!` answers none of them. Harmless, since the code below is unreachable either way |
 | tuple-struct struct-patterns `Pair { a, b }` | write the constructor spelling `Pair(a, b)` — "matching tuple struct with struct pattern syntax is not allowed" |
 | variable shadowing diagnostics | a `var` may silently shadow an earlier one in the same scope (top-level *item* names do collide — that is an error). There is a warning severity for it to use since milestone 89; what is missing is the analysis, and the choice about whether shadowing deserves one at all |
 | seeing a warning from the standard library | warnings are advice to an author, so they are dropped for the embedded std that every program compiles from source — which is also why `-Werror` cannot escalate one. `./build/ducktape --std-module std::cmp` compiles that module as the root, reading its source from disk, and does warn — the module path says which module it is, and nothing is inferred from the shape of a filesystem path |
@@ -3054,12 +3081,12 @@ See the gaps table below for what suppression still cannot do.
 | unused-warning order within a function | a binding is reported when its scope closes, so an inner block's warnings precede an outer one's regardless of line. Sorting the bag is blocked by notes, which attach to the diagnostic before them by position |
 | an unused *item* (a private `fun` or `struct` nothing calls) | not reported; only bindings and imports are. Codegen already skips it — a definition nothing reaches is never compiled |
 | a directory that is a module on its own | a directory is a path prefix; the module is the `.dt` file beside it, and `pub mod` in that file is what puts anything under the directory on a path at all. So a module added under a group and not declared is unreachable rather than half-reachable — but the short spellings a facade offers (`use std::collections::HashMap;`) are still hand-written `pub use` lines that nothing checks stay in step |
-| declaring a type whose name is a builtin (`struct Range`, `struct String`) | accepted, but a builtin name is resolved before the type scope is consulted, so every mention of it means the builtin and the declaration is unreachable |
-| overlapping method names across impls of one type | rejected since milestone 68: one type spends an inherent name once, whether the two definitions sit in two impl blocks or in one. A name the impl's *trait* declares is exempt — a bound or a trait-qualified path names which body was meant, so two traits may both declare `next` for one type. Where several impls legitimately declare a name (a generic trait like `Into<Int>` / `Into<String>`), a bare path still picks the first registered impl. Milestone 70 extends the same rule to an enum's variants, which spend from the same pool: an inherent associated function under a variant's name is refused, since `Enum::name` reads the variant |
+| declaring a *module* whose name is a builtin (`mod char;`) | legal, and `std::char` is why — a module whose content is `impl char` is reached through the type anyway. What has no route is an item the type does not own (a free function, a struct): the builtin answers the first segment, so the item is reachable by its full path and by no other spelling. The "no associated item" error carries a note saying so |
+| overlapping method names across impls of one type | rejected since milestone 68: one type spends an inherent name once, whether the two definitions sit in two impl blocks or in one. A name the impl's *trait* declares is exempt — a bound or a trait-qualified path names which body was meant, so two traits may both declare `next` for one type. Where several impls legitimately declare a name (a generic trait like `into<int>` / `into<String>`), a bare path still picks the first registered impl. Milestone 70 extends the same rule to an enum's variants, which spend from the same pool: an inherent associated function under a variant's name is refused, since `Enum::name` reads the variant |
 | capturing a `for` loop variable in a closure | runs, but the closure sees the loop variable's *final* value (one shared cell), not a per-iteration copy — `runtime.md` "Closures & upvalues". A `while var` binding does *not* share this: it is pushed and closed inside the loop, so each turn's closure keeps that turn's value |
 | infinitely deep generic instantiation | `fun grow<T>(v: T) { grow([v]) }` type-checks but names a new instantiation at every level; codegen stops at 32 and reports it (`runtime.md` "Monomorphisation") |
 | more than 65536 functions, counting one per instantiation | each instantiation takes a global slot, so a heavily generic program can outgrow the two-byte operand space (`runtime.md` "Bytecode") |
-| an `@intrinsic` named as a value (`var f = len::<Int>;`) | an intrinsic is an opcode, so there is no body for a global slot to address — "is an intrinsic and can only be called directly" (an `@native` *can* be a value) |
+| an `@intrinsic` named as a value (`var f = len::<int>;`) | an intrinsic is an opcode, so there is no body for a global slot to address — "is an intrinsic and can only be called directly" (an `@native` *can* be a value) |
 | a generic function named as a value (`var p = print;`) | its type arguments have nothing to solve them — "cannot infer type for 'T'"; call it, or use a non-generic one |
 | `@native` on a *trait-declaration* method | rejected: its default body is generic over `Self`, so there is no concrete C body to bind. An *impl* method may be native (milestone 39) |
 | generic `main` | nothing calls the entry point, so no instance is ever made — "'main' must not be generic" |

@@ -1,8 +1,8 @@
 # imported by main.dt
 
 pub struct Point {
-  pub x: Int,
-  pub y: Int,
+  pub x: int,
+  pub y: int,
 }
 
 pub fun origin() -> Point {
@@ -11,6 +11,6 @@ pub fun origin() -> Point {
 
 # never imported: private items are invisible across the module boundary,
 # but must not stop the module from being used.
-fun secret() -> Int {
+fun secret() -> int {
   return 42;
 }

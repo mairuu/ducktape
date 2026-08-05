@@ -2,6 +2,6 @@
 # *root* file's directory, not this file's.
 use util::twice;
 
-pub fun quad(n: Int) -> Int {
+pub fun quad(n: int) -> int {
   return twice(twice(n));
 }

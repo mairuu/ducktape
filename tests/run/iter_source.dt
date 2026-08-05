@@ -13,7 +13,7 @@ use std::io::print;
 # `Range` is a nameable type now — a builtin in the sense `String` and
 # `StringBuf` are: the compiler knows the type, every operation on one lives in
 # std. That is what lets a range be a parameter rather than only a loop header.
-fun evens_in(r: Range) -> [Int] {
+fun evens_in(r: Range) -> [int] {
     return r.iter().filter(|v| v % 2 == 0).collect();
 }
 
@@ -79,7 +79,7 @@ fun main() {
 #> [0, 0, 1, 1, 2, 2]
 
     # a source is an ordinary value: it can be a `dyn Iterator` like any other
-    var d: dyn Iterator<Item = Int> = (0..4).iter();
+    var d: dyn Iterator<Item = int> = (0..4).iter();
     print("{d.collect()}");
 #> [0, 1, 2, 3]
 }

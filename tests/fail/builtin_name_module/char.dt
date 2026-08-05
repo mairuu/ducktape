@@ -1,0 +1,3 @@
+# A module may carry a builtin's name, as `std::char` does. What it cannot do
+# is hand out its own items through the bare alias: the builtin answers first.
+pub fun greet() -> int { 7 }

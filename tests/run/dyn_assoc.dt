@@ -1,7 +1,7 @@
 # An associated type is the one part of a `Self`-mentioning signature a trait
 # object can keep: `Self` itself is what the coercion erased, but `Self.Item`
 # is a *function of* it, and a function of an erased thing can be pinned by
-# writing down its result. So `dyn Iterator<Item = Int>` is object-safe where
+# writing down its result. So `dyn Iterator<Item = int>` is object-safe where
 # a bare `dyn Iterator` is not even a complete type.
 #> 42
 #> counter
@@ -34,12 +34,12 @@ trait Iterator {
     }
 }
 
-struct Counter { n: Int }
+struct Counter { n: int }
 struct Words { w: String }
 
 impl Iterator for Counter {
-    type Item = Int;
-    fun next(self) -> Int { self.n + 1 }
+    type Item = int;
+    fun next(self) -> int { self.n + 1 }
     fun label(self) -> String { "counter" }
 }
 
@@ -51,7 +51,7 @@ impl Iterator for Words {
 }
 
 # a heterogeneous collection that also agrees on what it yields
-fun sum_all(xs: [dyn Iterator<Item = Int>]) -> Int {
+fun sum_all(xs: [dyn Iterator<Item = int>]) -> int {
     var total = 0;
     for it in xs {
         total += it.next();
@@ -66,7 +66,7 @@ fun first<T>(xs: [dyn Iterator<Item = T>]) -> T {
 }
 
 # a trait object in a struct field, beside a plain one
-struct Slot { it: dyn Iterator<Item = Int>, tag: Int }
+struct Slot { it: dyn Iterator<Item = int>, tag: int }
 
 fun id<T>(v: T) -> T { return v; }
 
@@ -74,12 +74,12 @@ fun id<T>(v: T) -> T { return v; }
 # "cannot instantiate: type argument is not known here" wart, because codegen
 # has no way to collapse `T.Item`; through a trait object the binding is
 # already concrete at the checker, so it keys the instantiation like any type.
-fun echo(d: dyn Iterator<Item = Int>) -> Int {
+fun echo(d: dyn Iterator<Item = int>) -> int {
     return id(d.next());
 }
 
 fun main() {
-    var it: dyn Iterator<Item = Int> = Counter { n: 41 };
+    var it: dyn Iterator<Item = int> = Counter { n: 41 };
     print(it.next());
     print(it.label());
     print(it.twice());
@@ -97,15 +97,15 @@ fun main() {
 
     var slot = Slot { it: Counter { n: 0 }, tag: 3 };
     print(slot.it.label());
-    var pair: (dyn Iterator<Item = Int>, Int) = (Counter { n: 1 }, 9);
+    var pair: (dyn Iterator<Item = int>, int) = (Counter { n: 1 }, 9);
     print(pair.0.next());
     print(echo(Counter { n: 4 }));
 
     # identity still decides structurally: two coercions of one type to one
     # trait object are equal, and the binding is part of that type
-    var a: dyn Iterator<Item = Int> = Counter { n: 1 };
-    var b: dyn Iterator<Item = Int> = Counter { n: 1 };
-    var c: dyn Iterator<Item = Int> = Counter { n: 2 };
+    var a: dyn Iterator<Item = int> = Counter { n: 1 };
+    var b: dyn Iterator<Item = int> = Counter { n: 1 };
+    var c: dyn Iterator<Item = int> = Counter { n: 2 };
     print(a == b);
     print(a == c);
 }

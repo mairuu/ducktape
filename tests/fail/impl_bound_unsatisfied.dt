@@ -7,7 +7,7 @@ use std::io::print;
 use std::fmt::Display;
 
 struct Widget {
-    id: Int,
+    id: int,
 }
 
 fun main() {

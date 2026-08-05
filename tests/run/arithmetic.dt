@@ -18,7 +18,7 @@ fun main() {
     print(5 / 2);
     print(5 % 2);
     print(5 / 2.0);
-    print(2.5 as Int + 1);
+    print(2.5 as int + 1);
     print(3 > 2 and not (1 == 2));
     print(1.5 < 1.0 or false);
     print(());

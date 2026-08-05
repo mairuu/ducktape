@@ -13,7 +13,7 @@
 # trusting it, and this pins that.
 #
 # The second half is the other thing masking changed: a hash spans the whole of
-# `Int`, and roughly half of them are negative. `%` kept the sign of its left
+# `int`, and roughly half of them are negative. `%` kept the sign of its left
 # operand and needed a fold; `&` against a positive mask clears the sign along
 # with the high bits. Getting that wrong is an out-of-bounds read, so the keys
 # below are chosen to include hashes on both sides of zero.
@@ -27,7 +27,7 @@ use std::collections::HashMap;
 use std::hash::hash_of;
 use std::sort;
 
-fun fill(m: HashMap<Int, Int>, n: Int) {
+fun fill(m: HashMap<int, int>, n: int) {
     var i = 0;
     while i < n {
         m.insert(i, i * 3);
@@ -35,7 +35,7 @@ fun fill(m: HashMap<Int, Int>, n: Int) {
     }
 }
 
-fun all_present(m: HashMap<Int, Int>, n: Int) -> Bool {
+fun all_present(m: HashMap<int, int>, n: int) -> bool {
     var i = 0;
     while i < n {
         match m.get(i) {
@@ -63,24 +63,24 @@ fun all_present(m: HashMap<Int, Int>, n: Int) -> Bool {
 fun main() {
     # a capacity that is not a power of two, one that is far too small, and one
     # far larger than needed — all have to leave a working table
-    var a: HashMap<Int, Int> = HashMap::new();
+    var a: HashMap<int, int> = HashMap::new();
     fill(a, 40);
     a.rehash(5);
     print("rehash(5) survives: {a.len()} {all_present(a, 40)}");
 
-    var b: HashMap<Int, Int> = HashMap::new();
+    var b: HashMap<int, int> = HashMap::new();
     fill(b, 40);
     b.rehash(0);
     print("rehash(0) survives: {b.len()} {all_present(b, 40)}");
 
-    var c: HashMap<Int, Int> = HashMap::new();
+    var c: HashMap<int, int> = HashMap::new();
     fill(c, 40);
     c.rehash(1000);
     print("rehash(1000) survives: {c.len()} {all_present(c, 1000 - 960)}");
 
     # ── hashes on both sides of zero ──────────────────────────────────────────
     #
-    # `mix` spreads across the whole of `Int`, so a run of small keys already
+    # `mix` spreads across the whole of `int`, so a run of small keys already
     # produces plenty of negative hashes; count them so this test fails loudly
     # if that ever stops being true and the case stops being covered.
     var negatives = 0;
@@ -91,14 +91,14 @@ fun main() {
         }
         i += 1;
     }
-    var d: HashMap<Int, Int> = HashMap::new();
+    var d: HashMap<int, int> = HashMap::new();
     fill(d, 400);
     print("negative hashes: {d.len()} {negatives > 100 and all_present(d, 400)}");
 
     # pre-sizing must not change what the map contains, only how it got there
-    var grown: HashMap<Int, Int> = HashMap::new();
+    var grown: HashMap<int, int> = HashMap::new();
     fill(grown, 200);
-    var presized: HashMap<Int, Int> = HashMap::new();
+    var presized: HashMap<int, int> = HashMap::new();
     presized.rehash(400);
     fill(presized, 200);
     var ks1 = grown.keys();

@@ -1,7 +1,7 @@
-#! expect: expected enum type in variant pattern, got 'Int'
+#! expect: expected enum type in variant pattern, got 'int'
 # a conditional binding is refutable by design, but the pattern must still fit
 # the subject's *type* — a test that could never be true is a mistake.
-enum Shape { Circle(Int), Blank }
+enum Shape { Circle(int), Blank }
 
 fun main() {
     if var Shape::Circle(r) = 5 {

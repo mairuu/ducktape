@@ -1,4 +1,4 @@
-#! expect: cannot apply '+' to a value of type '[Int]': it does not implement 'Add'
+#! expect: cannot apply '+' to a value of type '[int]': it does not implement 'Add'
 # Same precondition, an aggregate instead of a tagged scalar: this used to
 # reach OP_ADD and segfault the VM.
 fun main() {

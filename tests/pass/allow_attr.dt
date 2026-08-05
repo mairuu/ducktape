@@ -6,37 +6,37 @@ use std::io::print;
 use std::cmp::clamp;
 
 @allow("unused_variable")
-fun bindings() -> Int {
+fun bindings() -> int {
     var spare = 1;
     var also_spare = spare;
     return 7;
 }
 
 @allow("unreachable_code")
-fun dead() -> Int {
+fun dead() -> int {
     return 1;
     print("never runs");
 }
 
 @allow("irrefutable_pattern")
-fun always_matches() -> Int {
+fun always_matches() -> int {
     if var x = 5 { return x; }
     return 0;
 }
 
-struct P { x: Int }
+struct P { x: int }
 
 # on the impl: it covers every method in the block.
 @allow("unused_variable")
 impl P {
-    fun one(self) -> Int { var spare = 1; return self.x; }
-    fun two(self) -> Int { var spare = 2; return self.x; }
+    fun one(self) -> int { var spare = 1; return self.x; }
+    fun two(self) -> int { var spare = 2; return self.x; }
 }
 
 # on a method: one scope further in, and it covers only its own body.
 impl P {
     @allow("unused_variable")
-    fun three(self) -> Int { var spare = 3; return self.x; }
+    fun three(self) -> int { var spare = 3; return self.x; }
 }
 
 # on a trait: its default bodies are inside it. A trait *item* takes no
@@ -53,7 +53,7 @@ impl Named for P { fun name(self) -> String { return "p"; } }
 # two lines rather than a list.
 @allow("unused_variable")
 @allow("unreachable_code")
-fun both() -> Int {
+fun both() -> int {
     var spare = 1;
     return 2;
     print("never runs");

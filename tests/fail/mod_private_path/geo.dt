@@ -1,5 +1,5 @@
 mod internal;
 
-pub fun near() -> Int {
+pub fun near() -> int {
   return 1;
 }

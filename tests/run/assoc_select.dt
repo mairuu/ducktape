@@ -16,25 +16,25 @@
 use std::io::print;
 use std::convert::From;
 
-struct Steps { n: Int }
+struct Steps { n: int }
 
 # two `From` impls for one type, differing only in the source they consume —
 # and the qualified path `Steps::from` names neither.
-impl From<Int> for Steps {
-    fun from(value: Int) -> Steps { return Steps { n: value }; }
+impl From<int> for Steps {
+    fun from(value: int) -> Steps { return Steps { n: value }; }
 }
-impl From<Char> for Steps {
-    fun from(value: Char) -> Steps { return Steps { n: Int::from(value) }; }
+impl From<char> for Steps {
+    fun from(value: char) -> Steps { return Steps { n: int::from(value) }; }
 }
 
 trait Make<T> { fun make(value: T) -> Self; }
 
-struct Tally { total: Int }
-impl Make<Int> for Tally {
-    fun make(value: Int) -> Tally { return Tally { total: value }; }
+struct Tally { total: int }
+impl Make<int> for Tally {
+    fun make(value: int) -> Tally { return Tally { total: value }; }
 }
-impl Make<Bool> for Tally {
-    fun make(flag: Bool) -> Tally {
+impl Make<bool> for Tally {
+    fun make(flag: bool) -> Tally {
         if flag { return Tally { total: 1 }; }
         return Tally { total: 0 };
     }
@@ -42,20 +42,20 @@ impl Make<Bool> for Tally {
 
 # a struct-typed argument, so disambiguation runs through `impl_type_match` on a
 # composite rather than a primitive.
-struct Amount { cents: Int }
+struct Amount { cents: int }
 impl Make<Amount> for Tally {
     fun make(value: Amount) -> Tally { return Tally { total: value.cents }; }
 }
 
 fun main() {
-    print(Steps::from(26).n);   # Int  -> 26
-    print(Steps::from('a').n);  # Char -> 97 (the scalar value of 'a')
+    print(Steps::from(26).n);   # int  -> 26
+    print(Steps::from('a').n);  # char -> 97 (the scalar value of 'a')
 
-    print(Tally::make(3).total);                    # Int    -> 3
-    print(Tally::make(true).total);                 # Bool   -> 1
+    print(Tally::make(3).total);                    # int    -> 3
+    print(Tally::make(true).total);                 # bool   -> 1
     print(Tally::make(Amount { cents: 42 }).total); # Amount -> 42
 
     # a type with a single `From` impl still resolves the old way, untouched.
-    var f: Float = Float::from(7);
+    var f: float = float::from(7);
     print(f); # 7.0
 }

@@ -16,15 +16,15 @@ use std::cmp::Ord;
 use std::fmt::Display;
 use std::io::print;
 
-struct Counter { n: Int, max: Int }
+struct Counter { n: int, max: int }
 
 impl Counter {
-    fun to(max: Int) -> Counter { Counter { n: 0, max: max } }
+    fun to(max: int) -> Counter { Counter { n: 0, max: max } }
 }
 
 impl Iterator for Counter {
-    type Item = Int;
-    fun next(self) -> Option<Int> {
+    type Item = int;
+    fun next(self) -> Option<int> {
         if self.n >= self.max { return Option::None; }
         var v = self.n;
         self.n += 1;
@@ -34,17 +34,17 @@ impl Iterator for Counter {
 
 # an element that implements `Ord` through an impl rather than as a primitive,
 # so the bound is exercised on something the compiler does not know about
-struct Word { text: String, rank: Int }
+struct Word { text: String, rank: int }
 
 impl Ord for Word {
-    fun cmp(self, other: Word) -> Int { return self.rank.cmp(other.rank); }
+    fun cmp(self, other: Word) -> int { return self.rank.cmp(other.rank); }
 }
 
 impl Display for Word {
     fun to_string(self) -> String { return self.text; }
 }
 
-struct Words { i: Int }
+struct Words { i: int }
 
 impl Iterator for Words {
     type Item = Word;
@@ -71,7 +71,7 @@ fun main() {
     print(Counter::to(0).max());
 #> None
 
-    # through adapters, so the receiver is `Map<Filter<Counter>, Int>` and the
+    # through adapters, so the receiver is `Map<Filter<Counter>, int>` and the
     # projection collapses two hops before the bound is asked about it
     print(Counter::to(9).filter(|x| x % 3 == 0).map(|x| x * 2).max());
 #> Some(12)
@@ -100,7 +100,7 @@ fun main() {
 
     # a trait object still works — the trait is object-safe, `max` is merely
     # excluded from its vtable (tests/fail/dyn_assoc_bound_method.dt)
-    var d: dyn Iterator<Item = Int> = Counter::to(3);
+    var d: dyn Iterator<Item = int> = Counter::to(3);
     print(d.collect());
 #> [0, 1, 2]
 }
@@ -138,8 +138,8 @@ trait Pick {
 }
 
 impl Pick for Counter {
-    type Item2 = Int;
-    fun current(self) -> Option<Int> { return Option::Some(self.n); }
+    type Item2 = int;
+    fun current(self) -> Option<int> { return Option::Some(self.n); }
 }
 
 impl Pick for Words {

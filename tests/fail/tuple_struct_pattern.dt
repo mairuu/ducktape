@@ -1,7 +1,7 @@
 #! expect: matching tuple struct with struct pattern syntax is not allowed
 # a `var` binding is a pattern, so it is the pattern checker that rejects
 # this — the same diagnostic a match arm gets. `var Pair(a, b) = p;` works.
-struct Pair(Int, Int)
+struct Pair(int, int)
 
 fun main() {
     var p = Pair(1, 2);

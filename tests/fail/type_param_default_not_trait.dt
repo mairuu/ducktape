@@ -3,7 +3,7 @@
 # declared, and only a trait is. A function's or a struct's type parameters are
 # solved from the values, so a default there would be a second answer to a
 # question inference already has.
-fun pick<T = Int>(v: T) -> T { return v; }
+fun pick<T = int>(v: T) -> T { return v; }
 
 fun main() {
     var x = pick(1);

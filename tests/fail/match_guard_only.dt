@@ -3,7 +3,7 @@
 # question, so `false` is unreachable at compile time.
 use std::io::print;
 
-fun pick(b: Bool) -> Int {
+fun pick(b: bool) -> int {
     return match b {
         true => 1,
         x if x == false => 0,

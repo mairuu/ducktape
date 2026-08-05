@@ -4,7 +4,7 @@
 # `else` unreachable.
 use std::option;
 
-fun find(x: Int) -> Option<Int> {
+fun find(x: int) -> Option<int> {
     return Some(x);
 }
 

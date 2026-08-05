@@ -1,14 +1,14 @@
 # `Some`, `None`, `Ok` and `Err` are preluded: no `use` for any of them here.
 use std::io::print;
 
-fun half(n: Int) -> Option<Int> {
+fun half(n: int) -> Option<int> {
   if n % 2 == 0 {
     return Some(n / 2);
   }
   return None;
 }
 
-fun parse(s: String) -> Result<Int, String> {
+fun parse(s: String) -> Result<int, String> {
   if s == "1" {
     return Ok(1);
   }
@@ -30,7 +30,7 @@ pub fun main() {
     print(n);
 #> 2
   }
-  var o: Option<Int> = None;
+  var o: Option<int> = None;
   print(o.unwrap_or(7));
 #> 7
 }

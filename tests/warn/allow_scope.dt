@@ -8,13 +8,13 @@ use std::io::print;
 use std::cmp::clamp;
 
 @allow("unused_variable")
-fun quiet() -> Int {
+fun quiet() -> int {
     var silenced = 1;
     return 2;
 }
 
 @allow("unreachable_code")
-fun loud() -> Int {
+fun loud() -> int {
     var reported = 1;
     return 2;
 }

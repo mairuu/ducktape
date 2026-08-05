@@ -6,7 +6,7 @@ use std::io::print;
 use geometry::Point;
 use geometry::origin;
 
-fun shift(p: Point, dx: Int) -> Point {
+fun shift(p: Point, dx: int) -> Point {
   return Point { x: p.x + dx, y: p.y };
 }
 

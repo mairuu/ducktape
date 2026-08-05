@@ -4,7 +4,7 @@
 # all six of `std::ops` do — and it makes a question visible that `Item` never
 # could: an associated-type bound list is keyed by name, so `Add`'s `Output` and
 # `Mul`'s `Output` would be one entry, and the second binding would be reported
-# as contradicting the first ("bound twice, to 'T' and to 'Int'"). They are
+# as contradicting the first ("bound twice, to 'T' and to 'int'"). They are
 # different projections, so the key is the trait as well as the name.
 #
 # The same fact one layer down decides which *impl* a projection reads: `Cents`
@@ -17,7 +17,7 @@
 use std::ops::{Add, Mul};
 use std::io::print;
 
-struct Cents { v: Int }
+struct Cents { v: int }
 
 impl Add for Cents {
     type Output = Cents;
@@ -27,12 +27,12 @@ impl Add for Cents {
 # a different `Output` for the same self type, which is what makes the name
 # ambiguous and the trait the thing that resolves it.
 impl Mul for Cents {
-    type Output = Int;
-    fun mul(self, o: Cents) -> Int { return self.v * o.v; }
+    type Output = int;
+    fun mul(self, o: Cents) -> int { return self.v * o.v; }
 }
 
 # both bindings on one parameter: adding keeps the type, multiplying leaves it.
-fun sum_then_scale<T: Add<Output = T> + Mul<Output = Int>>(a: T, b: T) -> Int {
+fun sum_then_scale<T: Add<Output = T> + Mul<Output = int>>(a: T, b: T) -> int {
     return (a + b) * b;
 }
 

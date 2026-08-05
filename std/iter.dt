@@ -59,7 +59,7 @@ pub trait Iterator {
     }
 
     # Adapt to skip elements failing `pred`. Lazy in the same way.
-    fun filter(self, pred: fun(Self.Item) -> Bool) -> Filter<Self> {
+    fun filter(self, pred: fun(Self.Item) -> bool) -> Filter<Self> {
         return Filter { inner: self, pred: pred };
     }
 
@@ -93,7 +93,7 @@ pub trait Iterator {
 
     # Yield at most the first `n` elements, then stop — a lazy adapter holding a
     # countdown of its own.
-    fun take(self, n: Int) -> Take<Self> {
+    fun take(self, n: int) -> Take<Self> {
         return Take { inner: self, remaining: n };
     }
 
@@ -111,7 +111,7 @@ pub trait Iterator {
     # Drop the first `n` elements and yield the rest. The mirror of `take`, and
     # lazy in the same way: nothing is pulled until the first `next()`, which is
     # then the call that does the dropping.
-    fun skip(self, n: Int) -> Skip<Self> {
+    fun skip(self, n: int) -> Skip<Self> {
         return Skip { inner: self, remaining: n };
     }
 
@@ -120,7 +120,7 @@ pub trait Iterator {
     # and then never again — so the adapter carries a `done` flag rather than
     # re-testing a source it has already given up on. The element that failed is
     # pulled and dropped: there is no way to put one back.
-    fun take_while(self, pred: fun(Self.Item) -> Bool) -> TakeWhile<Self> {
+    fun take_while(self, pred: fun(Self.Item) -> bool) -> TakeWhile<Self> {
         return TakeWhile { inner: self, pred: pred, done: false };
     }
 
@@ -129,12 +129,12 @@ pub trait Iterator {
     # `take`. The subtlety is at the seam: the first element that *fails* the
     # predicate is the first one yielded, not the one dropped to notice the
     # skipping is over.
-    fun skip_while(self, pred: fun(Self.Item) -> Bool) -> SkipWhile<Self> {
+    fun skip_while(self, pred: fun(Self.Item) -> bool) -> SkipWhile<Self> {
         return SkipWhile { inner: self, pred: pred, skipping: true };
     }
 
     # Pair each element with its position: `(0, a), (1, b), ...`. The element
-    # type is a tuple, so the adapter's `Item` is `(Int, Self.Item)`.
+    # type is a tuple, so the adapter's `Item` is `(int, Self.Item)`.
     fun enumerate(self) -> Enumerate<Self> {
         return Enumerate { inner: self, i: 0 };
     }
@@ -174,13 +174,13 @@ pub trait Iterator {
     # milestone 48 along a line the library already had: **an adapter returns a
     # `Self`-shaped type and a consumer does not**. `take_while` returns
     # `TakeWhile<Self>`, so `Self` escapes the receiver and there is nothing to
-    # dispatch; `any` returns a `Bool` and `find` an `Option<Self.Item>`, a
+    # dispatch; `any` returns a `bool` and `find` an `Option<Self.Item>`, a
     # projection the trait object pins. What excludes a *consumer* is a type
     # parameter of its own (`fold`) or a bound on the element (`max`), and none
     # of these has either.
 
     # Is `pred` true of any element? `false` for an empty sequence.
-    fun any(self, pred: fun(Self.Item) -> Bool) -> Bool {
+    fun any(self, pred: fun(Self.Item) -> bool) -> bool {
         loop {
             match self.next() {
                 Option::Some(x) => { if pred(x) { return true; } },
@@ -192,7 +192,7 @@ pub trait Iterator {
     # Is `pred` true of every element? `true` for an empty sequence — there is
     # no element it fails on, which is the only answer that keeps `all` and
     # `any` mirrors of each other.
-    fun all(self, pred: fun(Self.Item) -> Bool) -> Bool {
+    fun all(self, pred: fun(Self.Item) -> bool) -> bool {
         loop {
             match self.next() {
                 Option::Some(x) => { if not pred(x) { return false; } },
@@ -205,7 +205,7 @@ pub trait Iterator {
     # *index* is `position`, and the two are separate rather than one returning
     # a pair because a caller almost always wants one and would have to unpack
     # the other.
-    fun find(self, pred: fun(Self.Item) -> Bool) -> Option<Self.Item> {
+    fun find(self, pred: fun(Self.Item) -> bool) -> Option<Self.Item> {
         loop {
             match self.next() {
                 Option::Some(x) => { if pred(x) { return Option::Some(x); } },
@@ -217,7 +217,7 @@ pub trait Iterator {
     # The index of the first element `pred` accepts, counted from where the
     # cursor is *now* rather than from the sequence's start — the iterator does
     # not know how far it has already come, and nothing can ask it.
-    fun position(self, pred: fun(Self.Item) -> Bool) -> Option<Int> {
+    fun position(self, pred: fun(Self.Item) -> bool) -> Option<int> {
         var i = 0;
         loop {
             match self.next() {
@@ -233,7 +233,7 @@ pub trait Iterator {
     # How many elements are left. The one consumer here that cannot short-
     # circuit: the answer is only known once the sequence has ended, so this
     # drains it and an endless source never comes back.
-    fun count(self) -> Int {
+    fun count(self) -> int {
         var n = 0;
         loop {
             match self.next() {
@@ -248,12 +248,12 @@ pub trait Iterator {
     # (`it.filter(p).for_each(f)`) without the chain having to be broken open
     # into a loop.
     #
-    # The closure returns `Unit`, and there is no discard coercion: a shorthand
+    # The closure returns `()`, and there is no discard coercion: a shorthand
     # closure *is* its expression, so `|x| f(x)` only fits when `f` returns
     # nothing. `|x| { f(x); }` is the way round it, and the trailing `;` doing
     # the dropping is the ordinary block rule rather than anything this method
     # asked for.
-    fun for_each(self, f: fun(Self.Item) -> Unit) {
+    fun for_each(self, f: fun(Self.Item) -> ()) {
         loop {
             match self.next() {
                 Option::Some(x) => { f(x); },
@@ -271,7 +271,7 @@ pub trait Iterator {
     # its operation as a closure, which is why `fold` does.
     #
     # The bound is discharged at each call against whatever receiver it has:
-    # `Counter.Item` is `Int`, so the question is about a real type; a bounded
+    # `Counter.Item` is `int`, so the question is about a real type; a bounded
     # `I: Iterator` answers with its own `where I.Item: Ord`, and so has to
     # declare one. Neither can sit in a `dyn Iterator` vtable — whether the
     # bound holds is a question about the concrete type, which is what the
@@ -475,7 +475,7 @@ impl<I: DoubleEnded, B> DoubleEnded for Map<I, B> {
 # is where laziness earns its keep.
 pub struct Filter<I: Iterator> {
     inner: I,
-    pred: fun(I.Item) -> Bool,
+    pred: fun(I.Item) -> bool,
 }
 
 impl<I: Iterator> Iterator for Filter<I> {
@@ -512,7 +512,7 @@ impl<I: DoubleEnded> DoubleEnded for Filter<I> {
 # reports the sequence spent — even if the source has more.
 pub struct Take<I: Iterator> {
     inner: I,
-    remaining: Int,
+    remaining: int,
 }
 
 impl<I: Iterator> Iterator for Take<I> {
@@ -534,11 +534,11 @@ impl<I: Iterator> Iterator for Take<I> {
 # source's element type *is* the first's, which is what lets `self.second.next()`
 # be returned where `Option<I.Item>` is wanted. It is also checked where the
 # impl is selected, so a `Chain<Counter, Words>` finds no `Iterator` impl rather
-# than quietly compiling a `String` as an `Int`.
+# than quietly compiling a `String` as an `int`.
 pub struct Chain<I: Iterator, J: Iterator> {
     first: I,
     second: J,
-    first_done: Bool,
+    first_done: bool,
 }
 
 impl<I: Iterator, J: Iterator<Item = I.Item>> Iterator for Chain<I, J> {
@@ -561,7 +561,7 @@ impl<I: Iterator, J: Iterator<Item = I.Item>> Iterator for Chain<I, J> {
 # source shorter than `n` simply ends.
 pub struct Skip<I: Iterator> {
     inner: I,
-    remaining: Int,
+    remaining: int,
 }
 
 impl<I: Iterator> Iterator for Skip<I> {
@@ -591,8 +591,8 @@ impl<I: Iterator> Iterator for Skip<I> {
 # adapter found out, and there is nowhere to put it back.
 pub struct TakeWhile<I: Iterator> {
     inner: I,
-    pred: fun(I.Item) -> Bool,
-    done: Bool,
+    pred: fun(I.Item) -> bool,
+    done: bool,
 }
 
 impl<I: Iterator> Iterator for TakeWhile<I> {
@@ -622,8 +622,8 @@ impl<I: Iterator> Iterator for TakeWhile<I> {
 # good, so a later element the predicate would have accepted is still yielded.
 pub struct SkipWhile<I: Iterator> {
     inner: I,
-    pred: fun(I.Item) -> Bool,
-    skipping: Bool,
+    pred: fun(I.Item) -> bool,
+    skipping: bool,
 }
 
 impl<I: Iterator> Iterator for SkipWhile<I> {
@@ -694,13 +694,13 @@ impl<I: Iterator, J: Iterator> Iterator for FlatMap<I, J> {
 # the source's cursor.
 pub struct Enumerate<I: Iterator> {
     inner: I,
-    i: Int,
+    i: int,
 }
 
 impl<I: Iterator> Iterator for Enumerate<I> {
-    type Item = (Int, I.Item);
+    type Item = (int, I.Item);
 
-    fun next(self) -> Option<(Int, I.Item)> {
+    fun next(self) -> Option<(int, I.Item)> {
         match self.inner.next() {
             Option::Some(x) => {
                 var idx = self.i;
@@ -761,8 +761,8 @@ impl<I: Iterator, J: Iterator> Iterator for Zip<I, J> {
 # read, which is what the `taken_back` count buys over a stored end index.
 pub struct ArrayIter<T> {
     xs: [T],
-    front: Int,      # elements already yielded off the front
-    taken_back: Int, # elements already yielded off the back
+    front: int,      # elements already yielded off the front
+    taken_back: int, # elements already yielded off the back
 }
 
 impl<T> Iterator for ArrayIter<T> {
@@ -812,7 +812,7 @@ impl<T> [T] {
 # `range_stop` is the one new opcode, and it exists because the desugaring's
 # other half asks the wrong question: `OP_RANGE_TEST` answers "is `i` still
 # inside", which walks forwards and says nothing about where to *start* from
-# the back. Answering with the first Int past the end is what folds `..` and
+# the back. Answering with the first int past the end is what folds `..` and
 # `..=` into one bound.
 #
 # Free functions, and deliberately not methods on `Range`: an impl method has
@@ -820,27 +820,27 @@ impl<T> [T] {
 # range in every program, and the exclusive-bound normalisation these two do is
 # this module's business. `iter` below is the only thing a range gains.
 @intrinsic("range_start")
-fun range_start(r: Range) -> Int;
+fun range_start(r: Range) -> int;
 
 @intrinsic("range_stop")
-fun range_stop(r: Range) -> Int;
+fun range_stop(r: Range) -> int;
 
-# A walk over the Ints of a range. `(0..n).iter()` builds one.
+# A walk over the ints of a range. `(0..n).iter()` builds one.
 #
 # Unlike `ArrayIter` this holds no `Range` at all — a range is two numbers and
-# a flag, and `range_stop` folds the flag away by answering with the first Int
+# a flag, and `range_stop` folds the flag away by answering with the first int
 # *past* the end. `0..3` and `0..=2` are the same three elements, so an
 # iterator that had to remember which spelling it came from would be carrying a
 # distinction its own sequence does not have.
 pub struct RangeIter {
-    cur: Int,
-    stop: Int, # exclusive
+    cur: int,
+    stop: int, # exclusive
 }
 
 impl Iterator for RangeIter {
-    type Item = Int;
+    type Item = int;
 
-    fun next(self) -> Option<Int> {
+    fun next(self) -> Option<int> {
         if self.cur >= self.stop {
             return Option::None;
         }
@@ -853,7 +853,7 @@ impl Iterator for RangeIter {
 # Both bounds are numbers the iterator holds, so counting down from the far end
 # costs exactly what counting up does: `(0..n).iter().rev()` is `n-1 … 0`.
 impl DoubleEnded for RangeIter {
-    fun next_back(self) -> Option<Int> {
+    fun next_back(self) -> Option<int> {
         if self.cur >= self.stop {
             return Option::None;
         }
@@ -863,7 +863,7 @@ impl DoubleEnded for RangeIter {
 }
 
 impl Range {
-    # Walk this range's Ints as an `Iterator`. A range is a value, so unlike an
+    # Walk this range's ints as an `Iterator`. A range is a value, so unlike an
     # array there is nothing underneath for anyone else to change: the sequence
     # is fixed the moment the range is written.
     fun iter(self) -> RangeIter {
@@ -874,7 +874,7 @@ impl Range {
 # The third source, and the one whose sequence is not already a sequence of
 # *values*: a String is bytes, and its characters have to be decoded out of
 # them. Before milestone 61 that decoding was a native returning the whole
-# `[Char]` at once, which made the array the primitive and the walk a thing you
+# `[char]` at once, which made the array the primitive and the walk a thing you
 # did to it afterwards. It is the other way round — `s.chars().collect()` is
 # that array, and nothing else has to be built to ask for the first character
 # or to stop after three.
@@ -884,10 +884,10 @@ impl Range {
 # byte offset is not a character position. Keeping them here is what lets
 # `CharIter` be the only thing that ever holds one.
 @native("string_char_at")
-fun char_at(s: String, at: Int) -> Char;
+fun char_at(s: String, at: int) -> char;
 
 @native("string_prev_boundary")
-fun prev_boundary(s: String, at: Int) -> Int;
+fun prev_boundary(s: String, at: int) -> int;
 
 # How many bytes `c` occupies in UTF-8. Stepping *forward* needs no native at
 # all, because a scalar value determines its own encoding: this is the same
@@ -897,7 +897,7 @@ fun prev_boundary(s: String, at: Int) -> Int;
 # an oversight — going back there is no character in hand yet, so the only
 # thing that says where one begins is the tag on the bytes, which is what
 # `prev_boundary` reads.
-fun utf8_width(c: Char) -> Int {
+fun utf8_width(c: char) -> int {
     var n = c.code();
     if n < 128 {
         return 1;
@@ -934,14 +934,14 @@ fun utf8_width(c: Char) -> Int {
 # a weakening: nothing is claimed about bytes nobody looked at.
 pub struct CharIter {
     s: String,
-    front: Int, # byte offset where the next character begins
-    back: Int,  # byte offset one past the last character not yet yielded
+    front: int, # byte offset where the next character begins
+    back: int,  # byte offset one past the last character not yet yielded
 }
 
 impl Iterator for CharIter {
-    type Item = Char;
+    type Item = char;
 
-    fun next(self) -> Option<Char> {
+    fun next(self) -> Option<char> {
         if self.front >= self.back {
             return Option::None;
         }
@@ -956,7 +956,7 @@ impl Iterator for CharIter {
 # to it, and `s.chars().rev()` costs what the forward walk costs. An encoding
 # where it did not would make this impl a lie or an array.
 impl DoubleEnded for CharIter {
-    fun next_back(self) -> Option<Char> {
+    fun next_back(self) -> Option<char> {
         if self.front >= self.back {
             return Option::None;
         }

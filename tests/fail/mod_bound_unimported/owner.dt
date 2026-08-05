@@ -2,11 +2,11 @@ use std::cmp::Ord;
 use shape::Rank;
 
 impl Ord for Rank {
-  fun cmp(self, other: Rank) -> Int {
+  fun cmp(self, other: Rank) -> int {
     return self.v - other.v;
   }
 }
 
-pub fun tag() -> Int {
+pub fun tag() -> int {
   return 0;
 }

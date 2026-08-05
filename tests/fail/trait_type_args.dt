@@ -1,20 +1,20 @@
 #! expect: trait 'Show' takes 0 type arguments but 1 was given
 # A trait's type parameters are supplied wherever it is *named* — an impl
 # head, a bound, a `dyn` — and never inferred, so the arity is checked at each
-# of them. `Show` declares none, which makes `Show<Int>` a mistake rather than
+# of them. `Show` declares none, which makes `Show<int>` a mistake rather than
 # a spelling nothing carries: before milestone 28 it was the second, and
 # before 27 it aborted the compiler.
 
 use std::io::print;
 
 trait Show {
-    fun show(self) -> Int;
+    fun show(self) -> int;
 }
 
-struct S { n: Int }
+struct S { n: int }
 
-impl Show<Int> for S {
-    fun show(self) -> Int { self.n }
+impl Show<int> for S {
+    fun show(self) -> int { self.n }
 }
 
 fun main() {

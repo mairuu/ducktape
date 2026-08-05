@@ -8,6 +8,6 @@ use std::iter::Iterator;
 use std::option::Option;
 use std::cmp::Ord;
 
-fun h<I: Iterator>(it: I) -> Int where I.Item.Inner: Ord {
+fun h<I: Iterator>(it: I) -> int where I.Item.Inner: Ord {
     return 1;
 }

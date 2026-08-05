@@ -4,7 +4,7 @@
 # would reach `v` having never bound it.
 use std::option;
 
-fun find(x: Int) -> Option<Int> {
+fun find(x: int) -> Option<int> {
     if x > 0 {
         return Some(x);
     }

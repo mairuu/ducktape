@@ -19,12 +19,12 @@
 # captures a parameter; the returned closure outlives make_adder's frame
 use std::io::print;
 
-fun make_adder(n: Int) -> fun(Int) -> Int {
-    return |x: Int| x + n;
+fun make_adder(n: int) -> fun(int) -> int {
+    return |x: int| x + n;
 }
 
 # captures and mutates a local; each call to make_counter yields its own cell
-fun make_counter() -> fun() -> Int {
+fun make_counter() -> fun() -> int {
     var count = 0;
     return || {
         count += 1;
@@ -33,20 +33,20 @@ fun make_counter() -> fun() -> Int {
 }
 
 # three-level upvalue chain: the innermost closure reads `a` two frames out
-fun make_adder3(a: Int) -> fun(Int) -> fun(Int) -> Int {
-    return |b: Int| |c: Int| a + b + c;
+fun make_adder3(a: int) -> fun(int) -> fun(int) -> int {
+    return |b: int| |c: int| a + b + c;
 }
 
-struct Counter(Int)
+struct Counter(int)
 
 impl Counter {
-    fun get(self) -> Int {
+    fun get(self) -> int {
         return self.0;
     }
 
     # `self` is a local of this frame like any other, so a closure captures it
-    fun plus(self, n: Int) -> Int {
-        var f = |m: Int| self.get() + m;
+    fun plus(self, n: int) -> int {
+        var f = |m: int| self.get() + m;
         return f(n);
     }
 }
@@ -65,7 +65,7 @@ fun main() {
     print(d());              # a fresh, independent cell
 
     var base = 1000;
-    var f = |y: Int| y + base;
+    var f = |y: int| y + base;
     print(f(7));
 
     var chain = make_adder3(100);
@@ -75,7 +75,7 @@ fun main() {
 
     # a capture inside a block that escapes via an outer binding: the upvalue
     # is closed when the block exits, yet the closure keeps working
-    var h: fun() -> Int = || 0;
+    var h: fun() -> int = || 0;
     if true {
         var secret = 42;
         h = || secret;

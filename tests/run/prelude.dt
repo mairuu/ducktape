@@ -11,10 +11,10 @@
 #> false
 use std::io::print;
 
-struct P { x: Int, y: Int }
+struct P { x: int, y: int }
 
 impl Ord for P {
-    fun cmp(self, other: P) -> Int {
+    fun cmp(self, other: P) -> int {
         if self.x != other.x { return self.x.cmp(other.x); }
         return self.y.cmp(other.y);
     }
@@ -28,13 +28,13 @@ fun main() {
     var a = P { x: 1, y: 2 };
     var b = P { x: 1, y: 9 };
     print("{a} < {b}: {a < b}"); # Display + Ord, unimported
-    print('a' < 'b');            # Char `<` desugars through Ord
+    print('a' < 'b');            # char `<` desugars through Ord
     print("[{42:>6}]");          # a width spec, no `use std::string`
     print("{3.14159:.2}");       # a precision spec, no `use std::fmt`
 
     var o = Option::Some(5);     # Option in scope, its methods too
     print(o.map(|n| n * 2).unwrap_or(0));
 
-    var r: Result<Int, String> = Result::Err("nope");
+    var r: Result<int, String> = Result::Err("nope");
     print(r.is_ok());
 }

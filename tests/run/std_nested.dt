@@ -12,12 +12,12 @@ use std::collections::{HashMap, HashSet};
 use std::string::join;
 
 fun main() {
-    var s: HashSet<Int> = HashSet::new();
+    var s: HashSet<int> = HashSet::new();
     s.insert(7);
     s.insert(7);
     print(s.to_array()[0]);
 
-    var counts: HashMap<String, Int> = HashMap::new();
+    var counts: HashMap<String, int> = HashMap::new();
     counts.insert("a", 1);
     counts.insert("b", 2);
     print(counts.len());

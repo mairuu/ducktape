@@ -1,6 +1,6 @@
 # An import that binds a name nothing writes and is still load-bearing: `ext`
 # is never spelled as a qualifier, but it is the only module that can put
-# `impl Int` in reach, and `n.doubled()` spends it. The unused-import warning
+# `impl int` in reach, and `n.doubled()` spends it. The unused-import warning
 # has to stay silent here — hence a `tests/run` file, which demands empty
 # stderr — and it does because the question it asks is not "was a name
 # written" but "would removing this line lose an impl that was selected".

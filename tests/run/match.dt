@@ -17,15 +17,15 @@
 use std::io::print;
 
 struct Point {
-    x: Int,
-    y: Int,
+    x: int,
+    y: int,
 }
 
-struct Pair(Int, Int)
+struct Pair(int, int)
 
 enum Shape {
-    Circle(Float),
-    Rect { w: Float, h: Float },
+    Circle(float),
+    Rect { w: float, h: float },
     Point,
 }
 
@@ -34,7 +34,7 @@ enum Opt {
     None,
 }
 
-fun describe_int(n: Int) -> String {
+fun describe_int(n: int) -> String {
     return match n {
         1 => "literal-one",
         _ => "other-{n}",
@@ -48,7 +48,7 @@ fun describe_point(p: Point) -> String {
     };
 }
 
-fun describe_pair(pair: (Int, Int)) -> String {
+fun describe_pair(pair: (int, int)) -> String {
     return match pair {
         (1, 2) => "tuple exact",
         (a, b) => "tuple bound {a} {b}",

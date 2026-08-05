@@ -4,7 +4,7 @@
 use std::io::print;
 
 enum Opt {
-    Some(Int),
+    Some(int),
     None,
 }
 

@@ -247,7 +247,7 @@ static bool run(Vm *vm, int stop_depth) {
         if ((op == OP_DIV || op == OP_MOD) && y == 0) {
           VM_RETURN(runtime_error(vm, "division by zero"));
         }
-        // The language promises that `Int` **wraps**, two's complement. Doing
+        // The language promises that `int` **wraps**, two's complement. Doing
         // that with signed operands is undefined behaviour in C — it happens
         // to produce the promised answer on the hardware, but a sanitizer
         // reports it and an optimiser is entitled to assume it cannot happen.
@@ -283,7 +283,7 @@ static bool run(Vm *vm, int stop_depth) {
         }
         result = val_int(r);
       } else {
-        // Int op Float widens to Float (matches the checker)
+        // int op float widens to float (matches the checker)
         double x = as_num(a), y = as_num(b), r = 0;
         switch (op) {
         case OP_ADD:
@@ -311,8 +311,8 @@ static bool run(Vm *vm, int stop_depth) {
       break;
     }
 
-    // The bitwise operators are Int-only — the checker has already refused a
-    // Float or anything else — so unlike the arithmetic above there is no
+    // The bitwise operators are int-only — the checker has already refused a
+    // float or anything else — so unlike the arithmetic above there is no
     // widening case and no string case to test for.
     case OP_BIT_AND:
     case OP_BIT_OR:

@@ -19,7 +19,7 @@ The roadmap keeps milestone 76 onward, the "Next" list and the open warts.
 
   Three things follow, and they are the whole milestone:
   - **The rewrite *replaces* the node rather than reshaping it, and that is the
-    only structural difference from `Ord`'s.** `a.cmp(b)` is an Int the outer
+    only structural difference from `Ord`'s.** `a.cmp(b)` is an int the outer
     `< 0` still consumes, so milestone 38 could keep the `EXPR_BINARY` node and
     swap its children. `a.add(b)` is the whole answer — its type *is* the
     operator's type — so `rewrite_ops_call` does `*expr = *call` once
@@ -35,9 +35,9 @@ The roadmap keeps milestone 76 onward, the "Next" list and the open warts.
   - **The traits are homogeneous, and that is forced rather than chosen.** Rust
     writes `Add<Rhs = Self>` with an associated `Output`; ducktape cannot,
     because a generic trait's parameters are never *inferred* where the trait is
-    named — so a heterogeneous `V2 * Float` would need the operator to select an
+    named — so a heterogeneous `V2 * float` would need the operator to select an
     impl by its right operand, which exists only through the written
-    `Meters::from(x)` / `Into::<U>::into(x)` spellings. An operator has neither,
+    `Meters::from(x)` / `into::<U>::into(x)` spellings. An operator has neither,
     so a heterogeneous impl would type-check and then fail to be selected. The
     honest shape is the one the language can check.
     **Superseded by milestone 75**, which found the "forced" in this paragraph
@@ -53,7 +53,7 @@ The roadmap keeps milestone 76 onward, the "Next" list and the open warts.
   `dyn Iterator` vtable by the same object-safety condition, at no cost.
   `impl Add for String` is what keeps them from being numeric-only.
 
-  The impls `std::ops` ships for `Int`/`Float`/`String` are *not* what makes
+  The impls `std::ops` ships for `int`/`float`/`String` are *not* what makes
   `1 + 2` work; they exist so a bounded `T: Add` can instantiate at a primitive,
   and each body (`return self + other;`) is the built-in path, so it costs a
   frame and nothing else. That is the same asymmetry `std::fmt`'s four `Display`
@@ -65,7 +65,7 @@ The roadmap keeps milestone 76 onward, the "Next" list and the open warts.
   captured: unlike `Display` and `Ord`, whose bounds a program can often leave
   to a call, a generic that does arithmetic must *write* `T: Add`, so the
   diagnostic asking for it has to be followable without an import. The cost is
-  the documented one — a program can no longer write its own `impl Add for Int`.
+  the documented one — a program can no longer write its own `impl Add for int`.
 
   Two existing tests changed their premise rather than their expectation, which
   is the clearest measure of what moved: `tests/fail/generic_add.dt` used to
@@ -74,7 +74,7 @@ The roadmap keeps milestone 76 onward, the "Next" list and the open warts.
   reports a missing `impl Neg`.
 
 - **A trait object satisfies its own bound (milestone 56)** — `first(d)` where
-  `d: dyn Iterator<Item = Int>` and `first` takes an `I: Iterator` compiles.
+  `d: dyn Iterator<Item = int>` and `first` takes an `I: Iterator` compiles.
   Design: `architecture.md` "Trait objects", `language.md` "Trait objects".
 
   The observation the milestone turns on was already written down, in milestone
@@ -97,7 +97,7 @@ The roadmap keeps milestone 76 onward, the "Next" list and the open warts.
   - **The associated bindings come off the value, not the index.**
     `impl_index_assoc_type` reads a `TY_DYN`'s own table, where the coercion left
     nothing behind. Because `subst_apply` and `infer_apply` both project through
-    that one function, this is what collapses `I.Item` to `Int` everywhere at
+    that one function, this is what collapses `I.Item` to `int` everywhere at
     once — a `for` loop's variable, `collect`'s element type, and the
     `where I.Item: Ord` a combinator carries.
   - **The object-safe subset governs the vtable, not the bound.** This is the
@@ -159,7 +159,7 @@ The roadmap keeps milestone 76 onward, the "Next" list and the open warts.
 
   - **An assertion cannot name itself.** Rust's `assert!` is a macro *for this
     reason* — a macro sees the source text `a == b` and can put it in the
-    message. A ducktape function sees a `Bool`. So `assert(cond)`'s message is
+    message. A ducktape function sees a `bool`. So `assert(cond)`'s message is
     the fixed "assertion failed" and no amount of work inside the function can
     improve it; saying more means the caller saying it, which is
     `assert_with`. That is the same split `Option` already has between `unwrap`
@@ -253,7 +253,7 @@ The roadmap keeps milestone 76 onward, the "Next" list and the open warts.
     dispatch on it indexes that same trait's closure** — the language has no
     `dyn A` → `dyn B` coercion, so two tables are never compared. So the vtable
     and the associated-type table both flatten, object safety is decided over
-    the closure, and a `dyn DoubleEnded<Item = Int>` is an `Iterator` in every
+    the closure, and a `dyn DoubleEnded<Item = int>` is an `Iterator` in every
     sense a bound or a `for` loop can ask about.
 
   `std::iter` gains `DoubleEnded` (`next_back`, `rev`), the `Rev<I>` adapter and
@@ -330,7 +330,7 @@ The roadmap keeps milestone 76 onward, the "Next" list and the open warts.
   with an `Iterator` and a `DoubleEnded` impl, plus `impl<T> [T] { fun iter }`
   and `impl Range { fun iter }`. The compiler side is ~15 lines.
 
-  - **`Range` becomes a nameable type**, joining `String`/`StringBuf`/`Char` as
+  - **`Range` becomes a nameable type**, joining `String`/`StringBuf`/`char` as
     a builtin the compiler knows while every operation on one lives in std:
     `t_range` on the `TypeChecker`, a line in `type_named_builtin`. That is the
     entire language feature, and what it buys is a *self type to write* — an
@@ -342,7 +342,7 @@ The roadmap keeps milestone 76 onward, the "Next" list and the open warts.
     `array_len` move exactly — an opcode that was emitted but could not be
     *named*. The one new opcode is `OP_RANGE_STOP`, and its shape is the
     observation the milestone turns on: **`a..b` and `a..=b` are two spellings
-    of one sequence**, so it answers with the first Int *past* the end and the
+    of one sequence**, so it answers with the first int *past* the end and the
     inclusive flag is folded away. `RangeIter` therefore holds two Ints and no
     `Range` — an iterator that remembered which spelling it came from would be
     carrying a distinction its own sequence does not have. Both intrinsics are
@@ -376,8 +376,8 @@ The roadmap keeps milestone 76 onward, the "Next" list and the open warts.
   built the trait for and had only a hand-written `Countdown` to spend it on.
 
 - **A String's characters as a walk (milestone 61)** — `s.chars()` answers a
-  `CharIter` rather than a `[Char]`. Design: `language.md` `std::iter` →
-  "Sources", and `std::char` → the String/Char split.
+  `CharIter` rather than a `[char]`. Design: `language.md` `std::iter` →
+  "Sources", and `std::char` → the String/char split.
 
   The third source, and the first whose sequence is not already a sequence of
   *values*: an array's elements and a range's Ints are there to be handed over,
@@ -397,7 +397,7 @@ The roadmap keeps milestone 76 onward, the "Next" list and the open warts.
     here — immutability dissolves it, which is worth recording as the reason
     rather than as a coincidence.
   - **Only one direction needs a native, and the asymmetry is the encoding's.**
-    A `Char` *is* a scalar value and a scalar value determines its UTF-8 width,
+    A `char` *is* a scalar value and a scalar value determines its UTF-8 width,
     so stepping forward is a four-branch range test in ducktape — the same shape
     every `std::char` classification has. Stepping backward cannot be derived
     from any value in hand, because there is no character yet; the only thing
@@ -519,7 +519,7 @@ The roadmap keeps milestone 76 onward, the "Next" list and the open warts.
     could write is `h * 31 + x`, which is precisely the weak one: multiply and
     add both carry information upward, so the high bits never reach the low
     bits `%` reads. Hence `fun hash(self, h: Hasher)` rather than
-    `fun hash(self) -> Int`: an impl says only *which parts of me matter*, the
+    `fun hash(self) -> int`: an impl says only *which parts of me matter*, the
     combining lives in one object, and that object reaches C. `Hasher` is to
     `Hash` what `StringBuf` is to building text, and the parallel is exact —
     both exist because the work below them cannot be said above them.
@@ -530,11 +530,11 @@ The roadmap keeps milestone 76 onward, the "Next" list and the open warts.
   - **A String's hash is a field read** — `heap_intern` computed it to find the
     string's bucket — so the type whose hash would otherwise be a walk over its
     bytes is the cheapest impl in std rather than the dearest.
-  - **No `impl Hash for Float`**, and the contrast with `impl Ord for Float` is
+  - **No `impl Hash for float`**, and the contrast with `impl Ord for float` is
     the point: an order is total and so had to put NaN *somewhere*, while a
     table may decline a key. `NaN != NaN` would make such a key unfindable in a
-    table that compares with `==`, and a truncating `as Int` is the only number
-    a Float can reach here anyway.
+    table that compares with `==`, and a truncating `as int` is the only number
+    a float can reach here anyway.
   - **Capacities are primes because they are allowed to be.** (Superseded by
     milestone 66, which switched to powers of two once `&` existed.) Every table
     that indexes with `h & (cap - 1)` is forced to a power of two by the mask;
@@ -630,7 +630,7 @@ The roadmap keeps milestone 76 onward, the "Next" list and the open warts.
   per-operation work is a user-written trait method is a much worse candidate
   than a sort.
 
-- **Bitwise operators (milestone 65)** — `& | ^ << >> >>>` and unary `~`, Int
+- **Bitwise operators (milestone 65)** — `& | ^ << >> >>>` and unary `~`, int
   only. Scanner, parser, checker, two opcode families, no std change. Design:
   `language.md` "Expressions".
 
@@ -653,7 +653,7 @@ The roadmap keeps milestone 76 onward, the "Next" list and the open warts.
     than less — a closure body is now an unbraced expression, so `|x| x | 1` has
     to take the `|` as part of the body — and greedy parsing gets it right.
   - **`>>` cannot be a token.** A nested generic closes with a run of `>`
-    (`HashMap<String, Option<Int>>`), and `parse_type` consumes those one at a
+    (`HashMap<String, Option<int>>`), and `parse_type` consumes those one at a
     time, so a scanner that fused `>>` would break every type that nests. The
     scanner therefore emits single angle brackets and `parse_shift` fuses
     adjacent ones, which also leaves milestone 63's `looks_like_type_args` scan
@@ -663,7 +663,7 @@ The roadmap keeps milestone 76 onward, the "Next" list and the open warts.
     comparison, so `a & b == c` is `(a & b) == c` rather than C's fifty-year-old
     `a & (b == c)` trap. Shifts stay looser than `+`, which is the half of C's
     ordering worth keeping.
-  - **`>>` propagates the sign and `>>>` shifts in zeros**, because `Int` is
+  - **`>>` propagates the sign and `>>>` shifts in zeros**, because `int` is
     signed and there is no unsigned type to make the distinction for us. The
     milestone's own test is what proves the split earns its keep: transliterating
     splitmix64 with `>>` in place of `>>>` agrees on small positives and
@@ -674,8 +674,8 @@ The roadmap keeps milestone 76 onward, the "Next" list and the open warts.
     guesses.
   - **They are the only binary operators that can drive inference.** Every other
     one has to look at its operands before it knows what it means — `+` might be
-    Int, Float, String or a call to `Add` — while a bitwise operator has exactly
-    one operand type. So they unify with `Int` rather than testing for it, and
+    int, float, String or a call to `Add` — while a bitwise operator has exactly
+    one operand type. So they unify with `int` rather than testing for it, and
     `|x| x | 1` solves `x` where `|x| x + 1` still cannot.
 
   And one bug found rather than decided, which is the milestone's real dividend.
@@ -739,7 +739,7 @@ The roadmap keeps milestone 76 onward, the "Next" list and the open warts.
   And an aggregate is a handle whose fields can be written through, but
   `OP_FIELD_SET` needs a field index, and a def with no fields has none: there
   is no state to alias. Type erasure adds a third for free — there is one
-  `EnumDef` per source enum, so `Option::<Int>::None` and `Option::<String>::None`
+  `EnumDef` per source enum, so `Option::<int>::None` and `Option::<String>::None`
   are now literally one object, which they were already indistinguishable from.
 
   - **Measured, with the control inside the same binary.** Two builds laid out
@@ -802,7 +802,7 @@ The roadmap keeps milestone 76 onward, the "Next" list and the open warts.
     like any other. The rule fell out of the question rather than being chosen.
   - **Overlap is asked with bounds ignored, from both sides** — the same
     conservative question trait coherence asks, minus the trait. So
-    `impl<T: Ord> W<T>` loses to `impl<T> W<T>` and `impl [Int]` loses to
+    `impl<T: Ord> W<T>` loses to `impl<T> W<T>` and `impl [int]` loses to
     `impl<T> [T]`: with no specialisation, neither a bound nor a narrower head
     is a way to win a name from a wider impl. Each direction has its own test,
     since the concrete-vs-generic case is caught by only one of them.
@@ -907,7 +907,7 @@ The roadmap keeps milestone 76 onward, the "Next" list and the open warts.
     pattern has always done the same — and is recorded in the warts list.
 
 - **The turbofish for a method call's type arguments (milestone 71)** —
-  `it.fold::<Int>(0, f)` replaces the bare `it.fold<Int>(0, f)`, matching the
+  `it.fold::<int>(0, f)` replaces the bare `it.fold<int>(0, f)`, matching the
   `::<..>` an expression path has always required. The lookahead that used to
   tell the two readings apart is deleted, so a `<` after a field or method
   access is unconditionally the less-than operator. Design: `architecture.md`
@@ -930,7 +930,7 @@ The roadmap keeps milestone 76 onward, the "Next" list and the open warts.
     was the ambiguity. It survives as the milestone's own test, rewritten
     around the `::` instead of around the lookahead.
   - **The retired spelling needed a diagnostic, or the parse wart just became a
-    message wart.** `h.pick<Int>(7, 9)` now dies as "unknown field 'pick'",
+    message wart.** `h.pick<int>(7, 9)` now dies as "unknown field 'pick'",
     which describes the lookup and not the mistake. `note_field_is_method`
     scans the impl index and adds a note whenever a failed field name *is* an
     applicable method — legitimate because the language has no method values,
@@ -1115,7 +1115,7 @@ The roadmap keeps milestone 76 onward, the "Next" list and the open warts.
   - **Left open:** the one-block spelling and a separate super impl cannot be
     mixed for the same name, which is the price of "a written impl always wins".
 
-- **A heterogeneous operator (milestone 75)** — `V2 * Float`. The five binary
+- **A heterogeneous operator (milestone 75)** — `V2 * float`. The five binary
   `std::ops` traits take an `Rhs` parameter defaulting to `Self`, a receiver
   method call is disambiguated by its arguments, and a bound may name its own
   subject. Design: `language.md` "Generic traits" → "Default type parameters"
@@ -1125,19 +1125,19 @@ The roadmap keeps milestone 76 onward, the "Next" list and the open warts.
   - **The wart had the diagnosis right and the conclusion wrong.** It said a
     heterogeneous operator "would need the operator to select an impl by its
     *right* operand, and selection by argument type exists only through the
-    written `Meters::from(x)` / `Into::<U>::into(x)` forms" — and it said,
+    written `Meters::from(x)` / `into::<U>::into(x)` forms" — and it said,
     correctly, that an `Output` alone would not help because it is `Rhs` that
     cannot be *inferred* where the trait is named. All true, and it does not
     follow: **an operator never has to infer the argument, because it has both
     operand types in hand and can write it down.** `ops_trait_ref` builds
-    `Mul<Float>` for `v * 2.0`. The three-year-old-looking obstacle was a
+    `Mul<float>` for `v * 2.0`. The three-year-old-looking obstacle was a
     sentence about inference standing in for a fact about knowledge.
   - **THE FINDING: the default is load-bearing, not sugar.** Without it every
     use has to name the argument, and at a bound that argument is the bounded
     parameter — `T: Add<T>`, a bound naming its own subject, which the language
     could not say. `Add<Self>` is not an escape either: `Self` is not in scope in
     a free function. So `Rhs = Self` is what makes the migration *zero* — every
-    `impl Add for Int`, every `T: Add`, every `where Self.Item: Add` in `std`
+    `impl Add for int`, every `T: Add`, every `where Self.Item: Add` in `std`
     is byte-identical — and it is also the thing that forced the self-reference
     to be implemented, since a default at a bound expands to exactly it.
   - **A self-referential bound looks like an interning cycle and is not.** A
@@ -1157,14 +1157,14 @@ The roadmap keeps milestone 76 onward, the "Next" list and the open warts.
     would be pinned by a promise the caller makes rather than by what the impl
     bound it to. Adding `Output` would break every generic use of these traits
     before it enabled one, so the result stays `Self` and the dot product
-    `V2 * V2 -> Float` stays unspellable. Recorded below as the wart's remainder.
+    `V2 * V2 -> float` stays unspellable. Recorded below as the wart's remainder.
   - **The receiver-side selector is milestone 30's, unchanged; the work was the
     guard.** `impl_index_assoc_select` needed nothing — a method's signature
     carries `self`, so the receiver is matched as an ordinary parameter. What is
     new is `assoc_candidates_differ_in_args`, and its question is *not* "is there
     more than one candidate": it is whether they disagree about the arguments
     they take. Running selection where they agree reports an ambiguity in place
-    of an answer — `Into<Fahrenheit>` and `Into<String>` both take `(Celsius)`
+    of an answer — `into<Fahrenheit>` and `into<String>` both take `(Celsius)`
     and are settled by the return-type hint, and a milestone 74 derived impl
     shares the written one's `MethodDef` outright. **Comparing the return type
     too puts the first case straight back**, which is why `sigs_take_same_args`
@@ -1175,8 +1175,8 @@ The roadmap keeps milestone 76 onward, the "Next" list and the open warts.
     below, rather than resolving them again — which would re-report a bad
     argument and re-queue every instantiation inside it.
   - **Two messages got better as a side effect.** A mixed pair is now
-    `'Cents' does not implement 'Add<Int>'` rather than
-    `expected 'Cents' but got 'Int'` on the rewritten call — the wart's own
+    `'Cents' does not implement 'Add<int>'` rather than
+    `expected 'Cents' but got 'int'` on the rewritten call — the wart's own
     complaint that the message "describes the desugaring rather than the
     mistake". And an unsolved *right* operand became its own diagnostic, since
     it is now what chooses.

@@ -11,13 +11,13 @@ use util::Maybe as Opt;
 use util::twice;
 use helper::quad;
 
-fun describe(c: Circle) -> Float {
+fun describe(c: Circle) -> float {
   # the impl lives in another module and is never imported: ImplIndex is
   # program-wide, so the method still resolves.
   return c.area();
 }
 
-fun wrap(n: Int) -> Opt<Int> {
+fun wrap(n: int) -> Opt<int> {
   return Opt::Some(n);
 }
 
@@ -27,7 +27,7 @@ fun main() {
   print(twice(3));
   print(quad(3));
 
-  var m: Opt<Int> = wrap(7);
+  var m: Opt<int> = wrap(7);
   var got = match m {
     Opt::Some(v) => v,
     Opt::None => 0,

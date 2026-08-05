@@ -10,13 +10,13 @@ struct W<T> {
 }
 
 impl<T> W<T> {
-  fun scale(self) -> Int {
+  fun scale(self) -> int {
     return 1;
   }
 }
 
 impl<T: Ord> W<T> {
-  fun scale(self) -> Int {
+  fun scale(self) -> int {
     return 2;
   }
 }

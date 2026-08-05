@@ -20,5 +20,5 @@ impl Iterator for Words {
 }
 
 fun main() {
-    var it: dyn Iterator<Item = Int> = Words { w: "hi" };
+    var it: dyn Iterator<Item = int> = Words { w: "hi" };
 }

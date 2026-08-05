@@ -25,16 +25,16 @@ trait Scale<K> {
     fun scale(self, k: K) -> Self.Out;
 }
 
-struct V2 { x: Int, y: Int }
+struct V2 { x: int, y: int }
 
 impl Scale<V2> for V2 {
     type Out = V2;
     fun scale(self, k: V2) -> V2 { return V2 { x: self.x * k.x, y: self.y * k.y }; }
 }
 
-impl Scale<Int> for V2 {
-    type Out = Int;
-    fun scale(self, k: Int) -> Int { return self.x * k; }
+impl Scale<int> for V2 {
+    type Out = int;
+    fun scale(self, k: int) -> int { return self.x * k; }
 }
 
 # the subject in the trait's *argument* position.
@@ -53,6 +53,6 @@ fun main() {
     var v = V2 { x: 2, y: 3 };
     print(square(v).x);      # 4
     print(square_out(v).y);  # 9
-    print(v.scale(5));       # Scale<Int>, Out = Int -> 10
+    print(v.scale(5));       # Scale<int>, Out = int -> 10
     print(cube(v).x);        # 8
 }

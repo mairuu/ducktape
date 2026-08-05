@@ -1,4 +1,4 @@
-# A `Char` is a Unicode scalar value, and a `String` is bytes. The two are
+# A `char` is a Unicode scalar value, and a `String` is bytes. The two are
 # different things, so the crossing between them is a conversion (`chars` /
 # `from_chars`) and never an index — which is what this file is mostly about.
 #> x
@@ -44,7 +44,7 @@ use std::string::from_chars;
 use std::cmp::{max, min};
 use std::fmt::Display;
 
-struct Tag { c: Char, n: Int }
+struct Tag { c: char, n: int }
 
 fun id<T>(v: T) -> T {
     return v;
@@ -77,8 +77,8 @@ fun main() {
     print('"');
     print('\\');
 
-    # a Char is a primitive, so interpolation renders it with no `Display` impl
-    # in sight — the same built-in path an Int takes
+    # a char is a primitive, so interpolation renders it with no `Display` impl
+    # in sight — the same built-in path an int takes
     var emoji = '\u{1F600}';
     print("{'x'} {'é'} {emoji} !");
 
@@ -92,7 +92,7 @@ fun main() {
         'x' => print("matched x"),
         _ => print("other"),
     }
-    # a Char column is never exhaustive without a wildcard, like an Int
+    # a char column is never exhaustive without a wildcard, like an int
     match '?' {
         'q' => print("q"),
         _ => print("other"),
@@ -100,8 +100,8 @@ fun main() {
 
     print('A'.code());
     print('😀'.code());
-    print(Char::from_code(9731));
-    print(Char::from_code('é'.code()) == 'é');
+    print(char::from_code(9731));
+    print(char::from_code('é'.code()) == 'é');
 
     # the whole point: `len` counts bytes and `chars` counts characters, and
     # for anything but ASCII those are different numbers. `chars` is a walk
@@ -121,7 +121,7 @@ fun main() {
     print("{'é'.is_alpha()} {'é'.is_ascii()} {'É'.is_upper()}");
     print('7'.to_digit());
 
-    # `impl Ord for Char` is code-point order: 'Z' (90) sorts before 'a' (97)
+    # `impl Ord for char` is code-point order: 'Z' (90) sorts before 'a' (97)
     print('a'.cmp('b'));
     print('b'.cmp('a'));
     print('a'.cmp('a'));
@@ -129,14 +129,14 @@ fun main() {
     print(min('a', 'Z'));
     print("{min('a', 'Z')}:{max('a', 'Z')}");
 
-    # a buffer takes Chars and Strings alike, which is what `from_chars` is
+    # a buffer takes chars and Strings alike, which is what `from_chars` is
     var b = StringBuf::new();
     b.push_char('a');
     b.push_char('b');
     b.push_char('c');
     print(b.build());
 
-    # a Char is a primitive everywhere a primitive goes: a struct field, a
+    # a char is a primitive everywhere a primitive goes: a struct field, a
     # type argument keying an instantiation, and a `dyn Display` element
     print(Tag { c: 'Z', n: 1 });
     print(id('q'));

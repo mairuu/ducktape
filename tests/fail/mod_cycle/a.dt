@@ -1,5 +1,5 @@
 use b::g;
 
-pub fun f() -> Int {
+pub fun f() -> int {
   return g();
 }

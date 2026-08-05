@@ -5,8 +5,8 @@ use std::assert::assert_eq;
 use std::fmt::Display;
 
 struct Point {
-    x: Int,
-    y: Int,
+    x: int,
+    y: int,
 }
 
 impl Display for Point {

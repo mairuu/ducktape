@@ -23,13 +23,13 @@ points at a GC-managed heap object (`include/object.h`):
 | `VAL_FUN` | `FunDef *` (top-level function or method — a callable with no captures) |
 | `VAL_OBJ` | `Obj *` — string, array, tuple, struct, enum instance, or closure, see "Heap & GC" |
 
-A `Char` is a plain value, not a heap object, which is the whole of its cost in
+A `char` is a plain value, not a heap object, which is the whole of its cost in
 the runtime: no allocation, no interning, no GC involvement, and `==` is a
 comparison of two `uint32_t`. It is stored decoded — a scalar value rather than
-its UTF-8 bytes — so the encoding appears only at the two edges where a Char
+its UTF-8 bytes — so the encoding appears only at the two edges where a char
 meets a String: `value_print`/`stringify` on the way out (`utf8_encode`), and
 `string_char_at`/`string_prev_boundary`/`strbuf_push_char` in the native
-registry (`string_char_count` validates without producing a Char). Both go
+registry (`string_char_count` validates without producing a char). Both go
 through `string_utils.h`, which validates strictly: an overlong encoding, a
 surrogate half and anything past U+10FFFF are rejected rather than round-
 tripped, so a `VAL_CHAR` that exists is always encodable and no output path
@@ -47,13 +47,13 @@ tuple structs, and enum instances the same way but with the variant's name
 and no enum qualifier (`Some(1)`, not `Option::Some(1)`), matching how Rust's
 `Debug` prints enums.
 
-Floats go through `value_format_float` (`src/value.c`), which both
+floats go through `value_format_float` (`src/value.c`), which both
 `value_print` and the VM's `stringify` call so `print(x)` and `"{x}"` never
 disagree. It picks the fewest significant digits that `strtod` reads back as
 the same double, then chooses notation: plain decimal while the exponent is in
 `[-5, 17)`, scientific outside it, and a `.0` suffix whenever neither a point
 nor an exponent survived — otherwise `1.0` would print as `1` and be
-indistinguishable from the `Int`. `NaN`, `inf`, and `-inf` are spelled out.
+indistinguishable from the `int`. `NaN`, `inf`, and `-inf` are spelled out.
 The scanner accepts exponent literals (`1e+18`), so every form printed is one
 the language can also read.
 
@@ -90,14 +90,14 @@ Operands are u8 unless noted.
 | `OP_ADD/SUB/MUL/DIV/MOD` | int×int stays int; any float widens (matches checker); div/mod by zero int → runtime error; float mod = `fmod` |
 | `OP_NEG` `OP_NOT` `OP_EQ/NEQ/LT/LTEQ/GT/GTEQ` | comparisons widen like arithmetic |
 | `OP_CAST_INT` `OP_CAST_FLOAT` | dynamic: no-op if already the target kind |
-| `OP_RANGE incl` `OP_RANGE_START` `OP_RANGE_TEST` `OP_RANGE_STOP` | build range from end/start; TEST pops i+range, pushes `i < end` (or `<=`); STOP pops range, pushes the first Int past the end (`end`, or `end + 1` when inclusive — saturating at `INT64_MAX`), which is what folds the two spellings into one bound for `std::iter`'s `RangeIter` |
+| `OP_RANGE incl` `OP_RANGE_START` `OP_RANGE_TEST` `OP_RANGE_STOP` | build range from end/start; TEST pops i+range, pushes `i < end` (or `<=`); STOP pops range, pushes the first int past the end (`end`, or `end + 1` when inclusive — saturating at `INT64_MAX`), which is what folds the two spellings into one bound for `std::iter`'s `RangeIter` |
 | `OP_JUMP u16` `OP_JUMP_IF_FALSE u16` `OP_LOOP u16` | JUMP_IF_FALSE does *not* pop the condition |
 | `OP_CALL argc` | callee value sits beneath the args |
 | `OP_RETURN` | pops result, tears down the frame (incl. callee slot), pushes result for the caller |
 | `OP_ARRAY count` | pops `count` elems (left-to-right order), pushes a new array |
 | `OP_INDEX_GET` | pops index, array; pushes `array[index]` (bounds-checked) |
 | `OP_INDEX_SET` | pops value, index, array; sets `array[index] = value`, pushes value back (bounds-checked) |
-| `OP_LEN` | pops array; pushes its length as `Int` |
+| `OP_LEN` | pops array; pushes its length as `int` |
 | `OP_INTERP seg_count` | pops that many values, stringifies + concatenates them in order, pushes the result string |
 | `OP_DUP depth` | pushes a copy of the value `depth` slots below the top |
 | `OP_TUPLE count` | pops `count` elems (left-to-right order), pushes a new tuple |
@@ -105,7 +105,7 @@ Operands are u8 unless noted.
 | `OP_ENUM enum_slot(u16) tag` | pops that variant's `field_count` elems (declaration order), pushes an enum instance — likewise shared for a fieldless variant, which is what makes `Option::None` free |
 | `OP_FIELD_GET index` | pops a tuple/struct/enum instance, pushes its `index`-th field — no bounds check, since the index is always a compile-time-valid constant |
 | `OP_FIELD_SET index` | pops value then a tuple/struct/enum instance, writes the `index`-th field, pushes the value back (assignment is an expression) — the mirror of `OP_FIELD_GET` |
-| `OP_TAG` | pops an enum instance, pushes its variant tag as `Int` |
+| `OP_TAG` | pops an enum instance, pushes its variant tag as `int` |
 | `OP_MAKE_DYN vtable_slot(u16)` | pops a value, pushes it wrapped as a trait object carrying `exe->vtables[slot]` |
 | `OP_DYN_METHOD index` | pops a trait object, pushes its `index`-th method *then* the unwrapped receiver — so the `OP_CALL` that follows sees an ordinary callee-beneath-args stack |
 | `OP_DYN_IS vtable_slot(u16)` | peeks a trait object, pushes whether it carries `exe->vtables[slot]`. One table per (trait, concrete type), so this *is* the type test `d as? T` compiles to; peeks rather than pops so the value survives for `OP_DYN_INNER` |
@@ -161,7 +161,7 @@ Two consequences worth knowing:
 
 - **A generic enum shares one singleton across every type argument.** There is
   one `EnumDef` per source enum (instantiation monomorphises *functions*, never
-  defs), so `Option::<Int>::None` and `Option::<String>::None` are literally the
+  defs), so `Option::<int>::None` and `Option::<String>::None` are literally the
   same object. Types are erased at runtime, so this was already indistinguishable
   — those two values compared equal before the change too.
 - **The def is a GC root, not a weak cache.** `heap_collect` marks
@@ -302,7 +302,7 @@ over:
 
 `strbuf_push_char` (milestone 26) is the same code with `utf8_encode` in front
 of it: one to four bytes into a stack array, then the identical reserve-copy-
-advance. That it needed no new rule is the point — a Char's bytes are bytes.
+advance. That it needed no new rule is the point — a char's bytes are bytes.
 It is also the append an array of parts could never have offered, since there
 is no String to hold one character, which is what makes `from_chars` ducktape
 rather than a native. `strbuf_push_int` is the third of the same shape —
@@ -562,7 +562,7 @@ holds exactly the outer locals plus the subject, and a `break` or `continue`
 inside pops the right number on its way out with no special case. The trap stays *below* the block rather than being replaced by
 it: the checker made the block diverge, and the alternative to a trap if one
 ever fell through anyway would be reading names that were never bound. Since
-milestone 85 checks `-> Never` bodies too, no source reaches it — it costs one
+milestone 85 checks `-> !` bodies too, no source reaches it — it costs one
 byte and is the only thing standing between a checker bug and unbound reads.
 
 #### `if var` and `while var`
@@ -636,7 +636,7 @@ the code compiled from a body: **which function a call resolves to.**
 fun describe<T: Show>(v: T) -> String { v.show() }
 ```
 
-`v.show()` is a different body for `T = Int` than for `T = Bool`, and the
+`v.show()` is a different body for `T = int` than for `T = bool`, and the
 receiver is abstract until the call site says otherwise. That is the whole
 reason generic code cannot simply be erased, and it also bounds the job:
 monomorphisation duplicates *code*, never types. `StructDef`/`EnumDef` and
@@ -671,7 +671,7 @@ The type arguments come from the checker: `resolve_callee`,
 once `infer_finalize` has run. Those arguments are in the *enclosing*
 definition's terms, so a call inside a generic body is instantiated by
 pushing the caller's own bindings (`Cg.subst`) through them — the step that
-lets `describe_twice<T>` reach `describe<Int>` reach `Int::show` rather than
+lets `describe_twice<T>` reach `describe<int>` reach `int::show` rather than
 stopping one level down.
 
 **Pushing them through is two steps, not one**, and `cg_subst` is where both
@@ -703,7 +703,7 @@ Two call shapes need more than the recorded arguments:
 
   Which of the two recorded substitutions an impl parameter is read from is
   therefore load-bearing: a call through a bound records the *trait's*
-  arguments, and `impl<T: Tag> Boxed<Int> for T` against `trait Boxed<T>` has
+  arguments, and `impl<T: Tag> Boxed<int> for T` against `trait Boxed<T>` has
   two live meanings for `T`. An impl parameter is read from the impl match
   first, because nothing else can speak for it; a method's own parameter keeps
   reading the call's arguments first.
@@ -713,7 +713,7 @@ Two call shapes need more than the recorded arguments:
   with it) and `bound_self`. Codegen substitutes both into this
   instantiation's terms and re-runs `impl_index_method` to find the body,
   falling back to `impl_index_default_method` when the impl inherited it.
-  Passing the reference is what tells `impl Into<Int> for S` from
+  Passing the reference is what tells `impl Into<int> for S` from
   `impl Into<String> for S`, which the receiver alone cannot. This is the one
   place codegen consults an impl index — and since impls became
   module-granular, *which* index is a question of its own.
@@ -745,8 +745,8 @@ type parameter is `Self`*, bounded by the trait — followed by the trait's own
 type parameters, if it has any:
 
 ```
-trait Show { fun twice(self) -> Int { self.show() + self.show() } }
-⇒            fun twice<Self: Show>(self: Self) -> Int { ... }
+trait Show { fun twice(self) -> int { self.show() + self.show() } }
+⇒            fun twice<Self: Show>(self: Self) -> int { ... }
 ```
 
 The trait's own `method_type` keeps stating `Self` as the trait type — that is
@@ -805,13 +805,13 @@ keeping the slot (rather than compacting the table) is what keeps
 Note what the runtime `VTable` does **not** hold: the trait and the self type.
 Those are compiler bookkeeping the VM never reads — the serialization rule,
 one level over. **Nor does it hold the associated-type bindings.** A
-`dyn Iterator<Item = Int>` and a `dyn Iterator<Item = String>` are different
+`dyn Iterator<Item = int>` and a `dyn Iterator<Item = String>` are different
 types to the checker and the same shape to the VM, because an associated type
 is erased exactly as a type argument is — so naming one at a coercion site
 changed nothing in codegen, the vtable, the opcodes or the image format. The
 memo key stays `(trait reference, self type)`, which still determines the
 bindings: an impl binds each associated type once. The *reference* rather than
-the trait, since milestone 28: `dyn Into<Int>` and `dyn Into<String>` over one
+the trait, since milestone 28: `dyn Into<int>` and `dyn Into<String>` over one
 self type name two impls, so they are two tables — and a trait's type argument
 is erased at runtime exactly as an associated type is, so that is again the
 only thing that changed.
@@ -848,10 +848,10 @@ so a program that only ever asks whether something is a `Point` still slots
 that table.
 
 Two things fall out of the key being the type rather than the value's shape.
-`Box<Int>` and `Box<String>` share one `StructDef` — structs are not
+`Box<int>` and `Box<String>` share one `StructDef` — structs are not
 monomorphised — yet they are distinct interned types and so two tables, which
 is why erasure never bites. And since the key is the trait *reference*, one
-self type behind `dyn Sink<Int>` and `dyn Sink<String>` has two tables; a
+self type behind `dyn Sink<int>` and `dyn Sink<String>` has two tables; a
 downcast reads its half of the key off the operand, so it always asks about the
 reference the value was written as.
 
@@ -1124,7 +1124,7 @@ funs     [u32 name, u16 param_count, u8 has_chunk,
 ```
 
 Every multi-byte field is little-endian and written byte by byte, so an image
-depends on neither the host's byte order nor any struct layout. Floats go out
+depends on neither the host's byte order nor any struct layout. floats go out
 as their IEEE-754 bit pattern.
 
 **An image is the runtime projection of the program.** Only what `vm.c` and
@@ -1273,7 +1273,7 @@ than a wrong answer.
 are the same event — `runtime_error` prints the message and the frames beneath
 it, and `vm_run` returns false. There is no unwinding: no `catch`, no
 destructor to run, no value carried out. What makes it usable from ducktape is
-purely a *checker* fact, that the declared return type `Never` stands in for
+purely a *checker* fact, that the declared return type `!` stands in for
 any type (`language.md` "`std::panic`"); the VM needed no change at all.
 
 The message is the argument's own bytes rather than a copy — an `ObjString` is
@@ -1283,8 +1283,8 @@ only sound *because* a panic never returns; a native that wanted to fail with a
 computed message and keep running would need somewhere else to put it.
 
 **The character walk's natives have nothing to say about that rule, which is
-what makes them cheap.** `string_char_at` answers a `Char` and
-`string_prev_boundary` an `Int`; both are values, so nothing allocates, nothing
+what makes them cheap.** `string_char_at` answers a `char` and
+`string_prev_boundary` an `int`; both are values, so nothing allocates, nothing
 can collect, and there is no rooting question at all — the walk's state lives
 in a ducktape struct (`std::iter`'s `CharIter`) rather than in C. Until
 milestone 61 the crossing was `string_chars`, a two-pass native that counted
@@ -1324,7 +1324,7 @@ the opcode is emitted bare with nothing to encode an operand into.
 
 **A method may be native too.** `resolve_impl_decl` runs the same
 `tc_bind_native` on an impl method's `FunDef` that `tc_register_fun` runs on a
-top-level one, so `impl String { @native("string_len") fun len(self) -> Int; }`
+top-level one, so `impl String { @native("string_len") fun len(self) -> int; }`
 binds exactly as a free native declaration does — which, since milestone 40, is
 how `std::string` spells `len`. `self` is an ordinary parameter
 (`is_self` set), and the receiver's value is what the free-function form would
@@ -1355,12 +1355,12 @@ ducktape, it could not be written. **Milestone 65 closed that**, and
 constant and checks the two agree. They stay in C as an optimisation: `mix` is
 six operations of pure arithmetic with no callback, the shape the cost model
 below says to move. Keeping the ducktape twin under test is what stops that
-from being a black box. `hash_mix` folds one Int into a running state: a splitmix64 finalisation of the incoming value first, so that
+from being a black box. `hash_mix` folds one int into a running state: a splitmix64 finalisation of the incoming value first, so that
 the low-entropy keys a program actually uses (0, 1, 2) still spread across all
 64 bits, then FNV-1a's prime to carry the accumulation and a last shift-xor to
 move the high bits down where `%` will read them. Every multiply relies on
 wrapping, done in `uint64_t` so it is defined rather than merely what the
-hardware does; the `Int` the language hands back wraps to match.
+hardware does; the `int` the language hands back wraps to match.
 
 `hash_string` allocates nothing and computes nothing: it returns
 `ObjString.hash`, which `heap_intern` already filled in to find the string's
@@ -1368,7 +1368,7 @@ bucket. So the one type whose hash would otherwise be a walk over its bytes is
 the one type that costs a field read — and because interning makes two equal
 Strings one pointer, the value is consistent with `==` for exactly the reason
 the intern table already depends on. Both take Ints and Strings and return an
-Int, so neither touches the heap or the collector, and `std::collections`'s
+int, so neither touches the heap or the collector, and `std::collections`'s
 whole open-addressed table is ordinary ducktape written on top of them.
 
 Porting `print` to this deleted `OP_PRINT`, `cg_names_builtin_print`,

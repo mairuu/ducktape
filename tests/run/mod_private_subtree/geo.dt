@@ -5,6 +5,6 @@ pub mod shape;
 # declared it without any `pub` on either side.
 use geo::internal::hidden;
 
-pub fun near() -> Int {
+pub fun near() -> int {
     return hidden();
 }

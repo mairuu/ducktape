@@ -1,10 +1,10 @@
 # the private field is also unreachable through a struct pattern from another
 # module — the destructure names the field just as `.field` does.
 pub struct Rect {
-  pub w: Int,
-  h: Int,
+  pub w: int,
+  h: int,
 }
 
-pub fun square(s: Int) -> Rect {
+pub fun square(s: int) -> Rect {
   return Rect { w: s, h: s };
 }

@@ -1,13 +1,13 @@
-#! expect: trait 'Into' takes 1 type argument but 0 were given
+#! expect: trait 'into' takes 1 type argument but 0 were given
 # A generic trait must be fully applied to qualify a call: the reference is
-# what names which impl, so `Into::into` says nothing `Into::<X>::into` does.
-trait Into<T> {
+# what names which impl, so `into::into` says nothing `into::<X>::into` does.
+trait into<T> {
     fun into(self) -> T;
 }
 
-struct A { x: Int }
+struct A { x: int }
 
-impl Into<A> for A {
+impl into<A> for A {
     fun into(self) -> A {
         return self;
     }
@@ -15,5 +15,5 @@ impl Into<A> for A {
 
 fun main() {
     var a = A { x: 1 };
-    var b = Into::into(a);
+    var b = into::into(a);
 }

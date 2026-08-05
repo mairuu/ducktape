@@ -4,17 +4,17 @@
 # first-registered-wins, so the second body is dead code with no diagnostic.
 
 struct P {
-  x: Int,
+  x: int,
 }
 
 impl P {
-  fun get(self) -> Int {
+  fun get(self) -> int {
     return 1;
   }
 }
 
 impl P {
-  fun get(self) -> Int {
+  fun get(self) -> int {
     return 2;
   }
 }

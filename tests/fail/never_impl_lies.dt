@@ -1,14 +1,14 @@
-#! expect: expected 'Never', which only diverging code produces, but got '()'
+#! expect: expected '!', which only diverging code produces, but got '()'
 # An impl method's body and a trait's default body are checked against their
 # declared return type by the same rule a free function's body is.
 trait Bail {
-    fun stop(self) -> Never;
+    fun stop(self) -> !;
 }
 
 struct S;
 
 impl Bail for S {
-    fun stop(self) -> Never { }
+    fun stop(self) -> ! { }
 }
 
 fun main() {

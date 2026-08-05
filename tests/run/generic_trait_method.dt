@@ -11,19 +11,19 @@ use std::io::print;
 #> 5
 
 trait Combine<T> {
-    fun with<U>(self, a: T, b: U) -> Int;
+    fun with<U>(self, a: T, b: U) -> int;
 }
 
-struct Item { id: Int }
+struct Item { id: int }
 
-impl Combine<Int> for Item {
-    fun with<U>(self, a: Int, _b: U) -> Int {
+impl Combine<int> for Item {
+    fun with<U>(self, a: int, _b: U) -> int {
         return self.id + a;
     }
 }
 
-impl Combine<Bool> for Item {
-    fun with<U>(self, _a: Bool, _b: U) -> Int {
+impl Combine<bool> for Item {
+    fun with<U>(self, _a: bool, _b: U) -> int {
         return self.id;
     }
 }
@@ -31,9 +31,9 @@ impl Combine<Bool> for Item {
 fun main() {
     var it = Item { id: 5 };
 
-    # the trait reference chooses `Combine<Int>`; `U` is inferred `Bool`
-    print("{Combine::<Int>::with(it, 3, true)}");
+    # the trait reference chooses `Combine<int>`; `U` is inferred `bool`
+    print("{Combine::<int>::with(it, 3, true)}");
 
-    # `Combine<Bool>`; the first argument is a `Bool`, `U` is inferred `Int`
-    print("{Combine::<Bool>::with(it, false, 9)}");
+    # `Combine<bool>`; the first argument is a `bool`, `U` is inferred `int`
+    print("{Combine::<bool>::with(it, false, 9)}");
 }

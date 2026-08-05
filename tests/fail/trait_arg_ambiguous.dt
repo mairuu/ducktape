@@ -1,28 +1,28 @@
-#! expect: cannot decide which 'dyn Into<_>'
+#! expect: cannot decide which 'dyn into<_>'
 # A trait argument nobody wrote down is read off the impl — but only when one
-# impl answers. `S` converts into two things, so `dyn Into<T>` with `T` still
+# impl answers. `S` converts into two things, so `dyn into<T>` with `T` still
 # unsolved is a question the source has to settle. This is the one case an
 # associated-type binding cannot run into, since an impl binds each of those
 # exactly once.
 
-trait Into<T> {
+trait into<T> {
     fun into(self) -> T;
 }
 
-struct S { n: Int }
+struct S { n: int }
 
-impl Into<Int> for S {
-    fun into(self) -> Int { self.n }
+impl into<int> for S {
+    fun into(self) -> int { self.n }
 }
 
-impl Into<String> for S {
+impl into<String> for S {
     fun into(self) -> String { "s" }
 }
 
-fun first<T>(xs: [dyn Into<T>]) -> T {
+fun first<T>(xs: [dyn into<T>]) -> T {
     return xs[0].into();
 }
 
 fun main() {
-    var a: Int = first([S { n: 1 }]);
+    var a: int = first([S { n: 1 }]);
 }

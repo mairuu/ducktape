@@ -3,7 +3,7 @@
 # rebound each turn and gone once the loop exits.
 use std::option;
 
-fun stop() -> Option<Int> { return Option::None; }
+fun stop() -> Option<int> { return Option::None; }
 
 fun main() {
     while var Option::Some(n) = stop() {

@@ -9,12 +9,12 @@
 # A numeric operand never reaches for them. `1 + 2` keeps `OP_ADD` — no import,
 # no frame, no impl lookup — exactly as `1 < 2` keeps `OP_LT` and `"{1}"` keeps
 # the VM's own rendering. Only a *non-numeric* operand asks a trait what the
-# operator means, which is why the impls for `Int` and `Float` below are not
+# operator means, which is why the impls for `int` and `float` below are not
 # what makes `1 + 2` work. They exist for the other direction: so a generic
 # bounded `T: Add` can instantiate at a primitive.
 #
 # That is also why each of those impls is free. `self + other` inside `impl Add
-# for Int` is two Ints, so it takes the built-in path and compiles to the
+# for int` is two ints, so it takes the built-in path and compiles to the
 # opcode — it does not call itself. `std::fmt`'s four impls are written the same
 # way (`return "{self}";`) and carry the same asymmetry, which there is a wart
 # (a `Display` impl for a *non*-primitive written that way recurses forever) and
@@ -31,10 +31,10 @@
 # heterogeneous one "would type-check its impls and then fail to select them" —
 # a generic trait's parameters are never *inferred* where the trait is named,
 # and an operator has neither of the written spellings (`Meters::from(x)`,
-# `Into::<U>::into(x)`) that selection by argument type had. That diagnosis was
+# `into::<U>::into(x)`) that selection by argument type had. That diagnosis was
 # right and the conclusion was wrong: an operator does not need to *infer* the
 # argument, because it has both operand types in hand and can simply write it
-# down. `v * 2.0` asks for `Mul<Float>`, `v * w` for `Mul<V2>`, and coherence
+# down. `v * 2.0` asks for `Mul<float>`, `v * w` for `Mul<V2>`, and coherence
 # has allowed both impls to stand since milestone 28.
 #
 # ── why the default is load-bearing ──────────────────────────────────────────
@@ -43,14 +43,14 @@
 # name the argument, and at a bound that argument is the bounded parameter
 # itself — `T: Add<T>` — which is a bound naming its own subject. Milestone 75
 # made that expressible too (see references/architecture.md), and the default is
-# what saves every `T: Add` and `impl Add for Int` in this file and elsewhere
+# what saves every `T: Add` and `impl Add for int` in this file and elsewhere
 # from being rewritten. Nothing in `std` moved.
 #
 # ── `Output`, and why it costs a bound ───────────────────────────────────────
 #
 # The result is an associated type, not `Self` (milestone 76), so a dot product
-# `V2 * V2 -> Float` has a spelling and so does `2.0 * v` (an `impl Mul<V2> for
-# Float` whose `Output` is `V2`, which a `-> Self` could never return).
+# `V2 * V2 -> float` has a spelling and so does `2.0 * v` (an `impl Mul<V2> for
+# float` whose `Output` is `V2`, which a `-> Self` could never return).
 #
 # It is not free the way `Rhs = Self` was. There is no default for an associated
 # type, so a *bound* learns nothing about the result: under `T: Add`, `a + b` is
@@ -102,7 +102,7 @@ pub trait Div<Rhs = Self> {
 
 # `%`. Named for the operation rather than the operator, and "remainder" rather
 # than "modulo" because that is what the VM computes: the sign follows the
-# dividend (C's `%` on Int, `fmod` on Float), so `-7 % 3` is -1 and not 2.
+# dividend (C's `%` on int, `fmod` on float), so `-7 % 3` is -1 and not 2.
 @lang("rem")
 pub trait Rem<Rhs = Self> {
     type Output;
@@ -122,69 +122,69 @@ pub trait Neg {
 # ── the primitives ───────────────────────────────────────────────────────────
 #
 # Every body here is the built-in path, so these impls cost a frame at the call
-# and nothing else. Shipping them is what lets `T: Add` instantiate at `Int` —
+# and nothing else. Shipping them is what lets `T: Add` instantiate at `int` —
 # and, as with `Display` and `Ord`, it takes the pair away from a program that
-# would write its own `impl Add for Int`, since naming the trait makes this impl
+# would write its own `impl Add for int`, since naming the trait makes this impl
 # visible and coherence rejects the second.
 
-impl Add for Int {
-    type Output = Int;
-    fun add(self, other: Int) -> Int { return self + other; }
+impl Add for int {
+    type Output = int;
+    fun add(self, other: int) -> int { return self + other; }
 }
 
-impl Sub for Int {
-    type Output = Int;
-    fun sub(self, other: Int) -> Int { return self - other; }
+impl Sub for int {
+    type Output = int;
+    fun sub(self, other: int) -> int { return self - other; }
 }
 
-impl Mul for Int {
-    type Output = Int;
-    fun mul(self, other: Int) -> Int { return self * other; }
+impl Mul for int {
+    type Output = int;
+    fun mul(self, other: int) -> int { return self * other; }
 }
 
-impl Div for Int {
-    type Output = Int;
-    fun div(self, other: Int) -> Int { return self / other; }
+impl Div for int {
+    type Output = int;
+    fun div(self, other: int) -> int { return self / other; }
 }
 
-impl Rem for Int {
-    type Output = Int;
-    fun rem(self, other: Int) -> Int { return self % other; }
+impl Rem for int {
+    type Output = int;
+    fun rem(self, other: int) -> int { return self % other; }
 }
 
-impl Neg for Int {
-    type Output = Int;
-    fun neg(self) -> Int { return 0 - self; }
+impl Neg for int {
+    type Output = int;
+    fun neg(self) -> int { return 0 - self; }
 }
 
-impl Add for Float {
-    type Output = Float;
-    fun add(self, other: Float) -> Float { return self + other; }
+impl Add for float {
+    type Output = float;
+    fun add(self, other: float) -> float { return self + other; }
 }
 
-impl Sub for Float {
-    type Output = Float;
-    fun sub(self, other: Float) -> Float { return self - other; }
+impl Sub for float {
+    type Output = float;
+    fun sub(self, other: float) -> float { return self - other; }
 }
 
-impl Mul for Float {
-    type Output = Float;
-    fun mul(self, other: Float) -> Float { return self * other; }
+impl Mul for float {
+    type Output = float;
+    fun mul(self, other: float) -> float { return self * other; }
 }
 
-impl Div for Float {
-    type Output = Float;
-    fun div(self, other: Float) -> Float { return self / other; }
+impl Div for float {
+    type Output = float;
+    fun div(self, other: float) -> float { return self / other; }
 }
 
-impl Rem for Float {
-    type Output = Float;
-    fun rem(self, other: Float) -> Float { return self % other; }
+impl Rem for float {
+    type Output = float;
+    fun rem(self, other: float) -> float { return self % other; }
 }
 
-impl Neg for Float {
-    type Output = Float;
-    fun neg(self) -> Float { return 0.0 - self; }
+impl Neg for float {
+    type Output = float;
+    fun neg(self) -> float { return 0.0 - self; }
 }
 
 # `+` on two Strings is a built-in concat, decided before any trait is

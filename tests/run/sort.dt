@@ -33,7 +33,7 @@
 use std::io::print;
 use std::sort;
 
-struct Rec { key: Int, tag: String }
+struct Rec { key: int, tag: String }
 
 fun main() {
     # enough elements for three merge passes, so the odd-parity copy-back runs
@@ -57,7 +57,7 @@ fun main() {
     print(copy);
 
     # any `Ord` orders its own arrays: byte order for String, code points for
-    # Char, so 'Apple' sorts before 'fig' and 'Z' before 'a'
+    # char, so 'Apple' sorts before 'fig' and 'Z' before 'a'
     var names = ["pear", "Apple", "fig", "apple"];
     names.sort();
     print(names);
@@ -67,7 +67,7 @@ fun main() {
 
     # the edges are the same code with nothing to do: an empty array, one
     # element, already ordered, exactly reversed, and all-equal
-    var e: [Int] = [];
+    var e: [int] = [];
     e.sort();
     print(e);
     var one = [7];

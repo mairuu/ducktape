@@ -7,8 +7,8 @@
 # This file used to conclude from that that `d.max()` was an error. Milestone 56
 # says the conclusion does not follow: the vtable is not the only way to reach a
 # provided method. Its body is a generic function over `Self`, so it is
-# monomorphised at `Self = dyn Iterator<Item = Int>` — and *that* site can read
-# the binding off the trait object's own type and ask whether `Int: Ord`, which
+# monomorphised at `Self = dyn Iterator<Item = int>` — and *that* site can read
+# the binding off the trait object's own type and ask whether `int: Ord`, which
 # it is. The coercion never had to know.
 #
 # So the partition still describes the vtable exactly; it just no longer
@@ -20,11 +20,11 @@ use std::iter::Iterator;
 use std::option::Option;
 use std::io::print;
 
-struct Counter { n: Int, max: Int }
+struct Counter { n: int, max: int }
 
 impl Iterator for Counter {
-    type Item = Int;
-    fun next(self) -> Option<Int> {
+    type Item = int;
+    fun next(self) -> Option<int> {
         if self.n >= self.max { return Option::None; }
         var v = self.n;
         self.n += 1;
@@ -33,12 +33,12 @@ impl Iterator for Counter {
 }
 
 fun main() {
-    var d: dyn Iterator<Item = Int> = Counter { n: 0, max: 3 };
+    var d: dyn Iterator<Item = int> = Counter { n: 0, max: 3 };
     print(d.collect());
     # `collect` drained it, so this one is empty — the trait object is a single
     # mutable iterator, not a fresh one per call.
     print(d.max());
 
-    var e: dyn Iterator<Item = Int> = Counter { n: 0, max: 3 };
+    var e: dyn Iterator<Item = int> = Counter { n: 0, max: 3 };
     print(e.max());
 }

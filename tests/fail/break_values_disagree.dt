@@ -1,4 +1,4 @@
-#! expect: type mismatch: expected 'Int' but got 'String'
+#! expect: type mismatch: expected 'int' but got 'String'
 # The breaks are the loop's exits, so they are siblings and have to join. The
 # first one to land is what the rest are measured against.
 fun main() {

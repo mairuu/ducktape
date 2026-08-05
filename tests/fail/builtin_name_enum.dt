@@ -1,0 +1,5 @@
+#! expect: 'char' is a builtin type name
+# The same rule at an enum, whose variants would be unreachable with it.
+enum char { A, B }
+
+fun main() { }

@@ -1,6 +1,6 @@
-#! expect: type mismatch: expected 'Int' but got 'Float'
+#! expect: type mismatch: expected 'int' but got 'float'
 # `a op= b` is `a = a op b`, so the operator's *result* must fit the place:
-# `Int + Float` is a Float, and a Float does not go back into an Int.
+# `int + float` is a float, and a float does not go back into an int.
 fun main() {
     var i = 1;
     i += 1.5;

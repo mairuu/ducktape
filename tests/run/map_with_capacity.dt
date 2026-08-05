@@ -26,7 +26,7 @@ use std::io::print;
 use std::collections::{HashMap, HashSet};
 use std::sort;
 
-fun fill(m: HashMap<Int, Int>, from: Int, to: Int) {
+fun fill(m: HashMap<int, int>, from: int, to: int) {
     var i = from;
     while i < to {
         m.insert(i, i * 3);
@@ -34,7 +34,7 @@ fun fill(m: HashMap<Int, Int>, from: Int, to: Int) {
     }
 }
 
-fun all_present(m: HashMap<Int, Int>, n: Int) -> Bool {
+fun all_present(m: HashMap<int, int>, n: int) -> bool {
     var i = 0;
     while i < n {
         match m.get(i) {
@@ -57,19 +57,19 @@ fun main() {
     #
     # 7 entries. As slots that is 8, whose 3/4 load is 6, so the 7th insert
     # rehashes; as entries it is 16 slots, room for 12.
-    var a: HashMap<Int, Int> = HashMap::new();
+    var a: HashMap<int, int> = HashMap::new();
     a.rehash(7);
     var a0 = a.capacity();
     fill(a, 0, 7);
     print("rehash(7) still rebuilds: {a0} -> {a.capacity()}, all present {all_present(a, 7)}");
 
-    var b: HashMap<Int, Int> = HashMap::with_capacity(7);
+    var b: HashMap<int, int> = HashMap::with_capacity(7);
     var b0 = b.capacity();
     fill(b, 0, 7);
     print("with_capacity(7): {a0} -> {b0} {b.capacity()}, all present {all_present(b, 7)}");
 
     # ── the round number a caller would actually type ─────────────────────────
-    var c: HashMap<Int, Int> = HashMap::with_capacity(1000);
+    var c: HashMap<int, int> = HashMap::with_capacity(1000);
     var c0 = c.capacity();
     fill(c, 0, 1000);
     var held = c.capacity() == c0 and all_present(c, 1000);
@@ -77,15 +77,15 @@ fun main() {
 
     # `with_capacity(0)` is exactly `new` — `slots_for(0)` lands on the same
     # minimum table size everything else is floored to.
-    var d: HashMap<Int, Int> = HashMap::with_capacity(0);
-    var e: HashMap<Int, Int> = HashMap::new();
+    var d: HashMap<int, int> = HashMap::with_capacity(0);
+    var e: HashMap<int, int> = HashMap::new();
     print("with_capacity(0) is new: {d.capacity() == e.capacity()}");
 
     # the promise, stated the way a caller reads it: room for what was asked
     print("capacity covers len: {b0 >= 7} {c0 >= 1000} {c.len() <= c.capacity()} {d.capacity() >= 0}");
 
     # ── reserve: the same promise for a map that already exists ───────────────
-    var f: HashMap<Int, Int> = HashMap::new();
+    var f: HashMap<int, int> = HashMap::new();
     var f0 = f.capacity();
     f.reserve(500);
     var f1 = f.capacity();
@@ -94,7 +94,7 @@ fun main() {
     print("reserve grows once: {f0} -> {f1}, len {f.len()} {once}");
 
     # asking for room that is already there does nothing at all
-    var g: HashMap<Int, Int> = HashMap::new();
+    var g: HashMap<int, int> = HashMap::new();
     var g0 = g.capacity();
     g.reserve(0);
     g.reserve(3);
@@ -106,7 +106,7 @@ fun main() {
     # decides (`used`), but needs no more slots by the count that sizes
     # (`live`). So it rebuilds at the same capacity: the cleanup and the growth
     # are one operation, told apart by which counter is read.
-    var h: HashMap<Int, Int> = HashMap::with_capacity(500);
+    var h: HashMap<int, int> = HashMap::with_capacity(500);
     var h0 = h.capacity();
     fill(h, 0, 500);
     var i = 0;
@@ -118,9 +118,9 @@ fun main() {
     print("reserve cleans rather than grows: {h.capacity()} {h.capacity() == h0 and h.len() == 0}");
 
     # pre-sizing must not change what a map contains, only how it got there
-    var grown: HashMap<Int, Int> = HashMap::new();
+    var grown: HashMap<int, int> = HashMap::new();
     fill(grown, 0, 200);
-    var presized: HashMap<Int, Int> = HashMap::with_capacity(200);
+    var presized: HashMap<int, int> = HashMap::with_capacity(200);
     fill(presized, 0, 200);
     var ks1 = grown.keys();
     ks1.sort();
@@ -129,7 +129,7 @@ fun main() {
     print("presized matches grown: {ks1 == ks2 and grown.len() == presized.len()}");
 
     # ── the set forwards all three ────────────────────────────────────────────
-    var s: HashSet<Int> = HashSet::with_capacity(300);
+    var s: HashSet<int> = HashSet::with_capacity(300);
     var s0 = s.capacity();
     var j = 0;
     while j < 300 {

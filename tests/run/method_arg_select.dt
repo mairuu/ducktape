@@ -3,14 +3,14 @@
 # Milestone 30 gave this to the qualified spelling: `Steps::from(v)` reads its
 # argument to choose among several `From` impls for one produced type. The
 # receiver spelling kept the older rule — the first registered impl won, and
-# every other argument was an "expected 'Int' but got 'V2'" against it — which
+# every other argument was an "expected 'int' but got 'V2'" against it — which
 # is what a heterogeneous operator ran into, since `a * b` desugars to exactly
 # a receiver call.
 #
 # The selector is milestone 30's, unchanged. What is new is the *guard*: it runs
 # only when the candidate impls disagree about the arguments they take. Two
 # candidates whose parameters are identical are settled by something else and
-# must be left to it — `Into<Fahrenheit>` and `Into<String>` both take
+# must be left to it — `into<Fahrenheit>` and `into<String>` both take
 # `(Celsius)` and are chosen by the return-type hint, and a supertrait-derived
 # impl (milestone 74) shares the written one's method outright. Asking the
 # arguments about those would report an ambiguity where an answer exists.
@@ -28,10 +28,10 @@ trait Scale<K = Self> {
     fun scale(self, k: K) -> Self;
 }
 
-struct V2 { x: Int, y: Int }
+struct V2 { x: int, y: int }
 
-impl Scale<Int> for V2 {
-    fun scale(self, k: Int) -> V2 { return V2 { x: self.x * k, y: self.y * k }; }
+impl Scale<int> for V2 {
+    fun scale(self, k: int) -> V2 { return V2 { x: self.x * k, y: self.y * k }; }
 }
 
 impl Scale for V2 {
@@ -40,8 +40,8 @@ impl Scale for V2 {
 
 # a third, over a type neither of the others mentions, so the arity is the same
 # and only the parameter type tells them apart.
-impl Scale<Bool> for V2 {
-    fun scale(self, flip: Bool) -> V2 {
+impl Scale<bool> for V2 {
+    fun scale(self, flip: bool) -> V2 {
         if flip { return V2 { x: self.y, y: self.x }; }
         return self;
     }
@@ -51,40 +51,40 @@ impl Scale<Bool> for V2 {
 # impl takes part on the same terms.
 struct Wrap<T> { v: T }
 
-trait Put<T> { fun put(self, x: T) -> Int; }
+trait Put<T> { fun put(self, x: T) -> int; }
 
-impl Put<Int> for Wrap<String> {
-    fun put(self, x: Int) -> Int { return x; }
+impl Put<int> for Wrap<String> {
+    fun put(self, x: int) -> int { return x; }
 }
 
 impl Put<String> for Wrap<String> {
-    fun put(self, x: String) -> Int { return x.len(); }
+    fun put(self, x: String) -> int { return x.len(); }
 }
 
 # the return-type hint still decides where the arguments cannot: these two take
 # the same `(Celsius)` and differ only in what they produce.
-struct Celsius { deg: Int }
-struct Fahrenheit { deg: Int }
+struct Celsius { deg: int }
+struct Fahrenheit { deg: int }
 
-trait Into2<T> { fun into2(self) -> T; }
+trait into2<T> { fun into2(self) -> T; }
 
-impl Into2<Fahrenheit> for Celsius {
+impl into2<Fahrenheit> for Celsius {
     fun into2(self) -> Fahrenheit { return Fahrenheit { deg: self.deg * 2 }; }
 }
 
-impl Into2<String> for Celsius {
+impl into2<String> for Celsius {
     fun into2(self) -> String { return "{self.deg}C"; }
 }
 
 fun main() {
     var v = V2 { x: 2, y: 3 };
-    print(v.scale(10).x);                    # Scale<Int>  -> 20
+    print(v.scale(10).x);                    # Scale<int>  -> 20
     print(v.scale(V2 { x: 4, y: 5 }).x);     # Scale<V2>   -> 8
-    print(v.scale(true).x);                  # Scale<Bool> -> 3
+    print(v.scale(true).x);                  # Scale<bool> -> 3
 
     var w = Wrap { v: "ping" };
     print(w.put("ping"));                    # Put<String> -> 4
-    print(w.put(7));                         # Put<Int>    -> 7
+    print(w.put(7));                         # Put<int>    -> 7
 
     var f: Fahrenheit = Celsius { deg: 10 }.into2();
     print(f.deg);

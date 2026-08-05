@@ -1,6 +1,6 @@
 #! expect: assertion failed
 # `assert` has no way to quote its own argument — no macros, and the callee
-# receives a `Bool` — so the message is this fixed string and nothing more.
+# receives a `bool` — so the message is this fixed string and nothing more.
 use std::assert::assert;
 
 fun main() {

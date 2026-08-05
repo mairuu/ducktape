@@ -8,7 +8,7 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
 
 - **76. An operator's result is its own type: the wart's remainder was two
   questions, not one.** `std::ops` grows an `Output` associated type, so a dot
-  product `V2 * V2 -> Float` and a reversed `impl Mul<V2> for Float` have
+  product `V2 * V2 -> float` and a reversed `impl Mul<V2> for float` have
   spellings that `-> Self` could never give them. What the milestone actually
   built was a *binding whose subject is a projection*
   (`where Self.Item: Add<Output = Self.Item>`), which is what `std::iter`'s
@@ -44,7 +44,7 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
     second interned node spelling the same thing.
   - **`Output` is the first associated-type name two traits share, and it broke
     two lookups that a unique `Item` had been hiding.** The bound list keyed
-    entries by name, so `T: Add<Output = T> + Mul<Output = Int>` merged into one
+    entries by name, so `T: Add<Output = T> + Mul<Output = int>` merged into one
     and reported the second binding as contradicting the first; and
     `impl_index_assoc_type` searched impls by name, so a `Cents` with two impls
     binding `Output` answered with whichever was registered first. Both are now
@@ -98,11 +98,11 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   fix on the way: `dyn_assoc_bindings_agree` indexed a trait's own
   `assoc_types` with a closure-numbered index, so a binding inherited from a
   supertrait was never checked and `dyn DoubleEnded<Item = String>` over an
-  `Item = Int` impl segfaulted at run. Remainder: none open. Full write-up in
+  `Item = int` impl segfaulted at run. Remainder: none open. Full write-up in
   the commit body.
 
 - **79. A trait object's arguments unify** (`7d115b7`) — `fun pull<T>(s: dyn Src<T>)` takes
-  a `dyn Src<Int>` and solves `T`, and `dyn Bag<Item = T>` does the same one
+  a `dyn Src<int>` and solves `T`, and `dyn Bag<Item = T>` does the same one
   bracket list out. Design: `language.md` "Trait objects", `architecture.md`
   ("A trait object decomposes within one trait"). The finding: `TY_DYN` was an
   atom in `infer_unify` because a `dyn`'s arguments are normally decided by the
@@ -199,7 +199,7 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   panic("not a rect"); };`, Rust's `let else`: the pattern is refutable and the
   success case stays at statement level, so `w` and `h` are ordinary locals
   below it rather than names nested inside an `if var`. Design:
-  `language.md` "`var ... else`" + the `Never` paragraph in `std::panic`,
+  `language.md` "`var ... else`" + the `!` paragraph in `std::panic`,
   `architecture.md` ("Binding patterns"), `runtime.md` ("Destructuring a
   `var`"), `grammar.ebnf` `varDecl`. The finding: the construct needed nothing
   new anywhere — `compile_destructure` already emitted the failure path, and
@@ -210,14 +210,14 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   which is what makes `else { panic("no"); }` count with its semicolon. The
   refutability check is `matrix_covers` with the answer turned around, so the
   two spellings of `var` partition the patterns between them. No opcode, no
-  image change. Remainder: a `-> Never` body that falls through is still
+  image change. Remainder: a `-> !` body that falls through is still
   accepted (milestone 85), which is why the trap stays under the `else`.
 
-- **85. A promise nothing was asked to keep** (`f9ca510`) — `fun evil() -> Never { }`
-  compiled, handed its `Unit` to whatever the caller declared, and crashed the
+- **85. A promise nothing was asked to keep** (`f9ca510`) — `fun evil() -> ! { }`
+  compiled, handed its `()` to whatever the caller declared, and crashed the
   VM on an assertion. Design: `language.md` "`std::panic`" + two "not yet
   implemented" rows, `architecture.md` (inference intro), `runtime.md`
-  ("Destructuring a `var`"). The finding: `Never` was not under-checked, it was
+  ("Destructuring a `var`"). The finding: `!` was not under-checked, it was
   **checked in a direction that does not exist**. `infer_unify` returned true if
   *either* side was `!`, and only one of those is a rule — `!` is the bottom
   type, so it flows out of diverging code into anything and into nothing at all.
@@ -236,8 +236,8 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   milestone 86.
 
 - **86. The loop that asks nothing** (`02ee9be`) — `loop { }`, and a body with no
-  `break` in it types `!`, so `fun serve() -> Never { loop { } }` compiles.
-  Design: `language.md` "Divergence and `Never`" + the expression list + two
+  `break` in it types `!`, so `fun serve() -> ! { loop { } }` compiles.
+  Design: `language.md` "Divergence and `!`" + the expression list + two
   "not yet implemented" rows, `architecture.md` (`CheckLoop`), `runtime.md`
   (`compile_loop`), `grammar.ebnf`. The finding: the keyword **is** the
   analysis — reading `while true` as endless means reading a condition's
@@ -255,8 +255,8 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   `parse_block`), `runtime.md` (`compile_loop`, the break), `grammar.ebnf`. The
   finding: this is the *same question* milestone 86 answered, read at the other
   end of its range. A `loop` types `!` because its breaks are its only exits and
-  there are none; it types `Int` because its breaks are its only exits and they
-  all say `Int` — so the join **replaces** `ExprLoop.has_break` rather than
+  there are none; it types `int` because its breaks are its only exits and they
+  all say `int` — so the join **replaces** `ExprLoop.has_break` rather than
   joining it, and `NULL` after the body is the divergence case with nothing
   special written for it. Every break is a *sibling*, milestone 85's rule
   applied to however many a loop has instead of to two arms, which is why a
@@ -266,7 +266,7 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   with. Codegen needed no opcode and no image change — `OP_SLIDE` already
   removes n values beneath the top, which is exactly a value evaluated before
   the body locals it reads and outliving them. Probing turned up the real cost:
-  a `loop` was not on `parse_block`'s tail-promotion list, so `fun f() -> Int {
+  a `loop` was not on `parse_block`'s tail-promotion list, so `fun f() -> int {
   loop { break 1; } }` was `()` until it was added. **No spend in std**: every
   search there is a whole function body, so `return` already carries the value
   out, and this pays where a loop is one step of a larger function instead.
@@ -335,7 +335,7 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   its registry key**: the same source keyed `std/cmp.dt` and `<std>/cmp.dt` is
   two modules, each with its own copy of every type and trait the file declares.
   Five files said so ("conflicting definitions of method" — the ones whose
-  inherent impls land on *interned* types, `[T]`/`Char`/`String`/`StringBuf`),
+  inherent impls land on *interned* types, `[T]`/`char`/`String`/`StringBuf`),
   and that visible failure was the lesser half: the six others in the prelude's
   closure type-checked a **shadow** std against the real one and reported
   success, because two copies of `trait Ord` are two `TraitDef`s and coherence
@@ -568,6 +568,32 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   `break_depth = local_count` was indistinguishable from `= cg->depth` until a
   test put one in an argument. Left over: no `unused_label` lint.
 
+- **99. The types you cannot name** (`SHA`) — `int`/`float`/`bool`/`char`; `()`
+  and `!`. Design: `language.md` "Types" (the case rule, the two punctuation
+  types, the reserved-name rule), `architecture.md` `type_named_builtin`,
+  `grammar.ebnf` `type`. Pinned by `tests/pass/reclaimed_type_names.dt`, four
+  `tests/fail/builtin_name_*`, and the reworded `tests/{pass,fail,run}/never_*`.
+
+  The scalars are lowercase, so capitalisation now says where a type came from:
+  lowercase is the language's own, PascalCase is declared or stands for one.
+  `Unit` and `Never` stopped being names at all — the unit type is spelled `()`
+  and the never type `!` (a new `TOKEN_BANG`; negation is still `not`), both
+  parsed as their own type nodes and returned straight from `parse_type`, so
+  neither can be qualified and neither has a second spelling to drift from.
+  **THE FINDING: the reserved-name rule cannot cover `mod`, and std is the
+  proof.** `std/lib.dt` declares `pub mod char;` and refusing it broke every
+  compile — but `std::char` is fine, because its content is all `impl char`, so
+  the bare `char::to_upper` spelling reaches what it meant *through the builtin
+  type*. What has no route is a module item the type does not own. So the rule
+  binds only where a *type* name is bound (`struct`/`enum`/`trait`/type
+  parameter, which `fun` and `var` escape because a value lookup answers first),
+  and the module case became a note on the failure it causes instead — two
+  mystifying diagnostics turned into one that names the cause. The type
+  parameter was the worst of the set: `fun id<int>(..)` reported "cannot infer
+  type for 'int'" at the *call*. Both sites call `type_named_builtin`, so the
+  list cannot fork. Sabotage 5/5 bit. Left over: a builtin-named module is still
+  only reachable through the type.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -581,7 +607,7 @@ the module system was the one item that replaced infrastructure known to be
 wrong, and it landed in milestones 94–95.
 
 (**A heterogeneous operator** was the largest open design question and is now
-milestone 75: `V2 * Float`. What it needed from the language was two things
+milestone 75: `V2 * float`. What it needed from the language was two things
 neither of which was about operators — a trait type parameter with a default,
 and a bound that may name its own subject — plus milestone 30's argument-driven
 selection at the *receiver* spelling. Its remainder, an `Output` associated
@@ -652,7 +678,7 @@ which the dependency graph forced.)
 (**Selection by argument type** was item 2 here and is now milestone 30: a
 qualified `Meters::from(x)` reads its argument to pick the impl. The *receiver*
 spelling that milestone 30's note left unread is now milestone 31: a
-trait-qualified `Into::<Fahrenheit>::into(c)` names the trait so the receiver
+trait-qualified `into::<Fahrenheit>::into(c)` names the trait so the receiver
 settles the rest, without an expected type.)
 
 (**Ordering operators over `Ord`** was item 2 here and is now milestone 38:
@@ -707,7 +733,7 @@ as here.)
    arithmetic went to traits because they had no meaning for a non-primitive at
    all, while equality already has one that works for every type.
    `==`/`!=` stay a structural primitive: `OP_EQ` reads
-   no static type, so `a == b` works on any value — Int, struct, generic `T` —
+   no static type, so `a == b` works on any value — int, struct, generic `T` —
    with nothing imported. Routing it through an `Eq`/`PartialEq` trait would
    (a) make the commonest operation depend on a trait impl — and unlike `Ord`,
    `==` is deliberately *not* one of the prelude's lang items, so this would be
@@ -723,10 +749,10 @@ as here.)
    what it wanted from the language was a way to *print*, not a way to compare.
    Milestone 63's map is the second consumer to answer the same way, and it was
    the one this item named in advance. The `PartialEq`/`PartialOrd` split waits
-   with it; its one live motivation, the `Ord for Float` NaN wart, is an
+   with it; its one live motivation, the `Ord for float` NaN wart, is an
    ordering bug fixable on its own terms and does not need the trait hierarchy
    to address — and milestone 63 showed the other way out of it, since
-   `std::hash` simply declines to implement `Hash for Float` at all.
+   `std::hash` simply declines to implement `Hash for float` at all.
 
 Not on the roadmap: the **REPL** is a side feature, not a milestone — it lives
 on the `feature/repl` branch (`--repl`, incremental compilation over one module
@@ -739,7 +765,7 @@ via `Module.decl_base`) and is not part of the main line.
   An associated function written where a *pattern* expects a variant reports
   "expected an enum variant in this pattern" **and** an unsolved type parameter
   (milestone 70; a struct has always done this too). The bare
-  `it.fold<Int>(0, f)` parses as comparisons, so it reports an unknown *field*
+  `it.fold<int>(0, f)` parses as comparisons, so it reports an unknown *field*
   and then usually an undefined variable for the type name (milestone 71); a
   note on the first names the turbofish, which is as far as that site can see
 - two arms that are both wrong under one `dyn` expectation report twice, once
@@ -761,7 +787,7 @@ via `Module.decl_base`) and is not part of the main line.
   that stopped it: `>>=` sits against `a > > b` versus `a >> b`, the one place
   in the grammar where whitespace already changes a parse (milestone 65). The
   checker side is a second branch beside `resolve_arith_op` (bitwise unifies at
-  `Int` rather than asking a trait), and codegen already has the opcodes
+  `int` rather than asking a trait), and codegen already has the opcodes
 - no unsigned integer type, so `>>>` stands in for one and a bit pattern with
   the top bit set prints negative
 - a *written* impl always wins, which is what keeps milestone 74's supertrait
@@ -779,7 +805,7 @@ via `Module.decl_base`) and is not part of the main line.
   correct there only because a primitive receiver takes the built-in path —
   the asymmetry is invisible from the source. A cycle check would have to run
   where the impl is written, not where it is called
-- `std::ops` ships `impl Add for Int` (and the other eleven primitive impls), so
+- `std::ops` ships `impl Add for int` (and the other eleven primitive impls), so
   a program can no longer write its own — the `Display`/`Ord`-for-primitives
   cost, one module over, and unavoidable for the same reason: without them a
   bounded `T: Add` could not instantiate at a number
@@ -789,11 +815,11 @@ via `Module.decl_base`) and is not part of the main line.
   arity has no impl, since nothing can be generic over a tuple's length
 - `std::convert`'s blanket `impl<T, U: From<T>> Into<U> for T` is the same wart
   taken to its limit: it applies to *every* self type, so importing the module
-  takes `Into` impls away from a program entirely. That is Rust's rule and the
+  takes `into` impls away from a program entirely. That is Rust's rule and the
   price of the free direction being free, but it is the widest thing coherence's
   blindness to bounds has cost so far
 - a unit struct's name cannot be bound as a variable any more: `var Marker =
-  7;` is a struct pattern against an `Int`, and the diagnostic ("expected
+  7;` is a struct pattern against an `int`, and the diagnostic ("expected
   struct type in struct pattern") describes the rewrite rather than the
   mistake. Rust behaves the same way; the message could be kinder
 - no shadowing diagnostics for `var` (`vscope_define` todo); top-level item
@@ -814,6 +840,11 @@ via `Module.decl_base`) and is not part of the main line.
   the only per-declaration control is `@allow`, which only goes downwards. Nor
   is there a level that *beats* an `@allow` — Rust's `forbid` — so a build that
   must not be silenced anywhere has to grep for the attribute
+- a module may be named after a builtin type (`mod char;`, which std does), but
+  a builtin name resolves before any module, so `char::` reaches the *type*'s
+  items. That is why std's spelling works — `std::char` is all `impl char` — and
+  why a free function in such a module has no bare path at all. Milestone 99
+  chose a note over a refusal here; the shadowing itself stands
 - an allow's grain is a whole **declaration**, since an attribute is what
   carries one. There is no statement or expression form, and none on a trait
   item — a default body is covered by its trait, one scope wider than it
@@ -855,7 +886,7 @@ via `Module.decl_base`) and is not part of the main line.
   unaffected; this is codegen only
 - overlapping method names across impls: bare generic paths take the first
   registered impl
-- `Point::new` vs `Point::<Int>::new`: expression paths require turbofish
+- `Point::new` vs `Point::<int>::new`: expression paths require turbofish
 - an associated-type projection keying an instantiation **through a bound** was
   the long-standing one here — handing a `T.Item` / `Self.Item` value to another
   generic (`id(v.item())`, `it.next().unwrap()` where the payload is `I.Item`)
@@ -912,7 +943,7 @@ via `Module.decl_base`) and is not part of the main line.
   `array → option → cmp` cycle (a method needs its impl visible; a free
   `@intrinsic` does not)
 - shipping an inherent method on a primitive widely (`impl String`, `impl<T> [T]`,
-  `impl Char` since milestone 40, and a *second* `impl String` in `std::text`
+  `impl char` since milestone 40, and a *second* `impl String` in `std::text`
   since milestone 41) means a program importing that module cannot add its own
   inherent method of the same name. The `Display`/`Ord`-for-containers cost, one
   level over. **Milestone 68 gave it the missing diagnostic** — it is now an
@@ -932,7 +963,7 @@ via `Module.decl_base`) and is not part of the main line.
 - `std::array` is no longer a leaf: `pop` returns an `Option`, so importing any
   of it reaches `std::option` and, transitively, every impl `std::fmt` and
   `std::cmp` ship. A program that wanted `push` and its own `impl Display for
-  Int` cannot have both. Milestones 25 and 26 lengthened that chain — `std::cmp`
+  int` cannot have both. Milestones 25 and 26 lengthened that chain — `std::cmp`
   now reaches `std::string` and `std::char`, and `std::char` reaches
   `std::panic` — but not its cost, since none of the three ships an impl to
   inherit
@@ -941,7 +972,7 @@ via `Module.decl_base`) and is not part of the main line.
   so a window has to be cut out to be compared; a real substring search would
   need one, which is the byte-level reader `std::char` declined to offer
 - `std::text::parse_int` wraps on overflow rather than failing: `acc * 10 + d`
-  is an ordinary `Int` multiply, and detecting the wrap needs a widening multiply
+  is an ordinary `int` multiply, and detecting the wrap needs a widening multiply
   or a divide-back check the module has not been given a reason to write. So the
   `Option` it returns distinguishes "not a number" from a number, but not a
   number too large from one that fits
@@ -963,23 +994,23 @@ via `Module.decl_base`) and is not part of the main line.
   reaches the bad bytes rather than to `chars()` — a pipeline that stops short
   of them succeeds, which is the ordinary meaning of laziness and not a
   weakening of the check
-- getting one `Char` out of a String once meant building the whole `[Char]`,
+- getting one `char` out of a String once meant building the whole `[char]`,
   since the conversion was the only reader. Fixed in milestone 61: `chars` is a
   lazy walk, so `s.chars().next()` decodes one character and
   `s.chars().take(3)` decodes three. The byte/character question is still
   answered milestone 26's way — the walk holds byte offsets and keeps them
   private, so no *program* ever indexes a String by one
-- `Ord` ships for `Int`, `Float`, `Char`, `String`, `Option<T>`, `[T]` and
+- `Ord` ships for `int`, `float`, `char`, `String`, `Option<T>`, `[T]` and
   `(A, B)` (the last two as of milestone 36), so an array of strings sorts and a
   tuple compares field by field without a per-program impl. As with `Display`,
   shipping them takes the pair away from a program that would write its own, and
   only the two-element tuple is covered — nothing is generic over a tuple's
   arity, so a `(A, B, C)` still has no order
-- `Ord` for `Float` was IEEE comparison, so `NaN.cmp(x)` answered 0 for every
+- `Ord` for `float` was IEEE comparison, so `NaN.cmp(x)` answered 0 for every
   `x` and NaN compared equal to everything. Fixed in milestone 42: the impl now
   decides a total order — NaN sorts after every real number and all NaNs are
   equal — with `self != self` as the NaN test, so `max(nan, x)` is NaN whichever
-  side the NaN is and a `[Float]` with a NaN has a defined sort. What the
+  side the NaN is and a `[float]` with a NaN has a defined sort. What the
   placement ignores is the sign bit and payload: `-NaN` and `+NaN` are one
   order, unlike Rust's `total_cmp`, since nothing has needed to tell them apart.
   `String` never had this problem: every byte string is ordered against every
@@ -987,8 +1018,8 @@ via `Module.decl_base`) and is not part of the main line.
 - a `StringBuf` grows but never shrinks its *buffer*: `b.clear()` drops the
   length to zero so one buffer can be reused across iterations, but the capacity
   it grew to is kept, and released only when the buffer is collected
-- a `StringBuf` can be appended to from a `String`, a `Char` (milestone 26) or an
-  `Int`'s digits (`b.push_int(n)`, no `"{n}"` interned to carry them), but not
+- a `StringBuf` can be appended to from a `String`, a `char` (milestone 26) or an
+  `int`'s digits (`b.push_int(n)`, no `"{n}"` interned to carry them), but not
   from a *slice* of a String, so a `b.push_slice(s, from, to)` that avoids
   interning the window first is the natural next entry; it has not been needed yet
 - a panic message can only name the value that caused it where the type
@@ -1003,13 +1034,13 @@ via `Module.decl_base`) and is not part of the main line.
   one branch in `mod_parse`" — each forced by the same rule, that a construct the
   compiler desugars (interpolation, a spec) cannot have its meaning depend on
   what the user happened to import
-- `Never` is refused in the positions that ask a **structural** question rather
-  than a flow one: `if panic("x") { }` wants a `Bool`, `for x in panic("x")`
-  wants an `Iterator`, and `r?` inside a `-> Never` function wants the same enum
+- `!` is refused in the positions that ask a **structural** question rather
+  than a flow one: `if panic("x") { }` wants a `bool`, `for x in panic("x")`
+  wants an `Iterator`, and `r?` inside a `-> !` function wants the same enum
   back. Each reports a plain mismatch. Rust accepts all three; nothing is lost
   by refusing them, since the code below is unreachable either way
 - a panic does not unwind — no `catch`, and no way for a program to observe one
-  and keep running. `Never` is only a *type*; the runtime behaviour behind it is
+  and keep running. `!` is only a *type*; the runtime behaviour behind it is
   "print the frames and stop"
 - a trait object cannot be made from the abstract `Self` of a default body:
   `check_coerce_dyn` refuses a `TY_TRAIT`, so `self` inside a default body
@@ -1021,14 +1052,14 @@ via `Module.decl_base`) and is not part of the main line.
   methods object safety could not carry
 - a trait's type arguments are never *inferred* at the place the trait is
   named: an impl head, a bound and a `dyn` each write them out, and a bare
-  `Into` is an arity error rather than a request to work it out. The one
+  `into` is an arity error rather than a request to work it out. The one
   exception is a `dyn` whose argument is an unsolved unknown, where the impl
   decides — and that is ambiguous the moment two impls answer
 - **a bare method call on a type implementing one generic trait twice** picks
   by the *expected* type, and by first-registered-impl when there is none. So
   `print(c.into())` is not the same question as `var f: Fahrenheit =
   c.into()`, and only the second has an answer *as a bare call*. Since milestone
-  31 the trait-qualified spelling `Into::<Fahrenheit>::into(c)` settles it
+  31 the trait-qualified spelling `into::<Fahrenheit>::into(c)` settles it
   explicitly, so the gap is now only the *bare* form's — a value context with no
   expected type has a way out, it is just not `c.into()`. Since milestone 29 the
   expected type also *pins* an impl parameter the receiver cannot reach, which
@@ -1036,7 +1067,7 @@ via `Module.decl_base`) and is not part of the main line.
   to pin it, no impl applies at all and the diagnostic is "no method named 'into'"
 - impl selection reads an **argument** type only through the qualified
   spelling: `Meters::from(x)` picks by `x` (milestone 30), and the receiver side
-  `Into::<U>::into(x)` picks by `x`'s type (milestone 31), but only through those
+  `into::<U>::into(x)` picks by `x`'s type (milestone 31), but only through those
   written forms. The argument (or receiver) must type hint-free to do so, so
   `Meters::from(None)` — where the argument is what would choose the impl yet
   needs one chosen to type — cannot be disambiguated
@@ -1047,7 +1078,7 @@ via `Module.decl_base`) and is not part of the main line.
   in an impl head: `impl<T> Into<T> for S` type-checks, but nothing solves `T`
   from an `S`, so the impl applies only where a bound, a `dyn`, or (since
   milestone 29) the *expected type* names the argument. The last is what makes
-  the `From`/`Into` blanket work, and it is the only one that is inference
+  the `From`/`into` blanket work, and it is the only one that is inference
   rather than a written-down reference
 - the slot spaces are two bytes wide, so 65536 functions/structs/enums/vtables
   is a hard program-wide ceiling (reported, not silently truncated) — and every

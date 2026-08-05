@@ -13,23 +13,23 @@
 
 use std::io::print;
 
-trait Into<T> {
+trait into<T> {
     fun into(self) -> T;
     # a default body is generic over the trait's parameters as much as over
     # `Self`, and the call site records both.
     fun into_pair(self) -> (T, T) { (self.into(), self.into()) }
 }
 
-struct Celsius { deg: Int }
-struct Fahrenheit { deg: Int }
+struct Celsius { deg: int }
+struct Fahrenheit { deg: int }
 
 # one type, two impls of one trait: they differ only in the trait's argument,
 # so coherence lets both stand.
-impl Into<Fahrenheit> for Celsius {
+impl into<Fahrenheit> for Celsius {
     fun into(self) -> Fahrenheit { Fahrenheit { deg: self.deg * 9 / 5 + 32 } }
 }
 
-impl Into<String> for Celsius {
+impl into<String> for Celsius {
     fun into(self) -> String { "{self.deg}C" }
 }
 
@@ -37,24 +37,24 @@ impl Into<String> for Celsius {
 # trait's argument is written in terms of.
 struct Wrap<T> { v: T }
 
-impl<T> Into<T> for Wrap<T> {
+impl<T> into<T> for Wrap<T> {
     fun into(self) -> T { self.v }
 }
 
 # through a bound: the reference says which impl, so no annotation is needed.
-fun sum<T: Into<Int>>(a: T, b: T) -> Int {
+fun sum<T: into<int>>(a: T, b: T) -> int {
     return a.into() + b.into();
 }
 
-struct Count { n: Int }
+struct Count { n: int }
 
-impl Into<Int> for Count {
-    fun into(self) -> Int { self.n }
+impl into<int> for Count {
+    fun into(self) -> int { self.n }
 }
 
 # through a trait object: the vtable is keyed on the reference, so two `dyn`s
 # over one self type are two tables.
-fun label(v: dyn Into<String>) -> String {
+fun label(v: dyn into<String>) -> String {
     return v.into();
 }
 
@@ -65,29 +65,29 @@ trait Pipe<T> {
     fun pipe(self, v: T) -> Self.Out;
 }
 
-struct Repeat { times: Int }
+struct Repeat { times: int }
 
 impl Pipe<String> for Repeat {
-    type Out = Int;
-    fun pipe(self, _v: String) -> Int { self.times }
+    type Out = int;
+    fun pipe(self, _v: String) -> int { self.times }
 }
 
-fun run(p: dyn Pipe<String, Out = Int>) -> Int {
+fun run(p: dyn Pipe<String, Out = int>) -> int {
     return p.pipe("x");
 }
 
 # a bound may name another type parameter of the same list, which is the shape
 # a generic trait exists for: `U` converts into whatever `T` turns out to be.
-# The bound is opened alongside `T`, so it is `Into<Int>` by the time the
+# The bound is opened alongside `T`, so it is `into<int>` by the time the
 # solved argument is checked against it.
-fun conv<T, U: Into<T>>(v: U) -> T {
+fun conv<T, U: into<T>>(v: U) -> T {
     return v.into();
 }
 
 # a trait argument nobody wrote down: the impl is the only thing that knows
 # what `Count` converts into, so the coercion solves `T` rather than checking
 # it — the same move an unsolved associated-type binding gets.
-fun first<T>(xs: [dyn Into<T>]) -> T {
+fun first<T>(xs: [dyn into<T>]) -> T {
     return xs[0].into();
 }
 
@@ -109,7 +109,7 @@ fun main() {
 
     print(run(Repeat { times: 3 }));
 
-    var n: Int = conv(Count { n: 9 });
+    var n: int = conv(Count { n: 9 });
     print(n);
 
     print(first([Count { n: 4 }]));

@@ -13,11 +13,11 @@
 
 use std::io::print;
 
-struct Counter { n: Int }
+struct Counter { n: int }
 
 impl Counter {
     fun bump(self) { self.n += 1; }
-    fun get(self) -> Int { return self.n; }
+    fun get(self) -> int { return self.n; }
 }
 
 struct Wrap { c: Counter }

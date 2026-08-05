@@ -4,12 +4,12 @@
 use std::io::print;
 use std::iter::Iterator;
 
-struct Counter { n: Int, limit: Int }
+struct Counter { n: int, limit: int }
 
 impl Iterator for Counter {
-    type Item = Int;
+    type Item = int;
 
-    fun next(self) -> Option<Int> {
+    fun next(self) -> Option<int> {
         if self.n >= self.limit { return Option::None; }
         var v = self.n;
         self.n = v + 1;
@@ -17,7 +17,7 @@ impl Iterator for Counter {
     }
 }
 
-fun upto(n: Int) -> Counter { return Counter { n: 1, limit: n + 1 }; }
+fun upto(n: int) -> Counter { return Counter { n: 1, limit: n + 1 }; }
 
 # A bounded iterator has to declare the projection's bound itself — the same
 # discharge-at-every-call-site rule `max` meets, one trait over.

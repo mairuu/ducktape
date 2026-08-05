@@ -1,0 +1,10 @@
+#! expect: a module named 'char' is in scope, but a builtin type name is resolved before it
+# `mod char;` is legal — refusing it would refuse `std::char`, whose whole
+# content is `impl char` and which therefore works. A free function is what has
+# no route through the type, and the note is what says so.
+mod char;
+use char;
+
+fun main() {
+    var _n = char::greet();
+}

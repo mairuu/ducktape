@@ -262,7 +262,7 @@ static Type *subst_apply_(const Subst *s, ImplIndex *impls, Type *t, bool total,
   }
   case TY_TRAIT: {
     // a trait *reference* follows T like any other composite: the bound
-    // `U: Into<T>` inside a generic function is `Into<Int>` once T is Int.
+    // `U: Into<T>` inside a generic function is `Into<int>` once T is int.
     if (!t->as.trait.type_arg_count) {
       return t;
     }
@@ -565,7 +565,7 @@ static Subst subst_with_self(Subst method_args, Type *self_ty, Allocator *al) {
 }
 
 // The substitution a trait *reference* carries: the trait's own type
-// parameters bound to the arguments it was named with. `Into<Int>` inside a
+// parameters bound to the arguments it was named with. `Into<int>` inside a
 // bound, an impl head or a `dyn` is what turns the trait's signatures — which
 // are written against those parameters — into the caller's terms. Empty for a
 // trait with no parameters, which is every trait before milestone 28.
@@ -707,7 +707,7 @@ bool infer_unify(InferCtx *ctx, Type *a, Type *b, DiagBag *diags, Span span) {
   b = infer_find(ctx, b);
 
   // a projection whose base has been solved is really whatever the impl bound
-  // it to — collapse it before comparing, or `T.Item` and `Int` would look
+  // it to — collapse it before comparing, or `T.Item` and `int` would look
   // like different kinds.
   if (a->kind == TY_ASSOC) {
     a = infer_apply(ctx, a, ctx->al);
@@ -724,7 +724,7 @@ bool infer_unify(InferCtx *ctx, Type *a, Type *b, DiagBag *diags, Span span) {
   // expectation (see the header), so diverging code on the right satisfies any
   // expectation at all, while an expectation of `!` on the left is a promise to
   // diverge that only diverging code keeps. Accepting it in both directions is
-  // what let `fun evil() -> Never { }` hand its Unit to whatever the caller
+  // what let `fun evil() -> ! { }` hand its `()` to whatever the caller
   // declared. Two `!`s are already equal above.
   //
   // Positions that unify *siblings* rather than a value against an expectation
@@ -752,7 +752,7 @@ bool infer_unify(InferCtx *ctx, Type *a, Type *b, DiagBag *diags, Span span) {
     char bb[64];
     type_sprintf(b, bb, sizeof(bb));
     diag_error(diags, span,
-               "expected 'Never', which only diverging code produces, but got "
+               "expected '!', which only diverging code produces, but got "
                "'%s'",
                bb);
     return false;
@@ -863,7 +863,7 @@ bool infer_unify(InferCtx *ctx, Type *a, Type *b, DiagBag *diags, Span span) {
 
   case TY_TRAIT: {
     // a trait reference decomposes like any other composite: `Into<_>` and
-    // `Into<Int>` differ only in an argument, and solving it is what lets a
+    // `Into<int>` differ only in an argument, and solving it is what lets a
     // coercion into `dyn Into<T>` read the argument off the impl.
     TypeTrait *at = &a->as.trait, *bt = &b->as.trait;
     if (at->def == bt->def && at->type_arg_count == bt->type_arg_count) {
@@ -887,7 +887,7 @@ bool infer_unify(InferCtx *ctx, Type *a, Type *b, DiagBag *diags, Span span) {
     // are usually decided by the *coercion* that wraps a value, which is why
     // this used to be an atom — but two trait objects meeting have no
     // coercion between them, both are already built, so there is nothing to
-    // defer to and `dyn Src<T>` takes a `dyn Src<Int>`.
+    // defer to and `dyn Src<T>` takes a `dyn Src<int>`.
     //
     // Two *different* traits stay atomic on purpose: what relates them is the
     // upcast, which swaps tables and so is a coercion (check_upcast_dyn).
@@ -1271,7 +1271,7 @@ static void note_blocking_bound(DiagBag *diags, ImplIndex *idx, Type *self_type,
 // namespaces simply do not overlap, and "unknown field" describes the lookup
 // rather than the mistake. Two spellings reach here: a method mentioned without
 // calling it, and a method call whose type arguments were written bare
-// (`it.fold<Int>(0, f)`), which since the turbofish landed parses as a
+// (`it.fold<int>(0, f)`), which since the turbofish landed parses as a
 // comparison against a field. The note names both because the error span cannot
 // tell them apart.
 static void note_field_is_method(DiagBag *diags, ImplIndex *idx,
@@ -1825,6 +1825,51 @@ static bool decl_item_name(Decl *decl, StringView *out) {
   }
 }
 
+static Type *type_named_builtin(TypeChecker *tc, StringView name);
+
+// A builtin type name is answered before any scope is consulted — by
+// `TYNODE_NAMED` and by a path's first segment alike — so a declaration under
+// one is not shadowed, it is *unreachable*: every later mention of the name
+// means the builtin, and the declaration can never be written down again.
+// Refused rather than left to rot, and refused by asking `type_named_builtin`
+// itself, so the two can only agree.
+//
+// The rule covers what binds a **type** name (`struct`, `enum`, `trait`) plus
+// `mod`, whose name is the first segment of a path and so is read the same way.
+// A `fun` or a `var` is left alone: a value lookup answers those before the
+// builtin is asked, so `fun int(v: int) -> int` costs nothing and works.
+static void tc_check_reserved_names(TypeChecker *tc, Module *m) {
+  for (int i = 0; i < m->ast->decl_count; i++) {
+    Decl *decl = m->ast->decls[i];
+
+    StringView name;
+    const char *what;
+    Span span;
+    switch (decl->kind) {
+    case DECL_STRUCT:
+      name = decl->as.struct_decl.name, what = "a struct", span = decl->span;
+      break;
+    case DECL_ENUM:
+      name = decl->as.enum_decl.name, what = "an enum", span = decl->span;
+      break;
+    case DECL_TRAIT:
+      name = decl->as.trait_decl.name, what = "a trait", span = decl->span;
+      break;
+    default:
+      continue;
+    }
+
+    if (type_named_builtin(tc, name) != NULL) {
+      diag_error(tc->diags, span, "'" SV_FMT "' is a builtin type name",
+                 SV_ARG(name));
+      diag_note(tc->diags, span,
+                "a builtin name is resolved before any declaration, so " SV_FMT
+                " could not name %s and still be reachable",
+                SV_ARG(name), what);
+    }
+  }
+}
+
 // neither vscope_define nor tscope_define detects collisions, and both lookups
 // return the *first* match — so a redeclaration would silently lose to the
 // original with no diagnostic. Catch it here, before anything is registered.
@@ -1848,6 +1893,7 @@ static void tc_check_duplicate_decls(TypeChecker *tc, Module *m) {
 }
 
 void tc_register_module(TypeChecker *tc, Module *m) {
+  tc_check_reserved_names(tc, m);
   tc_check_duplicate_decls(tc, m);
 
   // counts
@@ -2682,7 +2728,7 @@ static AssocBound *assoc_bound_entry(ResolveCtx *rctx, AssocBound **assoc,
                                      int *assoc_count, StringView name,
                                      TraitDef *owner, Span span) {
   // Keyed by trait as well as name. `where T.Item: A, T.Item: B` is still one
-  // entry, but `T: Add<Output = T> + Mul<Output = Int>` is two — the name is
+  // entry, but `T: Add<Output = T> + Mul<Output = int>` is two — the name is
   // shared and the projections are not, and merging them would report the
   // second binding as a contradiction of the first. Nothing could reach that
   // before milestone 76, when `Item` was the only associated type in the
@@ -2961,6 +3007,21 @@ static void resolve_type_params(ResolveCtx *rctx, const TypeParamNode *params,
       diag_error(rctx->diags, params[i].span,
                  "a type parameter default is only allowed on a trait");
     }
+    // same rule as `tc_check_reserved_names`, at the one site that binds a type
+    // name without being a declaration: `fun id<int>(v: int)` would put the
+    // parameter where no mention of it can reach, and the parameter then goes
+    // unsolved — reported as "cannot infer type for 'int'", which names the
+    // symptom rather than the cause.
+    if (type_named_builtin(rctx->tyres.tc, params[i].name) != NULL) {
+      diag_error(rctx->diags, params[i].span,
+                 "'" SV_FMT "' is a builtin type name", SV_ARG(params[i].name));
+      diag_note(
+          rctx->diags, params[i].span,
+          "a builtin name is resolved before any type parameter, so " SV_FMT
+          " could not name one and still be reachable",
+          SV_ARG(params[i].name));
+    }
+
     tscope_define(rctx->tyres.tscope, params[i].name,
                   ty_generic(params[i].name, /*bounds=*/NULL, 0, /*assoc=*/NULL,
                              0, rctx->al),
@@ -3461,7 +3522,7 @@ static AssocTypeDef *impl_find_assoc(ImplDef *impl, StringView name) {
 static bool impl_lacks_super_item(ImplDef *impl, TraitDef *super,
                                   StringView *out_name, bool *out_is_assoc) {
   // an associated type has no default to fall back on, so the block is the
-  // only source. `impl DoubleEnded for X { type Item = Int; .. }` is how a
+  // only source. `impl DoubleEnded for X { type Item = int; .. }` is how a
   // derived `Iterator` impl gets one.
   for (int i = 0; i < super->assoc_type_count; i++) {
     if (impl_find_assoc(impl, super->assoc_types[i].name) == NULL) {
@@ -3685,8 +3746,8 @@ static Type *trait_self_param(TraitDef *trait, AssocBound *assoc_bounds,
 // Give a default body a definition of its own, so it can be compiled like the
 // generic function it effectively is:
 //
-//     trait Show { fun twice(self) -> Int { self.show() + self.show() } }
-//     ⇒  fun twice<Self: Show>(self: Self) -> Int { ... }
+//     trait Show { fun twice(self) -> int { self.show() + self.show() } }
+//     ⇒  fun twice<Self: Show>(self: Self) -> int { ... }
 //
 // The trait's `method_type` states `Self` as the trait type, which a name-keyed
 // `Subst` cannot bind — so the signature is projected onto the type parameter
@@ -3881,7 +3942,7 @@ static void resolve_self_assoc_bounds(ResolveCtx *rctx, TraitDef *trait_def,
 // adapter struct whose own bound is this very trait).
 //
 // `Self` inside the trait is the trait applied to its own parameters: inside
-// `trait Into<T>`, `Self` is `Into<T>`, and an impl head reading `Into<Int>` is
+// `trait Into<T>`, `Self` is `Into<T>`, and an impl head reading `Into<int>` is
 // what binds T. So a trait's type parameters are ordinary generic parameters of
 // every signature it declares, and everything that already knew how to
 // substitute one — conformance, a call through a bound, monomorphisation —
@@ -4964,7 +5025,7 @@ static bool dyn_assoc_bindings_agree(CheckCtx *ctx, Type *dyn_ty, Type *actual,
     }
 
     // Reported here rather than left to the caller: the mismatch the caller
-    // would print names the two *types* ("expected 'dyn Iterator<Item = Int>'
+    // would print names the two *types* ("expected 'dyn Iterator<Item = int>'
     // but got 'Counter'") and cannot say that the trait is implemented and
     // only the binding disagrees, which is the entire mistake.
     char ab[64], wb[64], gb[64], tb[64];
@@ -5011,13 +5072,13 @@ static bool check_upcast_dyn(CheckCtx *ctx, Expr *e, Type *actual,
   TraitDef *have = have_ref->as.trait.def, *want = want_ref->as.trait.def;
   if (have == want) {
     // one trait, so this is identity or an ordinary type mismatch between two
-    // references of it (`dyn Into<Int>` against `dyn Into<String>`). Neither is
+    // references of it (`dyn Into<int>` against `dyn Into<String>`). Neither is
     // an upcast, and the caller says it better than a supertrait walk could.
     return false;
   }
 
   // The target must be one of the source's supertraits *restated in the
-  // source's type arguments*: a `dyn Pair<Int>` is a `dyn Into<Int>` and not a
+  // source's type arguments*: a `dyn Pair<int>` is a `dyn Into<int>` and not a
   // `dyn Into<String>`, and the closure entry is what knows which.
   Subst s = trait_ref_subst(have_ref, ctx->al);
   Type *super_ref = NULL;
@@ -5169,7 +5230,7 @@ static bool check_coerce_dyn(CheckCtx *ctx, Expr *e, Type *actual,
     return true;
   }
 
-  // the trait *reference*, not the definition: `dyn Into<Int>` and
+  // the trait *reference*, not the definition: `dyn Into<int>` and
   // `dyn Into<String>` are two vtables over one self type, and only the
   // reference tells codegen which impl built this one. Recorded unsolved if
   // the argument is still an unknown at this point — cg pushes the
@@ -5216,7 +5277,7 @@ static Type *dyn_expectation(CheckCtx *ctx, Type *hint) {
 }
 
 // Finish a qualified associated call whose impl the path left ambiguous
-// (`Steps::from(v)` with a `From<Int>` and a `From<Char>`). The arguments are
+// (`Steps::from(v)` with a `From<int>` and a `From<char>`). The arguments are
 // resolved first — hint-free, because the argument is exactly what is supposed
 // to decide the impl, so a value that needs the parameter as a hint cannot
 // disambiguate anyway — and `impl_index_assoc_select` picks the one impl whose
@@ -6163,7 +6224,7 @@ static Type *column_type(CheckCtx *ctx, const PatMatrix *m) {
 }
 
 // the constructors that between them cover every value of `ty`, or false if the
-// domain is unenumerable (Int, String, ...) or unknown.
+// domain is unenumerable (int, String, ...) or unknown.
 static bool type_signature(Type *ty, Ctor *sig, int *count) {
   if (ty == NULL) {
     return false;
@@ -6202,7 +6263,7 @@ static bool type_signature(Type *ty, Ctor *sig, int *count) {
 }
 
 // a type whose domain we cannot enumerate is still *certain* if we know we
-// cannot: Int has infinitely many values, so a wildcard is genuinely required.
+// cannot: int has infinitely many values, so a wildcard is genuinely required.
 // An unsolved unknown is a different thing — we simply do not know yet.
 static bool type_domain_is_certain(Type *ty) {
   if (ty == NULL) {
@@ -6450,7 +6511,7 @@ static Type *resolve_match_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
         char gt[64];
         type_sprintf(guard_ty, gt, sizeof(gt));
         diag_error(ctx->diags, arm->guard->span,
-                   "match guard must be of type Bool, got '%s'", gt);
+                   "match guard must be of type bool, got '%s'", gt);
         had_error = true;
       }
     }
@@ -6680,7 +6741,7 @@ static Type *check_trait_method_call(CheckCtx *ctx, Expr *expr, Type *trait_ref,
 
   // the trait's own type parameters are generic parameters of every signature
   // it declares, and the reference is what binds them: inside `trait Into<T>`,
-  // a call through `S: Into<Int>` reads `into` as `fun(Self) -> Int`. Dropped
+  // a call through `S: Into<int>` reads `into` as `fun(Self) -> int`. Dropped
   // where a method type parameter reuses the name, like every other outer
   // substitution.
   Subst trait_subst =
@@ -6717,7 +6778,7 @@ static Type *check_trait_method_call(CheckCtx *ctx, Expr *expr, Type *trait_ref,
   // one projection may resolve to another: a pass-through adapter binds
   // `type Item = I.Item`, so `Filter<Counter>.Item` collapses to `Counter.Item`
   // — itself a projection, over a *concrete* base this time. `infer_apply`
-  // finishes the job (`Counter.Item` → `Int`) so a closure typed by the element
+  // finishes the job (`Counter.Item` → `int`) so a closure typed by the element
   // (`filter(..).map(|x| ..)`, `filter(..).fold(..)`) sees a real type. A base
   // still abstract — a bound receiver's `T.Item`, `Self.Item` in a default body
   // — is left as it was, since there is no impl to read.
@@ -6857,7 +6918,7 @@ static Type *resolve_method_call_typed(CheckCtx *ctx, Expr *expr, Type *self_ty,
   }
 
   // Milestone 75: one type may implement one *generic* trait several times
-  // (`Mul<V2>` and `Mul<Float>` for `V2`), and then the method name alone does
+  // (`Mul<V2>` and `Mul<float>` for `V2`), and then the method name alone does
   // not say which impl a receiver call means — the arguments do. This is
   // milestone 30's selection at the other spelling: there a qualified path
   // pinned what a conversion produced and the argument pinned what it
@@ -7511,7 +7572,7 @@ static Type **hint_type_args(Type *hint, Type *self_type, int *out_count) {
 //
 // A `"{v}"` segment has to turn `v` into a String. The primitives render
 // themselves: the VM's `stringify` has always known how, and keeping that path
-// is what lets a program interpolate an `Int` without importing anything.
+// is what lets a program interpolate an `int` without importing anything.
 //
 // Everything else asks the *type* how it wants to render, through `std::fmt`'s
 // `Display`. Once the trait is what decides, the segment *is* the call
@@ -7705,7 +7766,7 @@ static void check_interpol_seg(CheckCtx *ctx, InterpolSeg *seg) {
   Expr *rendered; // evaluates to a String
 
   if (spec->has_precision) {
-    // a precision renders a Float through `std::fmt::float`: the bare path has
+    // a precision renders a float through `std::fmt::float`: the bare path has
     // no way to ask for a fixed number of decimal places.
     Type *ty = resolve_expr(ctx, recv, NULL);
     ty = infer_apply(&ctx->infer, ty, ctx->al);
@@ -7716,7 +7777,7 @@ static void check_interpol_seg(CheckCtx *ctx, InterpolSeg *seg) {
       char buf[64];
       type_sprintf(ty, buf, sizeof(buf));
       diag_error(ctx->diags, span,
-                 "a '.%d' precision in an interpolation applies to a Float, "
+                 "a '.%d' precision in an interpolation applies to a float, "
                  "not '%s'",
                  (int)spec->precision, buf);
       return;
@@ -7791,7 +7852,7 @@ static bool ord_satisfied(CheckCtx *ctx, Type *type) {
 // diagnostic is about comparison (naming the bound to add) rather than about a
 // missing `cmp`, and so an unrelated inherent `cmp` cannot silently qualify —
 // the same two reasons the `Display` rewrite checks `display_satisfied` first.
-// Returns Bool on success, poison (after one diagnostic) otherwise.
+// Returns bool on success, poison (after one diagnostic) otherwise.
 static Type *rewrite_ord_comparison(CheckCtx *ctx, Expr *expr, Type *lhs) {
   ExprBinary *binary = &expr->as.binary;
   Span span = expr->span;
@@ -7859,7 +7920,7 @@ static Type *rewrite_ord_comparison(CheckCtx *ctx, Expr *expr, Type *lhs) {
     return ctx->tc->t_poison;
   }
 
-  // the outer comparison is now `<cmp> OP 0` — Int against Int, so codegen sees
+  // the outer comparison is now `<cmp> OP 0` — int against int, so codegen sees
   // an ordinary numeric comparison and emits OP_LT/etc. as before.
   binary->left = cmp;
   binary->right = mk_int_lit(ctx, 0, span);
@@ -7868,7 +7929,7 @@ static Type *rewrite_ord_comparison(CheckCtx *ctx, Expr *expr, Type *lhs) {
 
 // Milestone 55: `+`/`-`/`*`/`/`/`%` and unary `-` on a non-numeric operand
 // desugar to `std::ops`, the same move one operator family over. The difference
-// from `Ord` is where the rewritten node ends: `a.cmp(b)` is an Int the outer
+// from `Ord` is where the rewritten node ends: `a.cmp(b)` is an int the outer
 // `< 0` still consumes, so that rewrite *reshapes* the binary node, while
 // `a.add(b)` is the whole answer — its type is the operator's type — so this
 // one *replaces* the node with the call. Codegen, the opcodes, the VM and the
@@ -7881,7 +7942,7 @@ static Type *rewrite_ord_comparison(CheckCtx *ctx, Expr *expr, Type *lhs) {
 // from the trait they name.
 // Milestone 75: the five binary traits take an `Rhs` parameter defaulting to
 // `Self`, so the reference to look for is the trait applied to the *right
-// operand's* type — `V2 * 2.0` asks for `Mul<Float>` and `v * w` for `Mul<V2>`.
+// operand's* type — `V2 * 2.0` asks for `Mul<float>` and `v * w` for `Mul<V2>`.
 // This is the whole of what a heterogeneous operator needed: the operand types
 // are both known at the operator, so the argument the trait could never infer
 // is one the rewrite can simply write down. `Neg` has no right operand and no
@@ -8063,7 +8124,7 @@ static OpsTrait ops_trait_for_token(TokenType op) {
 // can pick between carry an unwritten precondition — `OP_ADD` and the rest
 // read their operands as numbers with no tag test, exactly as the bitwise
 // group says out loud that it may — so this function is what upholds it, and a
-// caller that skips it hands the VM a `Char` to do arithmetic on.
+// caller that skips it hands the VM a `char` to do arithmetic on.
 //
 // `out_call` is passed straight to `rewrite_ops_call`: NULL rewrites the site
 // into the call, non-NULL hands the call back instead.
@@ -8212,7 +8273,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     // different from a `break`: fold it into the same join and the block's type
     // is what comes out. A block that diverges contributes nothing (`!` is
     // evidence for no type), so with every exit a `break` the answer is theirs
-    // alone — and with no exit at all the block is `Never`, just like a `loop`.
+    // alone — and with no exit at all the block is `!`, just like a `loop`.
     if (labelled) {
       ctx->loops = frame.parent;
       Span exit_span =
@@ -8234,7 +8295,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     // A binary op on two generics needs no special case: the per-operator
     // rules below already say the right thing. `==`/`!=` compare structurally,
     // so two values of the same generic compare like two structs do — the
-    // runtime's `OP_EQ` inspects no static type — and yield Bool. Arithmetic
+    // runtime's `OP_EQ` inspects no static type — and yield bool. Arithmetic
     // and ordering want a concrete numeric type, so a generic operand reports
     // against its own name ("requires numeric types, got 'T'"); there is no
     // operator overloading, so a bounded `T: Ord` still orders through `.cmp`,
@@ -8262,18 +8323,18 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       result = resolve_arith_op(ctx, expr, op, binary->left, lhs, binary->right,
                                 rhs, /*out_call=*/NULL);
     } else if (is_bitwise) {
-      // **Int only, and no trait behind it.** Every other operator that could
+      // **int only, and no trait behind it.** Every other operator that could
       // mean something for a user type routes through `std::ops` when its
       // operands are not numeric; these do not, and the reason is that a bit
       // pattern is not an abstraction a type can supply its own meaning for the
-      // way an order or a sum is. `Float` is excluded for the same reason it
+      // way an order or a sum is. `float` is excluded for the same reason it
       // has no `impl Hash`: its bits are not what its value means, and the
       // language has no reinterpreting cast to ask for them deliberately.
       //
       // So these are the only binary operators whose operand type is known
       // *before* the operands are — and that makes them the only ones that can
       // **drive** inference rather than merely check it. `+` has to look first,
-      // because it could be Int, Float, String or a call to `Add`, which is why
+      // because it could be int, float, String or a call to `Add`, which is why
       // `|x| x + 1` cannot solve `x` and `|x| x | 1` can. Unifying rather than
       // testing is what buys that, and it is the same thing a range does to its
       // two bounds.
@@ -8305,7 +8366,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     } else if (is_logic) {
       if (lhs->kind != TY_BOOL || rhs->kind != TY_BOOL) {
         diag_error(ctx->diags, expr->span,
-                   "'%s' requires Bool operands, got '%s' and '%s'",
+                   "'%s' requires bool operands, got '%s' and '%s'",
                    op == TOKEN_AND ? "and" : "or", type_name(lhs),
                    type_name(rhs));
         result = ty_poison();
@@ -8768,7 +8829,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     // whether its result fits the place. Unifying the two operands with each
     // other — which is all this used to do — is neither, and happens to imply
     // both only when the type is numeric: it let `c += 'y'` reach `OP_ADD`,
-    // which reads a `Char` as a double, while refusing `f += 1`, which
+    // which reads a `char` as a double, while refusing `f += 1`, which
     // `f = f + 1` spells legally one line over.
     TokenType binop = compound_binary_op(assign->op);
     if (binop == TOKEN_ERROR) {
@@ -8797,7 +8858,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     TypeScratch elem_types;
     ts_init(&elem_types, tuple->count, ctx->al);
 
-    // an element-wise hint, so a `(dyn Shape, Int)` annotation reaches the
+    // an element-wise hint, so a `(dyn Shape, int)` annotation reaches the
     // element that has to coerce. Only used when the shape already matches;
     // a mismatched hint is left for the surrounding unification to report.
     Type *hint_ty = hint ? infer_find(&ctx->infer, hint) : NULL;
@@ -8839,7 +8900,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       char ct[64];
       type_sprintf(cond_ty, ct, sizeof(ct));
       diag_error(ctx->diags, wh->condition->span,
-                 "while loop condition must be Bool, got '%s'", ct);
+                 "while loop condition must be bool, got '%s'", ct);
       result = ctx->tc->t_poison;
       break;
     }
@@ -8934,7 +8995,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       char ct[64];
       type_sprintf(cond_ty, ct, sizeof(ct));
       diag_error(ctx->diags, if_->condition->span,
-                 "if condition must be Bool, got '%s'", ct);
+                 "if condition must be bool, got '%s'", ct);
       result = ctx->tc->t_poison;
       break;
     }
@@ -8974,7 +9035,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       if (dyn_want != NULL) {
         // both are checked even after one fails: each branch is its own claim
         // to be a `dyn Shape`, so each gets its own answer. A missing `else`
-        // is the Unit it already is, and mismatches as one.
+        // is the `()` it already is, and mismatches as one.
         bool ok = check_flow_into(ctx, if_->then_block, then_ty, dyn_want,
                                   if_->then_block->span);
         ok &= if_->else_branch != NULL
@@ -9037,13 +9098,13 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
         char buf[64];
         type_sprintf(op_ty, buf, sizeof(buf));
         diag_error(ctx->diags, unary->operand->span,
-                   "'not' requires a Bool operand, got '%s'", buf);
+                   "'not' requires a bool operand, got '%s'", buf);
         result = ctx->tc->t_poison;
       } else {
         result = ctx->tc->t_bool;
       }
     } else if (is_bitnot) {
-      // Int only, and unified rather than tested, for the reason the binary
+      // int only, and unified rather than tested, for the reason the binary
       // bitwise operators are: `~` has exactly one operand type, so it can
       // solve an unknown instead of complaining about one.
       result = infer_unify(&ctx->infer, ctx->tc->t_int, op_ty, ctx->diags,
@@ -9166,7 +9227,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       }
       if (ok) {
         if (elem_ty->kind == TY_NEVER) {
-          elem_ty = ty; // siblings again: `[panic("x"), 1]` is an `[Int]`
+          elem_ty = ty; // siblings again: `[panic("x"), 1]` is an `[int]`
         } else {
           ok &= infer_unify(&ctx->infer, elem_ty, ty, ctx->diags,
                             array->elems[i]->span);
@@ -9310,7 +9371,7 @@ static Type *trait_project(Type *t, TraitDef *trait, Type *self_to,
         t->as.assoc.base->as.trait.def == trait) {
       if (self_to->kind == TY_DYN && dyn_trait_def(self_to) == trait) {
         // a trait object *is* the binding: `Self.Item` on a
-        // `dyn Iterator<Item = Int>` receiver is `Int`, known without knowing
+        // `dyn Iterator<Item = int>` receiver is `int`, known without knowing
         // what the receiver is. This is the case object safety was relaxed
         // for, and it is why the projection must collapse here rather than
         // being rebased onto a self that no longer has an impl to consult.
@@ -9413,7 +9474,7 @@ static void tc_check_impl_conformance(TypeChecker *tc, Decl *decl,
     return; // inherent impl, or a poisoned trait head already diagnosed
   }
   TraitDef *trait = impl_def->trait_type->as.trait.def;
-  // the impl head binds the trait's own type parameters (`impl Into<Int> for
+  // the impl head binds the trait's own type parameters (`impl Into<int> for
   // S`), so a required signature is read in the impl's terms before it is
   // compared — the same substitution a call through a bound applies.
   Subst trait_subst = trait_ref_subst(impl_def->trait_type, tc->al);
@@ -9943,7 +10004,7 @@ static bool type_mentions_self(const Type *t, const TraitDef *trait) {
     // recovered once a value is coerced — that is what the coercion erased —
     // but a projection is not the erased type, it is a *function of* it, and
     // a function of an erased thing can be pinned by writing down its result:
-    // `dyn Iterator<Item = Int>`. So the projection is only a problem if its
+    // `dyn Iterator<Item = int>`. So the projection is only a problem if its
     // base is a `Self` the trait object did *not* pin. Which projections it
     // pins is literally the table `dyn` writes out, so that is the question
     // asked — over the supertrait closure, since `Self.Item` inside
@@ -10087,7 +10148,7 @@ static bool trait_check_object_safe(TypeResolver *r, TraitDef *trait,
 // The types the compiler knows by name rather than by declaration. NULL for
 // anything else, which sends the name to the type scope.
 //
-// `StringBuf`, `Char` and `Range` are builtins in exactly the sense the others
+// `StringBuf`, `char` and `Range` are builtins in exactly the sense the others
 // are: the compiler knows the *type*, while every operation on one lives in
 // std. That is not a lang item in the sense `Display` is — no std *item* is
 // named here. `Range` had existed as a type since ranges did; naming it is what
@@ -10095,23 +10156,23 @@ static bool trait_check_object_safe(TypeResolver *r, TraitDef *trait,
 // `iter()` off one — and what lets a range be a parameter rather than only a
 // loop header.
 //
-// `Never` is the type of code that does not come back. It already existed as
-// what `return`/`break` give an expression; naming it is what lets a signature
-// promise divergence, which is the whole of `panic`'s contract.
+// The two types a name cannot reach are the two that are punctuation: `()` and
+// `!` are parsed as type nodes of their own (`TYNODE_UNIT`, `TYNODE_NEVER`), so
+// neither can be qualified and neither has a second spelling to keep in step.
 //
-// This is also what a path may be qualified by (`Float::from(7)`), so the one
-// list has to serve both spellings or the two would drift.
+// This list is also what a path may be qualified by (`float::from(7)`), so it
+// has to serve both spellings or the two would drift.
 static Type *type_named_builtin(TypeChecker *tc, StringView name) {
-  if (sv_equal_cstr(name, "Int")) {
+  if (sv_equal_cstr(name, "int")) {
     return tc->t_int;
   }
-  if (sv_equal_cstr(name, "Float")) {
+  if (sv_equal_cstr(name, "float")) {
     return tc->t_float;
   }
-  if (sv_equal_cstr(name, "Bool")) {
+  if (sv_equal_cstr(name, "bool")) {
     return tc->t_bool;
   }
-  if (sv_equal_cstr(name, "Char")) {
+  if (sv_equal_cstr(name, "char")) {
     return tc->t_char;
   }
   if (sv_equal_cstr(name, "String")) {
@@ -10122,12 +10183,6 @@ static Type *type_named_builtin(TypeChecker *tc, StringView name) {
   }
   if (sv_equal_cstr(name, "Range")) {
     return tc->t_range;
-  }
-  if (sv_equal_cstr(name, "Unit")) {
-    return tc->t_unit;
-  }
-  if (sv_equal_cstr(name, "Never")) {
-    return tc->t_never;
   }
   return NULL;
 }
@@ -10142,6 +10197,9 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
   switch (node->kind) {
   case TYNODE_UNIT:
     result = r->tc->t_unit;
+    break;
+  case TYNODE_NEVER:
+    result = r->tc->t_never;
     break;
   case TYNODE_SELF: {
     TypeEntry *e = tscope_lookup(r->tscope, sv_from_cstr("Self"));
@@ -10261,7 +10319,7 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
     // canonical — which is what lets interning keep deciding identity by
     // pointer. Filling it is therefore also the completeness check: a hole is
     // a missing binding, and a name that matches no hole is a wrong one.
-    // `dyn DoubleEnded<Item = Int>` binds a name the supertrait declares, and
+    // `dyn DoubleEnded<Item = int>` binds a name the supertrait declares, and
     // it has to: the sub's own signatures project through it.
     int assoc_count = trait_flat_assoc_count(trait);
     TypeScratch assoc_types; // ts_init zeroes, so every slot starts unbound
@@ -10530,7 +10588,7 @@ static bool impl_type_match(Type *pattern, Type *concrete,
   case TY_TRAIT: {
     // a trait *reference* is matched like any other composite, which is what
     // lets `impl<T> Into<T> for Wrap<T>` be selected by the bound that asked
-    // for `Into<Int>` rather than only by its receiver.
+    // for `Into<int>` rather than only by its receiver.
     TypeTrait *pt = &pattern->as.trait, *ct = &concrete->as.trait;
     if (pt->def != ct->def || pt->type_arg_count != ct->type_arg_count) {
       return false;
@@ -10648,12 +10706,12 @@ static bool type_same_nominal_def(Type *a, Type *b) {
 
 // Does an impl's own type params satisfy their declared bounds, once the
 // receiver has pinned them down? `impl<T: Display> Display for [T]` applies to
-// `[Int]` but not to `[NoShow]`, and asking here — at selection — is what keeps
+// `[int]` but not to `[NoShow]`, and asking here — at selection — is what keeps
 // the failure at the call site. Left unasked, the impl is selected regardless
 // and the bound is only felt inside its body, where the diagnostic names the
 // impl's source rather than the code that reached for it.
 //
-// Answering recurses: `[[Int]]` asks whether `[Int]` is Display, which selects
+// Answering recurses: `[[int]]` asks whether `[int]` is Display, which selects
 // this same impl one level down. The type shrinks each step, so the only way
 // not to terminate is a self-referential blanket impl
 // (`impl<T: Foo> Foo for T`), which the depth cap catches.
@@ -10697,7 +10755,7 @@ static bool impl_bounds_satisfied(ImplDef *impl, Type **args, int n,
     // diagnostic but a wrong answer: `impl<I: Iterator, J: Iterator<Item =
     // I.Item>> Iterator for Chain<I, J>` binds `Item` to `I.Item`, so applying
     // it to a `Chain<Counter, Words>` would compile `self.b.next()`'s `String`
-    // as the `Int` the impl promised. An impl whose premises do not hold does
+    // as the `int` the impl promised. An impl whose premises do not hold does
     // not apply — the milestone-20 reading, one predicate kind over.
     for (int a = 0; ok && a < param->as.generic.assoc_bound_count; a++) {
       const AssocBound *ab = &param->as.generic.assoc_bounds[a];
@@ -10828,7 +10886,7 @@ bool impl_defs_conflict(ImplDef *a, ImplDef *b, Allocator *al) {
   // Overlap is asked the same way selection asks it, from both sides: does
   // either impl apply to the other's self type? For two non-generic impls
   // that is plain identity; for `Ord for Option<T>` against
-  // `Ord for Option<Int>` the generic one matches the concrete one's self
+  // `Ord for Option<int>` the generic one matches the concrete one's self
   // type, which is the case a receiver would find ambiguous.
   Subst ignored;
   return impl_applies(a, b->self_type, b->trait_type, &ignored, NULL, al) ||
@@ -10957,7 +11015,7 @@ MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, Type *trait_ref,
   // bare generic self: select the impl by method name and open its type
   // params as fresh unknowns — argument unification at the call site pins
   // down the type arguments (e.g. `Point::new(10, 20)` selecting
-  // `impl Point<Int>`). first name match wins.
+  // `impl Point<int>`). first name match wins.
   // Only a bare path (`Point::new`) may select an impl by method name. A
   // method-call receiver never may: since TY_GENERIC is interned, a generic
   // impl's `Self` is pointer-identical to the struct's canonical self type,
@@ -10993,7 +11051,7 @@ MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, Type *trait_ref,
   }
 
   // First applicable impl declaring the name wins — except that a generic
-  // trait lets one type have several impls of it (`Into<Int>` and
+  // trait lets one type have several impls of it (`Into<int>` and
   // `Into<Fahrenheit>` for one `Celsius`), which makes the order arbitrary
   // rather than merely unspecified. A bound names the reference and so never
   // gets here; the only thing a *bare* `c.into()` can name is the type it is
@@ -11387,7 +11445,7 @@ static MethodDef *impl_index_assoc_select(ImplIndex *idx, Type *self_type,
 // Does `type` implement the trait reference `trait_ref`? True if any registered
 // impl heads `impl [<..>] trait for T` matching both — exact for a non-generic
 // impl, structural (binding the impl's params) for a generic one. The trait's
-// own type arguments are part of the question: `S: Into<Int>` is not answered
+// own type arguments are part of the question: `S: Into<int>` is not answered
 // by an `impl Into<String> for S`.
 bool impl_index_implements(ImplIndex *idx, Type *type, Type *trait_ref,
                            Allocator *al) {
@@ -11566,7 +11624,7 @@ void cctx_init(CheckCtx *cctx, TypeChecker *tc, Module *m, DiagBag *diags,
 typedef enum {
   PATHRES_CTX_SCOPE,
   // a concrete type qualifying the rest of the path — a struct, or a builtin
-  // like `Float::from(7)`. Only the type is needed: the lookup is over the
+  // like `float::from(7)`. Only the type is needed: the lookup is over the
   // impls, and an impl's self type is a `Type` whatever declared it.
   PATHRES_CTX_TYPE,
   PATHRES_CTX_ENUM,
@@ -11749,7 +11807,7 @@ static PathStep pathres_step_entry(PathResCtx *ctx, Path *path, int i,
     return PATHRES_STEP_NEXT;
   }
   case TY_TRAIT: {
-    // a trait named *with* type arguments: the head of `impl Into<Int> for S`
+    // a trait named *with* type arguments: the head of `impl Into<int> for S`
     // when last, or the qualifier of a trait-qualified method call
     // (`Into::<F>::into(c)`) when not. A trait without them never reaches here
     // as a lone segment — that is answered by `tscope_lookup` in tyres. (A
@@ -11857,7 +11915,7 @@ static AssocRes pathres_assoc_item(PathResCtx *ctx, Path *path, int i,
   Type *fun_ty = subst_apply(&subst, fun->fun_type, ctx->al);
 
   // A generic trait may be implemented for one type several times
-  // (`From<Int>` and `From<Char>` for `Steps`), and the path names none of
+  // (`From<int>` and `From<char>` for `Steps`), and the path names none of
   // the trait arguments — so `method` above is only the first match. Flag
   // it so a *call* re-selects by its argument types; a value context keeps
   // the first match, which is all it can do without arguments. The bare
@@ -11892,7 +11950,7 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
     switch (res_ctx.kind) {
     case PATHRES_CTX_SCOPE: {
       // a builtin type may qualify a path just as a declared one does
-      // (`Float::from(7)`), which is what keeps `From` writable for the
+      // (`float::from(7)`), which is what keeps `From` writable for the
       // primitives it ships impls for. Asked first, exactly as `TYNODE_NAMED`
       // asks it, so the two spellings of a name cannot disagree.
       Type *builtin = type_named_builtin(ctx->tyres->tc, segment);
@@ -12082,6 +12140,23 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
       diag_error(ctx->diags, path->span,
                  "no associated item named '" SV_FMT "' found for type '%s'",
                  SV_ARG(segment), ty_buf);
+
+      // A module may legitimately share a builtin's name — `std::char` does,
+      // and its whole content is `impl char`, so `char::to_upper` finds what it
+      // meant through the *type*. A module holding anything else (a free
+      // function, a struct) is reachable only by its full path, because the
+      // builtin answers the first segment first. That is not worth refusing the
+      // declaration over, but it is worth saying out loud here.
+      StringView head = path->segments[0].name;
+      if (type_named_builtin(ctx->tyres->tc, head) != NULL &&
+          (qual_module_bound(ctx->tyres->module, head) ||
+           mod_find_own_decl(ctx->tyres->module, head) != NULL)) {
+        diag_note(ctx->diags, path->span,
+                  "a module named '" SV_FMT "' is in scope, but a builtin type "
+                  "name is resolved before it — reach the module's own items "
+                  "through their full path",
+                  SV_ARG(head));
+      }
       return false;
     }
     case PATHRES_CTX_GENERIC: {

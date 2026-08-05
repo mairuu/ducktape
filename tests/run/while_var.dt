@@ -13,39 +13,39 @@
 #> dyn=10
 use std::io::print;
 
-trait Src { fun take(self) -> Option<Int>; }
+trait Src { fun take(self) -> Option<int>; }
 
-struct Counter { n: Int }
+struct Counter { n: int }
 
 impl Src for Counter {
-    fun take(self) -> Option<Int> { return self.next(); }
+    fun take(self) -> Option<int> { return self.next(); }
 }
 
 # the body is monomorphised per instantiation and dispatched off a vtable
 # respectively; the loop shape is the same either way
-fun drain<S: Src>(s: S) -> Int {
+fun drain<S: Src>(s: S) -> int {
     var t = 0;
     while var Option::Some(v) = s.take() { t = t + v; }
     return t;
 }
 
-fun drain_dyn(s: dyn Src) -> Int {
+fun drain_dyn(s: dyn Src) -> int {
     var t = 0;
     while var Option::Some(v) = s.take() { t = t + v; }
     return t;
 }
 
 impl Counter {
-    fun next(self) -> Option<Int> {
+    fun next(self) -> Option<int> {
         if self.n <= 0 { return Option::None; }
         self.n = self.n - 1;
         return Option::Some(self.n);
     }
 }
 
-fun none_now() -> Option<Int> { return Option::None; }
+fun none_now() -> Option<int> { return Option::None; }
 
-fun at(xs: [Int], i: Int) -> Option<Int> {
+fun at(xs: [int], i: int) -> Option<int> {
     if i < xs.len() { return Option::Some(xs[i]); }
     return Option::None;
 }
@@ -80,7 +80,7 @@ fun main() {
 
     # the binding is fresh each turn, so a closure capturing it sees that
     # turn's value — unlike a `for` variable, which is one shared cell
-    var fs: [fun() -> Int] = [];
+    var fs: [fun() -> int] = [];
     var k = 0;
     while var Option::Some(v) = at([0, 1, 2], k) {
         fs.push(|| v * 10);

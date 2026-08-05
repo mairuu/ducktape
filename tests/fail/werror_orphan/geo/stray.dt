@@ -1,4 +1,4 @@
 # nothing declares this file, so it is not a module and is not compiled.
-pub fun oops() -> Int {
+pub fun oops() -> int {
     return 0;
 }

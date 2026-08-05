@@ -1,13 +1,13 @@
-#! expect: does not satisfy 'I.Item = Int'
-# A binding may name a concrete type, which makes `I: Iterator<Item = Int>`
-# read as "an iterator of Ints" — a signature that can then use its elements as
-# Ints. The promise is discharged where `I` is bound, so an iterator of anything
+#! expect: does not satisfy 'I.Item = int'
+# A binding may name a concrete type, which makes `I: Iterator<Item = int>`
+# read as "an iterator of ints" — a signature that can then use its elements as
+# ints. The promise is discharged where `I` is bound, so an iterator of anything
 # else is refused at the call rather than inside the body.
 use std::iter::Iterator;
 use std::option::Option;
 use std::io::print;
 
-struct Words { i: Int }
+struct Words { i: int }
 
 impl Iterator for Words {
     type Item = String;
@@ -18,7 +18,7 @@ impl Iterator for Words {
     }
 }
 
-fun sum_of<I: Iterator<Item = Int>>(it: I) -> Int {
+fun sum_of<I: Iterator<Item = int>>(it: I) -> int {
     var t = 0;
     for v in it { t += v; }
     return t;

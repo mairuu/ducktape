@@ -6,25 +6,25 @@
 # stays free for another trait to spend.
 
 struct P {
-  x: Int,
+  x: int,
 }
 
 trait Show {
-  fun show(self) -> Int;
+  fun show(self) -> int;
 }
 
 impl P {
-  fun helper(self) -> Int {
+  fun helper(self) -> int {
     return 1;
   }
 }
 
 impl Show for P {
-  fun show(self) -> Int {
+  fun show(self) -> int {
     return self.helper();
   }
 
-  fun helper(self) -> Int {
+  fun helper(self) -> int {
     return 2;
   }
 }

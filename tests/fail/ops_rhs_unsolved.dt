@@ -5,10 +5,10 @@
 # fail this way, because only it decided whether a trait was consulted at all.
 use std::ops::Mul;
 
-struct V2 { x: Float, y: Float }
+struct V2 { x: float, y: float }
 
-impl Mul<Float> for V2 {
-    fun mul(self, k: Float) -> V2 { return V2 { x: self.x * k, y: self.y * k }; }
+impl Mul<float> for V2 {
+    fun mul(self, k: float) -> V2 { return V2 { x: self.x * k, y: self.y * k }; }
 }
 
 fun main() {

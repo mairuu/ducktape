@@ -5,39 +5,39 @@
 #   arms 16, params 16, closure params 16, interpolation segments 16.
 use std::io::print;
 
-fun sum70(a0: Int, a1: Int, a2: Int, a3: Int, a4: Int, a5: Int, a6: Int, a7: Int, a8: Int, a9: Int, a10: Int, a11: Int, a12: Int, a13: Int, a14: Int, a15: Int, a16: Int, a17: Int, a18: Int, a19: Int, a20: Int, a21: Int, a22: Int, a23: Int, a24: Int, a25: Int, a26: Int, a27: Int, a28: Int, a29: Int, a30: Int, a31: Int, a32: Int, a33: Int, a34: Int, a35: Int, a36: Int, a37: Int, a38: Int, a39: Int, a40: Int, a41: Int, a42: Int, a43: Int, a44: Int, a45: Int, a46: Int, a47: Int, a48: Int, a49: Int, a50: Int, a51: Int, a52: Int, a53: Int, a54: Int, a55: Int, a56: Int, a57: Int, a58: Int, a59: Int, a60: Int, a61: Int, a62: Int, a63: Int, a64: Int, a65: Int, a66: Int, a67: Int, a68: Int, a69: Int) -> Int {
+fun sum70(a0: int, a1: int, a2: int, a3: int, a4: int, a5: int, a6: int, a7: int, a8: int, a9: int, a10: int, a11: int, a12: int, a13: int, a14: int, a15: int, a16: int, a17: int, a18: int, a19: int, a20: int, a21: int, a22: int, a23: int, a24: int, a25: int, a26: int, a27: int, a28: int, a29: int, a30: int, a31: int, a32: int, a33: int, a34: int, a35: int, a36: int, a37: int, a38: int, a39: int, a40: int, a41: int, a42: int, a43: int, a44: int, a45: int, a46: int, a47: int, a48: int, a49: int, a50: int, a51: int, a52: int, a53: int, a54: int, a55: int, a56: int, a57: int, a58: int, a59: int, a60: int, a61: int, a62: int, a63: int, a64: int, a65: int, a66: int, a67: int, a68: int, a69: int) -> int {
   return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13 + a14 + a15 + a16 + a17 + a18 + a19 + a20 + a21 + a22 + a23 + a24 + a25 + a26 + a27 + a28 + a29 + a30 + a31 + a32 + a33 + a34 + a35 + a36 + a37 + a38 + a39 + a40 + a41 + a42 + a43 + a44 + a45 + a46 + a47 + a48 + a49 + a50 + a51 + a52 + a53 + a54 + a55 + a56 + a57 + a58 + a59 + a60 + a61 + a62 + a63 + a64 + a65 + a66 + a67 + a68 + a69;
 }
 
 struct Adder;
 
 impl Adder {
-  fun sum(self, a0: Int, a1: Int, a2: Int, a3: Int, a4: Int, a5: Int, a6: Int, a7: Int, a8: Int, a9: Int, a10: Int, a11: Int, a12: Int, a13: Int, a14: Int, a15: Int, a16: Int, a17: Int, a18: Int, a19: Int, a20: Int, a21: Int, a22: Int, a23: Int, a24: Int, a25: Int, a26: Int, a27: Int, a28: Int, a29: Int, a30: Int, a31: Int, a32: Int, a33: Int, a34: Int, a35: Int, a36: Int, a37: Int, a38: Int, a39: Int, a40: Int, a41: Int, a42: Int, a43: Int, a44: Int, a45: Int, a46: Int, a47: Int, a48: Int, a49: Int, a50: Int, a51: Int, a52: Int, a53: Int, a54: Int, a55: Int, a56: Int, a57: Int, a58: Int, a59: Int, a60: Int, a61: Int, a62: Int, a63: Int, a64: Int, a65: Int, a66: Int, a67: Int, a68: Int, a69: Int) -> Int {
+  fun sum(self, a0: int, a1: int, a2: int, a3: int, a4: int, a5: int, a6: int, a7: int, a8: int, a9: int, a10: int, a11: int, a12: int, a13: int, a14: int, a15: int, a16: int, a17: int, a18: int, a19: int, a20: int, a21: int, a22: int, a23: int, a24: int, a25: int, a26: int, a27: int, a28: int, a29: int, a30: int, a31: int, a32: int, a33: int, a34: int, a35: int, a36: int, a37: int, a38: int, a39: int, a40: int, a41: int, a42: int, a43: int, a44: int, a45: int, a46: int, a47: int, a48: int, a49: int, a50: int, a51: int, a52: int, a53: int, a54: int, a55: int, a56: int, a57: int, a58: int, a59: int, a60: int, a61: int, a62: int, a63: int, a64: int, a65: int, a66: int, a67: int, a68: int, a69: int) -> int {
     return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13 + a14 + a15 + a16 + a17 + a18 + a19 + a20 + a21 + a22 + a23 + a24 + a25 + a26 + a27 + a28 + a29 + a30 + a31 + a32 + a33 + a34 + a35 + a36 + a37 + a38 + a39 + a40 + a41 + a42 + a43 + a44 + a45 + a46 + a47 + a48 + a49 + a50 + a51 + a52 + a53 + a54 + a55 + a56 + a57 + a58 + a59 + a60 + a61 + a62 + a63 + a64 + a65 + a66 + a67 + a68 + a69;
   }
 }
 
 struct Wide {
-  f0: Int,
-  f1: Int,
-  f2: Int,
-  f3: Int,
-  f4: Int,
-  f5: Int,
-  f6: Int,
-  f7: Int,
-  f8: Int,
-  f9: Int,
-  f10: Int,
-  f11: Int,
-  f12: Int,
-  f13: Int,
-  f14: Int,
-  f15: Int,
-  f16: Int,
-  f17: Int,
-  f18: Int,
-  f19: Int,
+  f0: int,
+  f1: int,
+  f2: int,
+  f3: int,
+  f4: int,
+  f5: int,
+  f6: int,
+  f7: int,
+  f8: int,
+  f9: int,
+  f10: int,
+  f11: int,
+  f12: int,
+  f13: int,
+  f14: int,
+  f15: int,
+  f16: int,
+  f17: int,
+  f18: int,
+  f19: int,
 }
 
 enum Many {
@@ -63,7 +63,7 @@ enum Many {
   V19,
 }
 
-fun tag(m: Many) -> Int {
+fun tag(m: Many) -> int {
   return match m {
     Many::V0 => 0,
     Many::V1 => 1,
@@ -124,7 +124,7 @@ fun main() {
   print("match: {tag(Many::V0)} {tag(Many::V19)}");
 #> match: 0 19
 
-  var f: fun(Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) -> Int = |c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19| c0 + c1 + c2 + c3 + c4 + c5 + c6 + c7 + c8 + c9 + c10 + c11 + c12 + c13 + c14 + c15 + c16 + c17 + c18 + c19;
+  var f: fun(int, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int) -> int = |c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19| c0 + c1 + c2 + c3 + c4 + c5 + c6 + c7 + c8 + c9 + c10 + c11 + c12 + c13 + c14 + c15 + c16 + c17 + c18 + c19;
   print("closure: {f(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19)}");
 #> closure: 190
 

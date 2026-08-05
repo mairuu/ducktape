@@ -1,14 +1,14 @@
-#! expect: 'Cents' does not implement 'Add<Int>'
+#! expect: 'Cents' does not implement 'Add<int>'
 # A mixed pair is now a *selection* failure, not an argument mismatch. Before
-# milestone 75 the operator traits were homogeneous, so `Cents + Int` reached
+# milestone 75 the operator traits were homogeneous, so `Cents + int` reached
 # `add(self, other: Cents)` and was reported by the ordinary argument check on
 # the rewritten call — a message about the desugaring rather than about the
 # mistake, which the roadmap recorded as the wart's own cost.
 #
 # Now `Rhs` defaults to `Self`, so `impl Add for Cents` is `Add<Cents>`, `a + 5`
-# asks for `Add<Int>`, and no impl heads it. The fix the message points at is
+# asks for `Add<int>`, and no impl heads it. The fix the message points at is
 # the impl the program did not write.
-struct Cents { v: Int }
+struct Cents { v: int }
 
 impl Add for Cents {
     fun add(self, other: Cents) -> Cents {

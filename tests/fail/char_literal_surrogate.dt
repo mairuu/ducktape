@@ -1,7 +1,7 @@
 #! expect: \u{...} is not a Unicode scalar value
 # A surrogate half is not a character — it is one end of a UTF-16 pair, and
 # UTF-16 is not a thing this language has. Rejecting it here is what lets every
-# Char in the runtime be encodable without a failure path.
+# char in the runtime be encodable without a failure path.
 fun main() {
     var c = '\u{D800}';
 }

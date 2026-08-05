@@ -35,7 +35,7 @@ fun main() {
     print("[{"x":'-'^7}]");
     print("[{"ab":'-'^7}]");
 
-    # a precision renders a Float to fixed decimals; alone it is just `float`
+    # a precision renders a float to fixed decimals; alone it is just `float`
     print("[{3.14159:.2}]");
     # a width and a precision fuse (`>10.2`): render to 2 places, then pad to 10
     print("[{3.14159:>10.2}]");

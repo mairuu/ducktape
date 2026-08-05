@@ -7,16 +7,16 @@ use std::iter::Iterator;
 use std::option::Option;
 use std::io::print;
 
-struct Counter { n: Int }
+struct Counter { n: int }
 
 impl Iterator for Counter {
-    type Item = Int;
-    fun next(self) -> Option<Int> { return Option::None; }
+    type Item = int;
+    fun next(self) -> Option<int> { return Option::None; }
 }
 
-fun joined<I: Iterator<Item = String>>(it: I) -> Int { return 0; }
+fun joined<I: Iterator<Item = String>>(it: I) -> int { return 0; }
 
 fun main() {
-    var d: dyn Iterator<Item = Int> = Counter { n: 0 };
+    var d: dyn Iterator<Item = int> = Counter { n: 0 };
     print(joined(d));
 }

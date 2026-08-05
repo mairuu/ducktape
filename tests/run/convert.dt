@@ -1,5 +1,5 @@
-# std::convert (milestone 29): `From` and `Into` are one relation written from
-# two ends. A program writes `From` impls and gets `Into` through the blanket,
+# std::convert (milestone 29): `From` and `into` are one relation written from
+# two ends. A program writes `From` impls and gets `into` through the blanket,
 # which needs an associated function dispatched through a bound (`U::from`) and
 # an impl parameter pinned by the expected type rather than by the receiver.
 
@@ -13,10 +13,10 @@
 #> 97
 
 use std::io::print;
-use std::convert::{From, Into};
+use std::convert::{From, into};
 
-struct Celsius { deg: Int }
-struct Fahrenheit { deg: Int }
+struct Celsius { deg: int }
+struct Fahrenheit { deg: int }
 
 impl From<Celsius> for Fahrenheit {
     fun from(value: Celsius) -> Fahrenheit {
@@ -24,29 +24,29 @@ impl From<Celsius> for Fahrenheit {
     }
 }
 
-# `T: Into<Float>` writes the trait reference down, so `v.into()` inside needs
+# `T: into<float>` writes the trait reference down, so `v.into()` inside needs
 # no annotation: the bound is what names the impl.
-fun scaled<T: Into<Float>>(v: T) -> Float {
-    var f: Float = v.into();
+fun scaled<T: into<float>>(v: T) -> float {
+    var f: float = v.into();
     return f * 2.0;
 }
 
 # a bound naming an earlier parameter of the same list, which is the shape a
 # conversion trait exists for: `U` converts into whatever `T` turns out to be.
-fun convert<T, U: Into<T>>(v: U) -> T {
+fun convert<T, U: into<T>>(v: U) -> T {
     return v.into();
 }
 
 # a type reachable from two sources: which `From` impl the blanket uses is
 # decided by the receiver, since `U: From<T>` is asked with `T` already pinned.
-struct Steps { n: Int }
+struct Steps { n: int }
 
-impl From<Int> for Steps {
-    fun from(value: Int) -> Steps { return Steps { n: value }; }
+impl From<int> for Steps {
+    fun from(value: int) -> Steps { return Steps { n: value }; }
 }
 
-impl From<Char> for Steps {
-    fun from(value: Char) -> Steps { return Steps { n: Int::from(value) }; }
+impl From<char> for Steps {
+    fun from(value: char) -> Steps { return Steps { n: int::from(value) }; }
 }
 
 fun main() {
@@ -62,15 +62,15 @@ fun main() {
     print(back.deg);
 
     # a builtin type may qualify a path like any other.
-    var i: Float = Float::from(7);
+    var i: float = float::from(7);
     print(i);
 
-    var n: Int = 'A'.into();
+    var n: int = 'A'.into();
     print(n);
 
     print(scaled(6));
 
-    var t: Float = convert(100);
+    var t: float = convert(100);
     print(t);
 
     var a: Steps = 26.into();

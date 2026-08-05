@@ -4,7 +4,7 @@
 # built by interpolation at the call site.
 use std::result::Result;
 
-fun parse(s: String) -> Result<Int, String> {
+fun parse(s: String) -> Result<int, String> {
     return Result::Err("not a number: {s}");
 }
 

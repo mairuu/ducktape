@@ -32,8 +32,8 @@ use std::hash::{Hash, Hasher};
 use std::sort;
 
 struct Point {
-    x: Int,
-    y: Int,
+    x: int,
+    y: int,
 }
 
 # The whole of what a key has to supply: which parts of me matter. The combining
@@ -51,7 +51,7 @@ fun main() {
     var three = "three";
     var missing = "nope";
 
-    var m: HashMap<String, Int> = HashMap::new();
+    var m: HashMap<String, int> = HashMap::new();
     print("empty: {m.len()} {m.is_empty()}");
 
     m.insert(one, 1);
@@ -81,7 +81,7 @@ fun main() {
     # 300 entries into a table that starts with 7 slots, so this walks the whole
     # rehash path several times over. Every key must still be findable
     # afterwards, which is the property a rehash is easiest to break.
-    var big: HashMap<Int, Int> = HashMap::new();
+    var big: HashMap<int, int> = HashMap::new();
     var i = 0;
     while i < 300 {
         big.insert(i, i * i);
@@ -108,7 +108,7 @@ fun main() {
     print("reinserted: {big.len()} {big.get(0)}");
 
     # ── the set ───────────────────────────────────────────────────────────────
-    var s: HashSet<Int> = HashSet::new();
+    var s: HashSet<int> = HashSet::new();
     print("set: {s.insert(4)} {s.insert(4)} {s.len()} {s.contains(4)}");
     print("set remove: {s.remove(4)} {s.remove(4)} {s.len()}");
     s.insert(3);
@@ -120,7 +120,7 @@ fun main() {
     print("set members: {members}");
 
     # ── a user type as a key ──────────────────────────────────────────────────
-    var pm: HashMap<Point, Int> = HashMap::new();
+    var pm: HashMap<Point, int> = HashMap::new();
     pm.insert(Point { x: 1, y: 2 }, 9);
     print("point: {pm.get(Point { x: 1, y: 2 })} {pm.get(Point { x: 2, y: 1 })}");
 

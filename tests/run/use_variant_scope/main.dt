@@ -14,7 +14,7 @@ use Local::On;       # declared below
 
 enum Local { On, Off }
 
-fun shade(c: Color) -> Int {
+fun shade(c: Color) -> int {
   match c {
     Red => { return 1; },
     Green => { return 2; },

@@ -41,12 +41,12 @@ trait Tagged: Described {
     }
 }
 
-struct Sq { side: Int }
+struct Sq { side: int }
 struct Dot;
 
 impl Shape for Sq {
-    type Unit = Int;
-    fun area(self) -> Int { return self.side * self.side; }
+    type Unit = int;
+    fun area(self) -> int { return self.side * self.side; }
 }
 impl Named for Sq {
     fun name(self) -> String { return "square"; }
@@ -55,8 +55,8 @@ impl Described for Sq {}
 impl Tagged for Sq {}
 
 impl Shape for Dot {
-    type Unit = Int;
-    fun area(self) -> Int { return 0; }
+    type Unit = int;
+    fun area(self) -> int { return 0; }
 }
 impl Named for Dot {
     fun name(self) -> String { return "dot"; }

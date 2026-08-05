@@ -58,9 +58,9 @@ static inline Value val_obj(Obj *obj) {
   return (Value){.kind = VAL_OBJ, .as.obj = obj};
 }
 
-// renders a Float the way the language spells one: the shortest form that
-// reads back as the same double, always with a `.` or an exponent so a Float
-// never looks like an Int. Writes at most 32 bytes; returns the length.
+// renders a float the way the language spells one: the shortest form that
+// reads back as the same double, always with a `.` or an exponent so a float
+// never looks like an int. Writes at most 32 bytes; returns the length.
 int value_format_float(double f, char *buf, size_t cap);
 
 void value_print(Value v, FILE *out);

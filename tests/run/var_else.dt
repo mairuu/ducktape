@@ -16,10 +16,10 @@
 #> deep 30
 use std::io::print;
 
-struct Point { x: Int, y: Int }
-enum Shape { Circle(Int), Rect(Int, Int) }
+struct Point { x: int, y: int }
+enum Shape { Circle(int), Rect(int, int) }
 
-fun even(x: Int) -> Option<Int> {
+fun even(x: int) -> Option<int> {
     if x % 2 == 0 {
         return Some(x);
     }
@@ -27,14 +27,14 @@ fun even(x: Int) -> Option<Int> {
 }
 
 # `return` is the plain way out, and the binding is a normal local below it.
-fun head(xs: [Int]) -> Int {
+fun head(xs: [int]) -> int {
     var Some(h) = xs.first() else { return -1; };
     return h * 2;
 }
 
 # `continue` from inside an `else`: the subject local is live at that point and
 # has to come off the stack with the loop's own.
-fun sum_even(xs: [Int]) -> Int {
+fun sum_even(xs: [int]) -> int {
     var total = 0;
     for x in xs {
         var Some(v) = even(x) else { continue; };
@@ -44,7 +44,7 @@ fun sum_even(xs: [Int]) -> Int {
 }
 
 # a variant pattern with two fields, and the annotation still allowed in front.
-fun area(s: Shape) -> Int {
+fun area(s: Shape) -> int {
     var Shape::Rect(w, h): Shape = s else { return 0; };
     return w * h;
 }
@@ -56,7 +56,7 @@ fun main() {
     print("rect {area(Shape::Rect(3, 4))}");
 
     # a tuple pattern with a refutable element nested inside it
-    var pair: (Int, Option<Int>) = (1, Some(9));
+    var pair: (int, Option<int>) = (1, Some(9));
     var (a, Some(b)) = pair else { return; };
     print("pair {a} {b}");
 

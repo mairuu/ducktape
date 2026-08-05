@@ -9,7 +9,7 @@
 #
 # `unwrap` and `expect` are the reason this module waited for a panic: an
 # accessor that has to produce a `T` from an `Err` has nowhere to go but out.
-# `return panic(..)` is how — `panic` returns `Never`, which stands in for any
+# `return panic(..)` is how — `panic` returns `!`, which stands in for any
 # type, so the arm type-checks like any other.
 
 use std::fmt::Display;
@@ -25,14 +25,14 @@ pub enum Result<T, E> {
 pub use Result::{Ok, Err};
 
 impl<T, E> Result<T, E> {
-    fun is_ok(self) -> Bool {
+    fun is_ok(self) -> bool {
         match self {
             Result::Ok(_) => { return true; },
             Result::Err(_) => { return false; },
         }
     }
 
-    fun is_err(self) -> Bool {
+    fun is_err(self) -> bool {
         return not self.is_ok();
     }
 

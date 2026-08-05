@@ -1,10 +1,10 @@
 #! expect: is missing method 'area'
 struct Circle {
-    radius: Int,
+    radius: int,
 }
 
 trait Shape {
-    fun area(self) -> Int;
+    fun area(self) -> int;
 }
 
 impl Shape for Circle {

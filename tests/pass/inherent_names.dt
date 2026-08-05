@@ -4,18 +4,18 @@
 use std::cmp::Ord;
 
 struct P {
-  x: Int,
+  x: int,
 }
 
 # Splitting a type's methods across blocks: ordinary, and how std ships String.
 impl P {
-  fun width(self) -> Int {
+  fun width(self) -> int {
     return self.x;
   }
 }
 
 impl P {
-  fun height(self) -> Int {
+  fun height(self) -> int {
     return self.x + 1;
   }
 }
@@ -23,21 +23,21 @@ impl P {
 # Two traits may both declare `go` for one type: a bound or a trait-qualified
 # path says which body was meant, so neither is unreachable.
 trait Rolls {
-  fun go(self) -> Int;
+  fun go(self) -> int;
 }
 
 trait Flies {
-  fun go(self) -> Int;
+  fun go(self) -> int;
 }
 
 impl Rolls for P {
-  fun go(self) -> Int {
+  fun go(self) -> int {
     return 1;
   }
 }
 
 impl Flies for P {
-  fun go(self) -> Int {
+  fun go(self) -> int {
     return 2;
   }
 }
@@ -45,17 +45,17 @@ impl Flies for P {
 # An inherent name may coincide with a trait-declared one for the same reason —
 # `a < b` gates on Ord before it rewrites, so this `cmp` cannot silently qualify.
 struct Q {
-  v: Int,
+  v: int,
 }
 
 impl Q {
-  fun cmp(self, n: Int) -> Int {
+  fun cmp(self, n: int) -> int {
     return self.v - n;
   }
 }
 
 impl Ord for Q {
-  fun cmp(self, other: Q) -> Int {
+  fun cmp(self, other: Q) -> int {
     return self.v - other.v;
   }
 }
@@ -65,14 +65,14 @@ struct W<T> {
   v: T,
 }
 
-impl W<Int> {
-  fun tag(self) -> Int {
+impl W<int> {
+  fun tag(self) -> int {
     return 1;
   }
 }
 
 impl W<String> {
-  fun tag(self) -> Int {
+  fun tag(self) -> int {
     return 2;
   }
 }

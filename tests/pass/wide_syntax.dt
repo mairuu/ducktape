@@ -19,81 +19,81 @@ pub use std::iter::{Iterator, DoubleEnded, Rev, Map, Filter, Take, Chain, Skip,
 # 70 items in one trait; the cap was 64.
 trait Broad {
   type Out;
-  fun b0(self) -> Int { return 0; }
-  fun b1(self) -> Int { return 1; }
-  fun b2(self) -> Int { return 2; }
-  fun b3(self) -> Int { return 3; }
-  fun b4(self) -> Int { return 4; }
-  fun b5(self) -> Int { return 5; }
-  fun b6(self) -> Int { return 6; }
-  fun b7(self) -> Int { return 7; }
-  fun b8(self) -> Int { return 8; }
-  fun b9(self) -> Int { return 9; }
-  fun b10(self) -> Int { return 10; }
-  fun b11(self) -> Int { return 11; }
-  fun b12(self) -> Int { return 12; }
-  fun b13(self) -> Int { return 13; }
-  fun b14(self) -> Int { return 14; }
-  fun b15(self) -> Int { return 15; }
-  fun b16(self) -> Int { return 16; }
-  fun b17(self) -> Int { return 17; }
-  fun b18(self) -> Int { return 18; }
-  fun b19(self) -> Int { return 19; }
-  fun b20(self) -> Int { return 20; }
-  fun b21(self) -> Int { return 21; }
-  fun b22(self) -> Int { return 22; }
-  fun b23(self) -> Int { return 23; }
-  fun b24(self) -> Int { return 24; }
-  fun b25(self) -> Int { return 25; }
-  fun b26(self) -> Int { return 26; }
-  fun b27(self) -> Int { return 27; }
-  fun b28(self) -> Int { return 28; }
-  fun b29(self) -> Int { return 29; }
-  fun b30(self) -> Int { return 30; }
-  fun b31(self) -> Int { return 31; }
-  fun b32(self) -> Int { return 32; }
-  fun b33(self) -> Int { return 33; }
-  fun b34(self) -> Int { return 34; }
-  fun b35(self) -> Int { return 35; }
-  fun b36(self) -> Int { return 36; }
-  fun b37(self) -> Int { return 37; }
-  fun b38(self) -> Int { return 38; }
-  fun b39(self) -> Int { return 39; }
-  fun b40(self) -> Int { return 40; }
-  fun b41(self) -> Int { return 41; }
-  fun b42(self) -> Int { return 42; }
-  fun b43(self) -> Int { return 43; }
-  fun b44(self) -> Int { return 44; }
-  fun b45(self) -> Int { return 45; }
-  fun b46(self) -> Int { return 46; }
-  fun b47(self) -> Int { return 47; }
-  fun b48(self) -> Int { return 48; }
-  fun b49(self) -> Int { return 49; }
-  fun b50(self) -> Int { return 50; }
-  fun b51(self) -> Int { return 51; }
-  fun b52(self) -> Int { return 52; }
-  fun b53(self) -> Int { return 53; }
-  fun b54(self) -> Int { return 54; }
-  fun b55(self) -> Int { return 55; }
-  fun b56(self) -> Int { return 56; }
-  fun b57(self) -> Int { return 57; }
-  fun b58(self) -> Int { return 58; }
-  fun b59(self) -> Int { return 59; }
-  fun b60(self) -> Int { return 60; }
-  fun b61(self) -> Int { return 61; }
-  fun b62(self) -> Int { return 62; }
-  fun b63(self) -> Int { return 63; }
-  fun b64(self) -> Int { return 64; }
-  fun b65(self) -> Int { return 65; }
-  fun b66(self) -> Int { return 66; }
-  fun b67(self) -> Int { return 67; }
-  fun b68(self) -> Int { return 68; }
+  fun b0(self) -> int { return 0; }
+  fun b1(self) -> int { return 1; }
+  fun b2(self) -> int { return 2; }
+  fun b3(self) -> int { return 3; }
+  fun b4(self) -> int { return 4; }
+  fun b5(self) -> int { return 5; }
+  fun b6(self) -> int { return 6; }
+  fun b7(self) -> int { return 7; }
+  fun b8(self) -> int { return 8; }
+  fun b9(self) -> int { return 9; }
+  fun b10(self) -> int { return 10; }
+  fun b11(self) -> int { return 11; }
+  fun b12(self) -> int { return 12; }
+  fun b13(self) -> int { return 13; }
+  fun b14(self) -> int { return 14; }
+  fun b15(self) -> int { return 15; }
+  fun b16(self) -> int { return 16; }
+  fun b17(self) -> int { return 17; }
+  fun b18(self) -> int { return 18; }
+  fun b19(self) -> int { return 19; }
+  fun b20(self) -> int { return 20; }
+  fun b21(self) -> int { return 21; }
+  fun b22(self) -> int { return 22; }
+  fun b23(self) -> int { return 23; }
+  fun b24(self) -> int { return 24; }
+  fun b25(self) -> int { return 25; }
+  fun b26(self) -> int { return 26; }
+  fun b27(self) -> int { return 27; }
+  fun b28(self) -> int { return 28; }
+  fun b29(self) -> int { return 29; }
+  fun b30(self) -> int { return 30; }
+  fun b31(self) -> int { return 31; }
+  fun b32(self) -> int { return 32; }
+  fun b33(self) -> int { return 33; }
+  fun b34(self) -> int { return 34; }
+  fun b35(self) -> int { return 35; }
+  fun b36(self) -> int { return 36; }
+  fun b37(self) -> int { return 37; }
+  fun b38(self) -> int { return 38; }
+  fun b39(self) -> int { return 39; }
+  fun b40(self) -> int { return 40; }
+  fun b41(self) -> int { return 41; }
+  fun b42(self) -> int { return 42; }
+  fun b43(self) -> int { return 43; }
+  fun b44(self) -> int { return 44; }
+  fun b45(self) -> int { return 45; }
+  fun b46(self) -> int { return 46; }
+  fun b47(self) -> int { return 47; }
+  fun b48(self) -> int { return 48; }
+  fun b49(self) -> int { return 49; }
+  fun b50(self) -> int { return 50; }
+  fun b51(self) -> int { return 51; }
+  fun b52(self) -> int { return 52; }
+  fun b53(self) -> int { return 53; }
+  fun b54(self) -> int { return 54; }
+  fun b55(self) -> int { return 55; }
+  fun b56(self) -> int { return 56; }
+  fun b57(self) -> int { return 57; }
+  fun b58(self) -> int { return 58; }
+  fun b59(self) -> int { return 59; }
+  fun b60(self) -> int { return 60; }
+  fun b61(self) -> int { return 61; }
+  fun b62(self) -> int { return 62; }
+  fun b63(self) -> int { return 63; }
+  fun b64(self) -> int { return 64; }
+  fun b65(self) -> int { return 65; }
+  fun b66(self) -> int { return 66; }
+  fun b67(self) -> int { return 67; }
+  fun b68(self) -> int { return 68; }
 }
 
 struct Impls;
 
 impl Broad for Impls {
-  type Out = Int;
+  type Out = int;
 }
 
 # 12 type parameters and 12 type arguments; the caps were 8 and 16.
@@ -112,51 +112,51 @@ struct Params<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> {
   p11: T11,
 }
 
-fun take_params(x: Params<Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int>) -> Int {
+fun take_params(x: Params<int, int, int, int, int, int, int, int, int, int, int, int>) -> int {
   return x.p0;
 }
 
 # 12 bounds in one `+` chain and 12 where-clause predicates;
 # the caps were 8 and 8.
-trait B0 { fun tag0(self) -> Int { return 0; } }
-trait B1 { fun tag1(self) -> Int { return 1; } }
-trait B2 { fun tag2(self) -> Int { return 2; } }
-trait B3 { fun tag3(self) -> Int { return 3; } }
-trait B4 { fun tag4(self) -> Int { return 4; } }
-trait B5 { fun tag5(self) -> Int { return 5; } }
-trait B6 { fun tag6(self) -> Int { return 6; } }
-trait B7 { fun tag7(self) -> Int { return 7; } }
-trait B8 { fun tag8(self) -> Int { return 8; } }
-trait B9 { fun tag9(self) -> Int { return 9; } }
-trait B10 { fun tag10(self) -> Int { return 10; } }
-trait B11 { fun tag11(self) -> Int { return 11; } }
+trait B0 { fun tag0(self) -> int { return 0; } }
+trait B1 { fun tag1(self) -> int { return 1; } }
+trait B2 { fun tag2(self) -> int { return 2; } }
+trait B3 { fun tag3(self) -> int { return 3; } }
+trait B4 { fun tag4(self) -> int { return 4; } }
+trait B5 { fun tag5(self) -> int { return 5; } }
+trait B6 { fun tag6(self) -> int { return 6; } }
+trait B7 { fun tag7(self) -> int { return 7; } }
+trait B8 { fun tag8(self) -> int { return 8; } }
+trait B9 { fun tag9(self) -> int { return 9; } }
+trait B10 { fun tag10(self) -> int { return 10; } }
+trait B11 { fun tag11(self) -> int { return 11; } }
 
-fun bounded<T: B0 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11>(x: T) -> Int {
+fun bounded<T: B0 + B1 + B2 + B3 + B4 + B5 + B6 + B7 + B8 + B9 + B10 + B11>(x: T) -> int {
   return x.tag0();
 }
 
-fun predicated<W0, W1, W2, W3, W4, W5, W6, W7, W8, W9, W10, W11>(x: W0) -> Int
+fun predicated<W0, W1, W2, W3, W4, W5, W6, W7, W8, W9, W10, W11>(x: W0) -> int
 where W0: B0, W1: B0, W2: B0, W3: B0, W4: B0, W5: B0, W6: B0, W7: B0, W8: B0, W9: B0, W10: B0, W11: B0 {
   return x.tag0();
 }
 
 # a 20-element tuple type and a 20-parameter `fun` type; both caps were 16.
-fun wide_types(t: (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int), _f: fun(Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) -> Int) -> Int {
+fun wide_types(t: (int, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int), _f: fun(int, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int) -> int) -> int {
   return t.0;
 }
 
 # 20 subpatterns in a variant pattern and in a tuple pattern; the cap was 16.
 enum Payload {
-  Big(Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int),
+  Big(int, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int),
 }
 
-fun unpack(p: Payload) -> Int {
+fun unpack(p: Payload) -> int {
   return match p {
     Payload::Big(s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11, s12, s13, s14, s15, s16, s17, s18, s19) => s0 + s1 + s2 + s3 + s4 + s5 + s6 + s7 + s8 + s9 + s10 + s11 + s12 + s13 + s14 + s15 + s16 + s17 + s18 + s19,
   };
 }
 
-fun untuple() -> Int {
+fun untuple() -> int {
   var t = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19);
   return match t {
     (u0, u1, u2, u3, u4, u5, u6, u7, u8, u9, u10, u11, u12, u13, u14, u15, u16, u17, u18, u19) => u0 + u1 + u2 + u3 + u4 + u5 + u6 + u7 + u8 + u9 + u10 + u11 + u12 + u13 + u14 + u15 + u16 + u17 + u18 + u19,
@@ -176,26 +176,26 @@ trait Assoc {
   type A7;
   type A8;
   type A9;
-  fun pick(self) -> Int;
+  fun pick(self) -> int;
 }
 
 struct Holder;
 
 impl Assoc for Holder {
-  type A0 = Int;
-  type A1 = Int;
-  type A2 = Int;
-  type A3 = Int;
-  type A4 = Int;
-  type A5 = Int;
-  type A6 = Int;
-  type A7 = Int;
-  type A8 = Int;
-  type A9 = Int;
-  fun pick(self) -> Int { return 0; }
+  type A0 = int;
+  type A1 = int;
+  type A2 = int;
+  type A3 = int;
+  type A4 = int;
+  type A5 = int;
+  type A6 = int;
+  type A7 = int;
+  type A8 = int;
+  type A9 = int;
+  fun pick(self) -> int { return 0; }
 }
 
-fun as_dyn(h: dyn Assoc<A0 = Int, A1 = Int, A2 = Int, A3 = Int, A4 = Int, A5 = Int, A6 = Int, A7 = Int, A8 = Int, A9 = Int>) -> Int {
+fun as_dyn(h: dyn Assoc<A0 = int, A1 = int, A2 = int, A3 = int, A4 = int, A5 = int, A6 = int, A7 = int, A8 = int, A9 = int>) -> int {
   return h.pick();
 }
 

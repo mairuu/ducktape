@@ -1,6 +1,6 @@
-#! expect: expected 'Never', which only diverging code produces, but got 'Int'
-# `Never` is nameable anywhere a type goes, and nowhere is a value of it
+#! expect: expected '!', which only diverging code produces, but got 'int'
+# `!` is nameable anywhere a type goes, and nowhere is a value of it
 # producible: an annotated binding is checked like any other expectation.
 fun main() {
-    var x: Never = 5;
+    var x: ! = 5;
 }

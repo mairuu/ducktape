@@ -1,1 +1,1 @@
-pub fun real() -> Int { return 1; }
+pub fun real() -> int { return 1; }

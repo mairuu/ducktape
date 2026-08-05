@@ -272,7 +272,7 @@ typedef enum {
 static bool parse_path(Parser *p, PathParseMode mode, Path *out);
 
 // The `<..>` after a `dyn Trait`: the trait's own type arguments, then its
-// associated-type bindings (`<Int, Item = String>`). Writes each list into its
+// associated-type bindings (`<int, Item = String>`). Writes each list into its
 // out-parameter and returns false on a parse error.
 static bool parse_dyn_args(Parser *p, TypeNode ***out_args, int *out_arg_count,
                            AssocBindingNode **out_bindings,
@@ -283,6 +283,13 @@ static Pattern *parse_pattern(Parser *p);
 
 static TypeNode *parse_type(Parser *p) {
   TypeNode *base = NULL;
+
+  // `!` — code that does not come back. Returned straight, like `()`: neither
+  // takes a suffix, and both are punctuation so that the spelling a signature
+  // writes is the one a diagnostic prints back.
+  if (match_tok(p, TOKEN_BANG)) {
+    return ast_type_node(TYNODE_NEVER, token_span(previous_tok(p)), p->al);
+  }
 
   if (match_tok(p, TOKEN_LPAREN)) {
     if (match_tok(p, TOKEN_RPAREN)) {
@@ -399,8 +406,8 @@ static TypeNode *parse_type(Parser *p) {
   // in type position stays the *bound* spelling (`impl Show for T`), so the
   // two dispatch strategies are told apart in the source, not inferred.
   //
-  // `dyn Iterator<Item = Int>` pins each associated type the trait declares,
-  // and `dyn Into<Int>` supplies the trait's own type parameter. The path is
+  // `dyn Iterator<Item = int>` pins each associated type the trait declares,
+  // and `dyn Into<int>` supplies the trait's own type parameter. The path is
   // parsed *bare* so the '<' lands here rather than in `parse_type_args`: what
   // follows is one bracket list holding both, and reading it as a plain
   // type-argument list would report "expected '>'" at the `=`.
@@ -508,7 +515,7 @@ static bool parse_dyn_args(Parser *p, TypeNode ***out_args, int *out_arg_count,
     if (bindings_count > 0) {
       error_at(p, current_tok_span(p),
                "a trait's type arguments come before its associated-type "
-               "bindings, as in 'dyn Trait<Int, Item = String>'");
+               "bindings, as in 'dyn Trait<int, Item = String>'");
       return false;
     }
 
@@ -848,9 +855,9 @@ static Expr *parse_postfix(Parser *p) {
         Token name = *previous_tok(p);
 
         // A method call's type arguments are spelled with the turbofish, the
-        // same `::<..>` a path already requires (`Point::<Int>::new`). The
+        // same `::<..>` a path already requires (`Point::<int>::new`). The
         // brackets are the only ones in the expression grammar that could have
-        // been read as operators — `it.fold<Int>(0, f)` against `self.at < n`
+        // been read as operators — `it.fold<int>(0, f)` against `self.at < n`
         // — and the `::` is what settles it before either side is parsed, so
         // the `<` after a field or method access is now unconditionally the
         // less-than operator and `a.b < c > (d)` is two comparisons.
@@ -1113,7 +1120,7 @@ static bool parse_trait_ref(Parser *p, TraitRef *out) {
   out->bindings = NULL;
   out->binding_count = 0;
 
-  // `Into::<Int>` spells the arguments the way an expression path does; a
+  // `Into::<int>` spells the arguments the way an expression path does; a
   // bound accepts both, as PATH_TYPE did before this took the brackets over.
   if (check_tok(p, TOKEN_COLONCOLON) && peek_ahead(p, 1)->type == TOKEN_LT) {
     advance_tok(p);
@@ -1279,7 +1286,7 @@ static int parse_type_params(Parser *p, TypeParamNode **out) {
     } else {
       param->inline_bound = (TraitBound){.ref_count = 0, .refs = NULL};
     }
-    // `<Rhs = Self>` — after the bounds, so `<T: Ord = Int>` reads the way it
+    // `<Rhs = Self>` — after the bounds, so `<T: Ord = int>` reads the way it
     // is written. Accepted here for every declaration and rejected in sema for
     // all but a trait, which is where the position is known rather than the
     // syntax.
@@ -1720,7 +1727,7 @@ static bool parse_format_spec(Parser *p, FormatSpec *spec) {
 
   // an optional fill character, written as a char literal (`{v:'-'^8}`). A
   // char literal tokenises unambiguously where a bare `*` would collide with
-  // multiplication, and it is the Char the value is padded with either way.
+  // multiplication, and it is the char the value is padded with either way.
   if (check_tok(p, TOKEN_CHAR)) {
     uint32_t cp = 0;
     char_literal_value(peek_tok(p)->lexeme, &cp);
@@ -1822,7 +1829,7 @@ static Expr *parse_primary(Parser *p) {
 
   // character literal. The scanner has already validated the lexeme and
   // reported anything wrong with it, so a failure here is one the compile is
-  // failing over anyway and the value only has to be *a* Char.
+  // failing over anyway and the value only has to be *a* char.
   if (match_tok(p, TOKEN_CHAR)) {
     Expr *expr = ast_expr(EXPR_CHAR, token_span(t), p->al);
     uint32_t cp = 0;
@@ -2489,7 +2496,7 @@ static bool parse_param_list(Parser *p, ParamDeclNode **out, int *count) {
   // empty param list
   if (!check_tok(p, TOKEN_RPAREN)) {
     do {
-      // trailing comma: fun f(a: Int, b: Int,) — stop before ')'
+      // trailing comma: fun f(a: int, b: int,) — stop before ')'
       if (check_tok(p, TOKEN_RPAREN))
         break;
 

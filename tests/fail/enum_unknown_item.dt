@@ -15,5 +15,5 @@ impl<T> Opt<T> {
 }
 
 fun main() {
-  var o: Opt<Int> = Opt::Nnoe;
+  var o: Opt<int> = Opt::Nnoe;
 }

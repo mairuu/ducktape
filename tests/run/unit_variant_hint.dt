@@ -14,7 +14,7 @@ enum Slot<K, V> {
 struct Marker<T>;
 
 # the argument-hint form: `push` expects `Slot<K, V>`
-fun fill<K, V>(n: Int) -> [Slot<K, V>] {
+fun fill<K, V>(n: int) -> [Slot<K, V>] {
     var slots: [Slot<K, V>] = [];
     var i = 0;
     while i < n {
@@ -30,7 +30,7 @@ fun blank<K, V>() -> Slot<K, V> {
 }
 
 # nested, so the hint's arguments are themselves applications
-fun nested<T>() -> Slot<Slot<T, T>, Int> {
+fun nested<T>() -> Slot<Slot<T, T>, int> {
     return Slot::Empty;
 }
 
@@ -60,8 +60,8 @@ fun describe<K, V>(s: Slot<K, V>) -> String {
 
 fun main() {
     # one generic function, two instantiations in one program
-    var a: [Slot<Int, String>] = fill::<Int, String>(3);
-    var b: [Slot<String, Int>] = fill::<String, Int>(2);
+    var a: [Slot<int, String>] = fill::<int, String>(3);
+    var b: [Slot<String, int>] = fill::<String, int>(2);
     print("{a.len()} {b.len()}");
 
     var d0 = describe(a[0]);
@@ -77,9 +77,9 @@ fun main() {
     };
     print("{payload}");
 
-    var one: Slot<Int, String> = blank::<Int, String>();
-    var two: Slot<String, Int> = blank_renamed::<String, Int>();
-    var three: Slot<Slot<Int, Int>, Int> = nested::<Int>();
+    var one: Slot<int, String> = blank::<int, String>();
+    var two: Slot<String, int> = blank_renamed::<String, int>();
+    var three: Slot<Slot<int, int>, int> = nested::<int>();
     var _four: Marker<String> = marker::<String>();
     var five = a[3].cleared();
 

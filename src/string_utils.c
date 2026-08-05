@@ -89,7 +89,7 @@ int utf8_decode(const char *p, int len, uint32_t *out) {
   }
 
   // an overlong encoding spells a scalar value that a shorter sequence
-  // already spells, which would make two different byte strings one Char.
+  // already spells, which would make two different byte strings one char.
   if (cp < least || !utf8_is_scalar(cp)) {
     return 0;
   }

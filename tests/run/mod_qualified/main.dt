@@ -13,7 +13,7 @@ use std::io;
 use geo;
 use geo as g; # a module may also be bound under an alias
 
-fun quadrant_code(q: geo::Quadrant) -> Int {
+fun quadrant_code(q: geo::Quadrant) -> int {
   match q {
     geo::Quadrant::First => 1,
     geo::Quadrant::Other => 0,

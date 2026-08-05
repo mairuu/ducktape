@@ -1,4 +1,4 @@
-#! expect: expected struct type in struct pattern, got 'Int'
+#! expect: expected struct type in struct pattern, got 'int'
 # the consequence of a bare unit struct name being a constructor in patterns:
 # the name can no longer be bound as a variable, since `Marker` here is a
 # pattern that tests for the struct rather than a fresh binding.

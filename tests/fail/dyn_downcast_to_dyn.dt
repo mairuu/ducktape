@@ -5,15 +5,15 @@
 
 
 trait Shape {
-    fun area(self) -> Int;
+    fun area(self) -> int;
 }
 trait Named {
     fun name(self) -> String;
 }
 
-struct Sq { side: Int }
+struct Sq { side: int }
 impl Shape for Sq {
-    fun area(self) -> Int { self.side * self.side }
+    fun area(self) -> int { self.side * self.side }
 }
 impl Named for Sq {
     fun name(self) -> String { "sq" }

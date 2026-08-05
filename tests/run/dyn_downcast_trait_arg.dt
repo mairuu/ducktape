@@ -1,6 +1,6 @@
 # The other half of the vtable key: the trait *reference*, not the trait.
 #
-# `dyn Sink<Int>` and `dyn Sink<String>` over one self type are two tables,
+# `dyn Sink<int>` and `dyn Sink<String>` over one self type are two tables,
 # because each names a different impl — the rule `cg_vtable_for` was written to
 # in milestone 56. A downcast reads its key from the operand's `dyn`, so it asks
 # about the same reference the value was written as, and one concrete type can
@@ -13,29 +13,29 @@
 use std::io::print;
 
 trait Sink<T> {
-    fun put(self, v: T) -> Int;
+    fun put(self, v: T) -> int;
 }
 
-struct Any { n: Int }
-struct Ints { n: Int }
+struct Any { n: int }
+struct ints { n: int }
 
 # one type, two references, two tables
-impl Sink<Int> for Any {
-    fun put(self, v: Int) -> Int { v + self.n }
+impl Sink<int> for Any {
+    fun put(self, v: int) -> int { v + self.n }
 }
 impl Sink<String> for Any {
-    fun put(self, _v: String) -> Int { self.n }
+    fun put(self, _v: String) -> int { self.n }
 }
-impl Sink<Int> for Ints {
-    fun put(self, v: Int) -> Int { v }
+impl Sink<int> for ints {
+    fun put(self, v: int) -> int { v }
 }
 
-fun is_it<T, S: Sink<T>>(d: dyn Sink<T>) -> Bool {
+fun is_it<T, S: Sink<T>>(d: dyn Sink<T>) -> bool {
     return (d as? S).is_some();
 }
 
 fun main() {
-    var a: dyn Sink<Int> = Any { n: 1 };
+    var a: dyn Sink<int> = Any { n: 1 };
     var b: dyn Sink<String> = Any { n: 1 };
 
     # recognised through either reference — the tables differ, the type does not
@@ -43,7 +43,7 @@ fun main() {
 #> true
     print((b as? Any).is_some());
 #> true
-    print((a as? Ints).is_some());
+    print((a as? ints).is_some());
 #> false
 
     # and the answer is still the value that was wrapped, through both
@@ -53,9 +53,9 @@ fun main() {
 #> 1
 
     # the reference arriving with a type parameter in it, at two instantiations
-    print(is_it::<Int, Any>(a));
+    print(is_it::<int, Any>(a));
 #> true
-    print(is_it::<Int, Ints>(a));
+    print(is_it::<int, ints>(a));
 #> false
     print(is_it::<String, Any>(b));
 #> true

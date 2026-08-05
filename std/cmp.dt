@@ -1,6 +1,6 @@
 # std::cmp — ordering.
 #
-# Written in ducktape, not in C: `impl Ord for Int` is legal, so the standard
+# Written in ducktape, not in C: `impl Ord for int` is legal, so the standard
 # library can extend the primitives with the same trait machinery user code
 # uses. Only `String` reaches for a native, and it does so through
 # `std::string` rather than declaring one here.
@@ -12,7 +12,7 @@
 # other direction would not have been so cheap: putting the impl in
 # `std::string` would hand a program that only wanted `len` the three impls
 # here, and with them coherence's refusal to let it write its own `impl Ord
-# for Int`. With transitive visibility an import is measured in impls, not in
+# for int`. With transitive visibility an import is measured in impls, not in
 # code, so the dependency points at the impl-poor module.
 #
 # Placing the impl beside the *trait* is also what `std::fmt` already does:
@@ -26,7 +26,7 @@
 # Imported as modules, not by item: `compare` and `code` are methods now
 # (milestone 40), and a method travels with its impl by reachability rather than
 # through a named import — so the `use` is only here to make `impl String` and
-# `impl Char` visible, and the receiver spellings `self.compare(..)` /
+# `impl char` visible, and the receiver spellings `self.compare(..)` /
 # `self.code()` do the rest.
 use std::string;
 use std::char;
@@ -43,21 +43,21 @@ use std::char;
 # that blocks the *method* does not block the length it needs. Private and a
 # free function, since `xs.len()` is the method a program calls.
 @intrinsic("array_len")
-fun len<T>(xs: [T]) -> Int;
+fun len<T>(xs: [T]) -> int;
 
 @lang("ord")
 pub trait Ord {
     # <0 if self sorts before other, 0 if equal, >0 if after.
-    fun cmp(self, other: Self) -> Int;
+    fun cmp(self, other: Self) -> int;
 
-    fun lt(self, other: Self) -> Bool { return self.cmp(other) < 0; }
-    fun gt(self, other: Self) -> Bool { return self.cmp(other) > 0; }
-    fun le(self, other: Self) -> Bool { return self.cmp(other) <= 0; }
-    fun ge(self, other: Self) -> Bool { return self.cmp(other) >= 0; }
+    fun lt(self, other: Self) -> bool { return self.cmp(other) < 0; }
+    fun gt(self, other: Self) -> bool { return self.cmp(other) > 0; }
+    fun le(self, other: Self) -> bool { return self.cmp(other) <= 0; }
+    fun ge(self, other: Self) -> bool { return self.cmp(other) >= 0; }
 }
 
-impl Ord for Int {
-    fun cmp(self, other: Int) -> Int {
+impl Ord for int {
+    fun cmp(self, other: int) -> int {
         if self < other {
             return 0 - 1;
         }
@@ -78,9 +78,9 @@ impl Ord for Int {
 # needing nothing the language cannot already express — the sign bit and the
 # payload are ignored, so a `-NaN` and a `+NaN` are the same order, unlike Rust's
 # `total_cmp`. `self != self` is the NaN test: only NaN is unequal to itself, and
-# `!=` is IEEE on Float (`value_equal` compares the bits with `==`).
-impl Ord for Float {
-    fun cmp(self, other: Float) -> Int {
+# `!=` is IEEE on float (`value_equal` compares the bits with `==`).
+impl Ord for float {
+    fun cmp(self, other: float) -> int {
         if self != self {
             if other != other {
                 return 0;
@@ -104,22 +104,22 @@ impl Ord for Float {
 # `>` stay numeric-only opcodes — ordering anything else is a trait, not an
 # operator — so this is the whole of how a program compares two Strings.
 impl Ord for String {
-    fun cmp(self, other: String) -> Int {
+    fun cmp(self, other: String) -> int {
         return self.compare(other);
     }
 }
 
-# Code-point order, which is what a Char *is*: unlike `String` this needs no
-# native at all, because `c.code()` already hands the comparison two Ints and
-# `<` is a numeric opcode. The dependency costs only `std::char`'s own `Char`
+# Code-point order, which is what a char *is*: unlike `String` this needs no
+# native at all, because `c.code()` already hands the comparison two ints and
+# `<` is a numeric opcode. The dependency costs only `std::char`'s own `char`
 # methods — it ships that one impl and nothing else, and neither does what it
 # imports.
 #
 # It agrees with `impl Ord for String` on one-character strings, since UTF-8
 # byte order and code-point order are the same order. It disagrees with a
 # reader's expectations in the same places: 'Z' sorts before 'a'.
-impl Ord for Char {
-    fun cmp(self, other: Char) -> Int {
+impl Ord for char {
+    fun cmp(self, other: char) -> int {
         var a = self.code();
         var b = other.code();
         if a < b {
@@ -145,7 +145,7 @@ impl Ord for Char {
 # makes that a compile-time error where the element has none, checked (since
 # milestone 20) where the impl is selected.
 impl<T: Ord> Ord for [T] {
-    fun cmp(self, other: [T]) -> Int {
+    fun cmp(self, other: [T]) -> int {
         var n = len(self);
         var m = len(other);
         var i = 0;
@@ -170,7 +170,7 @@ impl<T: Ord> Ord for [T] {
 # way to be generic over it, so a 3-tuple would need its own impl — the same
 # limit `std::fmt` records. Each field is ordered in turn, `.0` before `.1`.
 impl<A: Ord, B: Ord> Ord for (A, B) {
-    fun cmp(self, other: (A, B)) -> Int {
+    fun cmp(self, other: (A, B)) -> int {
         var c = self.0.cmp(other.0);
         if c != 0 {
             return c;

@@ -1,12 +1,12 @@
-#! expect: trait 'Into' has no method named 'nope'
+#! expect: trait 'into' has no method named 'nope'
 # The final segment must name a method the trait declares.
-trait Into<T> {
+trait into<T> {
     fun into(self) -> T;
 }
 
-struct A { x: Int }
+struct A { x: int }
 
 fun main() {
     var a = A { x: 1 };
-    var b = Into::<A>::nope(a);
+    var b = into::<A>::nope(a);
 }

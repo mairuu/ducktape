@@ -9,7 +9,7 @@
 # the impl is *selected*, so a `[Widget]` fails at the interpolation rather
 # than inside std's source.
 #
-# The nesting cases are the interesting ones: the element's impl for `[[Int]]`
+# The nesting cases are the interesting ones: the element's impl for `[[int]]`
 # is this same impl one level down, which is what the recursive bound check has
 # to terminate on.
 #> [1, 2, 3]
@@ -35,7 +35,7 @@ use std::result::Result;
 # A user type with a rendering of its own — the whole point of routing a
 # container's elements through `Display` rather than the runtime's structural
 # walk is that this is what shows up inside the brackets.
-struct Point { x: Int, y: Int }
+struct Point { x: int, y: int }
 
 impl Display for Point {
   fun to_string(self) -> String {
@@ -54,7 +54,7 @@ fun main() {
   var nums = [1, 2, 3];
   print("{nums}");
 
-  var empty: [Int] = [];
+  var empty: [int] = [];
   print("{empty}");
 
   # a String element renders bare — `Display` is "render for a reader", and
@@ -82,13 +82,13 @@ fun main() {
   var some = Option::Some(Point { x: 5, y: 6 });
   print("{some}");
 
-  var none: Option<Int> = Option::None;
+  var none: Option<int> = Option::None;
   print("{none}");
 
-  var ok: Result<Int, String> = Result::Ok(7);
+  var ok: Result<int, String> = Result::Ok(7);
   print("{ok}");
 
-  var err: Result<Int, String> = Result::Err("nope");
+  var err: Result<int, String> = Result::Err("nope");
   print("{err}");
 
   # through a bound, at a container of a container of a user type

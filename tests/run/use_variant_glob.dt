@@ -5,8 +5,8 @@ use std::io::print;
 
 enum Shape {
   Dot,
-  Circle(Int),
-  Rect { w: Int, h: Int },
+  Circle(int),
+  Rect { w: int, h: int },
 }
 
 enum My { Some, Two }
@@ -14,7 +14,7 @@ enum My { Some, Two }
 use Shape::*;
 use My::*;
 
-fun area(s: Shape) -> Int {
+fun area(s: Shape) -> int {
   match s {
     Dot => { return 0; },
     Circle(r) => { return 3 * r * r; },

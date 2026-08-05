@@ -4,9 +4,9 @@ fun main() {
     var b = -a;
     var c = not (a > b);
 
-    var f = a as Float;
-    var _back = f as Int;
-    var _same = a as Int;
+    var f = a as float;
+    var _back = f as int;
+    var _same = a as int;
 
     var r = 1..10;
     var total = 0;

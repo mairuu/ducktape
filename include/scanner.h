@@ -80,6 +80,7 @@ typedef enum {
   TOKEN_PERCENTEQ,
   TOKEN_EQEQ,
   TOKEN_BANGEQ,
+  TOKEN_BANG, // !  (the never type; logical negation is `not`)
   TOKEN_LT,
   TOKEN_LTEQ,
   TOKEN_GT,

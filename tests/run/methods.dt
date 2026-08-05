@@ -11,31 +11,31 @@
 use std::io::print;
 
 struct Point {
-    x: Int,
-    y: Int,
+    x: int,
+    y: int,
 }
 
 impl Point {
-    fun new(x: Int, y: Int) -> Point {
+    fun new(x: int, y: int) -> Point {
         return Point { x: x, y: y };
     }
 
-    fun sum(self) -> Int {
+    fun sum(self) -> int {
         return self.x + self.y;
     }
 
-    fun scaled(self, factor: Int) -> Point {
+    fun scaled(self, factor: int) -> Point {
         return Point { x: self.x * factor, y: self.y * factor };
     }
 }
 
 enum Shape {
-    Circle(Float),
-    Square(Float),
+    Circle(float),
+    Square(float),
 }
 
 impl Shape {
-    fun area(self) -> Float {
+    fun area(self) -> float {
         return match self {
             Shape::Circle(r) => 3.14 * r * r,
             Shape::Square(s) => s * s,

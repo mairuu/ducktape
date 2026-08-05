@@ -21,7 +21,7 @@
 use std::io::print;
 use std::fmt::{Display, to_string, float};
 
-struct Point { x: Int, y: Int }
+struct Point { x: int, y: int }
 
 impl Display for Point {
     fun to_string(self) -> String {

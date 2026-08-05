@@ -28,7 +28,7 @@ fun main() {
     }
     print(total);
 
-    var empty: [Int] = [];
+    var empty: [int] = [];
     var seen = 0;
     for _x in empty {
         seen += 1;

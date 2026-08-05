@@ -15,8 +15,8 @@
 
 use std::io::print;
 
-fun eq<T>(a: T, b: T) -> Bool { return a == b; }
-fun ne<T>(a: T, b: T) -> Bool { return a != b; }
+fun eq<T>(a: T, b: T) -> bool { return a == b; }
+fun ne<T>(a: T, b: T) -> bool { return a != b; }
 
 fun tell<T>(a: T, b: T) {
     if a == b {
@@ -27,7 +27,7 @@ fun tell<T>(a: T, b: T) {
     }
 }
 
-struct P { x: Int, y: Int }
+struct P { x: int, y: int }
 
 fun main() {
     print(eq(2, 2));

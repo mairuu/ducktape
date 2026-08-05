@@ -4,7 +4,7 @@
 # than surfacing later as a mysterious missing method.
 
 impl String {
-    @native("no_such_native") fun len(self) -> Int;
+    @native("no_such_native") fun len(self) -> int;
 }
 
 fun main() {}

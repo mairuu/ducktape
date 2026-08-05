@@ -1,13 +1,13 @@
 pub trait Show {
-  fun show(self) -> Int;
+  fun show(self) -> int;
 
-  fun twice(self) -> Int {
+  fun twice(self) -> int {
     return self.show() + self.show();
   }
 }
 
 # generic over any Show. This module cannot see a single impl of its own
 # trait — the witness for `T: Show` is written wherever `sum_twice` is called.
-pub fun sum_twice<T: Show>(a: T, b: T) -> Int {
+pub fun sum_twice<T: Show>(a: T, b: T) -> int {
   return a.twice() + b.twice();
 }

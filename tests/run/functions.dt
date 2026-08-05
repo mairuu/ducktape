@@ -5,18 +5,18 @@
 #> 42
 use std::io::print;
 
-fun add(a: Int, b: Int) -> Int {
+fun add(a: int, b: int) -> int {
     a + b
 }
 
-fun fib(n: Int) -> Int {
+fun fib(n: int) -> int {
     if n < 2 {
         return n;
     }
     fib(n - 1) + fib(n - 2)
 }
 
-fun fact(n: Int) -> Int {
+fun fact(n: int) -> int {
     if n <= 1 { 1 } else { n * fact(n - 1) }
 }
 

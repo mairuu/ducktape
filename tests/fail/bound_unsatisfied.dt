@@ -1,19 +1,19 @@
-#! expect: type 'Int' does not implement trait 'Named'
+#! expect: type 'int' does not implement trait 'Named'
 struct Point {
-    x: Int,
+    x: int,
 }
 
 trait Named {
-    fun name(self) -> Int;
+    fun name(self) -> int;
 }
 
 impl Named for Point {
-    fun name(self) -> Int {
+    fun name(self) -> int {
         self.x
     }
 }
 
-fun label<T: Named>(t: T) -> Int {
+fun label<T: Named>(t: T) -> int {
     0
 }
 

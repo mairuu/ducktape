@@ -1,5 +1,5 @@
 # A `StringBuf` is the object a `String` cannot be: uninterned, so it can be
-# appended to in place. Interning is what makes a String immutable — two equal
+# appended to in place. interning is what makes a String immutable — two equal
 # strings are one pointer — so the two are different kinds, and `build` is the
 # one-way door between them. Both spell `len`; a method resolves on its
 # receiver, so `b.len()` and `s.len()` coexist with no qualifier needed.
@@ -100,8 +100,8 @@ fun main() {
     }
     print(out.build().len());
 
-    # `push_int` puts an Int's decimal digits straight in — no throwaway "{n}"
-    # String interned to carry them, the same saving `push_char` makes for a Char
+    # `push_int` puts an int's decimal digits straight in — no throwaway "{n}"
+    # String interned to carry them, the same saving `push_char` makes for a char
     var nums = StringBuf::new();
     nums.push_int(42);
     nums.push("/");

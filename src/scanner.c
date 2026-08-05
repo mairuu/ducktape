@@ -82,6 +82,7 @@ static const char *token_type_string[] = {
     [TOKEN_PERCENTEQ] = "PERCENTEQ",
     [TOKEN_EQEQ] = "EQEQ",
     [TOKEN_BANGEQ] = "BANGEQ",
+    [TOKEN_BANG] = "BANG", // !
     [TOKEN_LT] = "LT",
     [TOKEN_LTEQ] = "LTEQ",
     [TOKEN_GT] = "GT",
@@ -231,7 +232,7 @@ static Token scan_string(Scanner *s) {
   return make_token(s, TOKEN_STRING);
 }
 
-// ── Character scanning ───────────────────────────────────────────────────────
+// ── character scanning ───────────────────────────────────────────────────────
 
 static int hex_digit(char c) {
   if (c >= '0' && c <= '9')
@@ -406,7 +407,7 @@ static Token scan_number(Scanner *s) {
     is_float = true;
   }
 
-  // an exponent makes it a Float even without a point, so that every form the
+  // an exponent makes it a float even without a point, so that every form the
   // runtime prints (`1e+18`) is also a literal the scanner accepts.
   if (peek(s) == 'e' || peek(s) == 'E') {
     const char *rewind = s->current;
@@ -420,7 +421,7 @@ static Token scan_number(Scanner *s) {
         advance(s);
       is_float = true;
     } else {
-      // `1e` is the Int 1 followed by an identifier
+      // `1e` is the int 1 followed by an identifier
       s->current = rewind;
       s->col = rewind_col;
     }
@@ -582,7 +583,7 @@ Token scanner_next_token(Scanner *s) {
     return make_token(s, TOKEN_UNDER);
 
   case '!':
-    return make_token(s, match_char(s, '=') ? TOKEN_BANGEQ : TOKEN_ERROR);
+    return make_token(s, match_char(s, '=') ? TOKEN_BANGEQ : TOKEN_BANG);
   case '<':
     return make_token(s, match_char(s, '=') ? TOKEN_LTEQ : TOKEN_LT);
   case '>':

@@ -1,4 +1,4 @@
-#! expect: no implementation of 'scale' for 'V2' takes arguments (V2, Bool)
+#! expect: no implementation of 'scale' for 'V2' takes arguments (V2, bool)
 # When several impls of one generic trait disagree about the arguments they
 # take, the arguments are what chooses — so an argument no impl accepts is a
 # failure of *selection*, and the message names what was on offer instead of
@@ -7,10 +7,10 @@ trait Scale<K> {
     fun scale(self, k: K) -> Self;
 }
 
-struct V2 { x: Int, y: Int }
+struct V2 { x: int, y: int }
 
-impl Scale<Int> for V2 {
-    fun scale(self, k: Int) -> V2 { return V2 { x: self.x * k, y: self.y * k }; }
+impl Scale<int> for V2 {
+    fun scale(self, k: int) -> V2 { return V2 { x: self.x * k, y: self.y * k }; }
 }
 
 impl Scale<V2> for V2 {

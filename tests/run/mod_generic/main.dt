@@ -13,20 +13,20 @@ mod util;
 use std::io::print;
 use util::{Pair, swap, tag, loud, Label};
 
-impl Label for Int {
+impl Label for int {
   fun label(self) -> String {
     return "int {self}";
   }
 }
 
-impl Label for Bool {
+impl Label for bool {
   fun label(self) -> String {
     return "bool {self}";
   }
 }
 
 fun main() {
-  var p = Pair::<Int>::new(1, 2);
+  var p = Pair::<int>::new(1, 2);
   print(p.left());
   print(swap(p).left());
 

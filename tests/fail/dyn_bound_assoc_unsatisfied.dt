@@ -13,9 +13,9 @@ use std::option::Option;
 use std::cmp::Ord;
 use std::io::print;
 
-struct Pt { x: Int }
+struct Pt { x: int }
 
-struct Points { n: Int }
+struct Points { n: int }
 
 impl Iterator for Points {
     type Item = Pt;

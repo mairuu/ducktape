@@ -6,7 +6,7 @@ use std::option::Option::{Some, None};
 use std::result::Result::Ok as Yes;
 use std::io::print;
 
-fun half(n: Int) -> Option<Int> {
+fun half(n: int) -> Option<int> {
   if n % 2 == 0 {
     return Some(n / 2);
   }
@@ -26,7 +26,7 @@ pub fun main() {
   }
 
   # a unit variant as a value, and the qualified spelling beside the bare one.
-  var o: Option<Int> = None;
+  var o: Option<int> = None;
   print(o.is_none());
 #> true
   print(Some(4).unwrap_or(0));
@@ -34,7 +34,7 @@ pub fun main() {
   print(Option::Some(9).unwrap());
 #> 9
 
-  var r: Result<Int, String> = Yes(2);
+  var r: Result<int, String> = Yes(2);
   print(r.unwrap());
 #> 2
 }

@@ -9,13 +9,13 @@ trait Iterator {
     fun next(self) -> Self.Item;
 }
 
-struct Counter { n: Int }
+struct Counter { n: int }
 
 impl Iterator for Counter {
-    type Item = Int;
-    fun next(self) -> Int { self.n + 1 }
+    type Item = int;
+    fun next(self) -> int { self.n + 1 }
 }
 
 fun main() {
-    var it: dyn Iterator<Element = Int> = Counter { n: 1 };
+    var it: dyn Iterator<Element = int> = Counter { n: 1 };
 }

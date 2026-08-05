@@ -12,8 +12,8 @@
 #> 15s
 use std::io::print;
 
-struct Point { x: Int, y: Int }
-struct Pair(Int, Int)
+struct Point { x: int, y: int }
+struct Pair(int, int)
 struct Wrap { inner: Point, tag: String }
 
 fun make_point() -> Point {
@@ -60,10 +60,10 @@ fun main() {
   # ... and capturable, which means the hidden subject local must not
   # disturb upvalue slots
   var (base, mult) = (100, 3);
-  var scale = |v: Int| (v + base) * mult;
+  var scale = |v: int| (v + base) * mult;
   print(scale(1));
 
   # an annotation applies to the whole initializer
-  var (ta, tb): (Int, String) = (15, "s");
+  var (ta, tb): (int, String) = (15, "s");
   print("{ta}{tb}");
 }

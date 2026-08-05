@@ -1,10 +1,10 @@
 #! expect: not a Unicode scalar value
-# `Char::from_code` is the only place a Char can be conjured out of a number, so
+# `char::from_code` is the only place a char can be conjured out of a number, so
 # it is where the scalar-value invariant is enforced. 55296 is U+D800, a
 # surrogate.
 use std::io::print;
 use std::char;
 
 fun main() {
-    print(Char::from_code(55296));
+    print(char::from_code(55296));
 }

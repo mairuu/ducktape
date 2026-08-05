@@ -4,9 +4,9 @@
 
 use std::io::print;
 
-struct Sq { s: Int }
+struct Sq { s: int }
 
-fun use_it(x: dyn Sq) -> Int {
+fun use_it(x: dyn Sq) -> int {
     return 1;
 }
 

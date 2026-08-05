@@ -9,9 +9,9 @@ use std::iter::Iterator;
 use std::option::Option;
 use std::io::print;
 
-struct Widget { id: Int }
+struct Widget { id: int }
 
-struct Widgets { n: Int }
+struct Widgets { n: int }
 
 impl Iterator for Widgets {
     type Item = Widget;

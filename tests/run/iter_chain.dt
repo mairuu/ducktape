@@ -14,15 +14,15 @@ use std::option::Option;
 use std::cmp::Ord;
 use std::io::print;
 
-struct Counter { n: Int, max: Int }
+struct Counter { n: int, max: int }
 
 impl Counter {
-    fun to(max: Int) -> Counter { Counter { n: 0, max: max } }
+    fun to(max: int) -> Counter { Counter { n: 0, max: max } }
 }
 
 impl Iterator for Counter {
-    type Item = Int;
-    fun next(self) -> Option<Int> {
+    type Item = int;
+    fun next(self) -> Option<int> {
         if self.n >= self.max { return Option::None; }
         var v = self.n;
         self.n += 1;
@@ -80,15 +80,15 @@ fun main() {
 #> Some(4)
 
     # the other half of what the binding buys: naming a *concrete* type, so a
-    # signature can ask for "an iterator of Ints" and then treat its elements
-    # as the Ints they are
+    # signature can ask for "an iterator of ints" and then treat its elements
+    # as the ints they are
     print(sum_of(Counter::to(4)));
 #> 6
 }
 
-# `I.Item` is `Int` here by construction, so `t += v` needs no further bound —
+# `I.Item` is `int` here by construction, so `t += v` needs no further bound —
 # and an iterator of anything else is refused at the call.
-fun sum_of<I: Iterator<Item = Int>>(it: I) -> Int {
+fun sum_of<I: Iterator<Item = int>>(it: I) -> int {
     var t = 0;
     for v in it { t += v; }
     return t;

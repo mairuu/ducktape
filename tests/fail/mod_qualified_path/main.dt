@@ -6,7 +6,7 @@ mod lib;
 
 use lib::Point;
 
-fun f(p: lib::Point) -> Int {
+fun f(p: lib::Point) -> int {
   return p.x;
 }
 

@@ -33,7 +33,7 @@ fun first<T>(items: [T]) -> T {
   return items[0];
 }
 
-fun count<T>(items: [T]) -> Int {
+fun count<T>(items: [T]) -> int {
   var n = 0;
   for _item in items {
     n += 1;
@@ -41,13 +41,13 @@ fun count<T>(items: [T]) -> Int {
   return n;
 }
 
-fun map_ints(items: [Int], f: fun(Int) -> Int) -> [Int] {
+fun map_ints(items: [int], f: fun(int) -> int) -> [int] {
   return [f(items[0]), f(items[1]), f(items[2])];
 }
 
-# a generic function that recurses: `fact::<Int>` must resolve to the copy
+# a generic function that recurses: `fact::<int>` must resolve to the copy
 # already being compiled rather than queueing a new one at every level
-fun fact<T>(n: Int, acc: T) -> Int {
+fun fact<T>(n: int, acc: T) -> int {
   if n <= 1 {
     return 1;
   }
@@ -61,7 +61,7 @@ fun main() {
   print(pair_up(1, "x"));
 
   print(echo(7));
-  print(identity::<Int>(7));
+  print(identity::<int>(7));
 
   var nums = [3, 5, 8];
   print(first(nums));

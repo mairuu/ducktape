@@ -1,7 +1,7 @@
-# Milestone 75 — a heterogeneous operator. `V2 * Float` had no spelling before,
+# Milestone 75 — a heterogeneous operator. `V2 * float` had no spelling before,
 # because the `std::ops` traits took `other: Self`: an operator would have had
 # to pick an impl by its *right* operand, and selection by argument type existed
-# only through the written `Meters::from(x)` / `Into::<U>::into(x)` forms.
+# only through the written `Meters::from(x)` / `into::<U>::into(x)` forms.
 #
 # The traits now read `trait Mul<Rhs = Self>`, and the two halves of that answer
 # the two halves of the problem. `Rhs` is what lets one type implement `Mul`
@@ -27,7 +27,7 @@ use std::io::print;
 use std::ops::{Add, Mul, Neg};
 use std::convert::From;
 
-struct V2 { x: Float, y: Float }
+struct V2 { x: float, y: float }
 
 # the homogeneous spelling, unchanged by the milestone: `Add` with no argument
 # is `Add<Self>`, which is `Add<V2>` here.
@@ -48,17 +48,17 @@ impl Mul for V2 {
 # three impls of one trait for one type, told apart by the right operand alone.
 # Coherence lets them stand for milestone 28's reason — they differ in the
 # trait's argument — and the operator now *reads* that argument.
-impl Mul<Float> for V2 {
+impl Mul<float> for V2 {
     type Output = V2;
-    fun mul(self, k: Float) -> V2 {
+    fun mul(self, k: float) -> V2 {
         return V2 { x: self.x * k, y: self.y * k };
     }
 }
 
-impl Mul<Int> for V2 {
+impl Mul<int> for V2 {
     type Output = V2;
-    fun mul(self, k: Int) -> V2 {
-        var f = Float::from(k);
+    fun mul(self, k: int) -> V2 {
+        var f = float::from(k);
         return V2 { x: self.x * f, y: self.y * f };
     }
 }
@@ -81,24 +81,24 @@ fun twice<T: Add<Output = T>>(v: T) -> T { return v + v; }
 # which is what the defaults expand to and what milestone 75 made expressible.
 fun thrice<T: Add<T, Output = T>>(v: T) -> T { return v + v + v; }
 
-struct Cents { v: Int }
+struct Cents { v: int }
 
 # heterogeneity is not only about a scalar: two unrelated types, one operator.
-impl Add<Int> for Cents {
+impl Add<int> for Cents {
     type Output = Cents;
-    fun add(self, n: Int) -> Cents { return Cents { v: self.v + n }; }
+    fun add(self, n: int) -> Cents { return Cents { v: self.v + n }; }
 }
 
 fun main() {
     var v = V2 { x: 1.5, y: 2.0 };
 
-    print((v * 2.0).x);  # Mul<Float> -> 3.0
-    print((v * 3).x);    # Mul<Int>   -> 4.5
+    print((v * 2.0).x);  # Mul<float> -> 3.0
+    print((v * 3).x);    # Mul<int>   -> 4.5
     print((v * v).x);    # Mul<V2>    -> 2.25
     print(twice(v).x);   # Add<V2>    -> 3.0
     print((-v).y);       # Neg        -> -2.0
     print(thrice(v).x);  # Add<V2>    -> 4.5
 
     var c = Cents { v: 25 };
-    print((c + 5).v);    # Add<Int>   -> 30
+    print((c + 5).v);    # Add<int>   -> 30
 }

@@ -2,38 +2,38 @@
 # multiple bounds are resolved and enforced at instantiation. A concrete type
 # passed to a bounded generic must implement every bound.
 struct Point {
-    x: Int,
+    x: int,
 }
 
 trait A {
-    fun a(self) -> Int;
+    fun a(self) -> int;
 }
 
 trait B {
-    fun b(self) -> Int;
+    fun b(self) -> int;
 }
 
 impl A for Point {
-    fun a(self) -> Int {
+    fun a(self) -> int {
         self.x
     }
 }
 
 impl B for Point {
-    fun b(self) -> Int {
+    fun b(self) -> int {
         self.x
     }
 }
 
-fun need_a<T: A>(_t: T) -> Int {
+fun need_a<T: A>(_t: T) -> int {
     0
 }
 
-fun need_both<T: A + B>(_t: T) -> Int {
+fun need_both<T: A + B>(_t: T) -> int {
     0
 }
 
-fun need_where<T>(_t: T) -> Int where T: B {
+fun need_where<T>(_t: T) -> int where T: B {
     0
 }
 

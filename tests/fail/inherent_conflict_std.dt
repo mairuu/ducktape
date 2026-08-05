@@ -5,7 +5,7 @@
 # since nothing a call site can write names the loser.
 
 impl<T> [T] {
-  fun first(self) -> Int {
+  fun first(self) -> int {
     return 0;
   }
 }

@@ -6,6 +6,6 @@ pub enum Maybe<T> {
   None,
 }
 
-pub fun twice(n: Int) -> Int {
+pub fun twice(n: int) -> int {
   return n * 2;
 }

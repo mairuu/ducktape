@@ -16,25 +16,25 @@ use std::io::print;
 
 # A native method: its body is the C function `string_len`, reached by name.
 impl String {
-    @native("string_len") fun byte_count(self) -> Int;
-    @native("string_slice") fun sub(self, from: Int, to: Int) -> String;
+    @native("string_len") fun byte_count(self) -> int;
+    @native("string_slice") fun sub(self, from: int, to: int) -> String;
 }
 
 # An intrinsic method: `self.elem_count()` lowers to the OP_LEN opcode inline,
 # with no global slot and no call frame — the same tier the `for` desugaring
 # uses, now nameable on a receiver. Works over the generic `impl<T> [T]` too.
 impl<T> [T] {
-    @intrinsic("array_len") fun elem_count(self) -> Int;
+    @intrinsic("array_len") fun elem_count(self) -> int;
 }
 
 # A native method satisfying a trait: it takes an ordinary vtable slot, so a
 # `dyn` receiver dispatches to it dynamically like any other method.
-trait Measure { fun size(self) -> Int; }
+trait Measure { fun size(self) -> int; }
 impl Measure for String {
-    @native("string_len") fun size(self) -> Int;
+    @native("string_len") fun size(self) -> int;
 }
 
-fun total(items: [dyn Measure]) -> Int {
+fun total(items: [dyn Measure]) -> int {
     var acc = 0;
     for it in items {
         acc = acc + it.size();

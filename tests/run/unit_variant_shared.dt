@@ -30,10 +30,10 @@ use std::string::from_chars;
 enum Slot {
     Empty,
     Tomb,
-    Full(Int),
+    Full(int),
 }
 
-struct Cell { n: Int }
+struct Cell { n: int }
 struct Marker;
 
 # a method on a fieldless struct receives the shared object as `self`, which is
@@ -54,15 +54,15 @@ fun describe(s: Slot) -> String {
 
 fun main() {
     # the baseline: a unit variant still prints, matches and compares as itself
-    var none: Option<Int> = Option::None;
+    var none: Option<int> = Option::None;
     print("{none}");
-    var some: Option<Int> = Option::Some(7);
+    var some: Option<int> = Option::Some(7);
     print("{some}");
 
     # two separate constructions are equal — they were before the sharing, by
     # structural comparison, and they are after it, by pointer
-    var a: Option<Int> = Option::None;
-    var b: Option<Int> = Option::None;
+    var a: Option<int> = Option::None;
+    var b: Option<int> = Option::None;
     print("{a == b}");
     print("{Slot::Empty == Slot::Empty}");
     # ...and distinct variants of one enum are still distinct
@@ -133,7 +133,7 @@ fun main() {
     # and the shared object is not somehow a shared *slot*: three fresh Fulls
     # carry three different payloads
     var f: [Slot] = [Slot::Full(3), Slot::Full(1), Slot::Full(2)];
-    var out: [Int] = [];
+    var out: [int] = [];
     var t = 0;
     while t < f.len() {
         match f[t] {

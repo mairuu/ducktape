@@ -9,7 +9,7 @@
 #> 30
 use std::io::print;
 
-fun counted() -> Int {
+fun counted() -> int {
     var n = 0;
     loop {
         n += 1;
@@ -19,7 +19,7 @@ fun counted() -> Int {
 }
 
 # `continue` goes back to the top, as it does in a `while`.
-fun first_over(limit: Int) -> Int {
+fun first_over(limit: int) -> int {
     var n = 0;
     loop {
         n += 2;
@@ -30,7 +30,7 @@ fun first_over(limit: Int) -> Int {
 }
 
 # the inner `break` names the inner loop, so the outer one keeps turning.
-fun nested() -> Int {
+fun nested() -> int {
     var hits = 0;
     var rounds = 0;
     loop {
@@ -45,22 +45,22 @@ fun nested() -> Int {
 }
 
 # a `loop` is an expression, and one with a break is `()` like a `while`.
-fun as_expr() -> Int {
+fun as_expr() -> int {
     var n = 0;
     var _u = loop { n += 4; break; };
     return n;
 }
 
-# nothing follows the `loop`, and nothing has to: with no break it is `Never`,
+# nothing follows the `loop`, and nothing has to: with no break it is `!`,
 # so this body diverges before its end.
-fun forever_unless(x: Int) -> Int {
+fun forever_unless(x: int) -> int {
     if x > 0 { return 42; }
     loop { }
 }
 
 # locals declared in the body: the `break` has to pop down to the loop's base,
 # or the stack drifts by two every turn.
-fun locals() -> Int {
+fun locals() -> int {
     var n = 0;
     loop {
         var a = n + 1;
@@ -73,8 +73,8 @@ fun locals() -> Int {
 
 # a body local captured by a closure is a fresh cell each turn — it is pushed
 # and popped inside the loop, so `break` has to close it before popping.
-fun captured() -> Int {
-    var fs: [fun() -> Int] = [];
+fun captured() -> int {
+    var fs: [fun() -> int] = [];
     var i = 0;
     loop {
         var here = i * 10;

@@ -1,7 +1,7 @@
 # associated types in impls, resolved via Self.Name and Type.Name
 struct Point {
-    x: Int,
-    y: Int,
+    x: int,
+    y: int,
 }
 
 trait Drawable {

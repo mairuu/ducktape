@@ -1,15 +1,15 @@
 # nested directory: reached as `shapes::circle`
 
 pub trait Area {
-  fun area(self) -> Float;
+  fun area(self) -> float;
 }
 
 pub struct Circle {
-  pub r: Float,
+  pub r: float,
 }
 
 impl Area for Circle {
-  fun area(self) -> Float {
+  fun area(self) -> float {
     return 3.0 * self.r * self.r;
   }
 }

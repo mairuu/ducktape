@@ -17,11 +17,11 @@ use std::io::print;
 use std::sort;
 use std::string::from_chars;
 
-struct Row { tag: String, n: Int }
+struct Row { tag: String, n: int }
 
 # a plain top-level function, passed by name: a comparator arrives as a value,
 # and a non-capturing function is a `VAL_FUN` rather than a closure
-fun by_value(a: Int, b: Int) -> Int {
+fun by_value(a: int, b: int) -> int {
     return a - b;
 }
 
@@ -68,7 +68,7 @@ fun main() {
 
     # enough elements for several passes with an allocating comparator, so a
     # collection during the sort is not a lucky accident
-    var many: [Int] = [];
+    var many: [int] = [];
     for i in 0..20 {
         many.push((i * 7) % 20);
     }

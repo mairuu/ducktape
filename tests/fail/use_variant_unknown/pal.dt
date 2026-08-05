@@ -1,2 +1,2 @@
 pub enum Color { Red, Green }
-pub fun mix() -> Int { return 0; }
+pub fun mix() -> int { return 0; }

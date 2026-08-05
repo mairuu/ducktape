@@ -1,6 +1,6 @@
 #! expect: the name 'Thing' is defined multiple times
 struct Thing {
-    x: Int,
+    x: int,
 }
 
 fun Thing() {}

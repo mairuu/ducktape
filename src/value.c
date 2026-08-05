@@ -41,7 +41,7 @@ int value_format_float(double f, char *buf, size_t cap) {
   }
 
   // `%g` drops the point on a whole value, which would make `1.0` print as
-  // `1` — indistinguishable from the Int.
+  // `1` — indistinguishable from the int.
   if (!strpbrk(buf, ".e") && (size_t)len + 3 <= cap) {
     len += snprintf(buf + len, cap - (size_t)len, ".0");
   }
@@ -64,7 +64,7 @@ void value_print(Value v, FILE *out) {
     break;
   case VAL_CHAR: {
     // undecorated, like the String below: `print` shows the character, not
-    // the literal that spells it. A Char is always a scalar value, so the
+    // the literal that spells it. A char is always a scalar value, so the
     // encode cannot fail.
     char buf[UTF8_MAX_BYTES];
     int n = utf8_encode(v.as.c, buf);

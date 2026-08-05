@@ -1,7 +1,7 @@
 # struct/trait/impl + method calls + return statements + unit
 struct Point {
-    x: Int,
-    y: Int,
+    x: int,
+    y: int,
 }
 
 impl Point {
@@ -18,14 +18,14 @@ impl Done for Point {
     fun do(self) {}
 }
 
-fun early(n: Int) -> Int {
+fun early(n: int) -> int {
     if n > 0 {
         return n;
     }
     0
 }
 
-fun tail_return(n: Int) -> Int {
+fun tail_return(n: int) -> int {
     return n * 2;
 }
 

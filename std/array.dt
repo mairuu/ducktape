@@ -36,7 +36,7 @@ impl<T> [T] {
     # that an intrinsic has no body for a global slot to address, so it can only
     # be called directly, never passed as a value; an `@native` can be either.
     @intrinsic("array_len")
-    fun len(self) -> Int;
+    fun len(self) -> int;
 
     # Append `value`, growing the array's buffer when it is full. `push` is an
     # `@native` rather than an intrinsic even though it needs no operand: growth
@@ -56,7 +56,7 @@ impl<T> [T] {
         return Option::Some(pop_last(self));
     }
 
-    fun is_empty(self) -> Bool {
+    fun is_empty(self) -> bool {
         return self.len() == 0;
     }
 

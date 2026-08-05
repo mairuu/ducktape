@@ -5,7 +5,7 @@
 # `cmp` method. `==` would still work: structural equality needs no trait.
 use std::cmp::Ord;
 
-struct Widget { id: Int }
+struct Widget { id: int }
 
 fun main() {
     var a = Widget { id: 1 };

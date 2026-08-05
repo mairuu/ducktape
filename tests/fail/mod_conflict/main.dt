@@ -4,7 +4,7 @@ mod lib;
 use lib::Point;
 
 struct Point {
-  y: Int,
+  y: int,
 }
 
 fun main() {}

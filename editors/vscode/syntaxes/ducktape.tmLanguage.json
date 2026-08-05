@@ -153,8 +153,20 @@
     },
 
     "type": {
-      "name": "entity.name.type.ducktape",
-      "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+      "patterns": [
+        {
+          "name": "support.type.primitive.ducktape",
+          "match": "\\b(int|float|bool|char)\\b"
+        },
+        {
+          "name": "support.type.never.ducktape",
+          "match": "(?<=->)\\s*!"
+        },
+        {
+          "name": "entity.name.type.ducktape",
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+        }
+      ]
     },
 
     "call": {

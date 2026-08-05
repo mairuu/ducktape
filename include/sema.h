@@ -27,7 +27,7 @@ void subst_init(Subst *s, StringView *params, Type **args, int count);
 Type *subst_apply(const Subst *s, Type *t, Allocator *al);
 
 // collapse every `T.Assoc` projection in `t` whose base has become a real type,
-// reading the binding off the impl that applies — `Counter.Item` becomes `Int`.
+// reading the binding off the impl that applies — `Counter.Item` becomes `int`.
 // A projection over a type parameter or a trait's abstract `Self` has no answer
 // yet and is left standing.
 //
@@ -125,7 +125,7 @@ bool impl_shadows_enum_variant(ImplDef *impl, StringView *out_name);
 // `trait_ref` narrows the search to impls of that trait reference (a TY_TRAIT,
 // with its type arguments), or NULL for "any trait" — which is what a receiver
 // wants, since a method may come from any impl. Codegen passes one when the
-// call was resolved through a bound: `Into<Int>` and `Into<String>` are two
+// call was resolved through a bound: `Into<int>` and `Into<String>` are two
 // impls for one type, and only the bound says which body was meant.
 MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, Type *trait_ref,
                              StringView name, Type *ret_hint,
@@ -540,7 +540,7 @@ typedef struct CheckLoop {
   // The join of every exit's value so far, or NULL while none has landed —
   // which is the whole of the target's type. NULL after the body means nothing
   // leaves (no break at all, or every one of them diverging before it does),
-  // so the target is `Never`. A bare `break` joins as `()`. A labelled block
+  // so the target is `!`. A bare `break` joins as `()`. A labelled block
   // folds its own tail in here too: falling off the end is an exit like any
   // other, and it is the one a `loop` does not have.
   Type *break_type;
@@ -613,7 +613,7 @@ typedef struct {
       Subst subst; // impl-level substitution (may map to fresh unknowns)
       // non-NULL only for a qualified associated call (`Steps::from(..)`) whose
       // name is declared by more than one impl of a generic trait for this type
-      // (`From<Int>` and `From<Char>` for `Steps`). The `fun`/`subst`/`type`
+      // (`From<int>` and `From<char>` for `Steps`). The `fun`/`subst`/`type`
       // above are the first match — enough for a value context — but a call
       // must re-select once its arguments are known. Carries the self type the
       // re-selection needs; NULL means the single-match resolution is final.

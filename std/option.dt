@@ -24,14 +24,14 @@ pub enum Option<T> {
 pub use Option::{Some, None};
 
 impl<T> Option<T> {
-    fun is_some(self) -> Bool {
+    fun is_some(self) -> bool {
         match self {
             Option::Some(_) => { return true; },
             Option::None => { return false; },
         }
     }
 
-    fun is_none(self) -> Bool {
+    fun is_none(self) -> bool {
         return not self.is_some();
     }
 
@@ -46,7 +46,7 @@ impl<T> Option<T> {
 
     # The contained value, or a panic. This is the accessor that waited for
     # `std::panic`: producing a `T` from a `None` has nowhere to go but out.
-    # `panic` returns `Never`, which stands in for any type, so the arm
+    # `panic` returns `!`, which stands in for any type, so the arm
     # type-checks like any other.
     fun unwrap(self) -> T {
         match self {
@@ -90,7 +90,7 @@ impl<T> Option<T> {
     }
 
     # Keep the value only when it satisfies `pred`.
-    fun filter(self, pred: fun(T) -> Bool) -> Option<T> {
+    fun filter(self, pred: fun(T) -> bool) -> Option<T> {
         match self {
             Option::Some(v) => {
                 if pred(v) {
@@ -116,7 +116,7 @@ impl<T> Option<T> {
 # which is the ordering that makes `min` pick a present value over an absent
 # one. Only available where `T` itself is ordered.
 impl<T: Ord> Ord for Option<T> {
-    fun cmp(self, other: Option<T>) -> Int {
+    fun cmp(self, other: Option<T>) -> int {
         match self {
             Option::Some(a) => {
                 match other {

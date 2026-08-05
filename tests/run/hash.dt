@@ -23,8 +23,8 @@ use std::io::print;
 use std::hash::{Hash, Hasher, hash_of};
 
 struct Point {
-    x: Int,
-    y: Int,
+    x: int,
+    y: int,
 }
 
 impl Hash for Point {

@@ -13,9 +13,9 @@
 use std::io::print;
 use std::option;
 
-enum Shape { Circle(Int), Rect(Int, Int), Blank }
+enum Shape { Circle(int), Rect(int, int), Blank }
 
-struct Point { x: Int, y: Int }
+struct Point { x: int, y: int }
 
 # an `else if var` chains the way an `else if` does: the second pattern is
 # tested only once the first has failed.

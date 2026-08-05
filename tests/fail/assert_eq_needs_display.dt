@@ -5,7 +5,7 @@
 use std::assert::assert_eq;
 
 struct Widget {
-    id: Int,
+    id: int,
 }
 
 fun main() {

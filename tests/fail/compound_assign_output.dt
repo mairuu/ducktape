@@ -3,8 +3,8 @@
 # `Feet` cannot be compounded into a `Meters` place.
 use std::ops::Add;
 
-struct Meters { m: Int }
-struct Feet { f: Int }
+struct Meters { m: int }
+struct Feet { f: int }
 impl Add for Meters {
     type Output = Feet;
     fun add(self, o: Meters) -> Feet { return Feet { f: self.m + o.m }; }

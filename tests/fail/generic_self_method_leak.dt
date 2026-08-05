@@ -3,17 +3,17 @@ struct Box<T> {
     v: T,
 }
 
-impl Box<Int> {
-    fun tag(self) -> Int {
+impl Box<int> {
+    fun tag(self) -> int {
         1
     }
 }
 
 impl<T> Box<T> {
-    # `self` here is the generic Box<T>; `tag` only exists on Box<Int>, so this
+    # `self` here is the generic Box<T>; `tag` only exists on Box<int>, so this
     # must not resolve. Selecting an impl by method name is only allowed for a
     # bare path (`Box::tag`), never for a method-call receiver.
-    fun leak(self) -> Int {
+    fun leak(self) -> int {
         self.tag()
     }
 }

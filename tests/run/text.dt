@@ -4,7 +4,7 @@ use std::io::print;
 use std::option::Option;
 use std::text;
 
-fun show_int_opt(label: String, o: Option<Int>) {
+fun show_int_opt(label: String, o: Option<int>) {
     print("{label}: {o}");
 }
 

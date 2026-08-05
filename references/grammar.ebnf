@@ -148,7 +148,7 @@ wherePred      = ( IDENT | "Self" ) ( "." IDENT )? ":" traitBound ;
 traitBound     = traitRef ( "+" traitRef )* ;
 traitRef       = IDENT dynArgs? ;
                  (* the same bracket a `dyn` takes, and the same parser: the
-                    trait's own type arguments (T: Into<Int>) and then its
+                    trait's own type arguments (T: Into<int>) and then its
                     associated-type bindings (J: Iterator<Item = I.Item>).
                     A binding is an *equality* predicate — it says which type
                     the projection is, not which traits it satisfies — and it
@@ -159,6 +159,7 @@ traitRef       = IDENT dynArgs? ;
 (* ── types ────────────────────────────────────────────────────────────── *)
 
 type           = "(" ")"                          (* unit *)
+               | "!"                              (* never *)
                | "(" type ( "," type )* ")"       (* tuple; single = group *)
                | "fun" "(" ( type ( "," type )* )? ")" "->" type
                | "[" type "]"                     (* array *)
@@ -215,7 +216,7 @@ labelled       = LABEL ":" ( whileExpr | loopExpr | forExpr | block ) ;
 
 expr           = assign ;
 assign         = range ( ( "=" | "+=" | "-=" | "*=" | "/=" | "%=" ) assign )? ;
-range          = or ( ( ".." | "..=" ) or )? ;         (* Int-only ranges *)
+range          = or ( ( ".." | "..=" ) or )? ;         (* int-only ranges *)
 or             = and ( "or" and )* ;
 and            = equality ( "and" equality )* ;
 equality       = comparison ( ( "==" | "!=" ) comparison )* ;
@@ -224,7 +225,7 @@ bitor          = bitxor ( "|" bitxor )* ;
 bitxor         = bitand ( "^" bitand )* ;
 bitand         = shift ( "&" shift )* ;
 shift          = addition ( ( "<<" | ">>" | ">>>" ) addition )* ;
-                 (* Int-only, like every bitwise operator here. The bitwise
+                 (* int-only, like every bitwise operator here. The bitwise
                     levels sit *above* comparison, which is Rust's ordering:
                     `a & b == c` is `(a & b) == c`, not C's `a & (b == c)`.
 
@@ -276,7 +277,7 @@ exprPath       = pathSegE ( "::" pathSegE )* ;
                  (* a bare path may also be a value: a unit struct or a unit
                     enum variant, rewritten to an initializer by the checker *)
 pathSegE       = IDENT ( "::" "<" type ( "," type )* ">" )? ;
-                 (* expression position requires turbofish: Point::<Int>:: *)
+                 (* expression position requires turbofish: Point::<int>:: *)
 structInit     = "{" fieldInit ( "," fieldInit )* ","? "}" ;
 fieldInit      = IDENT ":" expr | IDENT ;
                  (* disallowed directly in if/match/while headers *)
@@ -288,7 +289,7 @@ loopExpr       = "loop" block ;
                     rather than a condition the checker would have to read *)
 condHead       = ( "var" pattern "=" )? expr ;
                  (* with the "var" prefix the expr is the *subject* — matched
-                    against the pattern instead of tested as a Bool — and the
+                    against the pattern instead of tested as a bool — and the
                     branch (or the next turn) is taken when it matches. "var"
                     cannot start an expr, so the two forms never collide, and
                     the pattern's own "{" is unambiguous because it sits to the
@@ -321,7 +322,7 @@ EXPONENT       = ( "e" | "E" ) ( "+" | "-" )? DIGIT+ ;
 (* ── strings and characters ───────────────────────────────────────────── *)
 
 interpString   = '"' ( TEXT | "{" expr formatSpec? "}" )* '"' ;
-                 (* segments must be Int/Float/Bool/Char/String, or a type
+                 (* segments must be int/float/bool/char/String, or a type
                     implementing std::fmt::Display; escapes:
                     \n \t \r \" \\ \{ *)
 formatSpec     = ":" ( CHAR? ( "<" | ">" | "^" ) INT ( "." INT )?

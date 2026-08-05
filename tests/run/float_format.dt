@@ -1,5 +1,5 @@
-# a Float always prints with a point or an exponent, so it never reads as an
-# Int, and it prints the shortest form that reads back as the same double.
+# a float always prints with a point or an exponent, so it never reads as an
+# int, and it prints the shortest form that reads back as the same double.
 #> 1.0
 #> 1
 #> -2.5
@@ -20,7 +20,7 @@
 
 use std::io::print;
 
-struct Pair { a: Float, b: Float }
+struct Pair { a: float, b: float }
 
 fun main() {
   print(1.0);

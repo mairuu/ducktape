@@ -1,25 +1,25 @@
 # pipe closures: annotated, hinted, block bodies, captures
-fun apply(f: fun(Int) -> Int, x: Int) -> Int {
+fun apply(f: fun(int) -> int, x: int) -> int {
     (f)(x)
 }
 
 fun main() {
-    var add = |x: Int, y: Int| x + y;
+    var add = |x: int, y: int| x + y;
     var _three = add(1, 2);
 
-    var hinted: fun(Int, Int) -> Int = |x, y| x + y;
+    var hinted: fun(int, int) -> int = |x, y| x + y;
     var _four = (hinted)(2, 2);
 
     var _doubled = apply(|x| x * 2, 21);
 
-    var blocky = |n: Int| -> Int {
+    var blocky = |n: int| -> int {
         var m = n + 1;
         return m * 2;
     };
     var _b = (blocky)(3);
 
     var base = 10;
-    var offset = |x: Int| x + base;
+    var offset = |x: int| x + base;
     var _eleven = (offset)(1);
 
     var thunk = || 5;

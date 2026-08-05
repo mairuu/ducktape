@@ -8,15 +8,15 @@ use std::iter::Iterator;
 use std::option::Option;
 use std::io::print;
 
-struct Counter { n: Int, max: Int }
+struct Counter { n: int, max: int }
 
 impl Counter {
-    fun to(max: Int) -> Counter { Counter { n: 0, max: max } }
+    fun to(max: int) -> Counter { Counter { n: 0, max: max } }
 }
 
 impl Iterator for Counter {
-    type Item = Int;
-    fun next(self) -> Option<Int> {
+    type Item = int;
+    fun next(self) -> Option<int> {
         if self.n >= self.max { return Option::None; }
         var v = self.n;
         self.n += 1;
@@ -60,7 +60,7 @@ fun main() {
 
     # the projection fix: a closure over a filtered iterator's element. Here the
     # receiver is `Filter<Counter>`, whose `Item` is `Counter.Item` — one hop
-    # short of `Int` until the fix collapsed it.
+    # short of `int` until the fix collapsed it.
     print(Counter::to(6).filter(|v| v % 2 == 0).map(|x| x + 1).collect());
 #> [1, 3, 5]
 

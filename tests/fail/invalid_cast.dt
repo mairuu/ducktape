@@ -1,4 +1,4 @@
-#! expect: invalid cast from 'Int' to 'String'
+#! expect: invalid cast from 'int' to 'String'
 fun main() {
     var x = 1 as String;
 }

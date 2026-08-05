@@ -1,8 +1,8 @@
 # A method call's type arguments, and the `<` that is not one.
 #
-# `it.pick::<Int>(a, b)` applies a type argument; `self.n < xs.len()` compares.
+# `it.pick::<int>(a, b)` applies a type argument; `self.n < xs.len()` compares.
 # The turbofish is what settles the two, and it settles them at the `::` —
-# before either side is parsed. The bare spelling `it.pick<Int>(a, b)` used to
+# before either side is parsed. The bare spelling `it.pick<int>(a, b)` used to
 # be the application, which left the `<` after a field or method access
 # genuinely ambiguous: the parser had to scan ahead for the matching `>` and ask
 # whether a `(` followed it. That lookahead is gone, so every case below is
@@ -17,7 +17,7 @@
 use std::io::print;
 
 struct Holder {
-    n: Int,
+    n: int,
 }
 
 impl Holder {
@@ -28,7 +28,7 @@ impl Holder {
         return b;
     }
 
-    fun width(self) -> Int {
+    fun width(self) -> int {
         return self.n;
     }
 }
@@ -39,14 +39,14 @@ fun main() {
     var xs = [3, 1, 2];
 
     # a type argument, written out and inferred
-    print("{lo.pick::<Int>(7, 9)}");
-    print("{hi.pick::<Int>(7, 9)}");
+    print("{lo.pick::<int>(7, 9)}");
+    print("{hi.pick::<int>(7, 9)}");
     print("{lo.pick(7, 9)}");
 
     # the comparison reading: a field, then a call, then a literal
     print("{lo.n < xs.len()}");
     print("{hi.n < xs.len()}");
-    print("{lo.pick::<[Int]>(xs, xs).len()}");
+    print("{lo.pick::<[int]>(xs, xs).len()}");
 
     # a `<` after a *method* call rather than a field, and one whose right side
     # starts with an identifier — the shape that most looked like a type list

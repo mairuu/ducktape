@@ -1,8 +1,8 @@
-#! expect: expected 'String' but got 'Char'
-# Distinct types: a String is a byte string on the heap and a Char is a scalar
-# value, so a one-character String and the Char it holds are not the same
+#! expect: expected 'String' but got 'char'
+# Distinct types: a String is a byte string on the heap and a char is a scalar
+# value, so a one-character String and the char it holds are not the same
 # thing. `from_chars` is the way across. Here `compare` is a String method
-# taking another String, so handing it a Char is the mismatch.
+# taking another String, so handing it a char is the mismatch.
 use std::string;
 
 fun main() {

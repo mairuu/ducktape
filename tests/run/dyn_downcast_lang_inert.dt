@@ -17,12 +17,12 @@ pub enum Maybe<T> {
 }
 
 trait Shape {
-    fun area(self) -> Int;
+    fun area(self) -> int;
 }
 
-struct Sq { side: Int }
+struct Sq { side: int }
 impl Shape for Sq {
-    fun area(self) -> Int { self.side * self.side }
+    fun area(self) -> int { self.side * self.side }
 }
 
 fun main() {
@@ -36,7 +36,7 @@ fun main() {
 #> 3
 
     # and the user's enum is still an ordinary, usable enum
-    var m: Maybe<Int> = Maybe::Some(5);
+    var m: Maybe<int> = Maybe::Some(5);
     match m {
         Maybe::Some(v) => { print(v); },
         Maybe::None => { print(0); },

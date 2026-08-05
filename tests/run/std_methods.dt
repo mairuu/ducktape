@@ -2,7 +2,7 @@
 # landed in milestone 39 (a native/intrinsic method body); this is std actually
 # using it, so `string::len(s)` is `s.len()`, `array::push(xs, v)` is
 # `xs.push(v)`, and the constructors are associated functions — `StringBuf::new()`,
-# `Char::from_code(n)`. A method resolves on its receiver, so the four `len`s
+# `char::from_code(n)`. A method resolves on its receiver, so the four `len`s
 # (String, [T], StringBuf, and the counted array of chars) coexist unqualified.
 #> 5
 #> ell
@@ -49,9 +49,9 @@ fun main() {
     print(b.build());
     print(b.len());
 
-    # Char: @native code / associated from_code, ducktape classifications
+    # char: @native code / associated from_code, ducktape classifications
     print('A'.code());
-    print(Char::from_code(97));
+    print(char::from_code(97));
     print('x'.is_alpha());
     print('x'.to_upper());
 

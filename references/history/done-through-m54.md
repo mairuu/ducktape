@@ -133,14 +133,14 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   - That collapse exposed a real bug: `type_is_bare_generic_self` used pointer
     identity to tell a bare path (`Point::new`) from a method receiver, so
     `self.m()` inside `impl<T> Box<T>` selected *any* impl defining `m` —
-    including `impl Box<Int>`'s. `impl_index_method` now takes an explicit
+    including `impl Box<int>`'s. `impl_index_method` now takes an explicit
     `bare_path` flag; receivers pass false
     (`tests/fail/generic_self_method_leak.dt`).
   - `tc_check_impl` now runs `infer_finalize` + `infer_check_bounds`; unsolved
     unknowns and bound violations inside impl method bodies were silently
     accepted before (`tests/fail/bound_in_impl_method.dt`).
-  - `type_sprintf` printed `fun(Int): ` — it never emitted the return type at
-    all. Now `fun(Int) -> Bool`. Its `n += snprintf(...)` accumulation was also
+  - `type_sprintf` printed `fun(int): ` — it never emitted the return type at
+    all. Now `fun(int) -> bool`. Its `n += snprintf(...)` accumulation was also
     an out-of-bounds write for any type rendering past the caller's `char[64]`
     (snprintf returns the *would-be* length, underflowing `buf_size - n`);
     every step is clamped through `sp_bump`.
@@ -426,7 +426,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   struct its path resolved to against the struct the value actually has, so
   `var B { x } = a;` (and `B { x } => ...` in a match arm, unreachable for
   `var` before this milestone but always live there) read A's field through
-  B's declared types — `x` bound as `String` over an `Int`, and `x + "!"`
+  B's declared types — `x` bound as `String` over an `int`, and `x + "!"`
   printed garbage. `check_variant_pattern` had made the matching check for
   enums since 5c-i; the struct half now does too
   (`tests/fail/struct_pattern_wrong_type.dt`). The old `BindingPat` code had
@@ -451,8 +451,8 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   The observation the milestone turns on: **a default body is a generic
   function whose first type parameter is `Self`.**
 
-      trait Show { fun twice(self) -> Int { self.show() + self.show() } }
-      ⇒            fun twice<Self: Show>(self: Self) -> Int { ... }
+      trait Show { fun twice(self) -> int { self.show() + self.show() } }
+      ⇒            fun twice<Self: Show>(self: Self) -> int { ... }
 
   What blocked it was that a `Subst` is keyed by *name*, and the trait's
   `Self` was a `TY_TRAIT` — nothing a substitution could bind, so there was
@@ -538,8 +538,8 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   Also fixed two pre-existing bugs this surfaced, neither about traits:
   - **`infer_unify`'s arguments were swapped at four call sites**, so those
     diagnostics printed backwards: `pair(1, "no")` on a `fun pair<T>(a: T,
-    b: T)` reported "expected 'String' but got 'Int'" when `T` was already
-    bound to `Int`. The convention is documented ("the *expected* type goes
+    b: T)` reported "expected 'String' but got 'int'" when `T` was already
+    bound to `int`. The convention is documented ("the *expected* type goes
     first") and every other caller honours it; the generic call-argument path,
     both generic method-argument paths, and struct/variant field init did not.
     Unification is symmetric about which side it binds, so only the wording
@@ -559,15 +559,15 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   standard library", `language.md` "The standard library".
 
   The observation that makes this a small milestone rather than a large one:
-  **`impl Ord for Int` is legal.** A trait can be implemented for a primitive,
+  **`impl Ord for int` is legal.** A trait can be implemented for a primitive,
   so the standard library is written *in ducktape* rather than bolted on in C —
   which means milestone 13 finishing the trait machinery is what unlocked it,
   and `std::cmp` needed no new builtins, no new opcodes and no language change
   at all. The module was prototyped against the unmodified compiler first, and
   every line of it ran.
 
-  `std::cmp` is `trait Ord { cmp; lt/gt/le/ge defaults }`, impls for `Int` and
-  `Float`, and `max`/`min`/`clamp` over `T: Ord`. It is deliberately *not*
+  `std::cmp` is `trait Ord { cmp; lt/gt/le/ge defaults }`, impls for `int` and
+  `float`, and `max`/`min`/`clamp` over `T: Ord`. It is deliberately *not*
   object-safe (`other: Self`), which is the object-safety rule working as
   designed: it is a bound, and only `dyn` asks for more.
 
@@ -612,8 +612,8 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   program's own import of it.
 
   What blocked it was one wart: **`Option::None` could not infer its type
-  argument**, so `return Option::None;` from a `-> Option<Int>` was a type
-  error and only `Option::<Int>::None` worked. A standard type needing a
+  argument**, so `return Option::None;` from a `-> Option<int>` was a type
+  error and only `Option::<int>::None` worked. A standard type needing a
   turbofish everywhere is a bad advert, which is why the fix came first.
 
   It was two bugs wearing one hat, and separating them is the interesting part:
@@ -622,7 +622,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
     the rewritten node; the multi-segment `EXPR_PATH` case (`Status::Off`)
     rewrote and returned `r.type` — the enum's *declared* `Opt<T>` — so the
     abstract parameter escaped into the caller as if it were concrete, and the
-    diagnostic read "expected 'Int' but got 'T'". Fixed by returning
+    diagnostic read "expected 'int' but got 'T'". Fixed by returning
     `resolve_expr(ctx, expr, hint)` like the other two, which routes it through
     the `EXPR_VARIANT` case that opens the parameters into fresh unknowns.
   - **A constructor with no fields has nothing to solve those unknowns from.**
@@ -636,7 +636,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
     a field is still unified and still reported.
 
   The second half is the more general fix, and it applies to unit structs too
-  (`var e: Empty<Int> = Empty;`) since the struct-init path grew the same
+  (`var e: Empty<int> = Empty;`) since the struct-init path grew the same
   seeding — the case milestone 14's unit-struct rewrite had left for the
   hint to handle "the same as `Wrap {}`", which turned out to be not at all.
   A bare unit variant with *no* expected type is now a "cannot infer type"
@@ -727,7 +727,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   learned about `return`; it simply had no name a signature could write.
 
   So the language change is four lines in `TYNODE_NAMED` — `Never` alongside
-  `Int`/`Bool`/`Unit` — plus one registry entry. `infer_unify` already let
+  `int`/`bool`/`Unit` — plus one registry entry. `infer_unify` already let
   `TY_NEVER` stand in for any type, so `return panic(msg)` satisfies any return
   type with no new rule, no coercion node, and no VM change whatsoever. The
   three roadmap questions answered themselves once put that way: a ducktape
@@ -744,7 +744,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   The one limit worth recording is where the design stops: a panic message
   cannot *name* the value that caused it. `"{e}"` on a generic `E` is "cannot
   interpolate a value of type 'E'" — printing an arbitrary value needs a
-  `to_string`, which needs the formatting story the `Float` wart has been
+  `to_string`, which needs the formatting story the `float` wart has been
   waiting on. `unwrap`'s message is therefore fixed and `expect` takes one from
   the caller, which is a smaller loss than it looks: the caller knows what it
   expected, and the frame list is printed either way.
@@ -782,7 +782,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   - **Codegen, `OP_INTERP`, the VM and the image format did not change.** The
     segment now evaluates to a String, and `stringify` has always passed a
     String through untouched. The diff is one std file, one checker helper, and
-    a native for `Float` precision.
+    a native for `float` precision.
   - The primitives keep their built-in path, which is why no existing test
     needed an import: `"{1}"` still emits no call. The four impls in `std::fmt`
     exist for the *other* direction — so a `T: Display` generic can instantiate
@@ -823,7 +823,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   Rust draws as `Debug`/`Display`, arrived at from the other end.
 
   Also cleared: `std::fmt::float(value, precision)` is the first rendering
-  control a `Float` has ever had, and the `-Woverlength-strings` warning
+  control a `float` has ever had, and the `-Woverlength-strings` warning
   `std/result.dt` started emitting in milestone 17 (a std module crossing the
   4095-character literal ISO requires support for) is suppressed in the
   Makefile with a note, so the build is warning-free again.
@@ -857,7 +857,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
     superset of every set below it.
 
   **Coherence replaces first-registration-wins.** Visibility alone does not fix
-  the wart it was promoted for: a user's `impl Ord for Int` and `std::cmp`'s are
+  the wart it was promoted for: a user's `impl Ord for int` and `std::cmp`'s are
   *both* visible the moment `std::cmp` is imported, so scoping only changes
   which arbitrary winner is picked. `impl_defs_conflict` asks selection's own
   question — same trait, and either impl's `impl_applies` accepts the other's
@@ -925,7 +925,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
     whether or not their bounds are disjoint, and the conservative answer is
     the one coherence wants — and associated-type lookup passes NULL because,
     like coherence, it runs while the index is still filling.
-  - **Answering recurses**, since `[[Int]]` asks whether `[Int]` is `Display`,
+  - **Answering recurses**, since `[[int]]` asks whether `[int]` is `Display`,
     selecting the same impl one level down. The type shrinks each step, so the
     only non-terminating shape is a self-referential blanket impl
     (`impl<T: Foo> Foo for T`); `IMPL_BOUND_MAX_DEPTH` is where that lives,
@@ -1165,7 +1165,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   depend on `std::option`, and since milestone 19 impl visibility is transitive
   through `use`. So `use std::array::push;` now hands a program `std::fmt`'s
   and `std::cmp`'s impls as well, and with them coherence's refusal to let it
-  write its own `impl Display for Int`. `std::array` used to be a leaf. The
+  write its own `impl Display for int`. `std::array` used to be a leaf. The
   alternative was a panicking `pop`, which trades a worse API for a shallower
   graph — not a trade worth making, but worth saying out loud, because it is
   the first time a std module's *dependencies* are part of its public contract.
@@ -1335,7 +1335,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   dependent of the host whatever impls the imported module ships.
 
   - impl in `std::string` → `use std::string::len;` would also deliver `impl Ord
-    for Int` and `Float`, and with them coherence's refusal to let a program
+    for int` and `float`, and with them coherence's refusal to let a program
     write its own. `std::string` would stop being a leaf, undoing milestone 24's
     one deliberate promise.
   - impl in `std::cmp` → `std::cmp` imports a module of free functions that
@@ -1352,7 +1352,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
 
   Both directions were checked rather than assumed, and the probes are worth
   keeping in mind because coherence makes the obvious test misleading — a
-  program cannot write a conflicting `impl Ord for Int` without importing `Ord`,
+  program cannot write a conflicting `impl Ord for int` without importing `Ord`,
   which drags the impls in by itself. The observable question is *method
   dispatch without importing the trait*: `use std::string::compare;` then
   `3.lt(9)` is still "no method named 'lt'" (std::string reaches nothing), while
@@ -1363,22 +1363,22 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   it does not even exercise the native calling convention's rooting rule — the
   one thing `std::string`'s other natives exist to demonstrate.
 
-- **A `Char` type (milestone 26)** — `'a'` is a value, and a program can finally
+- **A `char` type (milestone 26)** — `'a'` is a value, and a program can finally
   get inside a String. Design: `language.md` "`std::char`, and what a `String`
   is made of", `runtime.md` "Values" / "Native functions", `architecture.md`
   Scanner / "Types and inference".
 
-  The observation the milestone turns on: **a `String` is bytes, and a `Char` is
+  The observation the milestone turns on: **a `String` is bytes, and a `char` is
   not one.** Everything the runtime does with text has been byte-shaped —
   `len` counts bytes, `slice` cuts at byte offsets, milestone 25's `compare` is
   `memcmp` — and that was consistent only while nothing could look inside. A
-  Char is the first thing that has to say what a String is *made of*, and the
+  char is the first thing that has to say what a String is *made of*, and the
   answer cannot be "a byte" without making the name a lie for text the language
   can already hold in a literal (`"héllo"` has been legal since 5b).
 
   So the two views stay apart, and everything follows from refusing to blur
   them:
-  - **The bridge is a conversion, never an index.** `chars(s) -> [Char]` and
+  - **The bridge is a conversion, never an index.** `chars(s) -> [char]` and
     `from_chars` cross over; there is deliberately no `char_at(s, i)`, because
     `i` would be a byte offset, a byte offset is not a character position, and
     that spelling would make confusing the two the *default* rather than the
@@ -1386,21 +1386,21 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
     lets those two numbers meet.
   - **`chars` can fail, and that is honest rather than untidy.** `slice` is
     indexed in bytes, so a program can halve a multi-byte sequence; the result
-    is a String that is not valid UTF-8. Only a `Char` promises to be a
+    is a String that is not valid UTF-8. Only a `char` promises to be a
     character, so the promise is enforced where one is made — at `chars`, and
     at `from_code`, the only other way to conjure one.
-  - **A Char is stored decoded.** `VAL_CHAR` is a `uint32_t` scalar value, so
+  - **A char is stored decoded.** `VAL_CHAR` is a `uint32_t` scalar value, so
     the encoding appears at exactly two edges: `utf8_encode` on the way out
     (`value_print`, the VM's `stringify`) and `utf8_decode` in the two natives
     that read a String. Strict both ways — overlong, surrogate, out of range all
     rejected — which is what lets every *other* path take for granted that a
-    Char it holds can be written.
+    char it holds can be written.
 
   The second observation is milestone 23's rule, and it cuts deeper here than it
-  did for arrays: **what a Char cannot express about itself is its number.** So
+  did for arrays: **what a char cannot express about itself is its number.** So
   `code`/`from_code` are the whole of `std::char`'s C surface, and `is_digit`,
-  `is_alpha`, `to_upper`, `to_lower`, `to_digit` and `impl Ord for Char` are all
-  ordinary ducktape — a code point *is* an Int, so every classification is a
+  `is_alpha`, `to_upper`, `to_lower`, `to_digit` and `impl Ord for char` are all
+  ordinary ducktape — a code point *is* an int, so every classification is a
   range test and every case conversion is an addition. Four natives total, two
   of them in `std::string` (`chars`, `push_char`), and `from_chars` is ducktape
   because `push_char` exists.
@@ -1416,9 +1416,9 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   **The checker barely noticed.** Adding a *primitive* is four lines beside
   `Never` in `TYNODE_NAMED`, a case in `resolve_expr`, an entry in three inert
   type switches, and the name in `check_interpol_seg`'s primitive list — the one
-  place it differs from `StringBuf`, since a Char renders itself. Nothing in
+  place it differs from `StringBuf`, since a char renders itself. Nothing in
   sema had to learn what a character is. Struct fields, generics keyed on
-  `TY_CHAR`, `dyn Display`, `Option<Char>`, patterns and closures all arrived
+  `TY_CHAR`, `dyn Display`, `Option<char>`, patterns and closures all arrived
   working, with no case anywhere for any of them.
 
   The cost is instead in the three places `StringBuf` never had to go, and they
@@ -1440,18 +1440,18 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
     in 9a. `BC_C_CHAR` is the only tag whose payload is *not* total over its
     bits — every other one can decode anything it reads — so `bc_load` validates
     it rather than trusting it. An image may not be the one place in the runtime
-    where a Char is not a scalar value. Appending the tag rather than inserting
+    where a char is not a scalar value. Appending the tag rather than inserting
     it leaves the existing numbering alone, which costs nothing.
 
-  **`impl Ord for Char` confirms milestone 25's placement rule rather than
+  **`impl Ord for char` confirms milestone 25's placement rule rather than
   merely obeying it.** The impl goes with the trait, in `std::cmp`, so `std::cmp`
   imports `std::char` — and the reason that is the cheap direction is that
   `std::char` ships no impls, nor does the one module *it* imports
   (`std::panic`, for `to_digit`). "An import's cost is measured in impls, not in
   code" now has a second instance, and this one sharpens it: a dependency on an
   impl-free module is free *no matter how much of it is used*. The contrast with
-  `String` is the interesting half — ordering a Char needs no native at all,
-  because `code` hands the comparison two Ints and `<` on an Int is an opcode,
+  `String` is the interesting half — ordering a char needs no native at all,
+  because `code` hands the comparison two Ints and `<` on an int is an opcode,
   whereas ordering a *string* of them was exactly the circularity that forced
   `string_cmp` into C.
 
@@ -1466,13 +1466,13 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
 
   No pre-existing bug surfaced, which is worth recording because it breaks a run
   of them: the suite was green and `make sanitize` clean on the first try. The
-  most plausible reason is that a Char adds a new *kind* rather than a new
+  most plausible reason is that a char adds a new *kind* rather than a new
   relationship — nothing about it makes an existing path reachable from a
   direction it was not already reachable from, which is what every one of the
   last several latent bugs turned out to need.
 
 - **Object-safe traits with associated types (milestone 27)** —
-  `dyn Iterator<Item = Int>` dispatches dynamically over a trait the
+  `dyn Iterator<Item = int>` dispatches dynamically over a trait the
   object-safety rule used to reject outright. Design: `language.md` "Trait
   objects", `architecture.md` "Trait objects (`dyn Trait`)", `runtime.md`
   "Trait objects".
@@ -1483,7 +1483,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   it can no longer have. A projection looks like the same problem and is not:
   it is not the erased type, it is a *function of* it, and a function of an
   erased thing can be pinned by writing down its result. So `dyn
-  Iterator<Item = Int>` is not a trait object with decoration — it is the
+  Iterator<Item = int>` is not a trait object with decoration — it is the
   trait object plus the part of the signature the vtable erased, put back where
   the caller can read it.
 
@@ -1519,7 +1519,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   the path after `dyn` is parsed in a new `PATH_BARE` mode and the `<` is read
   by `parse_assoc_bindings` instead. Handing it to `parse_type_args` would
   report "expected '>'" at the `=`; more to the point, a trait's own type
-  parameters are a different question, still unsupported, and `dyn Into<Int>`
+  parameters are a different question, still unsupported, and `dyn Into<int>`
   remains without meaning.
 
   A side effect worth recording, because it narrows a listed wart rather than
@@ -1539,7 +1539,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
 
   And one real pre-existing bug, found while checking what to write in the
   "Next" list rather than by the feature itself: **a generic trait aborted the
-  compiler.** `impl Into<Int> for S` reaches `resolve_path` — a *bare* trait
+  compiler.** `impl Into<int> for S` reaches `resolve_path` — a *bare* trait
   name never does, since the type scope answers it directly — where `TY_TRAIT`
   fell into `default: assert(false)`. So the one spelling that gets there was
   the one nothing handled. Two diagnostics now, because they are two different
@@ -1551,7 +1551,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   on top.
 
 - **Generic traits (milestone 28)** — `trait Into<T>` carries its type
-  arguments, so `impl Into<Int> for S`, `T: Into<Int>` and `dyn Into<Int>` all
+  arguments, so `impl Into<int> for S`, `T: Into<int>` and `dyn Into<int>` all
   mean something. Design: `language.md` "Generic traits", `architecture.md`
   "Generic traits", `runtime.md` "Monomorphisation" / "Trait objects".
 
@@ -1569,19 +1569,19 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   Three things follow, and they are the whole milestone:
   - **The bound is where the arguments were always missing.** `TypeGeneric`
     held `TraitDef *`, so a bound could name a trait and nothing about it.
-    Holding a `TY_TRAIT` instead makes `S: Into<Int>` a question with an
+    Holding a `TY_TRAIT` instead makes `S: Into<int>` a question with an
     answer, and — because trait references are interned — the check stayed the
     pointer comparison it already was. It also gives a bound somewhere to put
     a *type*, which is what makes `fun conv<T, U: Into<T>>` writable: bounds
     now resolve left to right, defining each parameter as they go, and
     `infer_open_generics` rewrites the stashed bound through the substitution
-    it just built so `Into<T>` is checked as `Into<Int>` rather than as a
+    it just built so `into<T>` is checked as `into<int>` rather than as a
     literal no impl heads.
   - **An impl applies to a *pair*, not to a receiver.** `impl_applies` takes
     the trait reference alongside the self type and matches the head against
     both, so either half may pin the impl's own parameters, and coherence asks
     the same question from both sides — which is what lets one type implement
-    one trait at several arguments (`Into<Int>` and `Into<Fahrenheit>` for one
+    one trait at several arguments (`into<int>` and `into<Fahrenheit>` for one
     `Celsius`) without it being a conflict.
   - **That makes a bare method call the one thing the receiver cannot
     decide.** `c.into()` has two bodies, and a bound would have named the
@@ -1593,7 +1593,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
 
   `dyn` needed a small grammar change and no new concept: the bracket list now
   holds the trait's positional type arguments *then* its named associated-type
-  bindings (`dyn Pipe<String, Out = Int>`), told apart by two tokens of
+  bindings (`dyn Pipe<String, Out = int>`), told apart by two tokens of
   lookahead. Object safety is untouched — a trait's type parameters are
   written down by whoever names the `dyn`, so unlike `Self` they were never
   erased, which is the same argument milestone 27 made for `Self.Item`.
@@ -1615,7 +1615,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   `TraitDef *` it replaced — can still be an unsolved unknown when the
   coercion is discovered.
 
-- **`std::convert`, and the call it needed (milestone 29)** — `From` and `Into`
+- **`std::convert`, and the call it needed (milestone 29)** — `From` and `into`
   are one relation written from two ends, and a program writes only the first.
   Design: `language.md` "`std::convert`", `architecture.md` "Calls through a
   trait bound" / "An impl parameter the head does not pin", `runtime.md`
@@ -1626,7 +1626,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   opposite — a receiver names its impl, or a bound names the reference — and a
   conversion is exactly the case where neither can. So the two ends of the
   relation are two traits, and each supplies the half the other cannot:
-  `From` is qualified by the type it *produces*, and `Into` is pinned by the
+  `From` is qualified by the type it *produces*, and `into` is pinned by the
   type its result *flows into*.
 
   Three things follow, and they are the whole milestone:
@@ -1653,9 +1653,9 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
     `'a'.into()` reach different `From` impls for one `Steps`.
   - **The blanket is what makes the pair honest, and it costs the language a
     rule.** Coherence is deliberately blind to an impl's bounds, so
-    `impl<T, U: From<T>> Into<U> for T` overlaps every `Into` impl that could
+    `impl<T, U: From<T>> Into<U> for T` overlaps every `into` impl that could
     ever be written: importing `std::convert` means you write `From` and never
-    `Into`. That is Rust's rule arrived at from the same direction. The
+    `into`. That is Rust's rule arrived at from the same direction. The
     reflexive `impl<T> From<T> for T` is absent for the same reason one step
     worse — it would leave a trait nobody could implement.
 
@@ -1670,7 +1670,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
     bounds (`infer_open_generics` rewriting the stashed bound); the impl half
     had no such shape to exercise it until now.
   - **a `Subst` is keyed by name, and a name had two live meanings.** For
-    `impl<T: Tag> Boxed<Int> for T` against `trait Boxed<T>`, the trait's
+    `impl<T: Tag> Boxed<int> for T` against `trait Boxed<T>`, the trait's
     argument and the impl's parameter are both "T", and `cg_inst_key` read the
     call's recorded arguments first — so the impl parameter silently took the
     trait's value and the body compiled against the wrong type. Renaming the
@@ -1679,7 +1679,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
     for it.
 
   Also cleared, because the module needs it: **a builtin type may qualify a
-  path** (`Float::from(7)`). The struct path context carried only a `Type`, so
+  path** (`float::from(7)`). The struct path context carried only a `Type`, so
   it became `PATHRES_CTX_TYPE`, and the builtin names moved into one
   `type_named_builtin` shared with `TYNODE_NAMED` so the two spellings cannot
   drift. Without it an impl written for a primitive would have been reachable
@@ -1744,7 +1744,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   the only evidence there is.
 
 - **Trait-qualified calls (milestone 31)** — a call may name its trait in full,
-  `Into::<Fahrenheit>::into(c)`, closing the receiver spelling milestone 30's
+  `into::<Fahrenheit>::into(c)`, closing the receiver spelling milestone 30's
   note left unread. Design: `architecture.md` "Trait-qualified calls",
   `language.md` "The standard library" → `std::convert`.
 
@@ -1949,7 +1949,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
     combining character counts as one — the same ASCII-exact limit `std::char`
     documents, and it inherits `chars`'s runtime error on invalid UTF-8.
   - **It lives in `std::string`, not `std::fmt`** — `pad` reshapes a `String`,
-    where `float` renders a `Float`, so it is `repeat`'s neighbour rather than
+    where `float` renders a `float`, so it is `repeat`'s neighbour rather than
     `float`'s. That also keeps the no-impl property: `std::string` ships no
     impls and refuses to reach `std::array` (the count is a `for` over `chars`,
     not `array::len(chars(s))`, for the same reason `join` counts nothing —
@@ -1980,7 +1980,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   **Codegen, `OP_INTERP`, the VM and the image format did not change**, exactly
   as milestone 18 predicted a spec would behave: the segment simply evaluates to
   a `String`. The whole feature is a scanner token (`^`), a `FormatSpec` on the
-  `InterpolSeg`, a parser for the spec, and the checker rewrite.
+  `interpolSeg`, a parser for the spec, and the checker rewrite.
 
   Two things follow, and the second is the real cost:
   - **The scanner already tokenised the spec** — `:` `>` `8` are ordinary
@@ -1989,7 +1989,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
     DOT then INT, so a fused width-and-precision arrives as a FLOAT the parser
     splits, and a lone precision as its own tokens. The fill is a *char literal*
     (`'-'`), which tokenises unambiguously where a bare `*` would collide with
-    multiplication and is the `Char` the value is padded with either way.
+    multiplication and is the `char` the value is padded with either way.
   - **`pad_*` and `float` had to become lang items, and that is forced by the
     same argument that made `Display` one.** The user never writes those names,
     so the compiler generates the calls — and if it resolved them through
@@ -2008,7 +2008,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   "the checker already knows the FunDef" shape `resolve_assoc_call` uses. The
   `pad_*` are non-generic ducktape and `float` a non-generic native, so the
   calls need no inference; the rewrite validates only the value's own type, since
-  a precision applies to a `Float` and nothing else.
+  a precision applies to a `float` and nothing else.
 
   Deliberately not done: a *dynamic* width or precision (`{v:>{n}}`) — the two
   are literals, and a runtime value there has no spelling; truncation (pad only
@@ -2044,7 +2044,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   the same limit `Display` records), and the element is ordered through its own
   `Ord`, so `[(A, B)]` and `[[T]]` sort by reaching both new impls through the
   bound (`tests/run/container_ord.dt`). Not done: `Ord` for other tuple arities,
-  and a total order for `[Float]` still inherits the NaN wart the element does.
+  and a total order for `[float]` still inherits the NaN wart the element does.
 
 - **`==` on a generic, and the soundness hole behind it (milestone 37)** — a
   binary operator on two values of an unbounded generic type used to be a bare
@@ -2055,7 +2055,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   The observation the milestone turns on: **structural equality is a runtime
   operation, so `==` on a generic needs no static type.** `OP_EQ` inspects none —
   it compares two structs the same way it compares two Ints — so `a == b` on a
-  generic `T` is `types_equal(T, T)` → `Bool`, exactly as it already was for a
+  generic `T` is `types_equal(T, T)` → `bool`, exactly as it already was for a
   struct or a tuple. Arithmetic and ordering are the other side of the same coin:
   there is no operator overloading, so `+` and `<` want a concrete numeric type,
   and a generic operand now reports against its own name ("requires numeric
@@ -2066,7 +2066,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   The reason it was worth a milestone and not a one-line cleanup is the *second*
   bug the silent poison caused. A poisoned `if` condition makes `resolve_expr`'s
   `EXPR_IF` bail before the branch body (`type_is_poison(cond_ty)` → return), so
-  the body went **unchecked** — a blatant `var z: Int = "str";` inside
+  the body went **unchecked** — a blatant `var z: int = "str";` inside
   `if a == b { .. }` was accepted, and a *call* in that body reached codegen with
   no `resolved_fun`, failing as the misleading "this name is not supported by the
   VM yet". So one silent poison in the type layer surfaced as a soundness hole in
@@ -2074,7 +2074,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   at the operator. The lesson is the one the CLAUDE.md convention already states:
   a checker error is *one `diag_error` then poison* — a poison with no diagnostic
   is how a whole branch goes dark. Tests: `tests/run/generic_eq.dt` (the positive
-  path across Int/String/struct, and the call-in-`if`-body shape the bug hid),
+  path across int/String/struct, and the call-in-`if`-body shape the bug hid),
   `tests/fail/generic_add.dt` / `generic_cmp.dt` (arithmetic/ordering now
   diagnosed), `tests/fail/generic_eq_body_checked.dt` (the body error now
   reported). Uncovered while prototyping a `std::assert`, which `assert_eq<T>`
@@ -2091,7 +2091,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   `rewrite_ord_comparison` reshapes the `EXPR_BINARY` node in place: build an
   `EXPR_METHOD_CALL` for `a.cmp(b)`, resolve it against the already-known
   receiver type, then set the node's left to that call and its right to a `0`
-  literal, operator untouched. The outer node is now `Int OP Int`, so **codegen,
+  literal, operator untouched. The outer node is now `int OP int`, so **codegen,
   `OP_LT` and the VM did not change at all** — the exact shape the `to_string`
   rewrite has, where the segment ends up a `String` the VM already stringifies.
 
@@ -2120,7 +2120,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   through an `Eq` would make the commonest operation import-dependent and hand
   coherence the power to take `[1,2] == [1,2]` away from a program. `Eq` waits
   for a concrete consumer that needs *custom* equality. Tests:
-  `tests/run/ord_operators.dt` (struct, bounded generic, Char, `max`),
+  `tests/run/ord_operators.dt` (struct, bounded generic, char, `max`),
   `tests/run/string_ord.dt`'s selection sort now spells its comparison `<`,
   `tests/fail/generic_cmp.dt` (unbounded `T` asks for the bound),
   `tests/fail/ord_not_implemented.dt` (a type with no impl),
@@ -2169,7 +2169,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
 - **The standard library adopts methods (milestone 40)** — the primitive modules
   now spell their operations as methods: `s.len()`, `xs.push(v)`, `c.code()`,
   `b.build()`, with constructors as associated functions (`StringBuf::new()`,
-  `Char::from_code(n)`). Design: `language.md` "The standard library",
+  `char::from_code(n)`). Design: `language.md` "The standard library",
   `runtime.md` "Native functions". This is the milestone-39 follow-up, and it is
   **a pure `.dt` change**: no C moved, the checker and runtime were already done
   in 39, and the whole diff is the four primitive modules (`std::string`,
@@ -2200,11 +2200,11 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
     into, so their meaning cannot depend on what a program imported — a method
     would move the target the desugar builds and break the capture in
     `tc_register_fun`. `join`/`concat`/`from_chars` stay free because their
-    receiver is a `[String]` / `[Char]`, not a `String`. `print` stays free
+    receiver is a `[String]` / `[char]`, not a `String`. `print` stays free
     because it is general over any `T`, a function rather than one type's method.
 
   **The cost the milestone actually buys is a wart, and it is worth naming.**
-  Shipping `impl String` / `impl<T> [T]` / `impl Char` widely means a program that
+  Shipping `impl String` / `impl<T> [T]` / `impl char` widely means a program that
   imports the module can no longer add its own inherent method of the same name to
   that primitive — overlapping inherent methods were silently first-wins (there
   was no coherence check on inherent impls), so it shadowed with no diagnostic.
@@ -2256,18 +2256,18 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   `contains` → `find` became `self.find(needle)`, an ordinary method call on the
   receiver.
 
-- **`Ord for Float` is a total order (milestone 42)** — the last of the ordering
+- **`Ord for float` is a total order (milestone 42)** — the last of the ordering
   warts: IEEE comparison is not a total order, so the naive three-branch `cmp`
   returned 0 for `NaN.cmp(x)` at every `x` and NaN compared *equal to
   everything*, making `max(nan, 1.0)` and `max(1.0, nan)` disagree and a
-  `[Float]` with a NaN in it have no defined sort. Design: `language.md` →
+  `[float]` with a NaN in it have no defined sort. Design: `language.md` →
   `std::cmp`, and the wart entry updated to record the decision.
 
   The observation the milestone turns on: **the fix needs nothing the language
   cannot already say.** `self != self` is the NaN test — only NaN is unequal to
-  itself, and `!=` is IEEE on `Float` because `value_equal` compares the bits
+  itself, and `!=` is IEEE on `float` because `value_equal` compares the bits
   with `==` — so the whole change is two branches at the top of `impl Ord for
-  Float`, a pure `.dt` edit with no compiler, opcode or runtime change. The only
+  float`, a pure `.dt` edit with no compiler, opcode or runtime change. The only
   real content is the *decision* the wart said "nothing has needed to make":
   **NaN sorts after every real number and all NaNs are equal to each other.**
   That is the placement that keeps `cmp` transitive (every real `x` is `< NaN`,
@@ -2493,7 +2493,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   second argument's hint still read `I.Item` after the first had solved `I`. The
   fix is one `infer_apply` on the parameter type before it becomes the hint:
   **arguments are checked left to right, each hinted by what the earlier ones
-  solved.** Once `I = Counter`, `I.Item` collapses to `Int` and the closure
+  solved.** Once `I = Counter`, `I.Item` collapses to `int` and the closure
   checks. The mirror fix — `infer_apply` on the `for`-loop's element type — is
   what lets a `Filter` (whose `type Item = I.Item`) bind a usable loop variable
   rather than an abstract `Counter.Item`.
@@ -2585,13 +2585,13 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   The fix is the interesting part, and it was **latent before this milestone —
   the 48 tests just avoided it.** A pass-through adapter binds `type Item =
   I.Item`, so a receiver like `Filter<Counter>` has `Item` = `Counter.Item`: a
-  projection whose base is itself concrete, one hop short of `Int`.
+  projection whose base is itself concrete, one hop short of `int`.
   `check_trait_method_call` projected `Self.Item` through the impl (→
   `Counter.Item`) but stopped, so a closure typed by that element (`filter(p)
   .map(f)`, `filter(p).fold(..)`) saw an abstract `Counter.Item` and failed
   ("arithmetic operator requires numeric types, got 'Counter.Item'"). One
   `infer_apply` on the projected `fun_ty` finishes the collapse — it already
-  resolves a concrete-based `TY_ASSOC` recursively (`Counter.Item` → `Int` via
+  resolves a concrete-based `TY_ASSOC` recursively (`Counter.Item` → `int` via
   `impl_index_assoc_type`) and leaves a still-abstract base (a bound receiver's
   `T.Item`, `Self.Item` in a default body) untouched. So the win is broader than
   the four combinators: *any* closure over a pass-through adapter's element now
@@ -2624,7 +2624,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
   parameter, an unknown, or a trait's abstract `Self` — it reads the binding off
   the applicable impl via `impl_index_assoc_type` and *recurses on the answer*.
   The recursion is what handles a pass-through adapter, whose `Item` is a
-  projection of its own: `Filter<Counter>.Item` → `Counter.Item` → `Int` in one
+  projection of its own: `Filter<Counter>.Item` → `Counter.Item` → `int` in one
   pass. `assoc_apply(impls, t, al)` is that traversal with an empty substitution,
   exported for codegen; `subst_apply` passes NULL and is unchanged, so no sema
   caller's behaviour moves. Codegen routes its nine `subst_apply(&cg->subst, ..)`
@@ -2852,7 +2852,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
     parameter the same call is solving. `impl_bounds_satisfied` asks at impl
     selection, and for this predicate kind that is not a nicety: an
     `impl<I, J: Iterator<Item = I.Item>> Iterator for Chain<I, J>` applying to a
-    `Chain<Counter, Words>` would compile `Words`'s `String`s as the `Int`s it
+    `Chain<Counter, Words>` would compile `Words`'s `String`s as the `int`s it
     bound `Item` to. Selection had never looked at associated-type bounds at
     all, so milestone 52's kind was unchecked there too.
   - **A trait method's type parameter is declared in the trait's terms.**
@@ -2870,7 +2870,7 @@ is history: nothing here is a plan. The roadmap keeps milestone 55 onward, the
     there constraining nothing, so it is refused, naming `I.Item` as the
     spelling to use.
 
-  The syntax was free: `dyn Iterator<Item = Int>` has spelled exactly this
+  The syntax was free: `dyn Iterator<Item = int>` has spelled exactly this
   since milestone 27, so `parse_dyn_args` — which already separates a trait's
   type arguments from its associated-type bindings in one bracket list — now
   parses a trait *bound* too. The arguments go into the path's last segment

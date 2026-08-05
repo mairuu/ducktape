@@ -8,6 +8,6 @@ use std::iter::Iterator;
 use std::option::Option;
 use std::cmp::Ord;
 
-fun f<I: Iterator>(it: I) -> Int where I.Nope: Ord {
+fun f<I: Iterator>(it: I) -> int where I.Nope: Ord {
     return 1;
 }

@@ -8,7 +8,7 @@ enum Event {
   A,
   B,
   C,
-  Payload(Int),
+  Payload(int),
 }
 
 fun name(e: Event) -> String {

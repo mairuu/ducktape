@@ -2,25 +2,25 @@
 # a default body's `Self` satisfies exactly the bounds its own trait gives it,
 # and that is checked once here — not per impl, and not at the call site.
 trait Show {
-    fun show(self) -> Int;
+    fun show(self) -> int;
 
-    fun via(self) -> Int {
+    fun via(self) -> int {
         return needs_other(self);
     }
 }
 
 trait Other {
-    fun o(self) -> Int;
+    fun o(self) -> int;
 }
 
-fun needs_other<T: Other>(v: T) -> Int {
+fun needs_other<T: Other>(v: T) -> int {
     return v.o();
 }
 
-struct S(Int)
+struct S(int)
 
 impl Show for S {
-    fun show(self) -> Int {
+    fun show(self) -> int {
         return self.0;
     }
 }

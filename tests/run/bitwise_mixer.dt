@@ -7,7 +7,7 @@
 # checks it agrees with the native on every input tried.
 #
 # It reaches the native through the public API rather than by calling it:
-# `hash_of(n)` on an Int is `mix(0, n)`, and a `Hasher` written to twice is
+# `hash_of(n)` on an int is `mix(0, n)`, and a `Hasher` written to twice is
 # `mix(mix(0, a), b)`. So nothing here depends on `mix` being visible, and the
 # test would still hold if std rearranged which of its functions is native.
 #
@@ -22,15 +22,15 @@ use std::io::print;
 use std::hash::{Hasher, hash_of};
 
 # splitmix64's multiplier, 0xff51afd7ed558ccd. There are no hex literals, so it
-# is written as the signed Int holding that bit pattern — which is negative,
+# is written as the signed int holding that bit pattern — which is negative,
 # since the top bit is set. That is not a workaround: the value is a *pattern*
 # rather than a magnitude, and every operation below treats it as one.
-fun splitmix_const() -> Int {
+fun splitmix_const() -> int {
     return 0 - 49064778989728563;
 }
 
 # FNV-1a's 64-bit prime, 0x100000001b3. Small enough to be positive.
-fun fnv_prime() -> Int {
+fun fnv_prime() -> int {
     return 1099511628211;
 }
 
@@ -40,7 +40,7 @@ fun fnv_prime() -> Int {
 # Getting that one character wrong is the whole difference between this and a
 # function that agrees on positives and diverges on negatives — which is why
 # the checks below deliberately include values with the top bit set.
-fun mix(state: Int, value: Int) -> Int {
+fun mix(state: int, value: int) -> int {
     var v = value * splitmix_const();
     v = v ^ (v >>> 33);
     var h = state ^ v;
@@ -50,7 +50,7 @@ fun mix(state: Int, value: Int) -> Int {
 }
 
 fun main() {
-    # `hash_of` on an Int is one round from a zero state
+    # `hash_of` on an int is one round from a zero state
     var ok = true;
     var i = 0;
     while i < 1000 {
@@ -63,7 +63,7 @@ fun main() {
 
     # the values where a wrong shift or a non-wrapping multiply would show:
     # negatives, the extremes, and the constant itself
-    var awkward: [Int] = [
+    var awkward: [int] = [
         0 - 1,
         0 - 9223372036854775807 - 1,
         9223372036854775807,

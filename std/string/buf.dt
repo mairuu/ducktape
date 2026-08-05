@@ -34,18 +34,18 @@ impl StringBuf {
     # worth a new object kind: the bytes go straight in, with no String interned
     # along the way to carry them.
     @native("strbuf_push_char")
-    fun push_char(self, c: Char);
+    fun push_char(self, c: char);
 
-    # Append an Int's decimal digits, without first interning a String to carry
+    # Append an int's decimal digits, without first interning a String to carry
     # them. `b.push("{n}")` would build a throwaway String for the digits — the
     # re-interning a buffer exists to avoid — so this is `push_char`'s sibling
     # for numbers: the bytes go straight in.
     @native("strbuf_push_int")
-    fun push_int(self, n: Int);
+    fun push_int(self, n: int);
 
     # The bytes written so far.
     @native("strbuf_len")
-    fun len(self) -> Int;
+    fun len(self) -> int;
 
     # Empty the buffer, keeping the capacity it has grown to. A buffer can be
     # reused across a loop this way rather than allocating a fresh `new()` each
@@ -54,13 +54,13 @@ impl StringBuf {
     @native("strbuf_clear")
     fun clear(self);
 
-    # Intern the bytes written so far into a `String`. Non-destructive: the
+    # intern the bytes written so far into a `String`. Non-destructive: the
     # buffer is unchanged and may be appended to again, so `build` inside a loop
     # is a snapshot rather than a handover.
     @native("strbuf_build")
     fun build(self) -> String;
 
-    fun is_empty(self) -> Bool {
+    fun is_empty(self) -> bool {
         return self.len() == 0;
     }
 }

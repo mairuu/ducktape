@@ -1,10 +1,10 @@
 # a pub struct with a private field: the type is importable, but the field is
 # not readable from another module.
 pub struct Rect {
-  pub w: Int,
-  h: Int, # private: only rect.dt sees it
+  pub w: int,
+  h: int, # private: only rect.dt sees it
 }
 
-pub fun square(s: Int) -> Rect {
+pub fun square(s: int) -> Rect {
   return Rect { w: s, h: s };
 }

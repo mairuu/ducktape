@@ -1,11 +1,11 @@
 use shape::{Show, S};
 
 impl Show for S {
-  fun show(self) -> Int {
+  fun show(self) -> int {
     return self.v;
   }
 }
 
-pub fun from_a() -> Int {
+pub fun from_a() -> int {
   return 1;
 }

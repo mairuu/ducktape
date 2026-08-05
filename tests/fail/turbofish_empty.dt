@@ -5,11 +5,11 @@
 # further on. One spelling of the mistake, one diagnostic, on the brackets that
 # are the mistake.
 struct H {
-    n: Int,
+    n: int,
 }
 
 impl H {
-    fun width(self) -> Int {
+    fun width(self) -> int {
         return self.n;
     }
 }

@@ -4,8 +4,8 @@
 # as a method now, which is never a path-value at all, so this declares its own
 # free intrinsic to name the way that used to be reachable through std.
 @intrinsic("array_len")
-fun len<T>(xs: [T]) -> Int;
+fun len<T>(xs: [T]) -> int;
 
 fun main() {
-  var f = len::<Int>;
+  var f = len::<int>;
 }

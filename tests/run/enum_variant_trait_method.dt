@@ -14,7 +14,7 @@
 use std::io::print;
 
 trait Step {
-  fun next(self) -> Int;
+  fun next(self) -> int;
 }
 
 enum E {
@@ -23,7 +23,7 @@ enum E {
 }
 
 impl Step for E {
-  fun next(self) -> Int {
+  fun next(self) -> int {
     match self {
       E::next => 1,
       E::done => 0,

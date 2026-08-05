@@ -1,19 +1,19 @@
-#! expect: no method named 'into' found for type 'Int'
+#! expect: no method named 'into' found for type 'int'
 # The limit of the blanket impl, and it is inherent rather than an oversight:
-# `impl<T, U: From<T>> Into<U> for T` is chosen by neither the receiver nor a
+# `impl<T, U: From<T>> into<U> for T` is chosen by neither the receiver nor a
 # written trait reference, so `U` is pinned only by the type the result flows
 # into. A `print` argument is not that — `print<T>` accepts anything — so there
 # is nothing to pin it with and the impl does not apply.
 #
-# `var n: Int = 7.into();` is the same call with an answer.
+# `var n: int = 7.into();` is the same call with an answer.
 
 use std::io::print;
-use std::convert::{From, Into};
+use std::convert::{From, into};
 
-struct Meters { n: Int }
+struct Meters { n: int }
 
-impl From<Int> for Meters {
-    fun from(value: Int) -> Meters {
+impl From<int> for Meters {
+    fun from(value: int) -> Meters {
         return Meters { n: value };
     }
 }

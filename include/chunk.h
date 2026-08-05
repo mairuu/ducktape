@@ -43,7 +43,7 @@ typedef enum {
   OP_NEG,
   OP_NOT,
 
-  // Int-only, and the reason the language has them at all: nothing above this
+  // int-only, and the reason the language has them at all: nothing above this
   // tier can express a bit. `OP_SHR` propagates the sign, `OP_USHR` shifts
   // zeros in; both refuse a count outside 0..63 rather than inheriting C's
   // undefined behaviour for one.
@@ -62,13 +62,13 @@ typedef enum {
   OP_GT,
   OP_GTEQ,
 
-  OP_CAST_INT,   // Float -> Int (truncating); Int is a no-op
-  OP_CAST_FLOAT, // Int -> Float; Float is a no-op
+  OP_CAST_INT,   // float -> int (truncating); int is a no-op
+  OP_CAST_FLOAT, // int -> float; float is a no-op
 
   OP_RANGE,       // u8 inclusive — pops end, start; pushes start..end
   OP_RANGE_START, // pops range; pushes start
   OP_RANGE_TEST,  // pops i, range; pushes i < end (or <= when inclusive)
-  OP_RANGE_STOP,  // pops range; pushes the first Int past the end — `end`, or
+  OP_RANGE_STOP,  // pops range; pushes the first int past the end — `end`, or
                   // `end + 1` when inclusive. This is where `a..b` and `a..=b`
                   // stop being two things: a half-open bound describes both,
                   // so anything holding one (`std::iter`'s RangeIter) needs no
@@ -88,7 +88,7 @@ typedef enum {
   OP_INDEX_GET, // pops index, array; pushes array[index] (bounds-checked)
   OP_INDEX_SET, // pops value, index, array; sets array[index] = value,
                 // pushes value (bounds-checked)
-  OP_LEN,       // pops array; pushes its length as Int
+  OP_LEN,       // pops array; pushes its length as int
   OP_INTERP,    // u8 seg count — pop count values, stringify + concat,
                 // push the resulting string
   OP_DUP,       // u8 depth — push a copy of the value `depth` below the top
@@ -124,7 +124,7 @@ typedef enum {
                  // on the one the value already holds (VTable.upcasts): the
                  // site knows both traits and no concrete type, the table
                  // knows the concrete type and both traits
-  OP_TAG,        // pops an enum instance, pushes its variant tag as Int
+  OP_TAG,        // pops an enum instance, pushes its variant tag as int
   OP_MATCH_FAIL, // no arm matched a subject not statically proven exhaustive
                  // (checker doesn't enforce exhaustiveness yet); runtime error
 } OpCode;

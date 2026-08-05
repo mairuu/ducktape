@@ -44,7 +44,7 @@ Notables:
   `var/return/break/continue/if/for/match/while/loop` and a leading label
   through `parse_stmt`, but a parsed `if`/`match`/`loop` statement immediately
   before `}` is unwrapped into the block's tail (that's what makes
-  `{ if c { 1 } else { 2 } }` an `Int` block). `while` and `for` are not on
+  `{ if c { 1 } else { 2 } }` an `int` block). `while` and `for` are not on
   that list: they are always `()`, so there would be nothing to promote. A
   label lands on the node rather than around it, so a labelled `loop` is
   promoted like any other. `break 'l? expr?` needs no lookahead — a block is
@@ -66,7 +66,7 @@ Notables:
   named paths, and `.Assoc` postfix chains.
 - `parse_path(mode)` — expression paths require turbofish (`::<T>`) for type
   args; type paths accept plain `<T>`. A method call's type arguments
-  (`it.fold::<Int>(0, f)`) take the turbofish for the same reason and are read
+  (`it.fold::<int>(0, f)`) take the turbofish for the same reason and are read
   by the same `parse_type_args`, in `parse_postfix` rather than in the path.
   That is what keeps a `<` after a field or method access unambiguous: the
   `::` decides between a type-argument list and the less-than operator before
@@ -507,7 +507,7 @@ one module further away.
 **Coherence replaces first-registration-wins.** `impl_defs_conflict` asks
 whether two impls head the same trait *and* either one's `impl_applies` accepts
 the other's self type — selection's own question, asked from both sides, so
-`Ord for Option<T>` conflicts with `Ord for Option<Int>`. A conflict is
+`Ord for Option<T>` conflicts with `Ord for Option<int>`. A conflict is
 reported twice over, at the two places a pair can first meet: in
 `resolve_impl_decl` when a module's own impl meets an imported one, and in
 `tc_import_impls` when one `use` makes two dependencies' impls visible at once.
@@ -546,7 +546,7 @@ would have turned a working program into "no method named 'show'".
 the impl's self type match the receiver, binding the impl's type params
 (`impl_type_match`). The second, added once std shipped a container `Display`,
 is whether those bindings satisfy the bounds the impl *declared on them*:
-`impl<T: Display> Display for [T]` applies to `[Int]` and not to `[Widget]`.
+`impl<T: Display> Display for [T]` applies to `[int]` and not to `[Widget]`.
 
 Asking at selection is the whole point. Left unasked, the impl is selected
 regardless and the bound is felt only inside its body — where the diagnostic
@@ -566,7 +566,7 @@ parameter (NULL = structural only):
 - **associated-type lookup** (`impl_index_assoc_type`) passes NULL for the
   second of those reasons alone.
 
-Answering **recurses**: `[[Int]]` asks whether `[Int]` is `Display`, which
+Answering **recurses**: `[[int]]` asks whether `[int]` is `Display`, which
 selects the same impl one level down. The type shrinks each step, so the only
 non-terminating shape is a self-referential blanket impl
 (`impl<T: Foo> Foo for T`) — caught by `IMPL_BOUND_MAX_DEPTH`, past which an
@@ -623,8 +623,8 @@ produce*. Its mirror is the type a call *consumes*, and the two together are
 what `into` and `from` need respectively. `26.into()` is pinned by its receiver
 before the impl's bound is asked; `Steps::from(26)` has no receiver, and the
 qualified path names the produced type (`Steps`) but not the source — so when a
-generic trait is implemented for one type more than once (`From<Int>` and
-`From<Char>` for `Steps`) neither the self type nor a written reference can
+generic trait is implemented for one type more than once (`From<int>` and
+`From<char>` for `Steps`) neither the self type nor a written reference can
 choose between the impls. The argument is the only thing that can, and until
 milestone 30 selection never read one: the first registered impl won and every
 other argument was a type error against it.
@@ -672,7 +672,7 @@ codegen needs no new case.
 The same selector now also runs for `v.scale(10)`, and it had to: `a * b`
 desugars to `a.mul(b)`, so a heterogeneous operator is a *receiver* call, and
 the receiver spelling still had the pre-milestone-30 behaviour — the first
-registered impl won and every other argument was an "expected 'Int' but got
+registered impl won and every other argument was an "expected 'int' but got
 'V2'" against it.
 
 `resolve_method_call_typed` has no ordering obstacle to work around, because it
@@ -688,7 +688,7 @@ there more than one candidate". `assoc_candidates_differ_in_args` asks whether
 the candidates disagree about the arguments they *take*, comparing parameter
 lists only:
 
-- `Into<Fahrenheit>` and `Into<String>` for `Celsius` both take `(Celsius)` and
+- `into<Fahrenheit>` and `into<String>` for `Celsius` both take `(Celsius)` and
   differ in their return type. The return-type tie-break is what settles them,
   and running argument selection would report an ambiguity instead.
 - A supertrait-derived impl (milestone 74) shares the written impl's `MethodDef`
@@ -702,10 +702,10 @@ tie-break keeps the cases it already had.
 ### Trait-qualified calls
 
 `Steps::from(v)` above reads the *argument* to pick among several impls, because
-the self type is known and the trait reference is not. `Into::<Fahrenheit>::into(c)`
-is the exact dual: the trait reference is *written* (`Into<Fahrenheit>`) and the
+the self type is known and the trait reference is not. `into::<Fahrenheit>::into(c)`
+is the exact dual: the trait reference is *written* (`into<Fahrenheit>`) and the
 self type is not — it is the receiver argument. A bare `c.into()` cannot say
-which impl when `Celsius` goes `Into` two ways; naming the trait can. And
+which impl when `Celsius` goes `into` two ways; naming the trait can. And
 `(self type, trait reference)` is exactly the pair `impl_index_method` has keyed
 on since generic traits (milestone 28), so the whole feature is teaching the
 path grammar to reach that lookup — the parser already produces the two segments
@@ -826,9 +826,9 @@ so the flag and all three of its readers are gone.
 `"{v}"` has to turn `v` into a String, and the question that shapes the whole
 design is *who decides how*. Two answers, and both are used:
 
-- **A primitive renders itself.** Int, Float, Bool and String are handled by
+- **A primitive renders itself.** int, float, bool and String are handled by
   the VM's `stringify` (`src/vm.c`), which has known how since the feature
-  existed — Char joined them in milestone 26, rendered by `utf8_encode`.
+  existed — char joined them in milestone 26, rendered by `utf8_encode`.
   `check_interpol_seg` lets those five through untouched — no call is emitted
   at all — and that is what lets a program interpolate a number without
   importing anything.
@@ -871,7 +871,7 @@ kinds the impl index has no entry for, `TY_DYN` and the `TY_TRAIT` of a default
 body, answer from the trait they name.
 
 **A format spec desugars in the same place.** A `{v:>8}` / `{f:.3}` / `{f:>8.3}`
-spec (milestone 35) is parsed into a `FormatSpec` on the `InterpolSeg` — one
+spec (milestone 35) is parsed into a `FormatSpec` on the `interpolSeg` — one
 alignment (`<` `>` `^`) with a width, an optional fill char, and an optional
 `.N` precision, or a `.N` alone — and `check_interpol_seg` rewrites the segment
 into ordinary calls: the value is rendered to a `String` (through
@@ -900,9 +900,9 @@ through `resolve_callee`, which resolves by name and would fail.
 
 The `pad_*` are non-generic ducktape functions and `float` a non-generic native,
 so the calls need no inference — the render is a `String`, the width and
-precision `Int` literals, the fill a `Char` literal, all correct by
+precision `int` literals, the fill a `char` literal, all correct by
 construction, which is why the rewrite validates only the value's own type (a
-precision requires a `Float`).
+precision requires a `float`).
 
 ### Ordering operators and `Ord`
 
@@ -915,7 +915,7 @@ segment keeps the VM's own rendering. A non-numeric operand routes through
 it builds an `EXPR_METHOD_CALL` for `a.cmp(b)`, resolves it with
 `resolve_method_call_typed` (the receiver type is already known, so it must not
 re-resolve), then sets `binary->left` to that call and `binary->right` to a `0`
-literal, leaving the operator untouched. The outer node is now an `Int OP Int`
+literal, leaving the operator untouched. The outer node is now an `int OP int`
 comparison — so codegen, `OP_LT` and the VM need no change, the mirror of the
 `to_string` rewrite evaluating to a `String`.
 
@@ -962,7 +962,7 @@ operator as written. `ops_trait_for_token` maps the token to the row; unary `-`
 names `OPS_NEG` directly.
 
 **Where this rewrite differs from `Ord`'s is where the rewritten node ends.**
-`a.cmp(b)` is an `Int` that the outer `< 0` still consumes, so that rewrite
+`a.cmp(b)` is an `int` that the outer `< 0` still consumes, so that rewrite
 *reshapes* the binary node and keeps it. `a.add(b)` is the whole answer — its
 type is the operator's type — so `rewrite_ops_call` *replaces* the node:
 `*expr = *call` after `resolve_method_call_typed` has typed the call against the
@@ -997,7 +997,7 @@ the VM outright. In the other direction the same line was too strict, refusing
 The two questions are now asked in order: `resolve_arith_op` for the operator,
 then `infer_unify(lhs_ty, op_ty)` for the place. Every consequence falls out of
 the sentence rather than being decided separately — a heterogeneous `v *= 2.0`
-works because `Mul<Float>` does, an `Output` that is not `Self` is rejected
+works because `Mul<float>` does, an `Output` that is not `Self` is rejected
 because the place is, and `|n| { total += n; }` now needs its annotation for
 precisely the reason `total = total + n` always did. **That last one is the
 cost, and it is worth naming: the unsoundness and the inference were the same
@@ -1025,7 +1025,7 @@ Three details are the design:
   take `Rhs` with a default of `Self` (`fun add(self, other: Rhs) -> Self`);
   `Neg` has no right operand and no parameter. `ops_trait_ref` builds the
   reference the gate asks about — `ty_trait(trait, &rhs_ty, 1)`, so `v * 2.0`
-  asks for `Mul<Float>` and `v * w` for `Mul<V2>` — and the *call* it rewrites
+  asks for `Mul<float>` and `v * w` for `Mul<V2>` — and the *call* it rewrites
   to then reaches the matching impl through the receiver-side argument selection
   described under "Selection by argument type".
 
@@ -1034,18 +1034,18 @@ Three details are the design:
   trait is named, so an operator could not select by its right operand. True,
   and beside the point: an operator has both operand types in hand, so it does
   not need to infer the argument — it writes it down. The default is what keeps
-  the change free: `impl Add for Int` and `fun twice<T: Add>` still mean
-  `Add<Int>` and `Add<T>`, so nothing in `std` moved.
+  the change free: `impl Add for int` and `fun twice<T: Add>` still mean
+  `Add<int>` and `Add<T>`, so nothing in `std` moved.
 
   Two consequences. A still-unsolved *right* operand is now its own failure —
   it is what chooses, so there is nothing to choose with — reported separately
   from the left one's. And a mixed pair no impl heads is a selection failure
-  naming the reference (`'Cents' does not implement 'Add<Int>'`) rather than an
+  naming the reference (`'Cents' does not implement 'Add<int>'`) rather than an
   argument mismatch on the rewritten call, which was the old message's cost:
   it described the desugaring instead of the mistake.
 - **The result is an associated type** (milestone 76). Each trait declares a
   `type Output` and the method returns `Self.Output`, so a dot product
-  `V2 * V2 -> Float` and a reversed `impl Mul<V2> for Float` both have a
+  `V2 * V2 -> float` and a reversed `impl Mul<V2> for float` both have a
   spelling. The operator side of this cost nothing: `rewrite_ops_call` builds an
   `EXPR_METHOD_CALL` and returns whatever `resolve_method_call_typed` says, so
   changing the trait's return type changed the operator's result with no
@@ -1159,23 +1159,26 @@ after hashing it.
 The table is a process global, because pointer identity means two `Type *`
 compare equal only if one table produced them. Its entries — and the array —
 are compiler-arena memory, so `type_intern_reset` runs in `compiler_destroy`
-before that arena goes; nothing may hold a `Type *` across it. Singletons: Int, Float, Bool,
-`Char` (`TY_CHAR`), String, `StringBuf` (`TY_STRBUF`), `()` (unit), `!`
+before that arena goes; nothing may hold a `Type *` across it. Singletons: int, float, bool,
+`char` (`TY_CHAR`), String, `StringBuf` (`TY_STRBUF`), `()` (unit), `!`
 (`TY_NEVER` — produced by blocks ending in `return`, unifies with anything),
-`Range` (`TY_RANGE`, Int-only), and `TY_POISON`.
+`Range` (`TY_RANGE`, int-only), and `TY_POISON`.
 
-`TY_NEVER` is also writable, spelled `Never` in `TYNODE_NAMED` alongside the
-other primitives. That one line is the whole of the language support for
-`panic`: a signature can now *promise* divergence, and because unification
-already let `!` stand in for any type, `return panic(msg)` satisfies any return
-type with no coercion and no further rule (`language.md` "`std::panic`").
+`TY_NEVER` is also writable, and is one of the two types a *name* cannot reach:
+`()` and `!` are punctuation, parsed as `TYNODE_UNIT` and `TYNODE_NEVER` rather
+than resolved through `type_named_builtin`. Neither can be qualified and neither
+has a second spelling to keep in step with the one a diagnostic prints back.
+Writability is the whole of the language support for `panic`: a signature can
+*promise* divergence, and because unification already let `!` stand in for any
+type, `return panic(msg)` satisfies any return type with no coercion and no
+further rule (`language.md` "`std::panic`").
 
-`Char` is written in `TYNODE_NAMED` the same way, and is the cheaper half of
-the milestone that introduced it: adding a *primitive* to the checker is four
-lines beside `Never`, a case in `resolve_expr`, an entry in the three inert
+`char` is written in `TYNODE_NAMED`, and is the cheaper half of
+the milestone that introduced it: adding a *primitive* to the checker is one
+entry in `type_named_builtin`, a case in `resolve_expr`, an entry in the three inert
 type switches, and its name in the interpolation primitive list
 (`interp_render_bare`, the bare-segment half of `check_interpol_seg`) — which is
-the one place it differs from `StringBuf` below, since a Char renders itself.
+the one place it differs from `StringBuf` below, since a char renders itself.
 Everything else about the milestone is in the scanner, the value
 representation, and the image format; nothing in the checker had to learn what
 a character *is*.
@@ -1293,7 +1296,7 @@ Enforcement is deferred to the end of inference, because a bound can only be
 judged once its parameter is solved. `infer_open_generics` stashes the source
 `TY_GENERIC` in each fresh unknown's `.bound` — rewritten through the
 substitution it just built, so a bound mentioning a sibling parameter
-(`U: Into<T>`) becomes `Into<?T>` and is checked against `T`'s own solution
+(`U: Into<T>`) becomes `into<?T>` and is checked against `T`'s own solution
 rather than against a literal that no impl heads. That rewrite is the one
 *partial* `subst_apply`: a bound can mention parameters of an enclosing scope
 too, and only this declaration's are being opened. `check_bounds_satisfied`
@@ -1431,7 +1434,7 @@ Selection asks about the pair. `impl_applies` takes a nullable `trait_ref`
 alongside the self type, and matches the impl's head against *both* — so an
 impl's own parameters may be pinned by either half (`impl<T> Into<T> for
 Wrap<T>` by the receiver, `impl<T: Display> Into<String> for T` by both), and
-`impl Into<Int> for S` no longer answers `S: Into<String>`. Coherence
+`impl Into<int> for S` no longer answers `S: Into<String>`. Coherence
 (`impl_defs_conflict`) asks the same question from both sides, which is what
 lets one type implement one trait at several arguments.
 
@@ -1439,7 +1442,7 @@ Two consequences worth naming, because they are the only places the checker
 had to decide something new:
 
 - **A bare method call may have several bodies.** The receiver alone cannot
-  pick between `Into<Int>` and `Into<Fahrenheit>` for one type, and a bound
+  pick between `into<int>` and `into<Fahrenheit>` for one type, and a bound
   would have named the reference. So `impl_index_method` takes a `ret_hint` —
   the expected type, threaded from `resolve_method_call_expr` — and uses it as
   a *tie-break* only: with one candidate it is never consulted, so a wrong
@@ -1551,10 +1554,10 @@ A `self` parameter is *not* special there: the signature is used whole, so
 an associated function whose first parameter is `self`, and the path form is
 the spelling where that is visible — which is why one branch serves both.
 
-A **builtin type** may qualify a path the same way (`Float::from(7)`). The
+A **builtin type** may qualify a path the same way (`float::from(7)`). The
 struct path context carried only a `Type` anyway, so it became
 `PATHRES_CTX_TYPE` and the builtin names moved into `type_named_builtin`,
-shared with `TYNODE_NAMED` so the two spellings of `Float` cannot drift.
+shared with `TYNODE_NAMED` so the two spellings of `float` cannot drift.
 
 An **enum** qualifies one too, and is the one context where a segment has two
 readings: `PATHRES_CTX_ENUM` asks `find_enum_variant` first — the enum's own
@@ -1573,8 +1576,8 @@ A default body is checked and compiled *once per receiver type*, like the
 generic function it effectively is:
 
 ```
-trait Show { fun twice(self) -> Int { self.show() + self.show() } }
-⇒            fun twice<Self: Show>(self: Self) -> Int { ... }
+trait Show { fun twice(self) -> int { self.show() + self.show() } }
+⇒            fun twice<Self: Show>(self: Self) -> int { ... }
 ```
 
 `resolve_trait_default_impl` builds that `FunDef` at resolve time: its type
@@ -1618,7 +1621,7 @@ on `T` — or the trait itself, for `Self.Assoc` — declares that name.
 `subst_apply` substitutes inside the base but by default does not collapse the
 projection; `infer_apply` does, reading the binding off the applicable impl as
 soon as the base is concrete, and `infer_unify` normalises `TY_ASSOC` operands
-up front so `T.Item` and `Int` don't look like different kinds. While the base
+up front so `T.Item` and `int` don't look like different kinds. While the base
 is still abstract the projection survives unchanged, which is exactly what a
 generic body needs. A projection on a *trait object* never survives that long:
 `trait_project` reads it off the binding the `dyn` names, since a trait object
@@ -1655,7 +1658,7 @@ entry's traits) the way it already sorts plain bounds: `I` and
 `Item` was the only associated type in the language a name identified an entry,
 and both the bound list and `impl_index_assoc_type` searched by name alone.
 Giving all six `std::ops` traits an `Output` broke that in two places at once:
-`T: Add<Output = T> + Mul<Output = Int>` merged into one entry and reported the
+`T: Add<Output = T> + Mul<Output = int>` merged into one entry and reported the
 second binding as contradicting the first, and a `Cents` with two impls binding
 `Output` answered a projection with whichever impl was registered first. So
 `AssocBound` carries the declaring `owner`, the entry lookup and every reader
@@ -1707,7 +1710,7 @@ built, since the type it names is usually a *sibling* parameter the same call is
 solving. And `impl_bounds_satisfied` asks at impl selection, which for this
 predicate kind is not a nicety: an `impl<I, J: Iterator<Item = I.Item>> Iterator
 for Chain<I, J>` that applied to a `Chain<Counter, Words>` would compile
-`Words`'s `String`s as the `Int`s the impl bound `Item` to. (Selection had never
+`Words`'s `String`s as the `int`s the impl bound `Item` to. (Selection had never
 looked at associated-type bounds at all, so `where I.Item: Ord` on an impl was
 unchecked there too.)
 
@@ -1774,7 +1777,7 @@ impl, and looking it up needs an `ImplIndex`. So `subst_apply_` takes one as an
 optional argument and its `TY_ASSOC` case uses it when present, calling
 `impl_index_assoc_type` and **recursing on the answer**: a pass-through adapter
 binds `Item` to a projection of its own, so `Filter<Counter>.Item` →
-`Counter.Item` → `Int` needs more than one hop. `subst_apply` passes NULL — every
+`Counter.Item` → `int` needs more than one hop. `subst_apply` passes NULL — every
 checker caller wants the projection left standing, because `infer_apply` will
 finish it against the inference substitution — and `assoc_apply(impls, t, al)`
 is the same traversal with an empty substitution and an index, which is how
@@ -1851,7 +1854,7 @@ carries, written at the use site instead. Total plus canonically ordered is what
 lets interning keep deciding identity by pointer, and filling it *is* the
 completeness check — a hole is a missing binding, a name matching no hole is a
 wrong one. Over the closure rather than the trait's own list because a sub's
-signatures project through a super (`dyn DoubleEnded<Item = Int>` binds
+signatures project through a super (`dyn DoubleEnded<Item = int>` binds
 `Iterator`'s `Item`); `ty_dyn_assoc` and `impl_index_assoc_type` read it back
 through `trait_flat_assoc_index`, so the layout has one definition. The
 bindings are ordinary types, so `subst_apply`, `infer_apply`,
@@ -1888,7 +1891,7 @@ because a super's numbering is its own.
 **A trait object decomposes within one trait** (milestone 79). `infer_unify`
 treats a `TY_DYN` as a composite whose parts are the trait reference and the
 bindings beside it, exactly as it treats a struct's type arguments — so
-`dyn Src<T>` takes a `dyn Src<Int>` and solves `T`, and `dyn Bag<Item = T>`
+`dyn Src<T>` takes a `dyn Src<int>` and solves `T`, and `dyn Bag<Item = T>`
 solves it one bracket list out. Two *different* traits stay atomic on purpose:
 what relates them is the upcast, which swaps tables and so is a coercion, and
 reporting the whole objects is what that path's diagnostics want. The
@@ -1973,7 +1976,7 @@ are part of the type.
 `impl_index_assoc_type` is the other half: for a `TY_DYN` it reads the binding
 off the value's own type rather than searching an index the coercion left
 nothing in. Because `subst_apply` and `infer_apply` both project through that
-one function, this is what collapses `I.Item` to `Int` everywhere at once — the
+one function, this is what collapses `I.Item` to `int` everywhere at once — the
 loop variable of a `for` over a bounded parameter, the element type of
 `collect`, and the `where I.Item: Ord` a combinator carries.
 
@@ -2025,13 +2028,13 @@ discharged the obligation is a compile-time proof, so a `dyn Sub` flows into a
 
 Where the coercion asks the impl index, the upcast asks the source trait's
 **closure**, and asks it for the supertrait *restated in the source's type
-arguments* — a `dyn Twice<Int>` is a `dyn Src<Int>`, and `TraitFlat.ref` under
+arguments* — a `dyn Twice<int>` is a `dyn Src<int>`, and `TraitFlat.ref` under
 `trait_ref_subst` is what knows that. Two refusals fall out and are deliberately
 *not* reported here, both returning false to leave the caller its own answer:
 an unrelated trait, whose mismatch names the two whole trait objects; and the
 same trait at different arguments, which is not an upcast at all and is where
 unification's decomposition takes over. Only an unsolved target argument
-(`fun f<T>(s: dyn Twice<Int>)` reaching a `dyn Src<T>`) unifies here, for the
+(`fun f<T>(s: dyn Twice<int>)` reaching a `dyn Src<T>`) unifies here, for the
 same reason the coercion solves one from the impl — the closure is what knows.
 That is the direction unification cannot cover, since across two traits it has
 nothing to decompose.
@@ -2043,7 +2046,7 @@ containment is also what surfaced the flat/own indexing bug
 `dyn_assoc_bindings_agree` had carried since supertraits arrived: its binding
 table is numbered over the closure, and it was indexing the trait's *own*
 `assoc_types`, so on a sub whose associated types are all inherited it checked
-nothing and `dyn DoubleEnded<Item = String>` accepted an `Item = Int` impl
+nothing and `dyn DoubleEnded<Item = String>` accepted an `Item = int` impl
 (`tests/fail/dyn_assoc_super_binding.dt`).
 
 The result is recorded in the same `Expr.coerce_dyn` the coercion uses; codegen
@@ -2079,7 +2082,7 @@ A bare name that the value scope does not know is looked up in the type scope
 before "undefined variable" is emitted: a zero-field struct there means the
 name is a unit-struct constructor, and the `EXPR_PATH` node is rewritten into
 an empty `EXPR_STRUCT_INIT` and re-resolved — the struct-init path already
-handles type arguments and the hint, so a generic `Wrap<Int>` works the same
+handles type arguments and the hint, so a generic `Wrap<int>` works the same
 way. `check_pattern` makes the mirrored rewrite for `PAT_BIND`, so `Marker` in
 a pattern is a struct pattern rather than a binding that matches anything.
 Both consult the value scope first, which keeps an ordinary variable winning —
@@ -2097,7 +2100,7 @@ asks: is the all-wildcard row still useful against the arms? The matrix holds
 one row per arm and one column per value left to discriminate; a NULL column
 is a wildcard — a `_`, a binding, or a field the pattern simply omitted. For
 column 0 the checker takes the type from the first row that constrains it and
-asks for that type's *signature*: both `Bool` literals, every variant of an
+asks for that type's *signature*: both `bool` literals, every variant of an
 enum, the sole constructor of a struct or tuple. If the arms mention every
 constructor in the signature, it specialises (`S`) by each in turn and
 recurses; otherwise it drops to the default matrix (`D`) and recurses on the
@@ -2106,7 +2109,7 @@ remaining columns, which is exhaustive only if some row was a wildcard there.
 Two decisions are load-bearing:
 
 - **The column type comes off the pattern, not the field declaration.** A
-  field declared `T` is concrete at the match site — `Opt<Bool>`'s payload has
+  field declared `T` is concrete at the match site — `Opt<bool>`'s payload has
   two values, not an unenumerable domain. Reading `FieldDef.type` would report
   a correct `Opt::Some(true) | Opt::Some(false) | Opt::None` as a gap.
 - **The answer is tri-state** (`EXH_YES` / `EXH_NO` / `EXH_UNKNOWN`). A column

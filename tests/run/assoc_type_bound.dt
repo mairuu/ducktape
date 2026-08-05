@@ -9,22 +9,22 @@
 #
 # The bound is declared on the parameter and discharged at the instantiation:
 # `largest(Counter::to(5))` is where `I` becomes `Counter`, so `Counter.Item`
-# becomes `Int` and "is it `Ord`?" becomes a question about a real type.
+# becomes `int` and "is it `Ord`?" becomes a question about a real type.
 use std::iter::Iterator;
 use std::option::Option;
 use std::cmp::Ord;
 use std::fmt::Display;
 use std::io::print;
 
-struct Counter { n: Int, max: Int }
+struct Counter { n: int, max: int }
 
 impl Counter {
-    fun to(max: Int) -> Counter { Counter { n: 0, max: max } }
+    fun to(max: int) -> Counter { Counter { n: 0, max: max } }
 }
 
 impl Iterator for Counter {
-    type Item = Int;
-    fun next(self) -> Option<Int> {
+    type Item = int;
+    fun next(self) -> Option<int> {
         if self.n >= self.max { return Option::None; }
         var v = self.n;
         self.n += 1;
@@ -34,7 +34,7 @@ impl Iterator for Counter {
 
 # an iterator over Strings, so the bound is exercised on a non-numeric element
 # that implements `Ord` through an impl rather than as a primitive
-struct Words { i: Int }
+struct Words { i: int }
 
 impl Iterator for Words {
     type Item = String;
@@ -133,7 +133,7 @@ fun main() {
     print(Peak { src: Counter::to(7) }.best().unwrap());
 #> 6
 
-    # the projection survives an adapter: `Filter<Counter>.Item` is `Int` too
+    # the projection survives an adapter: `Filter<Counter>.Item` is `int` too
     print(largest(Counter::to(10).filter(|x| x % 3 == 0)).unwrap());
 #> 9
     print(largest(Counter::to(4).map(|x| x * 2)).unwrap());

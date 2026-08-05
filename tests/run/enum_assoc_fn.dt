@@ -69,8 +69,8 @@ trait Zero {
   fun zero() -> Self;
 }
 
-impl Zero for Opt<Int> {
-  fun zero() -> Opt<Int> {
+impl Zero for Opt<int> {
+  fun zero() -> Opt<int> {
     return Opt::Some(7);
   }
 }
@@ -90,7 +90,7 @@ fun main() {
 
   # the type parameter arrives three ways: from the annotation, from the
   # turbofish, and from the argument.
-  var a: Opt<Int> = Opt::none();
+  var a: Opt<int> = Opt::none();
   print("{Opt::get_or(a, 9)}");
 
   var b = Opt::<String>::none();

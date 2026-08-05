@@ -32,7 +32,7 @@
 #
 # `s.len()` (bytes) and `cs.len()` (elements) both appear below, told apart by
 # their receiver's type rather than by a module qualifier. The impls those
-# receivers need — `String`, `[T]`, `StringBuf`, `Char` — arrive transitively
+# receivers need — `String`, `[T]`, `StringBuf`, `char` — arrive transitively
 # through the two imports below rather than being named here: an import that
 # binds a name nothing writes is reported as unused (milestone 92), and
 # reachability cannot tell a deliberate restatement from a leftover.
@@ -54,7 +54,7 @@ impl String {
     # and the empty prefix always does — `self.slice(0, 0)` is `""`, which
     # interns to the same pointer `""` does, so `==` answers yes without a
     # special case.
-    fun starts_with(self, prefix: String) -> Bool {
+    fun starts_with(self, prefix: String) -> bool {
         var pl = prefix.len();
         if pl > self.len() {
             return false;
@@ -62,7 +62,7 @@ impl String {
         return self.slice(0, pl) == prefix;
     }
 
-    fun ends_with(self, suffix: String) -> Bool {
+    fun ends_with(self, suffix: String) -> bool {
         var sl = suffix.len();
         var n = self.len();
         if sl > n {
@@ -79,7 +79,7 @@ impl String {
     # only reader is `slice`, since there is no way to compare a window without
     # cutting it out first. A byte-level scan would need a `byte_at` the language
     # declines to offer (see `std::char`).
-    fun find(self, needle: String) -> Option<Int> {
+    fun find(self, needle: String) -> Option<int> {
         var nl = needle.len();
         if nl == 0 {
             return Option::Some(0);
@@ -95,7 +95,7 @@ impl String {
         return Option::None;
     }
 
-    fun contains(self, needle: String) -> Bool {
+    fun contains(self, needle: String) -> bool {
         return self.find(needle).is_some();
     }
 
@@ -134,7 +134,7 @@ impl String {
     # ── trimming and parsing, by character ───────────────────────────────────
 
     # `self` with leading and trailing whitespace removed. This is the crossing
-    # to the character view: whitespace is a `Char` classification, and an ASCII
+    # to the character view: whitespace is a `char` classification, and an ASCII
     # space is a single byte only by luck of the encoding — so the honest
     # spelling walks characters, not bytes, and rebuilds the middle through a
     # buffer rather than assuming a trimmed edge lands on a byte boundary.
@@ -169,10 +169,10 @@ impl String {
     # bare sign, or a stray character each answer `None` rather than a partial
     # parse.
     #
-    # Overflow is not detected: a value past what an `Int` holds wraps rather
+    # Overflow is not detected: a value past what an `int` holds wraps rather
     # than failing, which is the one thing this cannot promise without a widening
     # multiply the language has no way to spell.
-    fun parse_int(self) -> Option<Int> {
+    fun parse_int(self) -> Option<int> {
         var cs = self.chars().collect();
         var n = cs.len();
         if n == 0 {

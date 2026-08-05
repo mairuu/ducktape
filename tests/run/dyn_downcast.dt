@@ -15,31 +15,31 @@
 use std::io::print;
 
 trait Shape {
-    fun area(self) -> Int;
+    fun area(self) -> int;
 }
 
-struct Sq { side: Int }
-struct Circle { r: Int }
-enum Blob { Small, Big(Int) }
+struct Sq { side: int }
+struct Circle { r: int }
+enum Blob { Small, Big(int) }
 
 impl Shape for Sq {
-    fun area(self) -> Int { self.side * self.side }
+    fun area(self) -> int { self.side * self.side }
 }
 impl Shape for Circle {
-    fun area(self) -> Int { 3 * self.r * self.r }
+    fun area(self) -> int { 3 * self.r * self.r }
 }
 # a primitive and an enum are self types like any other: the identity is the
 # table, not anything the *value* carries, so nothing here has to be an object
 impl Shape for Blob {
-    fun area(self) -> Int {
+    fun area(self) -> int {
         match self {
             Blob::Small => 1,
             Blob::Big(n) => n,
         }
     }
 }
-impl Shape for Int {
-    fun area(self) -> Int { self }
+impl Shape for int {
+    fun area(self) -> int { self }
 }
 
 # The shape a downcast is for: recover what can be recovered, fall back on the
@@ -79,7 +79,7 @@ fun main() {
 
     # a primitive and an enum come back out as themselves
     var n: dyn Shape = 12;
-    print((n as? Int).unwrap() + 1);
+    print((n as? int).unwrap() + 1);
 #> 13
     print((n as? Blob).is_some());
 #> false

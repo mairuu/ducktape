@@ -1,7 +1,7 @@
 # std::collections::hashset — a set written on `std::collections::hashmap`.
 #
-# A `HashSet<T>` is a `HashMap<T, Bool>` whose values are never read, and that
-# is a deliberate trade: it wastes one `Bool` per entry to avoid a second
+# A `HashSet<T>` is a `HashMap<T, bool>` whose values are never read, and that
+# is a deliberate trade: it wastes one `bool` per entry to avoid a second
 # open-addressing implementation that would differ from the first only in what a
 # slot carries. The language has no way to be generic over "a payload or none",
 # so the choice is a wasted field or a duplicated algorithm, and the field is far
@@ -13,12 +13,12 @@ use std::hash::Hash;
 use std::collections::hashmap::HashMap;
 
 pub struct HashSet<T: Hash> {
-    map: HashMap<T, Bool>,
+    map: HashMap<T, bool>,
 }
 
 impl<T: Hash> HashSet<T> {
     fun new() -> HashSet<T> {
-        var map: HashMap<T, Bool> = HashMap::new();
+        var map: HashMap<T, bool> = HashMap::new();
         return HashSet { map: map };
     }
 
@@ -26,23 +26,23 @@ impl<T: Hash> HashSet<T> {
     # whole capacity API rather than owning any of it, which is what "a set is a
     # map whose values are never read" is supposed to mean: a member is an
     # entry, so the units already agree and there is nothing to convert.
-    fun with_capacity(n: Int) -> HashSet<T> {
-        var map: HashMap<T, Bool> = HashMap::with_capacity(n);
+    fun with_capacity(n: int) -> HashSet<T> {
+        var map: HashMap<T, bool> = HashMap::with_capacity(n);
         return HashSet { map: map };
     }
 
-    fun capacity(self) -> Int {
+    fun capacity(self) -> int {
         return self.map.capacity();
     }
 
-    fun reserve(self, more: Int) {
+    fun reserve(self, more: int) {
         self.map.reserve(more);
     }
 
     # Add `value`, answering whether it was *newly* added — `false` means it was
     # already there. That is the answer a set can give and a map cannot, since
     # the map's `insert` hands back the displaced value instead.
-    fun insert(self, value: T) -> Bool {
+    fun insert(self, value: T) -> bool {
         match self.map.insert(value, true) {
             Option::Some(_) => {
                 return false;
@@ -53,12 +53,12 @@ impl<T: Hash> HashSet<T> {
         }
     }
 
-    fun contains(self, value: T) -> Bool {
+    fun contains(self, value: T) -> bool {
         return self.map.contains_key(value);
     }
 
     # Take `value` out, answering whether it was there.
-    fun remove(self, value: T) -> Bool {
+    fun remove(self, value: T) -> bool {
         match self.map.remove(value) {
             Option::Some(_) => {
                 return true;
@@ -69,11 +69,11 @@ impl<T: Hash> HashSet<T> {
         }
     }
 
-    fun len(self) -> Int {
+    fun len(self) -> int {
         return self.map.len();
     }
 
-    fun is_empty(self) -> Bool {
+    fun is_empty(self) -> bool {
         return self.map.is_empty();
     }
 

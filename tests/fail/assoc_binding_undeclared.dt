@@ -5,6 +5,6 @@
 use std::iter::Iterator;
 use std::option::Option;
 
-fun f<J: Iterator<Nope = Int>>(j: J) -> Int {
+fun f<J: Iterator<Nope = int>>(j: J) -> int {
     return 1;
 }

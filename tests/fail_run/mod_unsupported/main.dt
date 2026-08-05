@@ -5,7 +5,7 @@ mod lib;
 use std::io::print;
 use lib::show_twice;
 
-struct S(Int)
+struct S(int)
 
 fun main() {
   print(show_twice(S(21)));

@@ -7,17 +7,17 @@
 #> 7
 use std::io::print;
 
-fun id(n: Int) -> Int { n }
+fun id(n: int) -> int { n }
 
 # the break is reached with `id`'s callee already pushed, waiting for its
 # argument — the loop's value must be the break's, not that callee
-fun break_past_a_callee() -> Int {
+fun break_past_a_callee() -> int {
     loop { id({ var b = 1; break b + 19; }) }
 }
 
 # the same for a plain `break` out of a `while`, where the leak would instead
 # leave the stack one deep every turn
-fun break_past_an_operand() -> Int {
+fun break_past_an_operand() -> int {
     var n = 0;
     while n < 100 {
         n += id({ var b = 5; if b == 5 { break; } 0 });
@@ -27,7 +27,7 @@ fun break_past_an_operand() -> Int {
 
 # `continue` unwinds the same way, and runs many times rather than once, so a
 # leak here grows the stack until the frame runs out
-fun continue_past_a_callee() -> Int {
+fun continue_past_a_callee() -> int {
     var n = 0;
     var turns = 0;
     while turns < 7 {

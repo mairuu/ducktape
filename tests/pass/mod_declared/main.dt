@@ -13,7 +13,7 @@ use Event::A;
 
 pub enum Event { A, B }
 
-fun pick() -> Int {
+fun pick() -> int {
   var e = A;
   return match e {
     Event::A => b(),

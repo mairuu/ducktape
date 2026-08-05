@@ -19,11 +19,11 @@
 use std::io::print;
 use std::cmp::{Ord, max};
 
-struct Point { x: Int, y: Int }
+struct Point { x: int, y: int }
 
 # order by x, then y — the impl is ordinary, and `<` on a Point reaches it
 impl Ord for Point {
-    fun cmp(self, other: Point) -> Int {
+    fun cmp(self, other: Point) -> int {
         if self.x != other.x {
             return self.x - other.x;
         }
@@ -32,7 +32,7 @@ impl Ord for Point {
 }
 
 # `<` on a bounded generic dispatches through the bound, monomorphised per T
-fun before<T: Ord>(a: T, b: T) -> Bool {
+fun before<T: Ord>(a: T, b: T) -> bool {
     return a < b;
 }
 
@@ -56,7 +56,7 @@ fun main() {
     var bigger = max(a, b);
     print(bigger.y == 5); # bigger is b
 
-    # Char orders through impl Ord for Char (code-point order)
+    # char orders through impl Ord for char (code-point order)
     print('a' < 'b');
     print('b' < 'a');
     print('Z' < 'a');     # uppercase sorts first: byte order

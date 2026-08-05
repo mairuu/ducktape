@@ -25,11 +25,11 @@ fun main() {
     print(relay(Counter { n: 0, max: 3 }));
 }
 
-struct Counter { n: Int, max: Int }
+struct Counter { n: int, max: int }
 
 impl Iterator for Counter {
-    type Item = Int;
-    fun next(self) -> Option<Int> {
+    type Item = int;
+    fun next(self) -> Option<int> {
         if self.n >= self.max { return Option::None; }
         var v = self.n;
         self.n += 1;

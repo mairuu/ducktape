@@ -1,7 +1,7 @@
 #! expect: string is not valid UTF-8
 # Reachable from ducktape, which is why it is a runtime error rather than an
 # invariant: `slice` is indexed in bytes, so it can cut a multi-byte sequence
-# in half. A String is a byte string; only a Char promises to be a character.
+# in half. A String is a byte string; only a char promises to be a character.
 #
 # Since milestone 61 `chars` is a lazy walk, so this is the `next()` that
 # reaches the malformed bytes failing, not the call that built the iterator —

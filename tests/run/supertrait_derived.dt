@@ -36,20 +36,20 @@ fun greet_dyn(x: dyn Greet) -> String { return x.name(); }
 
 # ── the derivation is transitive, because it walks the closure ───────────────
 
-trait A { fun a(self) -> Int; }
-trait B: A { fun b(self) -> Int; }
-trait C: B { fun c(self) -> Int; }
+trait A { fun a(self) -> int; }
+trait B: A { fun b(self) -> int; }
+trait C: B { fun c(self) -> int; }
 
 struct Z;
 
 impl C for Z {
-    fun a(self) -> Int { return 1; }
-    fun b(self) -> Int { return 2; }
-    fun c(self) -> Int { return 4; }
+    fun a(self) -> int { return 1; }
+    fun b(self) -> int { return 2; }
+    fun c(self) -> int { return 4; }
 }
 
-fun via_a<T: A>(x: T) -> Int { return x.a(); }
-fun via_b<T: B>(x: T) -> Int { return x.a() + x.b(); }
+fun via_a<T: A>(x: T) -> int { return x.a(); }
+fun via_b<T: B>(x: T) -> int { return x.a() + x.b(); }
 
 # ── a generic impl derives a generic impl ────────────────────────────────────
 
@@ -96,16 +96,16 @@ fun tag_of<T: Tagged>(x: T) -> String { return x.tag(); }
 trait Marker {}
 
 trait Counted: Marker {
-    fun count(self) -> Int;
+    fun count(self) -> int;
 }
 
 struct M;
 
 impl Counted for M {
-    fun count(self) -> Int { return 9; }
+    fun count(self) -> int { return 9; }
 }
 
-fun marked<T: Marker>(_x: T) -> Int { return 1; }
+fun marked<T: Marker>(_x: T) -> int { return 1; }
 
 fun main() {
     print(P.name());

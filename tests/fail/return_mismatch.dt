@@ -1,5 +1,5 @@
 #! expect: type mismatch
-fun f() -> Int {
+fun f() -> int {
     return true;
 }
 

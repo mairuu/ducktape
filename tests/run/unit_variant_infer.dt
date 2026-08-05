@@ -18,7 +18,7 @@ enum Opt<T> {
 
 struct Empty<T>;
 
-fun get(o: Opt<Int>) -> Int {
+fun get(o: Opt<int>) -> int {
     match o {
         Opt::Some(v) => v,
         Opt::None => 0,
@@ -26,16 +26,16 @@ fun get(o: Opt<Int>) -> Int {
 }
 
 # from the return type
-fun none() -> Opt<Int> {
+fun none() -> Opt<int> {
     return Opt::None;
 }
 
-fun pair(o: Opt<Int>, e: Empty<Int>) -> (Opt<Int>, Empty<Int>) {
+fun pair(o: Opt<int>, e: Empty<int>) -> (Opt<int>, Empty<int>) {
     return (o, e);
 }
 
 struct Holder {
-    slot: Opt<Int>,
+    slot: Opt<int>,
 }
 
 fun main() {
@@ -48,14 +48,14 @@ fun main() {
     print(get(Opt::Some(5)));
 
     # from an annotation, and for a unit struct too
-    var a: Opt<Bool> = Opt::None;
+    var a: Opt<bool> = Opt::None;
     print(a);
-    var e: Empty<Int> = Empty;
+    var e: Empty<int> = Empty;
     print(e);
 
     # from a field initializer, an array element, and a tuple element
     var h = Holder { slot: Opt::None };
-    var arr: [Opt<Int>] = [Opt::None, Opt::Some(2)];
+    var arr: [Opt<int>] = [Opt::None, Opt::Some(2)];
     print(arr);
     print(pair(h.slot, Empty));
 

@@ -19,7 +19,7 @@ trait Scale<K = Self> {
     fun scale(self, k: K) -> Self;
 }
 
-struct V2 { x: Int, y: Int }
+struct V2 { x: int, y: int }
 
 # no argument: `Self` is `V2`, so this is `impl Scale<V2> for V2`.
 impl Scale for V2 {
@@ -27,8 +27,8 @@ impl Scale for V2 {
 }
 
 # and the argument written out, for the same type.
-impl Scale<Int> for V2 {
-    fun scale(self, k: Int) -> V2 { return V2 { x: self.x * k, y: self.y * k }; }
+impl Scale<int> for V2 {
+    fun scale(self, k: int) -> V2 { return V2 { x: self.x * k, y: self.y * k }; }
 }
 
 # A bound with no argument is the default too, and there `Self` is `T` — which
@@ -55,7 +55,7 @@ fun main() {
     var v = V2 { x: 2, y: 3 };
 
     print(square(v).x);          # Scale<V2>  -> 4
-    print(v.scale(10).x);        # Scale<Int> -> 20
+    print(v.scale(10).x);        # Scale<int> -> 20
     print(square_explicit(v).y); # Scale<V2>  -> 9
 
     var w = V2 { x: 3, y: 4 };

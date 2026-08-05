@@ -165,7 +165,7 @@ static void cg_error(Cg *cg, Span span, const char *what) {
 // it. Two consequences worth stating:
 //   - slot pressure is a property of what a program uses, not of what its
 //     imports declare. `use std::cmp::max;` no longer spends slots on the
-//     `Int::cmp`/`Float::cmp` that `max` happens not to reach.
+//     `int::cmp`/`float::cmp` that `max` happens not to reach.
 //   - a body nothing reaches is never handed to codegen, so a construct the VM
 //     refuses inside one goes unreported. That was already true of every
 //     generic; it is now true uniformly, which is the honest price.
@@ -337,7 +337,7 @@ bool mono_seed(Mono *mono, FunDef *entry) {
 // being compiled under. Two steps, and both are needed to reach a concrete
 // type: substituting binds the type parameters (`I` → `Counter`), and
 // `assoc_apply` then collapses any projection those parameters were the base of
-// (`Counter.Item` → `Int`) by reading the binding off the impl.
+// (`Counter.Item` → `int`) by reading the binding off the impl.
 //
 // The checker gets the second step from infer_apply, which codegen has no
 // equivalent of — leaving it out is what used to make an `I.Item` argument
@@ -392,7 +392,7 @@ static bool cg_inst_key(Cg *cg, FunDef *fun, const Subst *primary,
     // an impl parameter is read from the *fallback* first, because that is the
     // impl's own match and nothing else can speak for it. A `Subst` is keyed by
     // name, and a call through a bound records the trait's arguments in
-    // `primary` — so `impl<T: Tag> Boxed<Int> for T` against `trait Boxed<T>`
+    // `primary` — so `impl<T: Tag> Boxed<int> for T` against `trait Boxed<T>`
     // has two live meanings for "T", and reading primary first silently picks
     // the trait's. (An impl reached by a concrete receiver has an empty
     // fallback and its parameters in primary, so the order costs it nothing.)
@@ -2631,7 +2631,7 @@ static void compile_expr_inner(Cg *cg, Expr *expr) {
     break;
   case EXPR_CHAR:
     // already decoded by the parser, which is the difference from a String:
-    // a Char is a value, so it needs no heap object and no intern.
+    // a char is a value, so it needs no heap object and no intern.
     emit_const(cg, val_char(expr->as.char_val));
     break;
 

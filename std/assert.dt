@@ -10,7 +10,7 @@
 # `assert_eq` needs `Display` to *report* a failure, impl visibility is
 # transitive, and so folding it in would hand every program that only wanted
 # `panic("...")` the whole of `std::fmt`'s impls — and with them coherence's
-# refusal to let it write its own `impl Display for Int`. That is the same
+# refusal to let it write its own `impl Display for int`. That is the same
 # argument `std::cmp` makes about where `impl Ord for String` belongs: with
 # transitive visibility an import is measured in impls, not in code, so the
 # dependency points at the impl-poor module. `assert` imports `panic`; `panic`
@@ -19,7 +19,7 @@
 # **An assertion cannot name itself.** Rust's `assert!` is a macro so that a
 # failure can quote the source text back at you — `assertion failed: a == b`,
 # with `a == b` copied from the call. ducktape has no macros, and a function
-# sees a `Bool`, not the expression that produced it. So the message from
+# sees a `bool`, not the expression that produced it. So the message from
 # `assert` is the fixed "assertion failed" and cannot ever be more, and saying
 # more means saying it yourself. That is exactly the split `Option` already
 # has between `unwrap` and `expect`, forced here by the same absence: nothing
@@ -52,14 +52,14 @@ use std::panic::panic;
 
 # The bare check. Its message is fixed, for the reason above — reach for
 # `assert_with` the moment "assertion failed" is not enough to locate it.
-pub fun assert(condition: Bool) {
+pub fun assert(condition: bool) {
     if not condition {
         panic("assertion failed");
     }
 }
 
 # `assert` with a message of your own, the way `expect` is `unwrap` with one.
-pub fun assert_with(condition: Bool, message: String) {
+pub fun assert_with(condition: bool, message: String) {
     if not condition {
         panic(message);
     }
@@ -67,7 +67,7 @@ pub fun assert_with(condition: Bool, message: String) {
 
 # `assert_with` for a message that costs something to build: the closure runs
 # only on the failing path.
-pub fun assert_else(condition: Bool, message: fun() -> String) {
+pub fun assert_else(condition: bool, message: fun() -> String) {
     if not condition {
         panic(message());
     }

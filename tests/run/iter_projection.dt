@@ -4,7 +4,7 @@
 # looks at it, and the checker is fine with that: the bound says the projection
 # exists. Codegen is where it has to become a real type, because an
 # instantiation is keyed by one — and `subst_apply` only binds `I`, leaving
-# `Counter.Item` where `Int` was needed. That is what used to be reported as
+# `Counter.Item` where `int` was needed. That is what used to be reported as
 # "type argument 'T' is not known here" at a call the checker had accepted.
 #
 # `cg_subst` now collapses the projection after substituting, so every shape
@@ -15,15 +15,15 @@ use std::iter::Iterator;
 use std::option::Option;
 use std::io::print;
 
-struct Counter { n: Int, max: Int }
+struct Counter { n: int, max: int }
 
 impl Counter {
-    fun to(max: Int) -> Counter { Counter { n: 0, max: max } }
+    fun to(max: int) -> Counter { Counter { n: 0, max: max } }
 }
 
 impl Iterator for Counter {
-    type Item = Int;
-    fun next(self) -> Option<Int> {
+    type Item = int;
+    fun next(self) -> Option<int> {
         if self.n >= self.max { return Option::None; }
         var v = self.n;
         self.n += 1;
@@ -97,7 +97,7 @@ fun main() {
 #> 0
 
     # the base is itself an adapter, so the projection is over a projection:
-    # `Filter<Counter>.Item` is `Counter.Item` is `Int`, collapsed in one pass
+    # `Filter<Counter>.Item` is `Counter.Item` is `int`, collapsed in one pass
     print(first(Counter::to(6).filter(|x| x % 2 == 1)));
 #> 1
 

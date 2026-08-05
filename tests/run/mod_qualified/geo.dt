@@ -1,13 +1,13 @@
 pub struct Point {
-  x: Int,
-  y: Int,
+  x: int,
+  y: int,
 }
 
 impl Point {
-  fun new(x: Int, y: Int) -> Point {
+  fun new(x: int, y: int) -> Point {
     return Point { x: x, y: y };
   }
-  fun manhattan(self) -> Int {
+  fun manhattan(self) -> int {
     return self.x + self.y;
   }
 }

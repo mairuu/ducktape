@@ -1,0 +1,9 @@
+#! expect: 'int' is a builtin type name
+# The one site that binds a type name without being a declaration. Without the
+# check this reported "cannot infer type for 'int'" at the *call*: `v: int`
+# means the builtin, so the parameter is never solved.
+fun id<int>(v: int) -> int { v }
+
+fun main() {
+    var _x = id(1);
+}

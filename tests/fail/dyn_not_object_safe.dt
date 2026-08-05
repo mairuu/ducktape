@@ -6,18 +6,18 @@
 use std::io::print;
 
 trait Pick {
-    fun area(self) -> Int;
+    fun area(self) -> int;
     fun bigger(self, other: Self) -> Self;
 }
 
-struct Sq { s: Int }
+struct Sq { s: int }
 
 impl Pick for Sq {
-    fun area(self) -> Int { self.s * self.s }
+    fun area(self) -> int { self.s * self.s }
     fun bigger(self, other: Sq) -> Sq { self }
 }
 
-fun use_it(x: dyn Pick) -> Int {
+fun use_it(x: dyn Pick) -> int {
     return x.area();
 }
 

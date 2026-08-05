@@ -9,16 +9,16 @@ trait Cloneish {
 }
 
 trait Wrapped: Cloneish {
-    fun tag(self) -> Int;
+    fun tag(self) -> int;
 }
 
-struct Box2 { n: Int }
+struct Box2 { n: int }
 
 impl Cloneish for Box2 {
     fun dup(self) -> Box2 { return Box2 { n: self.n }; }
 }
 impl Wrapped for Box2 {
-    fun tag(self) -> Int { return self.n; }
+    fun tag(self) -> int { return self.n; }
 }
 
 fun main() {

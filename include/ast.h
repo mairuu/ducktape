@@ -58,7 +58,7 @@ typedef enum {
   TY_TRAIT,   // the abstract `Self` of a trait: bound position, default bodies
   TY_DYN,     // `dyn Trait` — a trait object: a value plus its vtable
   TY_ARRAY,   // Array<T>
-  TY_RANGE,   // a..b / a..=b — Int-only for now
+  TY_RANGE,   // a..b / a..=b — int-only for now
   TY_GENERIC, // unresolved type parameter, e.g. T
   TY_ASSOC,   // T.Item   —  associated-type access before resolution
   TY_POISON,  // sentinel: error already reported, suppress downstream errors
@@ -92,8 +92,8 @@ typedef struct {
 // named with. A trait's type parameters are ordinary generic parameters of
 // every signature it declares, so a reference is what supplies the
 // substitution that turns those signatures into concrete terms — at an impl
-// head (`impl Into<Int> for S`), at a bound (`T: Into<Int>`), and inside a
-// `dyn`. Interned on the arguments too, so `Into<Int>` and `Into<String>` are
+// head (`impl Into<int> for S`), at a bound (`T: Into<int>`), and inside a
+// `dyn`. Interned on the arguments too, so `Into<int>` and `Into<String>` are
 // two types and pointer equality still decides identity.
 typedef struct {
   TraitDef *def;
@@ -111,10 +111,10 @@ typedef struct {
 // kind would put both dispatch strategies behind one type.
 //
 // `assoc_types` is the trait's associated types written at the *use* site
-// (`dyn Iterator<Item = Int>`) — the same table an impl carries, one entry per
+// (`dyn Iterator<Item = int>`) — the same table an impl carries, one entry per
 // `trait->assoc_types` and in that order, so the array is total and its
 // ordering canonical. That is what lets interning keep deciding identity by
-// pointer: `dyn Iterator<Item = Int>` and `dyn Iterator<Item = String>` are
+// pointer: `dyn Iterator<Item = int>` and `dyn Iterator<Item = String>` are
 // two types. Nothing at *runtime* reads it — an associated type is erased
 // exactly like a type argument — it exists so a caller can know what
 // `Self.Item` is once `Self` is gone, which is what makes such a method
@@ -163,7 +163,7 @@ typedef struct {
 // associated type in the language had a unique name — until milestone 76,
 // `Item` was the only one — and became load-bearing the moment all six
 // `std::ops` traits declared an `Output`, since `T: Add<Output = T> +
-// Mul<Output = Int>` is then two entries sharing a name. See
+// Mul<Output = int>` is then two entries sharing a name. See
 // impl_index_assoc_type, which takes it as a filter.
 typedef struct AssocBound AssocBound;
 struct AssocBound {
@@ -179,7 +179,7 @@ struct AssocBound {
 // TY_GENERIC — an unresolved type parameter like T
 typedef struct {
   StringView name; // e.g. "T"
-  Type **bounds;   // TY_TRAIT refs, e.g. [Display, Into<Int>]
+  Type **bounds;   // TY_TRAIT refs, e.g. [Display, Into<int>]
   int bound_count;
   AssocBound *assoc_bounds; // `where T.Item: Ord`, by associated-type name
   int assoc_bound_count;
@@ -272,7 +272,7 @@ int trait_flat_assoc_index(const TraitDef *trait, StringView name);
 static inline bool types_equal(const Type *a, const Type *b) { return a == b; }
 // does `t` mention a type parameter, an unsolved unknown or an unresolved
 // projection anywhere inside it? A trait reference answers about its type
-// arguments (`Into<T>` is abstract, `Into<Int>` is not), which is what a bound
+// arguments (`Into<T>` is abstract, `Into<int>` is not), which is what a bound
 // has to ask before it can be checked against an impl.
 bool type_is_abstract(const Type *t);
 bool type_is_numeric(const Type *t);
@@ -574,7 +574,7 @@ struct FunDef {
   int slot;
 };
 
-// a function whose body is in C rather than in ducktape. Never monomorphised
+// a function whose body is in C rather than in ducktape. `!` monomorphised
 // (the runtime is uniform in type arguments, so one C body serves every `T`)
 // and never compiled to a chunk.
 static inline bool fun_is_native(const FunDef *f) {
@@ -614,7 +614,8 @@ struct Path {
 
 typedef enum {
   TYNODE_UNIT,  // ()
-  TYNODE_NAMED, // Int, MyStruct, Option<T>
+  TYNODE_NEVER, // !
+  TYNODE_NAMED, // int, MyStruct, Option<T>
   TYNODE_TUPLE, // (A, B)
   TYNODE_ARRAY, // [T]
   TYNODE_FUN,   // fun(A, B): R
@@ -649,7 +650,7 @@ typedef struct {
   TypeNode *elem;
 } TypeNodeArray;
 
-// `Item = Int` inside `dyn Iterator<Item = Int>`.
+// `Item = int` inside `dyn Iterator<Item = int>`.
 typedef struct {
   StringView name;
   TypeNode *type;
@@ -658,10 +659,10 @@ typedef struct {
 
 // TYNODE_DYN — the path names the trait; the bracket list after it carries
 // two different things, which is why it is parsed here rather than by
-// `parse_path`. `<Int>` is a type argument, supplying one of the trait's own
-// type parameters; `<Item = Int>` is a binding, saying what `Self.Item` means
+// `parse_path`. `<int>` is a type argument, supplying one of the trait's own
+// type parameters; `<Item = int>` is a binding, saying what `Self.Item` means
 // once `Self` is erased. Arguments come first, exactly as in the source:
-// `dyn Into<Int>`, `dyn Iterator<Item = Int>`, or both.
+// `dyn Into<int>`, `dyn Iterator<Item = int>`, or both.
 typedef struct {
   Path path;
   TypeNode **type_args;
@@ -746,7 +747,7 @@ struct Pattern {
 // TRAIT REFERENCES AND WHERE CLAUSES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// A single trait in a bound, optionally generic: Clone, Iterator<Int>, From<T>
+// A single trait in a bound, optionally generic: Clone, Iterator<int>, From<T>
 //
 // The `<..>` after the name carries the same two lists a `dyn Trait<..>` does,
 // and is parsed by the same function: the trait's own type arguments (which go
@@ -761,7 +762,7 @@ typedef struct {
   Span span;
 } TraitRef;
 
-// One or more trait refs joined by +: Clone + Iterator<Int> + From<T>
+// One or more trait refs joined by +: Clone + Iterator<int> + From<T>
 typedef struct {
   TraitRef *refs;
   int ref_count; // always >= 1
@@ -836,7 +837,7 @@ typedef enum {
   EXPR_ARRAY,       // [a, b, c]
   EXPR_STRUCT_INIT, // Point { x: 1, y: 2 }
   EXPR_VARIANT,     // Some(x), None
-  EXPR_CLOSURE,     // fun(x: Int): Int { x + 1 }
+  EXPR_CLOSURE,     // fun(x: int): int { x + 1 }
 
   // ── String interpolation segment (pass 3 QoL) ─────────
   EXPR_INTERPOLATED, // "hello {name}" broken into segments
@@ -871,7 +872,7 @@ typedef struct {
   // `<Rhs = Self>` — the type a reference that omits this argument gets
   // instead. NULL means the argument is required. Traits only (milestone 75):
   // a default is what lets `Add` gain an `Rhs` parameter without every
-  // existing `T: Add` and `impl Add for Int` having to name it.
+  // existing `T: Add` and `impl Add for int` having to name it.
   TypeNode *default_type;
   Span span;
 } TypeParamNode;
@@ -1083,7 +1084,7 @@ typedef struct {
 
 // `binding` is what makes this an `if var P = subject` rather than a plain
 // `if`: when it is set, `condition` is the *subject* — a value of any type,
-// not a Bool — and the test is whether it has the pattern's shape.
+// not a bool — and the test is whether it has the pattern's shape.
 typedef struct {
   Expr *condition;
   Pattern *binding; // NULL for a plain `if`
@@ -1119,7 +1120,7 @@ typedef struct {
 // `loop { .. }`. No condition is not a `while` with one field missing: a
 // `while` always has an exit and so always types `()`, while this one leaves
 // only through a `break` — which is why a `loop` alone has a value to give its
-// breaks, and why with none that leaves it types `Never`. Both answers are the
+// breaks, and why with none that leaves it types `!`. Both answers are the
 // join the checker accumulates on its `CheckLoop` frame, so the node itself
 // records nothing.
 typedef struct {
@@ -1180,7 +1181,7 @@ struct Expr {
   // unknown, and codegen is the consumer either way.
   //
   // The *trait reference* (a TY_TRAIT, with its type arguments), not the trait
-  // definition: `Into<Int>` and `Into<String>` are two vtables over one type.
+  // definition: `Into<int>` and `Into<String>` are two vtables over one type.
   Type *coerce_dyn;
 
   union {

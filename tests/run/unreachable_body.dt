@@ -13,10 +13,10 @@
 use std::io::print;
 
 @intrinsic("array_len")
-fun len<T>(xs: [T]) -> Int;
+fun len<T>(xs: [T]) -> int;
 
 fun sleeping() {
-  var _f = len::<Int>;
+  var _f = len::<int>;
 }
 
 fun main() {

@@ -1,1 +1,1 @@
-fun secret() -> Int { return 7; }
+fun secret() -> int { return 7; }

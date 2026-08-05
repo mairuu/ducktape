@@ -4,8 +4,8 @@ struct Point<T> {
     y: T,
 }
 
-impl Point<Int> {
-    fun new(x: Int, y: Int) -> Self {
+impl Point<int> {
+    fun new(x: int, y: int) -> Self {
         Point { x: x, y: y }
     }
 }

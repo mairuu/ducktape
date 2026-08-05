@@ -18,21 +18,21 @@
 use std::io::print;
 use std::panic::panic;
 
-fun bail() -> Never {
+fun bail() -> ! {
     panic("unreachable");
 }
 
 # an `if` whose arms disagree about diverging, in both orders
-fun pick(c: Bool) -> Int {
+fun pick(c: bool) -> int {
     if c { return 1; } else { 2 }
 }
 
-fun pick_flipped(c: Bool) -> Int {
+fun pick_flipped(c: bool) -> int {
     if c { 2 } else { return 1; }
 }
 
 # same for a `match`, where the accumulator is the first arm's type
-fun classify(n: Int) -> Int {
+fun classify(n: int) -> int {
     return match n {
         0 => { return 9; },
         _ => 5,
@@ -40,7 +40,7 @@ fun classify(n: Int) -> Int {
 }
 
 # a diverging first element must not fix the array's element type at `!`
-fun head_of(c: Bool) -> Int {
+fun head_of(c: bool) -> int {
     if c {
         var xs = [bail(), 8];
         return xs[1];
@@ -48,12 +48,12 @@ fun head_of(c: Bool) -> Int {
     return 7;
 }
 
-fun take(x: Int) -> Int {
+fun take(x: int) -> int {
     return x;
 }
 
 # a diverging argument satisfies a monomorphic parameter
-fun mono(c: Bool) -> Int {
+fun mono(c: bool) -> int {
     if c { return take(bail()); }
     return take(42);
 }
@@ -63,7 +63,7 @@ fun first<T>(a: T, _b: T) -> T {
     return a;
 }
 
-fun generic(c: Bool) -> Int {
+fun generic(c: bool) -> int {
     if c { return first(bail(), 4); }
     return first(3, 4);
 }

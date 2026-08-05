@@ -4,10 +4,10 @@ pub use inner::{Point, mk};
 # a plain `use` is not a re-export — `hidden` stays geo's own business.
 use inner::hidden;
 
-pub fun sum(p: Point) -> Int {
+pub fun sum(p: Point) -> int {
   return p.x + p.y;
 }
 
-pub fun offset() -> Int {
+pub fun offset() -> int {
   return hidden();
 }

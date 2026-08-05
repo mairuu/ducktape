@@ -12,7 +12,7 @@ use std::io::print;
 struct Marker;
 struct Wrap<T>;
 
-fun take(_m: Marker) -> Int => 7
+fun take(_m: Marker) -> int => 7
 
 fun main() {
   var m = Marker;
@@ -22,7 +22,7 @@ fun main() {
   print([Marker, Marker]);
 
   # a generic unit struct still takes its type argument from the annotation
-  var w: Wrap<Int> = Wrap;
+  var w: Wrap<int> = Wrap;
   print(w);
 
   match m {

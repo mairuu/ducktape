@@ -8,17 +8,17 @@
 use std::io::print;
 
 @native("string_len")
-fun str_len(s: String) -> Int;
+fun str_len(s: String) -> int;
 
 @native("string_slice")
-fun str_slice(s: String, from: Int, to: Int) -> String;
+fun str_slice(s: String, from: int, to: int) -> String;
 
 @intrinsic("array_len")
-fun alen<T>(xs: [T]) -> Int;
+fun alen<T>(xs: [T]) -> int;
 
 # a native is an ordinary global, so it is first-class: passable, storable,
 # capturable. Only its *body* is unusual.
-fun apply(f: fun(String) -> Int, s: String) -> Int => f(s)
+fun apply(f: fun(String) -> int, s: String) -> int => f(s)
 
 fun main() {
     print("printed by a native");
@@ -47,7 +47,7 @@ fun main() {
     var fs = [str_len, str_len];
     print(fs[1]("in an array"));
 #> 11
-    var doubled: fun(String) -> Int = |s| str_len(s) * 2;
+    var doubled: fun(String) -> int = |s| str_len(s) * 2;
     print(doubled("captured"));
 #> 16
 

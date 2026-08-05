@@ -6,17 +6,17 @@
 use std::io::print;
 
 trait Shape {
-    fun area(self) -> Int;
+    fun area(self) -> int;
 }
 
-struct Sq { s: Int }
-struct Circle { r: Int }
+struct Sq { s: int }
+struct Circle { r: int }
 
 impl Shape for Sq {
-    fun area(self) -> Int { self.s * self.s }
+    fun area(self) -> int { self.s * self.s }
 }
 
-fun total(x: dyn Shape) -> Int {
+fun total(x: dyn Shape) -> int {
     return x.area();
 }
 

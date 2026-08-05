@@ -249,7 +249,7 @@ static AssocBound *assoc_bounds_canon(const AssocBound *src, int count,
         assoc_bounds_canon(src[i].assoc_bounds, src[i].assoc_bound_count, al);
   }
   // Ties on the name are broken by the owning trait, because since milestone 76
-  // a name no longer identifies an entry: `Add<Output = T> + Mul<Output = Int>`
+  // a name no longer identifies an entry: `Add<Output = T> + Mul<Output = int>`
   // is two entries called `Output`, and without the tie-break the two orders of
   // writing that bound would sort into two different lists and intern as two
   // different types.
@@ -929,13 +929,13 @@ int type_name_sprintf(const Type *t, char *buf, size_t buf_size) {
   }
   switch (t->kind) {
   case TY_INT:
-    return snprintf(buf, buf_size, "Int");
+    return snprintf(buf, buf_size, "int");
   case TY_FLOAT:
-    return snprintf(buf, buf_size, "Float");
+    return snprintf(buf, buf_size, "float");
   case TY_BOOL:
-    return snprintf(buf, buf_size, "Bool");
+    return snprintf(buf, buf_size, "bool");
   case TY_CHAR:
-    return snprintf(buf, buf_size, "Char");
+    return snprintf(buf, buf_size, "char");
   case TY_STRING:
     return snprintf(buf, buf_size, "String");
   case TY_STRBUF:
@@ -1007,13 +1007,13 @@ int type_sprintf(const Type *t, char *buf, size_t buf_size) {
   }
   switch (t->kind) {
   case TY_INT:
-    return snprintf(buf, buf_size, "Int");
+    return snprintf(buf, buf_size, "int");
   case TY_FLOAT:
-    return snprintf(buf, buf_size, "Float");
+    return snprintf(buf, buf_size, "float");
   case TY_BOOL:
-    return snprintf(buf, buf_size, "Bool");
+    return snprintf(buf, buf_size, "bool");
   case TY_CHAR:
-    return snprintf(buf, buf_size, "Char");
+    return snprintf(buf, buf_size, "char");
   case TY_STRING:
     return snprintf(buf, buf_size, "String");
   case TY_STRBUF:
@@ -1104,7 +1104,7 @@ int type_sprintf(const Type *t, char *buf, size_t buf_size) {
         sp_bump(0, buf_size,
                 snprintf(buf, buf_size, SV_FMT, SV_ARG(t->as.trait.def->name)));
     // the type arguments are part of the identity, so a mismatch has to show
-    // them: `Into<Int>` and `Into<String>` are two bounds.
+    // them: `Into<int>` and `Into<String>` are two bounds.
     for (int i = 0; i < t->as.trait.type_arg_count; i++) {
       n = sp_bump(n, buf_size,
                   snprintf(buf + n, buf_size - n, "%s", i == 0 ? "<" : ", "));
@@ -1123,7 +1123,7 @@ int type_sprintf(const Type *t, char *buf, size_t buf_size) {
     int n = sp_bump(0, buf_size,
                     snprintf(buf, buf_size, "dyn " SV_FMT, SV_ARG(def->name)));
     // the type arguments and the bindings are both part of the type, so a
-    // mismatch diagnostic has to show them: `dyn Iterator<Item = Int>` and
+    // mismatch diagnostic has to show them: `dyn Iterator<Item = int>` and
     // `dyn Iterator<Item = String>` are two different expectations and would
     // otherwise print the same. One bracket list, arguments before bindings —
     // the same shape the source writes.
@@ -1237,16 +1237,16 @@ void dump_type(const Type *t) {
   }
   switch (t->kind) {
   case TY_INT:
-    fprintf(stdout, "Int");
+    fprintf(stdout, "int");
     break;
   case TY_FLOAT:
-    fprintf(stdout, "Float");
+    fprintf(stdout, "float");
     break;
   case TY_BOOL:
-    fprintf(stdout, "Bool");
+    fprintf(stdout, "bool");
     break;
   case TY_CHAR:
-    fprintf(stdout, "Char");
+    fprintf(stdout, "char");
     break;
   case TY_STRING:
     fprintf(stdout, "String");
@@ -1331,6 +1331,9 @@ static void dump_typenode(const TypeNode *tn, int indent) {
   switch (tn->kind) {
   case TYNODE_UNIT:
     fprintf(stdout, "TypeNode: ()\n");
+    break;
+  case TYNODE_NEVER:
+    fprintf(stdout, "TypeNode: !\n");
     break;
   case TYNODE_SELF:
     fprintf(stdout, "TypeNode: Self\n");
@@ -1481,16 +1484,16 @@ void dump_expr(const Expr *e, int indent) {
 
   switch (e->kind) {
   case EXPR_INT:
-    fprintf(stdout, "Int: %ld\n", e->as.int_val);
+    fprintf(stdout, "int: %ld\n", e->as.int_val);
     break;
   case EXPR_FLOAT:
-    fprintf(stdout, "Float: %f\n", e->as.float_val);
+    fprintf(stdout, "float: %f\n", e->as.float_val);
     break;
   case EXPR_BOOL:
-    fprintf(stdout, "Bool: %s\n", e->as.bool_val ? "true" : "false");
+    fprintf(stdout, "bool: %s\n", e->as.bool_val ? "true" : "false");
     break;
   case EXPR_CHAR:
-    fprintf(stdout, "Char: U+%04X\n", e->as.char_val);
+    fprintf(stdout, "char: U+%04X\n", e->as.char_val);
     break;
   case EXPR_STRING:
     fprintf(stdout, "String: \"" SV_FMT "\"\n", STR_ARG(e->as.string.value));

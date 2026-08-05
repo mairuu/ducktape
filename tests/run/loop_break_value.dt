@@ -13,7 +13,7 @@ use std::io::print;
 
 # the shape the feature exists for: the answer leaves with the break instead of
 # being assigned to a `var` above the loop.
-fun first_even_after(xs: [Int], from: Int) -> Int {
+fun first_even_after(xs: [int], from: int) -> int {
     var i = from;
     loop {
         if i >= xs.len() { break -1; }
@@ -24,7 +24,7 @@ fun first_even_after(xs: [Int], from: Int) -> Int {
 
 # a bare `break` still joins as `()`, so a loop mixing it with nothing else is
 # the `()` it always was.
-fun bare_break_is_unit() -> Int {
+fun bare_break_is_unit() -> int {
     var n = 0;
     var _u: () = loop {
         n += 1;
@@ -35,7 +35,7 @@ fun bare_break_is_unit() -> Int {
 
 # the value is evaluated before the body's locals go and has to outlive them —
 # here by capturing one, so the close has to happen before the slide.
-fun captured() -> Int {
+fun captured() -> int {
     var f = loop {
         var k = 6;
         break || k * 7;
@@ -45,7 +45,7 @@ fun captured() -> Int {
 
 # several nested scopes under one break: every local between it and the loop's
 # base is slid out from under the value.
-fun deep() -> Int {
+fun deep() -> int {
     loop {
         var a = 1;
         var b = a + 1;
@@ -59,7 +59,7 @@ fun deep() -> Int {
 
 # the break names the innermost loop, so the inner value is what the outer one
 # breaks with.
-fun nested() -> Int {
+fun nested() -> int {
     loop {
         var inner = loop { break 7; };
         break inner * 2;
@@ -68,13 +68,13 @@ fun nested() -> Int {
 
 # two unrelated structs, one per break: the `dyn` expectation has to reach each
 # of them, the way milestone 82 sent it into an `if`'s arms.
-trait Shape { fun area(self) -> Int; }
-struct Sq { s: Int }
-struct Tri { b: Int }
-impl Shape for Sq { fun area(self) -> Int { self.s * self.s } }
-impl Shape for Tri { fun area(self) -> Int { self.b } }
+trait Shape { fun area(self) -> int; }
+struct Sq { s: int }
+struct Tri { b: int }
+impl Shape for Sq { fun area(self) -> int { self.s * self.s } }
+impl Shape for Tri { fun area(self) -> int { self.b } }
 
-fun pick_shape(which: Int) -> Int {
+fun pick_shape(which: int) -> int {
     var n = 0;
     var s: dyn Shape = loop {
         n += 1;
@@ -86,7 +86,7 @@ fun pick_shape(which: Int) -> Int {
 
 # a `loop` inside a `for` body, whose hidden iterator locals sit below the
 # loop's own base.
-fun for_inner() -> Int {
+fun for_inner() -> int {
     var acc = 0;
     for i in 0..3 {
         var v = loop {
@@ -99,7 +99,7 @@ fun for_inner() -> Int {
 }
 
 # the join is an ordinary type, so it solves a type argument like any other.
-fun find<T>(xs: [T], keep: fun(T) -> Bool) -> Option<T> {
+fun find<T>(xs: [T], keep: fun(T) -> bool) -> Option<T> {
     var i = 0;
     loop {
         if i >= xs.len() { break Option::None; }

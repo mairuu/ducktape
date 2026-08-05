@@ -13,7 +13,7 @@
 # roadmap held `Eq` back until a consumer asked for it, and a hash map keyed by
 # user types was named as that consumer. It turns out not to be one: `==` in
 # ducktape is a structural primitive with no trait behind it, so `k == key`
-# below type-checks on a `K` whose only bound is `Hash`, and it compares Ints,
+# below type-checks on a `K` whose only bound is `Hash`, and it compares ints,
 # Strings, structs and tuples alike with one opcode. A map needs equality, gets
 # it from the language, and spends its bound entirely on *hashing*. So the trait
 # a table wants is `Hash`, and `Eq` goes on waiting for a different consumer.
@@ -33,7 +33,7 @@ use std::iter::Iterator;
 # fail to find keys that had walked *past* it on the way in. So a removed slot
 # stays a wall to probes and becomes free again only at the next rehash.
 #
-# An enum, rather than the parallel `[K]` + `[V]` + `[Int]` a C implementation
+# An enum, rather than the parallel `[K]` + `[V]` + `[int]` a C implementation
 # would reach for, because the array of keys is the problem: `[K]` has to be
 # *filled* with something at every empty slot, and a generic `K` has no default
 # value to fill it with. A payload variant sidesteps the question — `Empty` holds
@@ -46,7 +46,7 @@ enum Slot<K, V> {
     Full(K, V),
 }
 
-fun empty_slots<K, V>(n: Int) -> [Slot<K, V>] {
+fun empty_slots<K, V>(n: int) -> [Slot<K, V>] {
     var slots: [Slot<K, V>] = [];
     # `Slot::Empty` used to need an annotated local here: the argument hint
     # solved the variant only as far as `Slot<_, _>`, because `K` and `V` are
@@ -82,7 +82,7 @@ fun empty_slots<K, V>(n: Int) -> [Slot<K, V>] {
 # high bits down. A program cannot hand this table a raw hash even if it wants
 # to. The trait shape milestone 63 chose for one reason turns out to buy this
 # for another.
-fun capacity_for(n: Int) -> Int {
+fun capacity_for(n: int) -> int {
     var c = 8;
     # `c > 0` is a termination guard rather than a real case: reaching it means
     # `c` has overflowed past 2^62 slots, and an array that long exhausts memory
@@ -106,7 +106,7 @@ fun capacity_for(n: Int) -> Int {
 # Growth triggers when `(used + 1) * 4 > slots * 3`, so `n` entries need
 # `slots * 3 >= n * 4`, and the smallest such slot count is `ceil(4n/3)` rounded
 # up to a power of two. `(n * 4 + 2) / 3` is that ceiling in integer division.
-fun slots_for(n: Int) -> Int {
+fun slots_for(n: int) -> int {
     return capacity_for((n * 4 + 2) / 3);
 }
 
@@ -117,8 +117,8 @@ fun slots_for(n: Int) -> Int {
 # instead of growing forever.
 pub struct HashMap<K: Hash, V> {
     slots: [Slot<K, V>],
-    live: Int,
-    used: Int,
+    live: int,
+    used: int,
 }
 
 impl<K: Hash, V> HashMap<K, V> {
@@ -135,13 +135,13 @@ impl<K: Hash, V> HashMap<K, V> {
     # are no tombstones to eat into the room and no live entries to raise the
     # floor. `with_capacity(0)` is `new` — `slots_for(0)` is the same minimum 8
     # that `capacity_for` imposes on everything else.
-    fun with_capacity(n: Int) -> HashMap<K, V> {
+    fun with_capacity(n: int) -> HashMap<K, V> {
         var slots: [Slot<K, V>] = empty_slots(slots_for(n));
         return HashMap { slots: slots, live: 0, used: 0 };
     }
 
     # How many entries the map holds. Tombstones are not entries.
-    fun len(self) -> Int {
+    fun len(self) -> int {
         return self.live;
     }
 
@@ -158,7 +158,7 @@ impl<K: Hash, V> HashMap<K, V> {
     # unobservable — a program cannot tell a pre-sized build from a grown one,
     # and neither could a test. Timing would be the alternative, and a timing
     # test is not a test.
-    fun capacity(self) -> Int {
+    fun capacity(self) -> int {
         return self.slots.len() * 3 / 4;
     }
 
@@ -171,33 +171,33 @@ impl<K: Hash, V> HashMap<K, V> {
     # the size to ask for reads `live`, because a rehash drops them. A map whose
     # capacity is spent entirely on tombstones therefore reserves by *cleaning*
     # and may not grow at all.
-    fun reserve(self, more: Int) {
+    fun reserve(self, more: int) {
         if (self.used + more) * 4 <= self.slots.len() * 3 {
             return;
         }
         self.rehash(slots_for(self.live + more));
     }
 
-    fun is_empty(self) -> Bool {
+    fun is_empty(self) -> bool {
         return self.live == 0;
     }
 
     # The mask that turns a hash, or a walked index, into a slot. One less than
     # the capacity, which is all a power of two needs.
-    fun mask(self) -> Int {
+    fun mask(self) -> int {
         return self.slots.len() - 1;
     }
 
     # Where `key`'s probe sequence begins.
     #
     # **The sign takes care of itself here**, which it did not under `%`. A hash
-    # spans the whole of `Int`, negatives included, and `%` keeps the sign of its
+    # spans the whole of `int`, negatives included, and `%` keeps the sign of its
     # left operand — so the modulo form had to fold a negative result back into
     # range, and getting that wrong was an out-of-bounds read rather than merely
     # a bad distribution. Masking against a positive mask clears the high bits
     # along with the sign, so the fold has nothing left to do and this is one
     # expression again.
-    fun start(self, key: K) -> Int {
+    fun start(self, key: K) -> int {
         return hash_of(key) & self.mask();
     }
 
@@ -227,7 +227,7 @@ impl<K: Hash, V> HashMap<K, V> {
     #
     # **`cap` is a request rather than a command**, and it has to be, because an
     # impl method has no visibility control — every method on this type is public
-    # whether or not it wants to be, so this one is reachable with any Int a
+    # whether or not it wants to be, so this one is reachable with any int a
     # program cares to pass. Masking only works on a power of two: given 5 slots
     # the mask would be 4, every probe would visit slots 0 and 4 alone, and
     # `(i + 1) & 4` would never leave 0. So the request is rounded up to a power
@@ -239,7 +239,7 @@ impl<K: Hash, V> HashMap<K, V> {
     # Rounding is also what keeps the re-insert loop from recursing: the result
     # is at least `2 * live + 1`, so every one of the `live` inserts stays under
     # the 3/4 load and none of them triggers a rehash of its own.
-    fun rehash(self, cap: Int) {
+    fun rehash(self, cap: int) {
         var want = cap;
         var need = self.live * 2 + 1;
         if want < need {
@@ -340,7 +340,7 @@ impl<K: Hash, V> HashMap<K, V> {
         return Option::None;
     }
 
-    fun contains_key(self, key: K) -> Bool {
+    fun contains_key(self, key: K) -> bool {
         match self.get(key) {
             Option::Some(_) => {
                 return true;
@@ -428,7 +428,7 @@ impl<K: Hash, V> HashMap<K, V> {
 
 pub struct MapIter<K: Hash, V> {
     slots: [Slot<K, V>],
-    at: Int,
+    at: int,
 }
 
 impl<K: Hash, V> Iterator for MapIter<K, V> {

@@ -3,13 +3,13 @@
 # both sides rather than aborting on it — but the rest of the signature is still
 # compared, so a wrong return type is still caught.
 trait Box<T> {
-    fun wrap<U>(self, u: U) -> Int;
+    fun wrap<U>(self, u: U) -> int;
 }
 
-struct S { n: Int }
+struct S { n: int }
 
-impl Box<Int> for S {
-    fun wrap<U>(self, u: U) -> Bool {
+impl Box<int> for S {
+    fun wrap<U>(self, u: U) -> bool {
         return true;
     }
 }

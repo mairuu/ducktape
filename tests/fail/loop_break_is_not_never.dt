@@ -1,7 +1,7 @@
-#! expect: expected 'Never', which only diverging code produces, but got '()'
+#! expect: expected '!', which only diverging code produces, but got '()'
 # A `loop` diverges only when nothing leaves it. One `break` gives it an exit,
 # so it types `()` like a `while` and the promise is broken.
-fun serve() -> Never {
+fun serve() -> ! {
     loop { break; }
 }
 

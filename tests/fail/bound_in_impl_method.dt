@@ -1,30 +1,30 @@
-#! expect: type 'Int' does not implement trait 'N'
+#! expect: type 'int' does not implement trait 'N'
 struct P {
-    x: Int,
+    x: int,
 }
 
 trait N {
-    fun n(self) -> Int;
+    fun n(self) -> int;
 }
 
 impl N for P {
-    fun n(self) -> Int {
+    fun n(self) -> int {
         self.x
     }
 }
 
-fun need<T: N>(t: T) -> Int {
+fun need<T: N>(t: T) -> int {
     0
 }
 
 struct Q {
-    y: Int,
+    y: int,
 }
 
 impl Q {
     # bound violations inside an impl method body must be caught too --
     # tc_check_impl finalizes its inference, not just tc_check_fun
-    fun bad(self) -> Int {
+    fun bad(self) -> int {
         need(5)
     }
 }

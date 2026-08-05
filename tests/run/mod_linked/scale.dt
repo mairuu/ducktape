@@ -3,7 +3,7 @@
 # not this module's.
 use shapes::rect::Rect;
 
-pub fun doubler() -> fun(Int) -> Int {
+pub fun doubler() -> fun(int) -> int {
   var factor = 2;
   return |n| n * factor;
 }

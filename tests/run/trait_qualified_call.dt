@@ -10,21 +10,21 @@ use std::io::print;
 #> 15
 #> 10
 
-trait Into<T> {
+trait into<T> {
     fun into(self) -> T;
 }
 
-struct Celsius { deg: Int }
-struct Fahrenheit { deg: Int }
-struct Kelvin { deg: Int }
+struct Celsius { deg: int }
+struct Fahrenheit { deg: int }
+struct Kelvin { deg: int }
 
-impl Into<Fahrenheit> for Celsius {
+impl into<Fahrenheit> for Celsius {
     fun into(self) -> Fahrenheit {
         return Fahrenheit { deg: self.deg * 9 / 5 + 32 };
     }
 }
 
-impl Into<Kelvin> for Celsius {
+impl into<Kelvin> for Celsius {
     fun into(self) -> Kelvin {
         return Kelvin { deg: self.deg + 273 };
     }
@@ -34,19 +34,19 @@ impl Into<Kelvin> for Celsius {
 # argument differs, so the reference is provably what selects. The `item`
 # argument beside `self` exercises the positional argument path.
 trait Pack<T> {
-    fun pack(self, item: T) -> Int;
+    fun pack(self, item: T) -> int;
 }
 
-struct Brick { kg: Int }
+struct Brick { kg: int }
 
-impl Pack<Int> for Brick {
-    fun pack(self, item: Int) -> Int {
+impl Pack<int> for Brick {
+    fun pack(self, item: int) -> int {
         return self.kg + item;
     }
 }
 
 impl Pack<String> for Brick {
-    fun pack(self, _item: String) -> Int {
+    fun pack(self, _item: String) -> int {
         return self.kg;
     }
 }
@@ -55,20 +55,20 @@ fun main() {
     var c = Celsius { deg: 100 };
 
     # the trait reference is what chooses, not the receiver or a hint
-    var f = Into::<Fahrenheit>::into(c);
+    var f = into::<Fahrenheit>::into(c);
     print("{f.deg}");
 
     var c2 = Celsius { deg: 100 };
-    var k = Into::<Kelvin>::into(c2);
+    var k = into::<Kelvin>::into(c2);
     print("{k.deg}");
 
     # the return type still flows into an annotation
     var c3 = Celsius { deg: 37 };
-    var f2: Fahrenheit = Into::<Fahrenheit>::into(c3);
+    var f2: Fahrenheit = into::<Fahrenheit>::into(c3);
     print("{f2.deg}");
 
     var b = Brick { kg: 10 };
     var word = "x";
-    print("{Pack::<Int>::pack(b, 5)}");    # the Int impl: 10 + 5
+    print("{Pack::<int>::pack(b, 5)}");    # the int impl: 10 + 5
     print("{Pack::<String>::pack(b, word)}"); # the String impl: 10
 }

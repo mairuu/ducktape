@@ -60,7 +60,7 @@ impl<T> [T] {
     # is refused with a runtime error rather than scattering an old sequence
     # over a new array, and the array is left exactly as it was.
     @native("sort_by")
-    fun sort_by(self, cmp: fun(T, T) -> Int);
+    fun sort_by(self, cmp: fun(T, T) -> int);
 }
 
 # The `Ord` half. These are the same operations with the comparator left out,
@@ -82,7 +82,7 @@ impl<T: Ord> [T] {
     # Whether `self` is already in ascending order. Cheap enough to assert with
     # (`std::assert`), and it is also the precondition the two searches below
     # need spelled out somewhere they can be checked against.
-    fun is_sorted(self) -> Bool {
+    fun is_sorted(self) -> bool {
         var i = 1;
         while i < self.len() {
             if self[i - 1].cmp(self[i]) > 0 {
@@ -106,12 +106,12 @@ impl<T: Ord> [T] {
     # `self` must be sorted. On an array that is not, the answer is unspecified
     # — but it is only an answer, never an out-of-bounds read: the window only
     # ever shrinks.
-    fun lower_bound(self, target: T) -> Int {
+    fun lower_bound(self, target: T) -> int {
         var lo = 0;
         var hi = self.len();
         while lo < hi {
             # `lo + (hi - lo) / 2` rather than `(lo + hi) / 2`: the sum of two
-            # indices can overflow an Int where the difference cannot. That is
+            # indices can overflow an int where the difference cannot. That is
             # borrowed caution rather than a live bug here — an array long
             # enough to overflow would have exhausted memory first — but the
             # spelling costs nothing.
@@ -135,7 +135,7 @@ impl<T: Ord> [T] {
     # `==` remains a structural primitive with no trait behind it (roadmap: the
     # deferred `Eq`) costs this nothing, because the notion of equality a search
     # needs was already written down as `Ord`.
-    fun binary_search(self, target: T) -> Option<Int> {
+    fun binary_search(self, target: T) -> Option<int> {
         var at = self.lower_bound(target);
         if at < self.len() and self[at].cmp(target) == 0 {
             return Option::Some(at);

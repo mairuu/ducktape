@@ -24,11 +24,11 @@
 use std::io::print;
 use std::option::Option;
 
-fun two(a: Int, b: Int) -> Int { a + b }
-struct P { x: Int, y: Int }
-enum E { A(Int), B }
-trait T { fun go(self, n: Int) -> Int; }
-impl T for P { fun go(self, n: Int) -> Int { n } }
+fun two(a: int, b: int) -> int { a + b }
+struct P { x: int, y: int }
+enum E { A(int), B }
+trait T { fun go(self, n: int) -> int; }
+impl T for P { fun go(self, n: int) -> int { n } }
 
 fun main() {
     # one pending value: an operand, an argument, an element, a receiver
@@ -63,5 +63,5 @@ fun main() {
 
     # an upvalue names a frame slot too, so a captured local declared under a
     # pending value is the same question asked of the closure
-    print(two(0, { var b = 2; var f: fun() -> Int = || b * 10; f() }));
+    print(two(0, { var b = 2; var f: fun() -> int = || b * 10; f() }));
 }

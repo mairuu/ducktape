@@ -6,10 +6,10 @@
 use std::iter::{Iterator, DoubleEnded};
 use std::option::Option;
 
-struct Span { lo: Int, hi: Int }
+struct Span { lo: int, hi: int }
 impl Iterator for Span {
-    type Item = Int;
-    fun next(self) -> Option<Int> {
+    type Item = int;
+    fun next(self) -> Option<int> {
         if self.lo >= self.hi { return Option::None; }
         var v = self.lo;
         self.lo += 1;
@@ -17,7 +17,7 @@ impl Iterator for Span {
     }
 }
 impl DoubleEnded for Span {
-    fun next_back(self) -> Option<Int> {
+    fun next_back(self) -> Option<int> {
         if self.lo >= self.hi { return Option::None; }
         self.hi -= 1;
         return Option::Some(self.hi);
@@ -25,6 +25,6 @@ impl DoubleEnded for Span {
 }
 
 fun main() {
-    var d: dyn DoubleEnded<Item = Int> = Span { lo: 0, hi: 4 };
+    var d: dyn DoubleEnded<Item = int> = Span { lo: 0, hi: 4 };
     var i: dyn Iterator<Item = String> = d;
 }

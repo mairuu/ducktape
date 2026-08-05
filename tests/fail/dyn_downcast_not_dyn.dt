@@ -1,4 +1,4 @@
-#! expect: 'as?' downcasts a trait object, but this is a 'Int'
+#! expect: 'as?' downcasts a trait object, but this is a 'int'
 # `as` and `as?` share a keyword and nothing else: the total form converts
 # between numbers, the fallible one recognises a trait object. So a downcast of
 # something that never was one is a mistake at the operand, not a cast that
@@ -6,12 +6,12 @@
 
 
 trait Shape {
-    fun area(self) -> Int;
+    fun area(self) -> int;
 }
 
-struct Sq { side: Int }
+struct Sq { side: int }
 impl Shape for Sq {
-    fun area(self) -> Int { self.side * self.side }
+    fun area(self) -> int { self.side * self.side }
 }
 
 fun main() {

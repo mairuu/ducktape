@@ -21,11 +21,11 @@ trait Shape {
 }
 
 struct Circle {
-    r: Int,
+    r: int,
 }
 
 impl Shape for Circle {
-    type Unit = Int;
+    type Unit = int;
 
     fun area(self) -> Self.Unit {
         self.r * self.r * 3
@@ -65,13 +65,13 @@ fun measure<T: Shape>(s: T) -> T.Unit {
 fun main() {
     var c = Circle { r: 2 };
     var _l: String = label(c);
-    var _a: Int = measure(c);
+    var _a: int = measure(c);
 
     # `doubled` and `describe` are inherited: neither impl overrides them.
-    var _d: Int = c.doubled();
+    var _d: int = c.doubled();
     var _t: String = c.describe();
 
     # through a generic impl, `Self.Unit` is the impl's own type param
     var b = Boxed { v: 7 };
-    var _e: Int = b.doubled();
+    var _e: int = b.doubled();
 }

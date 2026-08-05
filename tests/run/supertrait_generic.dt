@@ -2,8 +2,8 @@
 #
 # The closure stores each entry in the terms of the trait whose closure it is,
 # so `Src<T>` is recorded with `Twice`'s own `T`. Every reader then restates it
-# through the reference that named the trait — `Twice<Int>` makes the super
-# `Src<Int>` — which is the same substitution a call through a bound has always
+# through the reference that named the trait — `Twice<int>` makes the super
+# `Src<int>` — which is the same substitution a call through a bound has always
 # applied to a trait's signatures, one level out.
 use std::io::print;
 
@@ -21,10 +21,10 @@ trait Twice<T>: Src<T> {
 struct Five;
 struct Word;
 
-impl Src<Int> for Five {
-    fun get(self) -> Int { return 5; }
+impl Src<int> for Five {
+    fun get(self) -> int { return 5; }
 }
-impl Twice<Int> for Five {}
+impl Twice<int> for Five {}
 
 impl Src<String> for Word {
     fun get(self) -> String { return "hi"; }
@@ -46,13 +46,13 @@ fun main() {
 #> (5, 5)
     print(Word.pair());
 #> (hi, hi)
-    print(both::<Int, Five>(Five));
+    print(both::<int, Five>(Five));
 #> (5, 5)
     print(both::<String, Word>(Word));
 #> (hi, hi)
 
     # and through a trait object, whose vtable carries the super's `get`
-    var d: dyn Twice<Int> = Five;
+    var d: dyn Twice<int> = Five;
     print(d.get());
 #> 5
 }

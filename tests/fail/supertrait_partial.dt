@@ -6,7 +6,7 @@
 # *impl* when the fix is a missing method.
 trait Greet {
     fun name(self) -> String;
-    fun age(self) -> Int;
+    fun age(self) -> int;
 }
 
 trait Loud: Greet {

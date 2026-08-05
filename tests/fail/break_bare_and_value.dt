@@ -1,4 +1,4 @@
-#! expect: type mismatch: expected '()' but got 'Int'
+#! expect: type mismatch: expected '()' but got 'int'
 # A bare `break` is not "no opinion" — it leaves with `()`, which is a type like
 # any other, so it joins against a later value the same way two `if` arms do.
 fun main() {

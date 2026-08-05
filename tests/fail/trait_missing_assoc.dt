@@ -1,15 +1,15 @@
 #! expect: is missing associated type 'Unit'
 struct Circle {
-    radius: Int,
+    radius: int,
 }
 
 trait Shape {
     type Unit;
-    fun area(self) -> Int;
+    fun area(self) -> int;
 }
 
 impl Shape for Circle {
-    fun area(self) -> Int {
+    fun area(self) -> int {
         self.radius
     }
 }

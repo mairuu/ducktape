@@ -3,7 +3,7 @@
 # an ordinary interpolated String, built before the call like any argument.
 use std::assert::assert_with;
 
-fun check(n: Int) {
+fun check(n: int) {
     assert_with(n > 0, "expected a positive count, got {n}");
 }
 

@@ -5,7 +5,7 @@
 use std::io::print;
 use std::fmt::Display;
 
-struct Point { x: Int, y: Int }
+struct Point { x: int, y: int }
 
 fun main() {
     var p = Point { x: 1, y: 2 };

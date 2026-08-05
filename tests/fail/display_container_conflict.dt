@@ -1,4 +1,4 @@
-#! expect: conflicting implementations of trait 'Display' for type '[Int]'
+#! expect: conflicting implementations of trait 'Display' for type '[int]'
 # Now that std ships a `Display` for `[T]`, a program cannot also write its own:
 # naming the trait requires importing `std::fmt`, which makes the std impl
 # visible, and coherence is deliberately blind to bounds — two impls for one
@@ -8,7 +8,7 @@
 use std::io::print;
 use std::fmt::Display;
 
-impl Display for [Int] {
+impl Display for [int] {
     fun to_string(self) -> String {
         return "mine";
     }

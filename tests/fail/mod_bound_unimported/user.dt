@@ -3,6 +3,6 @@
 use std::cmp::max;
 use shape::{Rank, mk};
 
-pub fun biggest() -> Int {
+pub fun biggest() -> int {
   return max(mk(1), mk(2)).v;
 }

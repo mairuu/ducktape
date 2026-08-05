@@ -1,10 +1,10 @@
-# std::convert — `From` and `Into`.
+# std::convert — `From` and `into`.
 #
 # Two traits, and the observation that they are one relation written from two
-# ends: a `Meters` that can be made *from* an `Int` is an `Int` that goes
+# ends: a `Meters` that can be made *from* an `int` is an `int` that goes
 # *into* a `Meters`. The blanket impl below is what makes that literally true
-# rather than merely suggestive, so a program writes `From` and gets `Into`
-# free — and never writes `Into` at all.
+# rather than merely suggestive, so a program writes `From` and gets `into`
+# free — and never writes `into` at all.
 #
 # That direction is not a style preference, it is what the machinery allows. An
 # impl is selected by a (self type, trait reference) pair, and a conversion is
@@ -14,9 +14,9 @@
 # Writing the trait whose self type is the *output* is what puts the choice
 # where a name can be written down.
 #
-# **The blanket costs a program the ability to write its own `Into` impl.**
-# Coherence is blind to an impl's bounds, so `impl<T, U: From<T>> Into<U> for T`
-# overlaps every `impl Into<X> for Y` that could ever be written — importing
+# **The blanket costs a program the ability to write its own `into` impl.**
+# Coherence is blind to an impl's bounds, so `impl<T, U: From<T>> into<U> for T`
+# overlaps every `impl into<X> for Y` that could ever be written — importing
 # this module makes writing one an error. That is Rust's rule arrived at from
 # the same direction, and it is the price of the free direction being free.
 #
@@ -35,13 +35,13 @@
 # one thing, which is the split milestone 18 drew between `print` and
 # `Display` and worth not redrawing here.
 #
-# Nor is there a `From<Float> for Int`: `as Int` truncates, and a conversion
+# Nor is there a `From<float> for int`: `as int` truncates, and a conversion
 # that silently loses the fraction is not one a `From` should hide. Which way
 # it should round is a question a fallible conversion would have to ask, and
 # there is no `TryFrom` yet.
 
 # Imported as a module, not by item: `code` is a method now (milestone 40), so
-# the `use` is only here to make `impl Char` visible for `value.code()` below.
+# the `use` is only here to make `impl char` visible for `value.code()` below.
 use std::char;
 
 # `Self` is the type produced, which is why `from` is an associated function
@@ -50,7 +50,7 @@ pub trait From<T> {
     fun from(value: T) -> Self;
 }
 
-pub trait Into<T> {
+pub trait into<T> {
     fun into(self) -> T;
 }
 
@@ -61,24 +61,24 @@ pub trait Into<T> {
 #
 # Neither the receiver nor a named trait reference pins `U` at a bare
 # `x.into()`; the type the result flows into does.
-impl<T, U: From<T>> Into<U> for T {
+impl<T, U: From<T>> into<U> for T {
     fun into(self) -> U {
         return U::from(self);
     }
 }
 
 # Widening, which is the one numeric conversion that keeps its value.
-impl From<Int> for Float {
-    fun from(value: Int) -> Float {
-        return value as Float;
+impl From<int> for float {
+    fun from(value: int) -> float {
+        return value as float;
     }
 }
 
 # A character's scalar value. `c.code()` is the native behind it, and the
-# dependency costs only `std::char`'s own `Char` methods — the one impl it ships,
+# dependency costs only `std::char`'s own `char` methods — the one impl it ships,
 # and none from what it imports.
-impl From<Char> for Int {
-    fun from(value: Char) -> Int {
+impl From<char> for int {
+    fun from(value: char) -> int {
         return value.code();
     }
 }

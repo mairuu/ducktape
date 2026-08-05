@@ -8,9 +8,9 @@
 
 use std::io::print;
 
-struct R { w: Int }
+struct R { w: int }
 
-fun pick(b: Bool) -> R {
+fun pick(b: bool) -> R {
     if b {
         return R { w: 1 };
     }

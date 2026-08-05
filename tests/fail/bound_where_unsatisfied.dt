@@ -1,24 +1,24 @@
 #! expect: does not implement trait 'B'
 trait A {
-    fun a(self) -> Int;
+    fun a(self) -> int;
 }
 
 trait B {
-    fun b(self) -> Int;
+    fun b(self) -> int;
 }
 
 struct Only {
-    v: Int,
+    v: int,
 }
 
 impl A for Only {
-    fun a(self) -> Int {
+    fun a(self) -> int {
         self.v
     }
 }
 
 # Only implements A but not B; a `where T: B` predicate must reject it.
-fun needs_b<T>(t: T) -> Int where T: B {
+fun needs_b<T>(t: T) -> int where T: B {
     0
 }
 

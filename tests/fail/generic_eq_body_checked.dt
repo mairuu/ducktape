@@ -1,11 +1,11 @@
-#! expect: type mismatch: expected 'Int' but got 'String'
+#! expect: type mismatch: expected 'int' but got 'String'
 # The soundness regression: an `if` whose condition is a generic `==` used to
 # have its whole body go unchecked, because the condition silently poisoned and
 # `resolve_expr`'s EXPR_IF bails on a poison condition. The body error below was
 # accepted; it must now be reported.
 fun g<T>(a: T, b: T) {
     if a == b {
-        var z: Int = "str";
+        var z: int = "str";
     }
 }
 
