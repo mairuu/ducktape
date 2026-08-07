@@ -594,8 +594,9 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   list cannot fork. Sabotage 5/5 bit. Left over: a builtin-named module is still
   only reachable through the type.
 
-- **100. The module glob** — `use a::*;` binds every item `a` exports, and
-  `pub use a::*;` re-exports them, which is what makes a facade writable.
+- **100. The module glob** (`014eaf5`) — `use a::*;` binds every item `a`
+  exports, and `pub use a::*;` re-exports them, which is what makes a facade
+  writable.
   Design: `language.md` "Modules", `architecture.md` "Module globs",
   `grammar.ebnf` `useDecl`. **THE FINDING: the three binding strengths m81 wrote
   down are three PASSES, not a flag.** A scope lookup returns the first match,
