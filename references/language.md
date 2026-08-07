@@ -2461,8 +2461,14 @@ a deliberate exception, marked below.
 ```
 std::io      print<T>(value: T)                     # @native, free (see below)
 
+std::array   fill<T>(n: int, value: T) -> [T]       # @native, free
+             with_capacity<T>(n: int) -> [T]        # free
+
 impl<T> [T]  self.len() -> int                      # @intrinsic (OP_LEN)
              self.push(value: T)                    # @native
+             self.reserve(n: int)                   # @native
+             self.extend(other: [T])                # @native
+             self.truncate(n: int)                  # @native
              self.pop() -> Option<T>
              self.first() -> Option<T>
              self.last() -> Option<T>
@@ -2553,13 +2559,50 @@ growth itself:
   being iterated extends the loop rather than iterating a snapshot. Nothing
   prevents it; there is no borrow checker.
 
-Only `push` is written in C, alongside a private raw remove-last. They are the
-two things an array cannot express about itself — a slot that did not exist
-before, and one fewer than there was — and everything else in the module is
+`push` is written in C alongside a private raw remove-last. They are the two
+things an array cannot express about itself — a slot that did not exist before,
+and one fewer than there was — and `pop`, `first`, `last`, `is_empty` are
 ducktape on top. That is what lets `pop` answer with an `Option`: a native's
 contract is "n values in, one out" and it has no handle on the `VariantDef` an
 enum instance needs, so a native *cannot* build an `Option` at all. Popping
 does not release capacity; the buffer is returned when the array is collected.
+
+**Five more are in C for cost rather than expressibility** (milestone 106).
+Each has a ducktape spelling that is an interpreted loop around a native call,
+which is all cost and no decision — see runtime.md's cost model.
+
+```
+var zeros = array::fill(4, 0);          # [0, 0, 0, 0]
+var xs: [int] = array::with_capacity(64);   # empty, buffer already 64 long
+xs.reserve(128);                        # an allocation hint; nothing observable
+xs.extend(zeros);                       # append every element, in order
+xs.truncate(2);                         # keep the first 2; longer is a no-op
+xs.clear();                             # truncate(0)
+```
+
+`fill` and `with_capacity` are free functions, so they need the module:
+`use std::array;` then `array::fill(..)`. (`array` is not one of the six
+builtin type names, so unlike `string::` the qualifier does reach the module.)
+`with_capacity` reads `T` from the expected type and nothing else, so the
+annotation above is not optional.
+
+**`fill` copies its element; it does not clone it.** There is no `Clone` in the
+language, so for a type with identity the n slots are n names for *one* object:
+
+```
+var rows: [[int]] = array::fill(2, []);
+rows[0].push(1);
+print(rows);                            # [[1], [1]] — one row, seen twice
+```
+
+Milestone 103's naming rule is the predicate. A lowercase type (`int`, `float`,
+`bool`, `char`, `string`, `range`) is an immutable value with no identity, so
+the sharing cannot be observed and `fill` is simply "n of these"; anything
+PascalCase or declared has identity, and the elements must be built in a loop.
+
+`fill` is also the first place a program names an allocation *size*, so it is
+the first that has to refuse one: a negative length and a length past `int`
+are both runtime errors, at `fill`, `reserve` and `truncate` alike.
 
 **A `string` is built with a `StringBuf`, which lives in `std::string::buf`.** `a +
 b` allocates a new string and interns it, so growing one a piece at a time

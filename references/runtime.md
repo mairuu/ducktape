@@ -276,7 +276,25 @@ interned result already lived in.
 
 Growth reallocates, so **no raw `Value *` into `items` may be held across a
 push**. Nothing in the VM does: `args` points into the value stack, not into
-an array's buffer.
+an array's buffer. Milestone 106's `array_extend` is the first native with a
+reason to want one, and it is where the rule bites hardest: `xs.extend(xs)`
+makes the *source* buffer the one the reserve just moved, so both pointers are
+read back after it and the length is read before.
+
+**A length arriving from a program is an `int64_t`; `count` and `cap` are
+`int`.** Every native taking one (`array_fill`, `array_reserve`,
+`array_truncate`) checks the narrowing rather than casting through it —
+`(int)` of 2^33 is 0, which turns an absurd request into a silent no-op, and
+`(int)` of 2^31 is negative, which is a `count` that makes `len()` answer -1.
+Both are runtime errors ("array length cannot be negative", "array length is
+too large").
+
+Above that, `heap_alloc` is where memory exhaustion stops being undefined: it
+now prints `out of memory` and exits rather than returning a NULL every caller
+writes into. This is not a runtime error — there is no unwinding, and
+reporting one from inside allocation would have to allocate. What made it worth
+having is `array::fill`, the first native that lets a program name an
+allocation *size*; everything else is sized by data already in hand.
 
 ### Growing a string buffer
 
@@ -1198,6 +1216,13 @@ a native's contract with C is only "this many values in, one value out".
 than in codegen, because that is where the attribute still has a span to
 report an unknown name against, which a hand-built builtin never had.
 
+**What a native may make.** Milestone 102's rule is not that a native cannot
+allocate but that it cannot reach a definition a *program* wrote: a struct or
+an enum needs a `StructDef`/`VariantDef` the native has no handle on, which is
+why anything answering an `Option` needs a ducktape wrapper. Object kinds the
+runtime defines are unaffected, so `array_fill` (milestone 106) mints a whole
+`[T]` in C, as `string_slice` and `strbuf_build` already mint strings.
+
 **`@native` is an ordinary global.** It takes a slot in `exe->globals` like
 any other definition, so `OP_GET_GLOBAL` reaches it and it is first-class for
 free: passable, storable in an array, capturable by a closure, usable as a
@@ -1415,6 +1440,36 @@ imported like anything else, and is deliberately kept out of the prelude
 (milestone 45) — that prelude covers the lang-item and vocabulary modules, not
 plain functions like `print`.
 
+
+### The cost model: what belongs in C
+
+Measured at -O2, best-of-7: an interpreted loop iteration is **~32ns**, a call
+frame **~5ns**, an allocation **~26ns**.
+
+**The rule: moving work to C pays in proportion to the interpreted *iterations*
+it deletes, minus the callbacks it must still make.** A native that calls back
+into ducktape keeps the expensive half — `sort_by` in C beats the ducktape sort
+by only ~3x, and ~85% of what is left is the comparator.
+
+Milestone 106 is the rule with the subtraction set to zero, over 1,000,000
+elements:
+
+| | interpreted | native |
+|---|---|---|
+| build n elements | 61ns/elem (`push` loop) | 15ns/elem (`fill`) |
+| copy n elements | 43ns/elem (`push` loop) | 16ns/elem (`extend`) |
+| drop n elements | 70ns/elem (`pop` loop) | O(1) (`clear`) |
+
+The ~37ns the model attributes to the iteration and the frame is exactly what
+goes; the ~15ns that stays is the allocation, which no native deletes. `clear`
+is the outlier only because its loop was *inside std* — it walked `pop_last`
+one element at a time to reach a state that is one assignment to `count`.
+
+**What this does not license.** A native's argument for existing is deleted
+iterations, not familiarity: a map in C would delete none (`std::collections`
+is already one interpreted probe per lookup either way, and `hash_mix` is
+already native), which is why the ranked follow-ups from milestone 63 never
+included one.
 
 ## Future (design intent, not implemented)
 

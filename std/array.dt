@@ -1,23 +1,12 @@
 # std::array — operations on `[T]`.
 #
 # An array is a *growable* buffer behind a reference: `push` may reallocate it,
-# and every name bound to the same array sees the result. That follows from
-# what an array already was — indexing has always assigned through a shared
-# object — rather than from anything new here, and it is why `push` takes the
-# receiver by value and needs no way to spell "by reference".
-#
-# The operations are **methods** (milestone 40): `xs.len()`, `xs.push(v)`,
-# `xs.pop()`. Only two of them are written in C, and they are exactly the two an
-# array cannot express about itself: a slot that did not exist before, and one
-# fewer than there was. Everything else is ducktape on top — which is what makes
-# `pop` able to return an `Option`, a thing the native tier cannot do at all,
-# since a native's contract is "n values in, one out" and it has no handle on
-# the `VariantDef` an enum instance needs.
+# and every name bound to the same array sees the result. That is why `push`
+# takes the receiver by value and needs no way to spell "by reference".
 #
 # The impl this ships is on `[T]`, so a program that imports any of `std::array`
 # can no longer add its own inherent method of the same name to an array — the
-# cost of shipping a method for a type the program did not define, paid here for
-# the same names `std::cmp` and `std::fmt` already spend on `[T]`.
+# price `std::cmp` and `std::fmt` already pay for `[T]`.
 use std::option::Option;
 
 # The raw remove-last: a runtime error on an empty array. A free *function*, and
@@ -28,11 +17,33 @@ use std::option::Option;
 @native("array_pop")
 fun pop_last<T>(xs: [T]) -> T;
 
+# `n` copies of `value`. A runtime error if `n` is negative.
+#
+# **`value` is copied, never cloned** — the language has no `Clone` and this
+# function could not call one if it did, so for a type with identity the n slots
+# are n names for *one* object: `fill(3, xs)` hands back three views of the same
+# array, and `fill(rows, fill(cols, 0))` is one row, shared `rows` times.
+# Milestone 103's naming rule is the predicate — a lowercase type (`int`,
+# `float`, `bool`, `char`, `string`, `range`) has no identity, so the sharing is
+# unobservable; for anything else, build the elements in a loop.
+@native("array_fill")
+pub fun fill<T>(n: int, value: T) -> [T];
+
+# An empty array whose buffer is already `n` long — the pair to `HashMap`'s
+# `with_capacity`, and the reason `reserve` below is worth having at all.
+#
+# `T` is solved from the expected type and from nowhere else (there is no
+# element to read it off), so the annotation is not optional:
+# `var xs: [int] = with_capacity(64);`
+pub fun with_capacity<T>(n: int) -> [T] {
+    var xs: [T] = [];
+    xs.reserve(n);
+    return xs;
+}
+
 impl<T> [T] {
     # `len` is an `@intrinsic` rather than an `@native`: it lowers to OP_LEN
-    # inline, so a call costs one opcode and no frame. The opcode already existed
-    # — the `for x in xs` desugaring emits it — but nothing could *name* it until
-    # there was a declaration surface to hang it on. The price of that tier is
+    # inline, so a call costs one opcode and no frame. The price of that tier is
     # that an intrinsic has no body for a global slot to address, so it can only
     # be called directly, never passed as a value; an `@native` can be either.
     @intrinsic("array_len")
@@ -44,6 +55,22 @@ impl<T> [T] {
     # next to that.
     @native("array_push")
     fun push(self, value: T);
+
+    # Widen the buffer to hold `n` elements. Purely an allocation hint: the
+    # length does not move, so nothing observable changes and dropping every
+    # `reserve` from a program only makes it slower.
+    @native("array_reserve")
+    fun reserve(self, n: int);
+
+    # Append every element of `other`, in order. `xs.extend(xs)` doubles `xs`.
+    @native("array_extend")
+    fun extend(self, other: [T]);
+
+    # Keep the first `n` elements and drop the rest. An `n` at or past the
+    # current length is a no-op, so this only ever shortens. Capacity is not
+    # released.
+    @native("array_truncate")
+    fun truncate(self, n: int);
 
     # Remove and return the last element, or `None` when there is none.
     #
@@ -79,8 +106,6 @@ impl<T> [T] {
     # Drop every element, in place. The array is the same object afterwards, so
     # anything else holding it sees the emptying too.
     fun clear(self) {
-        while self.len() > 0 {
-            pop_last(self);
-        }
+        self.truncate(0);
     }
 }

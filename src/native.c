@@ -2,6 +2,7 @@
 #include "chunk.h"
 #include "object.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -37,10 +38,26 @@ static Value n_io_print(NativeCtx *ctx, Value *args, int argc) {
 // std::array
 // ───────────────────────────────────────────────────────────────────────────────
 
-// The two operations a `[T]` cannot express about itself: a slot that did not
-// exist before, and one fewer than there was. Everything else `std::array`
-// offers is written in ducktape on top of these — which is why `pop` here is
-// the raw, panicking one and the `Option`-returning `pop` lives in the .dt.
+// Two kinds live here. `push`/`pop` are what a `[T]` cannot express about
+// itself: a slot that did not exist before, and one fewer than there was. The
+// rest are what it *can* express and shouldn't — a bulk move whose ducktape
+// spelling is an interpreted loop over a native call, which is all cost and no
+// decision (milestone 106).
+//
+// A length arriving from a program is an `int64_t` and an array's `count` is an
+// `int`, so every one of these checks the narrowing rather than casting through
+// it: `(int)n` of 2^33 is 0, which would make an absurd request a silent no-op.
+static bool array_len_ok(NativeCtx *ctx, int64_t n) {
+  if (n < 0) {
+    ctx->error = "array length cannot be negative";
+    return false;
+  }
+  if (n > INT_MAX) {
+    ctx->error = "array length is too large";
+    return false;
+  }
+  return true;
+}
 
 static Value n_array_push(NativeCtx *ctx, Value *args, int argc) {
   (void)argc;
@@ -68,6 +85,79 @@ static Value n_array_pop(NativeCtx *ctx, Value *args, int argc) {
     return val_unit();
   }
   return arr->items[--arr->count];
+}
+
+// The one native that *makes* an array, and it can because an array's shape
+// belongs to the runtime — the m102 rule is not "a native cannot allocate" but
+// "a native cannot reach a definition a program wrote", so a struct and an enum
+// are out and a string, a buffer, an array and a tuple are in.
+//
+// It is also the first native to let a program name an allocation *size*.
+// Everything else here is sized by data already in hand — `push` grows by one,
+// `concat` sums two existing lengths — so `array_len_ok` is the whole of the
+// difference, and above it the runtime's standing assumption that a malloc
+// succeeds is the only thing left (see `heap_alloc`).
+//
+// Nothing allocates between the array existing and the last slot being written,
+// so the half-filled array is never handed to a collection.
+static Value n_array_fill(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  if (!array_len_ok(ctx, args[0].as.i)) {
+    return val_unit();
+  }
+  int n = (int)args[0].as.i;
+  ObjArray *arr = heap_array(ctx->heap, n);
+  for (int i = 0; i < n; i++) {
+    arr->items[i] = args[1];
+  }
+  return val_obj(&arr->obj);
+}
+
+static Value n_array_reserve(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  if (!array_len_ok(ctx, args[1].as.i)) {
+    return val_unit();
+  }
+  heap_array_reserve(ctx->heap, val_as_array(args[0]), (int)args[1].as.i);
+  return val_unit();
+}
+
+// Shortening is only `count`: the dropped values stay in the buffer but stop
+// being traced, which is the same window `pop` leaves and is safe for the same
+// reason — nothing reads past `count`, and `reserve` copies only that far.
+// Growing is not this function's business, so a length at or above the current
+// one is a no-op rather than an error.
+static Value n_array_truncate(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  if (!array_len_ok(ctx, args[1].as.i)) {
+    return val_unit();
+  }
+  ObjArray *arr = val_as_array(args[0]);
+  int n = (int)args[1].as.i;
+  if (n < arr->count) {
+    arr->count = n;
+  }
+  return val_unit();
+}
+
+// `xs.extend(xs)` is a program a program may write, so the source buffer is
+// read *after* the reserve: growing reallocates `items`, and when the two
+// arrays are one object the buffer that moved is the one being copied from.
+static Value n_array_extend(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  ObjArray *arr = val_as_array(args[0]);
+  int added = val_as_array(args[1])->count;
+  if (added == 0) {
+    return val_unit();
+  }
+  if (!array_len_ok(ctx, (int64_t)arr->count + added)) {
+    return val_unit();
+  }
+  heap_array_reserve(ctx->heap, arr, arr->count + added);
+  memcpy(arr->items + arr->count, val_as_array(args[1])->items,
+         sizeof(Value) * (size_t)added);
+  arr->count += added;
+  return val_unit();
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -631,8 +721,12 @@ typedef struct {
 } NativeEntry;
 
 static const NativeEntry natives[] = {
+    {"array_extend", n_array_extend},
+    {"array_fill", n_array_fill},
     {"array_pop", n_array_pop},
     {"array_push", n_array_push},
+    {"array_reserve", n_array_reserve},
+    {"array_truncate", n_array_truncate},
     {"char_code", n_char_code},
     {"char_from_code", n_char_from_code},
     {"fmt_float", n_fmt_float},

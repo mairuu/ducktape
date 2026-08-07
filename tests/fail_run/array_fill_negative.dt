@@ -1,0 +1,9 @@
+#! expect: array length cannot be negative
+# `fill` is the first native to take an allocation size straight from a program,
+# so it is the first that has to say no to one.
+use std::array;
+use std::io::print;
+
+fun main() {
+    print(array::fill(-1, 0));
+}

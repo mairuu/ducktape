@@ -1,0 +1,11 @@
+#! expect: array length cannot be negative
+# The same rule at the other site that takes a length. Unguarded this is a wrong
+# answer rather than a refusal — a `count` of -1 makes `len()` answer -1 and the
+# array unreachable through its own indices.
+use std::io::print;
+
+fun main() {
+    var xs = [1, 2, 3];
+    xs.truncate(-1);
+    print(xs);
+}

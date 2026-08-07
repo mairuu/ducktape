@@ -1,0 +1,78 @@
+# `std::array`'s bulk operations — fill, with_capacity, reserve, extend,
+# truncate, clear — and the one thing `fill` cannot do: give each slot its own
+# object.
+#> [0, 0, 0, 0]
+#> 4
+#> []
+#> [0, 7, 0, 0, 5]
+#> [[1], [1]]
+#> 0
+#> true
+#> [1]
+#> [2, 2, 2]
+#> 3
+#> [1, 1, 8, 8, 8]
+#> [1, 1, 8, 8, 8]
+#> [1, 2, 3, 1, 2, 3]
+#> [1, 2]
+#> [1, 2]
+#> [1, 2, 6]
+#> []
+#> 0
+
+use std::array;
+use std::io::print;
+
+fun main() {
+    var zeros = array::fill(4, 0);
+    print(zeros);
+    print(zeros.len());
+    print(array::fill(0, 9));
+
+    # A filled array is an ordinary one: its slots assign and it still grows.
+    zeros[1] = 7;
+    zeros.push(5);
+    print(zeros);
+
+    # The element is copied, never cloned. An `int` has no identity, so the four
+    # zeros above are four zeros; an array has one, so these two rows are one
+    # row seen twice.
+    var rows: [[int]] = array::fill(2, []);
+    rows[0].push(1);
+    print(rows);
+
+    var pre: [int] = array::with_capacity(64);
+    print(pre.len());
+    print(pre.is_empty());
+    pre.push(1);
+    print(pre);
+
+    # `reserve` is an allocation hint and nothing else — no length moves.
+    var xs = array::fill(3, 2);
+    xs.reserve(100);
+    print(xs);
+    xs.reserve(0);
+    print(xs.len());
+
+    var a = array::fill(2, 1);
+    a.extend(array::fill(3, 8));
+    print(a);
+    a.extend([]);
+    print(a);
+
+    # Self-extend: the source is the buffer `reserve` just moved.
+    var s = [1, 2, 3];
+    s.extend(s);
+    print(s);
+
+    var t = [1, 2, 3, 4, 5];
+    t.truncate(2);
+    print(t);
+    t.truncate(9);
+    print(t);
+    t.push(6);
+    print(t);
+    t.clear();
+    print(t);
+    print(t.len());
+}

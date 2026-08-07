@@ -3,6 +3,8 @@
 #include "chunk.h"
 
 #include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define HEAP_FIRST_GC (1u << 20) // 1 MiB
@@ -11,13 +13,24 @@
 // ── allocation ───────────────────────────────────────────────────────────────
 
 // every heap byte goes through these two so `bytes_allocated` stays honest.
+//
+// Exhaustion is not a runtime error: there is no unwinding, and reporting one
+// from here would have to allocate. What the check buys is that the failure is
+// *defined* — every caller below writes into the result without testing it, so
+// without this a NULL is a segfault. Milestone 106 is what made it reachable in
+// one step, `array::fill` being the first place a program names a size.
 static void *heap_alloc(Heap *h, size_t size) {
   if (h->mark_roots != NULL &&
       (h->stress || h->bytes_allocated + size > h->next_gc)) {
     heap_collect(h);
   }
   h->bytes_allocated += size;
-  return al_alloc(&h->al, size);
+  void *ptr = al_alloc(&h->al, size);
+  if (ptr == NULL) {
+    fprintf(stderr, "out of memory\n");
+    exit(1);
+  }
+  return ptr;
 }
 
 static void heap_dealloc(Heap *h, void *ptr, size_t size) {

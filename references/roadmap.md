@@ -743,6 +743,45 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   inside a closure reports twice (the `break` errors, and the label is then
   genuinely unread) — the m82 family, and only on a failing compile.
 
+- **106. `array::fill` and the bulk operations** (`SHA`) — the last ranked
+  follow-up from milestone 63's cost model, plus the family it belongs to:
+  `fill`, `with_capacity`, `reserve`, `extend`, `truncate`, and `clear`
+  rewritten onto `truncate`. Design: `language.md` "Arrays" (the surface, the
+  sharing rule), `runtime.md` "Growing an array" (the narrowing checks and
+  `heap_alloc`) and its new cost-model section. No compiler change, no opcode,
+  no image change — six declarations and five C functions.
+  **THE FINDING: `fill` is the first native to let a program name an allocation
+  *size*, and that is a different kind of native.** Every other allocation is
+  sized by data already in hand — `push` grows by one, `concat` sums two
+  existing lengths — so no native before this had to *refuse* a request. Two
+  refusals: a negative length, and a length past `int` (a `count` is 32 bits and
+  a program's is 64, so `(int)` of 2^33 is a silent no-op and `(int)` of 2^31 is
+  a `count` that makes `len()` answer -1). Above them the audit reached
+  `heap_alloc`, which returned a NULL every caller wrote into; exhaustion is now
+  a defined exit rather than a segfault.
+  **SECOND FINDING: `fill` cannot clone, so the naming rule is its contract.**
+  There is no `Clone`, so `fill(2, [])` is two names for one array and
+  `fill(rows, fill(cols, 0))` is one row shared. Milestone 103's rule is exactly
+  the predicate — lowercase means no identity, so the sharing is unobservable;
+  anything else has to be built in a loop. Also sharpens milestone 102's rule:
+  a native cannot mint a *declared* type, but an array's shape is the runtime's,
+  so `fill` builds a whole `[T]` in C.
+  Measured -O2 best-of-7 over 1,000,000 elements: build 61→15ns/elem, copy
+  43→16ns/elem, drop 70ns/elem→O(1). The model predicted it exactly — zero
+  callbacks, so the whole ~37ns of iteration and frame goes and the allocation
+  stays. **`clear`'s 70ns/elem was inside std itself**, an interpreted walk over
+  `pop_last` to reach a state that is one assignment. Writing the model down
+  also closed a dangling forward reference in `runtime.md` ("the cost model
+  below", which was never below).
+  Sabotage 8/8 attempted, **6 bit and 2 were no-ops — both honestly so**:
+  `reserve` made a no-op changes nothing a test can see, because an allocation
+  hint has no observable behaviour by construction, and the `heap_alloc` check
+  guards a state the suite cannot construct in bounded time. That refines the
+  standing rule: a sabotage that does not bite is a *test gap* only when the
+  thing sabotaged has something to observe. Remainder: `truncate` and `clear`
+  still never release capacity, and there is no `insert`/`remove` at an index —
+  both bulk moves of the same shape, neither yet wanted.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -773,7 +812,9 @@ nothing infers one.)
    `impl Ord for string` exists and text sorts). What is left is breadth, and
    each piece is one registry entry plus a decision about the type it needs.
    Every piece with a design question behind it is now done — the last open one,
-   padding, is milestone 34 (below).
+   padding, is milestone 34 (below). **Milestone 106 spent the last of the
+   ranked performance follow-ups** (`array::fill` and the bulk family): what is
+   left of *that* list is nothing, since the cost model declines a native map.
 
    (**An iterator source** was the one piece the iterator work had left
    pointing at itself, and is now milestone 60: `xs.iter()` and
@@ -1135,8 +1176,17 @@ via `Module.decl_base`) and is not part of the main line.
 - a native's C signature is not checked against its ducktape one — the registry
   knows only "n values in, one out", so a mismatch is a std bug that the
   checker cannot catch
-- an array grows but never shrinks its buffer: `pop` and `clear` leave the
-  capacity where it got to, and it is released only when the array is collected
+- an array grows but never shrinks its buffer: `pop`, `truncate` and `clear`
+  leave the capacity where it got to, and it is released only when the array is
+  collected. `reserve` is the only way to move it, and it only goes up — there
+  is no `shrink_to_fit`
+- there is no `insert` or `remove` at an index. Both are the bulk move
+  milestone 106's family is made of (`memmove` rather than `memcpy`), and
+  neither has been wanted yet
+- **memory exhaustion is not recoverable.** Since milestone 106 it is at least
+  *defined* — `heap_alloc` prints `out of memory` and exits — but a program
+  cannot observe it, because there is no unwinding to observe it with. It is
+  the same shape as a panic, minus the frames
 - `for x in xs` re-reads the length each iteration, so pushing to the array
   being iterated extends the loop instead of iterating a snapshot. There is no
   borrow checker to forbid it, and nothing diagnoses it

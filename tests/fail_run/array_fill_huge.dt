@@ -1,0 +1,10 @@
+#! expect: array length is too large
+# The other half of the same check. An `int` is 64 bits and an array's `count`
+# is 32, so the narrowing has to be refused rather than performed: `(int)` of
+# this length is 2^31 negative, which would ask for a buffer nothing intended.
+use std::array;
+use std::io::print;
+
+fun main() {
+    print(array::fill(3000000000, 0));
+}
