@@ -70,3 +70,16 @@ int utf8_encode(uint32_t cp, char *out);
 // reads one scalar value from `p[0..len)`; returns how many bytes it spanned,
 // or 0 if the sequence is malformed or truncated.
 int utf8_decode(const char *p, int len, uint32_t *out);
+
+// is `p[0..len)` a well-formed sequence of scalar values? Every String the
+// runtime builds is required to satisfy this, so the two untrusted intakes —
+// a source file and an image's string table — are checked with it at the door.
+bool utf8_validate(const char *p, int len);
+
+// where a character starts, in a string already known to be valid. A
+// continuation byte is the encoding's own tag for "not here", which is what
+// makes the question O(1); the end of the string is a boundary like any other.
+// `at` must be within `0..len`.
+static inline bool utf8_is_boundary(const char *p, int len, int at) {
+  return at == len || ((unsigned char)p[at] & 0xC0) != 0x80;
+}

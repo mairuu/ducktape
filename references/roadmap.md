@@ -612,6 +612,34 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   Remainder: a module qualifier is still not re-exportable, so a facade can
   offer every type below it and not the module they came from.
 
+- **101. A `String` is valid UTF-8** (`SHA`) — the guarantee, paid for at the
+  two untrusted intakes and at `slice`, plus `matches_at`, the byte compare a
+  search needs once cutting is no longer free.
+  Design: `language.md` "Characters and text" + the gaps table, `runtime.md`
+  "A `String` is valid UTF-8", `architecture.md` "std is embedded".
+  **THE FINDING: the guarantee's cost is not the check, it is that searching
+  had to stop cutting.** `std::text` compared a candidate window by slicing one
+  out at *every* byte offset — offsets it had no reason to believe in yet — so a
+  boundary-checked `slice` would have made `find`, `split`, `starts_with` and
+  `ends_with` fail on inputs that used to answer `false`. `matches_at` is total
+  where that cut is not, and UTF-8's self-synchronisation is what makes it so: a
+  non-empty needle begins with a lead byte, a lead byte never sits where a
+  continuation byte belongs, so a compare inside a character simply says no.
+  The same property pays a second time — an offset `find` returns is therefore
+  always a boundary, so `split` cuts at its own matches with nothing to check —
+  and a third: deleting the interned window made the search ~21% faster on
+  ASCII and more where windows do not repeat. Enforcement is three places
+  (`read_file`, the image string table, `slice`); everything else is valid by
+  induction, `StringBuf` included. What that deletes is a whole population of
+  runtime errors — the three `tests/fail_run` files that walked or padded a
+  halved character are gone, and `string_char_at`/`string_prev_boundary` now
+  report "not a character boundary", a question about the offset rather than
+  about the string. Sabotage 6/6 bit **but one was a no-op first**, and the
+  no-op is the finding: `utf8_is_boundary`'s `at == len` arm cannot be made to
+  matter from ducktape, because an `ObjString` is NUL-terminated and a NUL is
+  not a continuation byte — it is there so the helper does not depend on that.
+  Remainder: a position is still a bare `int`, which is item 3 below.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -772,11 +800,11 @@ as here.)
    to address — and milestone 63 showed the other way out of it, since
    `std::hash` simply declines to implement `Hash for float` at all.
 
-3. **`String` is valid UTF-8, positioned by an opaque `StrPos`.** Designed,
-   unbuilt. Today a `String` is bytes that happen to be UTF-8, checked lazily at
-   the three natives that decode (`string_char_at`, `string_prev_boundary`,
-   `string_char_count`); only `slice` can create a bad one, by cutting a
-   sequence in half. The redesign guarantees validity and makes a position
+3. **A `String` position that is opaque: `StrPos`.** Designed, unbuilt — the
+   *other* half of the string redesign, whose first half is milestone 101. A
+   String is now guaranteed valid UTF-8, and `slice` refuses a cut inside a
+   character; what is left is that a program can still *write* such a cut,
+   because a position is a bare `int` byte offset. The redesign makes it
    **opaque**: a `StrPos` comes from a search or a walk, never from an `int`, so
    a non-boundary cut stops being a runtime error and becomes unrepresentable.
    That is what `CharIter` already does with its private byte offsets, promoted
@@ -785,22 +813,16 @@ as here.)
    `StrPos`), which is the one thing worth stealing from a character-indexed
    design.
 
-   **The prerequisite is not the check — it is a byte-level compare.**
-   `std::text` slices *speculatively*: `find` cuts a candidate window at every
-   byte offset just to compare it, and `ends_with` cuts at `n - sl` before
-   knowing whether it matches, so a boundary-checked `slice` fails on inputs
-   that today correctly answer `false`. A `matches_at(s, at, needle)` native
-   fixes it and is total where a cut is not — a valid needle never begins with a
-   continuation byte, so a compare at a mid-sequence offset simply says no. It
-   also deletes `find`'s O(n·m) *allocations*. Rejected alternatives: Go-style
-   shared views (O(1) slicing, but interning dies and with it pointer-equal `==`
-   and cheap hashing), and Python-style character indexing (best ergonomics,
-   most C — two or three storage widths).
-
-   Also needed: validate the two untrusted intakes — the source file (`read_file`
-   never checks, and a literal has no `\u{}` escape, so raw source bytes are its
-   only route to non-ASCII) and the image string table. `StringBuf` is already
-   valid by induction and should say so.
+   Milestone 101 supplied the prerequisite — `matches_at`, the byte-level
+   compare that lets a search stop cutting — and validated both untrusted
+   intakes, so what remains here is the *type*, and the API surface it changes:
+   `find` answering a `StrPos`, `slice` taking two, and the arithmetic
+   `std::text` does on offsets today (`n - sl`, `i + sl`) losing its spelling.
+   That last is the real design question, since a `StrPos` that supports
+   arithmetic is an `int` wearing a hat. Rejected alternatives, unchanged:
+   Go-style shared views (O(1) slicing, but interning dies and with it
+   pointer-equal `==` and cheap hashing), and Python-style character indexing
+   (best ergonomics, most C — two or three storage widths).
 
    **THE FINDING, on `byte`: it is not a scalar-shaped problem.** A new scalar
    buys type-safety and not one byte of memory — a `Value` is as wide as its
@@ -1052,14 +1074,18 @@ via `Module.decl_base`) and is not part of the main line.
   `is_alpha('é')` is false, `to_upper('é')` is unchanged, and nothing warns.
   Full Unicode case mapping is a table rather than a range test, and there is no
   way to ship a partial one that is not silently wrong for most of the world
-- a `String` is a byte string, not guaranteed valid UTF-8: `slice` cuts at byte
-  offsets, so it can halve a multi-byte sequence, and walking the result is a
-  runtime error. Making the type carry the guarantee would mean validating every
-  `slice`, which is the cost the byte-indexed API exists to avoid. Since
-  milestone 61 the walk is lazy, so the error belongs to the character that
-  reaches the bad bytes rather than to `chars()` — a pipeline that stops short
-  of them succeeds, which is the ordinary meaning of laziness and not a
-  weakening of the check
+- a `String` is guaranteed valid UTF-8 (milestone 101), but a *position* into
+  one is still a bare `int` byte offset, so cutting inside a character is a
+  runtime error rather than something that cannot be written. An opaque
+  `StrPos`, obtainable only from a search or a walk, would make it the latter
+  and is roadmap item 3 below. The check itself is not the cost the byte-indexed
+  API was avoiding — it is two O(1) tests at `slice` — but the *spelling* is
+  still one that lets a program name a position it did not get from the string
+- nothing hands over a `String`'s bytes: `len` counts them, `matches_at`
+  compares them, and there it stops. A `byte` scalar is the wrong shape for the
+  gap (see item 3 below — it buys no packing, and 0..255 would be the only sized
+  integer in a language that has none), so what fills it is a packed `Bytes`
+  object, and nothing needs one until there is I/O to read
 - getting one `char` out of a String once meant building the whole `[char]`,
   since the conversion was the only reader. Fixed in milestone 61: `chars` is a
   lazy walk, so `s.chars().next()` decodes one character and

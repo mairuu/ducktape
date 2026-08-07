@@ -38,9 +38,19 @@ impl String {
     fun len(self) -> int;
 
     # `self[from..to)`, indexed in bytes. A runtime error if the range is not
-    # within the string.
+    # within the string, or if either end falls inside a character: a String is
+    # valid UTF-8 and `slice` is the only operation that could produce one that
+    # is not, so it is where the guarantee is paid for (milestone 101).
     @native("string_slice")
     fun slice(self, from: int, to: int) -> String;
+
+    # Does `needle` begin at byte offset `at`? The compare that does not cut,
+    # and the reason `std::text` can search a String it is forbidden to slice
+    # arbitrarily: a needle at a mid-character offset answers `false` where the
+    # equivalent `slice` would be an error, and no candidate window is interned
+    # to ask the question.
+    @native("string_matches_at")
+    fun matches_at(self, at: int, needle: String) -> bool;
 
     # Byte order: <0 if `self` sorts before `other`, 0 if equal, >0 if after.
     # This is what `impl Ord for String` is written on, and it has to be a native

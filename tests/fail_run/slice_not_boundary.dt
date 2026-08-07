@@ -1,0 +1,9 @@
+#! expect: string slice does not cut at a character boundary
+# The cut that used to make a malformed String and let it travel. `é` is two
+# bytes, so `to` here is inside it; the error arrives at the cut rather than at
+# whatever eventually decoded the result (milestone 101).
+use std::io::print;
+
+fun main() {
+    print("é".slice(0, 1));
+}

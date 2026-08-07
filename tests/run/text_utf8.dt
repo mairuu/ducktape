@@ -1,0 +1,79 @@
+# Searching text that is not ASCII, which is where a byte offset stops being a
+# character position and the two have to agree anyway (milestone 101).
+#
+# The property everything below rests on is UTF-8's self-synchronisation: a
+# valid needle begins with a lead byte, and a lead byte never appears where a
+# continuation byte belongs. So a scan over *every* byte offset finds only real
+# occurrences, and every offset it returns is a character boundary — which is
+# what makes a `slice` at one safe when a `slice` at an arbitrary offset is an
+# error.
+
+use std::io::print;
+use std::option::Option;
+use std::text;
+
+fun main() {
+    # a(1) é(2) ☃(3) 😀(4) — every width, so every offset that is not a
+    # boundary is one of five.
+    var s = "aé☃😀";
+    print(s.len());
+#> 10
+
+    # the compare itself: at a boundary, inside a character, and past the end.
+    # Only the offset is checked, so the last two are answers rather than errors.
+    print(s.matches_at(3, "☃"));
+#> true
+    print(s.matches_at(2, "☃"));
+#> false
+    print(s.matches_at(8, "😀"));
+#> false
+    print(s.matches_at(10, ""));
+#> true
+
+    # find lands on boundaries, and the offset it hands back is one `slice`
+    # accepts — the two halves of the milestone meeting.
+    if var Option::Some(i) = s.find("☃") {
+        print(i);
+        print(s.slice(0, i));
+        print(s.slice(i, s.len()));
+    }
+#> 3
+#> aé
+#> ☃😀
+
+    # a needle whose first byte cannot be mistaken for one inside a character:
+    # 日 and 本 both begin 0xE6, and the scan still reports 本 at 3 rather than
+    # at any of the two offsets inside 日.
+    var jp = "日本語";
+    print(jp.find("本"));
+#> Some(3)
+    print(jp.matches_at(1, "本"));
+#> false
+    print(jp.starts_with("日"));
+#> true
+    print(jp.starts_with("本"));
+#> false
+    print(jp.ends_with("語"));
+#> true
+    print(jp.contains("本語"));
+#> true
+
+    # cutting at a multi-byte separator, and cutting multi-byte pieces at an
+    # ASCII one. Every piece is whole either way.
+    for p in "a☃b☃c".split("☃") {
+        print("[{p}]");
+    }
+#> [a]
+#> [b]
+#> [c]
+    for p in "é,☃,😀".split(",") {
+        print("<{p}>");
+    }
+#> <é>
+#> <☃>
+#> <😀>
+
+    # the pads count characters, so a string of them is four wide and not ten.
+    print("[{s:>6}]");
+#> [  aé☃😀]
+}

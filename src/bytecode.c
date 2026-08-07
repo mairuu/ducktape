@@ -706,6 +706,15 @@ bool bc_load(const char *path, Allocator *al, Executable *exe, Heap *heap,
     if (!r_take(&r, len, &chars)) {
       break;
     }
+    // validated rather than trusted, for BC_C_CHAR's reason read one level up:
+    // a String is valid UTF-8 everywhere else in the runtime, so an image may
+    // not be the one place it is not. This table is the whole intake — every
+    // string constant is interned from it — and a name that is not text is
+    // just as much a malformed image as a string constant that is not.
+    if (!utf8_validate((const char *)chars, (int)len)) {
+      r.ok = bc_error("bytecode image: string %d is not valid UTF-8", i);
+      break;
+    }
     // pointed straight into the image buffer, which outlives the run: it is
     // arena memory freed with the rest of the compiler.
     r.strings[i] = (StringView){.chars = (const char *)chars, .len = (int)len};

@@ -24,8 +24,7 @@
 #> 3
 #> [(7, w), (8, ö)]
 #> 3
-#> 1
-#> 0
+#> 2
 use std::io::print;
 use std::string::from_chars;
 
@@ -73,12 +72,10 @@ fun main() {
     print(t.chars().enumerate().skip(7).take(2).collect());
     print(t.chars().rev().take_while(|c| c.is_alpha()).count());
 
-    # what laziness changes: `slice` cuts in bytes, so this one is half of a
-    # two-byte character and no walk over it can finish. A walk that stops
-    # before those bytes never looks at them, so it answers rather than fails —
-    # `tests/fail_run/chars_invalid_utf8.dt` is the same string driven to the
-    # end.
-    var bad = "é".slice(0, 1);
-    print(bad.len());
-    print(bad.chars().take(0).count());
+    # a slice is still a byte range, and one that lands on boundaries is the
+    # only kind there is now (milestone 101), so a walk over one is a walk like
+    # any other. What used to stand here was half a character and a walk that
+    # answered only by stopping short of it.
+    var head = s.slice(0, 3);
+    print(head.chars().count());
 }

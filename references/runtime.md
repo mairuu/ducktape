@@ -29,11 +29,13 @@ comparison of two `uint32_t`. It is stored decoded — a scalar value rather tha
 its UTF-8 bytes — so the encoding appears only at the two edges where a char
 meets a String: `value_print`/`stringify` on the way out (`utf8_encode`), and
 `string_char_at`/`string_prev_boundary`/`strbuf_push_char` in the native
-registry (`string_char_count` validates without producing a char). Both go
+registry (`string_char_count` counts without producing a char). Both go
 through `string_utils.h`, which validates strictly: an overlong encoding, a
 surrogate half and anything past U+10FFFF are rejected rather than round-
 tripped, so a `VAL_CHAR` that exists is always encodable and no output path
-needs a failure case.
+needs a failure case. The same decoder, run to the end of a buffer, is
+`utf8_validate` — what the two untrusted intakes check with, and so what makes
+every `ObjString` valid UTF-8 (see "A `String` is valid UTF-8" below).
 
 `value_equal` (`src/value.c`) is the one equality used by `OP_EQ`/`OP_NEQ`:
 strings compare by pointer (interning makes that correct); arrays, tuples,
@@ -1296,13 +1298,34 @@ partially-filled array live across each growth. What survives of it is
 the array it used to build is now `s.chars().collect()`, grown by the ordinary
 `array_push` under the ordinary rule.
 
-**One native reads bytes the decoder did not hand it**: `string_prev_boundary`
+**Two natives read bytes the decoder did not hand them.** `string_prev_boundary`
 scans backwards over continuation bytes (`(b & 0xC0) == 0x80`) to find where the
 character ending at an offset begins. The scan is bounded by four rather than
 open, since that is the longest a UTF-8 sequence gets, and the lead byte it
 lands on is then decoded and required to span exactly to the offset it started
-from — so malformed bytes fail here the same way they fail going forwards,
-instead of being walked off the front of the string.
+from — so an offset that is not a boundary fails here the same way it fails
+going forwards, instead of being walked off the front of the string.
+`string_matches_at` (milestone 101) compares a needle's bytes at an offset with
+`memcmp`, which is the whole of it: nothing is decoded, nothing allocates, and
+the answer at an offset inside a character is `false` rather than an error,
+because the encoding puts a continuation byte where the needle has a lead one.
+
+**A `String` is valid UTF-8, and three places pay for it.** Two are intakes —
+`read_file` checks a source file's bytes (`src/module.c`), and the image loader
+checks every entry of the string table before anything is interned from it
+(`src/bytecode.c`, beside the older `BC_C_CHAR` scalar-value check). The third
+is `string_slice`, the only native that cuts new bytes out of an old String: it
+requires both ends to be character boundaries, which is O(1) in valid UTF-8
+(`utf8_is_boundary` — a character starts where the byte is not a continuation
+byte). Every other producer is valid by induction, `ObjStrBuf` included, since
+its appends take a String, a `char` or decimal digits.
+
+The guarantee is what lets the decoding natives stop asking about the bytes:
+`string_char_at` and `string_prev_boundary` now report "string offset is not a
+character boundary", a question about the offset. `string_char_count` keeps its
+malformed-bytes guard even so — it is the only native that decodes a whole
+string, so it is the invariant's cheapest detector, and dropping the guard would
+turn a runtime bug into a hang rather than an error.
 
 **A generic native is never monomorphised.** The runtime is uniform in type
 arguments, so one C body serves every `T` — `cg_call_target` returns the

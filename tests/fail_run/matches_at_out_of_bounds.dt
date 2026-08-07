@@ -1,0 +1,10 @@
+#! expect: string offset is out of bounds
+# `matches_at` is total in its *needle* — running off the end is `false` — but
+# not in its offset: an offset outside the string is a question about a place
+# that does not exist, and answering `false` would hide it. `len` itself is
+# inside, so this has to reach past it.
+use std::io::print;
+
+fun main() {
+    print("hi".matches_at(3, ""));
+}

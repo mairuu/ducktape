@@ -1,0 +1,8 @@
+#! expect: string slice does not cut at a character boundary
+# The other end. Both offsets are checked, and `len` is a boundary like any
+# other — so this range is in bounds and still refused.
+use std::io::print;
+
+fun main() {
+    print("é".slice(1, 2));
+}

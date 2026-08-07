@@ -836,7 +836,10 @@ write.
 
 So the entire difference is **one branch in `mod_parse`**: a module with
 `is_std` set and `from_disk` clear takes its source from `std_module_source`,
-anything else from `read_file`. Pointing that branch at a directory is all it
+anything else from `read_file` — which is also where a source file is checked
+for being valid UTF-8, since it is the compiler's one untrusted intake and a
+string literal's bytes come from it verbatim (milestone 101; the embedded side
+is the build's own output and is not re-checked). Pointing that branch at a directory is all it
 would take to make std filesystem-backed; nothing else in the pipeline can tell
 the difference. `std_mod_key` builds the key as `<std>/<rel>.dt`, and the angle
 brackets are what guarantee it cannot collide with a user path: a real one is a

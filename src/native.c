@@ -390,11 +390,10 @@ static Value n_string_cmp(NativeCtx *ctx, Value *args, int argc) {
 // Neither allocates, so neither has anything to say about the calling
 // convention: a char is a value and an offset is an int.
 
-// The character beginning at byte offset `at`. A runtime error if `at` is
-// outside the string or does not start a well-formed sequence — the second is
-// reachable from ducktape, since `slice` cuts at byte offsets and can halve a
-// multi-byte sequence. A String is a byte string; only a char promises to be a
-// scalar value.
+// The character beginning at byte offset `at`. Since milestone 101 a String is
+// valid UTF-8 by construction, so the decode cannot fail on the *bytes*: the
+// one way this errors past the bounds check is an `at` in the middle of a
+// sequence, which is a question about the offset, not about the string.
 static Value n_string_char_at(NativeCtx *ctx, Value *args, int argc) {
   (void)argc;
   ObjString *s = val_as_string(args[0]);
@@ -405,7 +404,7 @@ static Value n_string_char_at(NativeCtx *ctx, Value *args, int argc) {
   }
   uint32_t cp;
   if (utf8_decode(s->chars + at, s->len - (int)at, &cp) == 0) {
-    ctx->error = "string is not valid UTF-8";
+    ctx->error = "string offset is not a character boundary";
     return val_unit();
   }
   return val_char(cp);
@@ -421,8 +420,8 @@ static Value n_string_char_at(NativeCtx *ctx, Value *args, int argc) {
 //
 // A sequence is at most four bytes, so the scan is bounded rather than a
 // search: past that, or if the lead byte found does not span exactly to `at`,
-// the bytes are not UTF-8 and the error is the same one the forward direction
-// gives.
+// `at` was not a boundary — the same reading the forward direction gives, and
+// since milestone 101 the only one left, the bytes themselves being valid.
 static Value n_string_prev_boundary(NativeCtx *ctx, Value *args, int argc) {
   (void)argc;
   ObjString *s = val_as_string(args[0]);
@@ -439,7 +438,7 @@ static Value n_string_prev_boundary(NativeCtx *ctx, Value *args, int argc) {
   uint32_t cp;
   int width = utf8_decode(s->chars + start, s->len - (int)start, &cp);
   if (width == 0 || start + width != at) {
-    ctx->error = "string is not valid UTF-8";
+    ctx->error = "string offset is not a character boundary";
     return val_unit();
   }
   return val_int(start);
@@ -449,8 +448,13 @@ static Value n_string_prev_boundary(NativeCtx *ctx, Value *args, int argc) {
 // which is the shape of what `std::string` still needs: `char_width` backs the
 // `pad_*` lang items, and `std::string` sits on the wrong side of the import
 // graph to reach `CharIter` (`std::cmp` imports `std::string`, so the reverse
-// edge would be a cycle). Counting is one validating pass with nothing
-// allocated — strictly less than the array the pads used to build to count it.
+// edge would be a cycle). Nothing is allocated — strictly less than the array
+// the pads used to build to count it.
+//
+// This is the only native that decodes the *whole* string, so it is also the
+// cheapest detector the String invariant has: the guard below is unreachable
+// from any program, and a firing means the runtime built a String it should
+// not have. It stays because dropping it would turn that bug into a hang.
 static Value n_string_char_count(NativeCtx *ctx, Value *args, int argc) {
   (void)argc;
   ObjString *s = val_as_string(args[0]);
@@ -468,9 +472,41 @@ static Value n_string_char_count(NativeCtx *ctx, Value *args, int argc) {
   return val_int(count);
 }
 
+// Does `needle` sit at byte offset `at`? The compare a String has no other way
+// to ask for: `std::text` used to cut a candidate window out and compare
+// *that*, which allocated an interned String per position and — since milestone
+// 101 — would now fail outright, because a window cut at an arbitrary byte
+// offset is exactly the slice a valid String refuses to make.
+//
+// It is total where that cut is not, and the encoding is what makes it so: a
+// non-empty needle is valid UTF-8, so its first byte is never a continuation
+// byte, so a compare at a mid-sequence offset simply says no. Only `at` itself
+// is bounds-checked; running off the end is an answer, not an error.
+static Value n_string_matches_at(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  ObjString *s = val_as_string(args[0]);
+  int64_t at = args[1].as.i;
+  ObjString *needle = val_as_string(args[2]);
+  if (at < 0 || at > s->len) {
+    ctx->error = "string offset is out of bounds";
+    return val_bool(false);
+  }
+  if (needle->len > s->len - at) {
+    return val_bool(false);
+  }
+  return val_bool(memcmp(s->chars + at, needle->chars, (size_t)needle->len) ==
+                  0);
+}
+
 // `s[from..to)`, in bytes. Allocating, so it is the one that has to obey the
 // calling convention: `heap_intern` can collect, and it is `args` still
 // sitting on the VM stack that keeps the source string alive across it.
+//
+// The boundary check is what makes every String valid UTF-8 (milestone 101):
+// this is the only operation that can produce bytes no intake vetted, so the
+// invariant costs two O(1) tests here and nothing anywhere else. What used to
+// be a malformed String travelling until something decoded it is now an error
+// at the cut that made it.
 static Value n_string_slice(NativeCtx *ctx, Value *args, int argc) {
   (void)argc;
   ObjString *s = val_as_string(args[0]);
@@ -478,6 +514,11 @@ static Value n_string_slice(NativeCtx *ctx, Value *args, int argc) {
   int64_t to = args[2].as.i;
   if (from < 0 || to < from || to > s->len) {
     ctx->error = "string slice is out of bounds";
+    return val_unit();
+  }
+  if (!utf8_is_boundary(s->chars, s->len, (int)from) ||
+      !utf8_is_boundary(s->chars, s->len, (int)to)) {
+    ctx->error = "string slice does not cut at a character boundary";
     return val_unit();
   }
   ObjString *out = heap_intern(ctx->heap, s->chars + from, (int)(to - from));
@@ -611,6 +652,7 @@ static const NativeEntry natives[] = {
     {"string_char_count", n_string_char_count},
     {"string_cmp", n_string_cmp},
     {"string_len", n_string_len},
+    {"string_matches_at", n_string_matches_at},
     {"string_prev_boundary", n_string_prev_boundary},
     {"string_slice", n_string_slice},
 };

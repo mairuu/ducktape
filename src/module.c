@@ -891,6 +891,17 @@ static String read_file(const char *path, Allocator *al) {
 
   buffer[bytes_read] = '\0';
   fclose(file);
+
+  // the first of the two untrusted intakes (the other is an image's string
+  // table). A literal has no `\u{}` escape, so raw source bytes are the only
+  // route a String has to anything non-ASCII — checking the file once here is
+  // what lets every String downstream be valid UTF-8 by construction.
+  if (!utf8_validate(buffer, (int)bytes_read)) {
+    fprintf(stderr, "'%s' is not valid UTF-8.\n", path);
+    al_free(al, buffer, sizeof(char) * (file_size + 1));
+    return str_null();
+  }
+
   return str_create(buffer, (int)bytes_read, (int)file_size + 1);
 }
 

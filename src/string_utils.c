@@ -55,6 +55,18 @@ int utf8_encode(uint32_t cp, char *out) {
   return 4;
 }
 
+bool utf8_validate(const char *p, int len) {
+  for (int i = 0; i < len;) {
+    uint32_t cp;
+    int width = utf8_decode(p + i, len - i, &cp);
+    if (width == 0) {
+      return false;
+    }
+    i += width;
+  }
+  return true;
+}
+
 int utf8_decode(const char *p, int len, uint32_t *out) {
   if (len <= 0) {
     return 0;

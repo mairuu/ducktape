@@ -213,15 +213,23 @@ check_image() {
     pass=$((pass + 1))
 }
 
-# a malformed image must be rejected, never executed.
-check_bad_image() {  # $1 = description, $2 = file holding the image
+# a malformed image must be rejected, never executed. An expected substring is
+# optional and is what a mangling that could have hit more than one check has
+# to give: without it, being refused for the wrong reason still counts.
+check_bad_image() {  # $1 = description, $2 = image file, $3 = expected (opt)
     desc=$1
     img=$2
+    expect=${3:-}
     err=$("$BIN" --run "$img" 2>&1 >/dev/null)
     code=$?
     if [ "$code" -eq 0 ]; then
         fail=$((fail + 1))
         echo "FAIL (bad image accepted): $desc"
+    elif [ -n "$expect" ] && ! printf '%s' "$err" | grep -qF "$expect"; then
+        fail=$((fail + 1))
+        echo "FAIL (bad image refused for the wrong reason): $desc"
+        echo "    expected substring: $expect"
+        printf '%s\n' "$err" | sed 's/^/    /'
     else
         pass=$((pass + 1))
     fi
@@ -256,6 +264,22 @@ if [ -e "$seed" ] && "$BIN" --emit-bc "$bad" "$seed" >/dev/null 2>&1; then
     sed 's/io_print/io_prinX/' < "$bad" > "$bad.mangled"
     mv "$bad.mangled" "$bad"
     check_bad_image "image naming an unknown native" "$bad"
+else
+    rm -f "$bad"
+fi
+
+# the second untrusted intake: every String an image can produce is interned
+# from its string table, so the table is checked at load the way a source file
+# is checked at read. The same trick as above — one byte of a long, unique name
+# replaced by 0xFF, which begins no sequence — and the table is read before
+# anything is bound, so this is refused there rather than as an unknown native.
+bad=$(mktemp)
+seed=$ROOT/tests/run/native.dt
+if [ -e "$seed" ] && "$BIN" --emit-bc "$bad" "$seed" >/dev/null 2>&1; then
+    LC_ALL=C sed "s/io_print/io_prin$(printf '\377')/" < "$bad" > "$bad.mangled"
+    mv "$bad.mangled" "$bad"
+    check_bad_image "image string table that is not UTF-8" "$bad" \
+        "is not valid UTF-8"
 else
     rm -f "$bad"
 fi

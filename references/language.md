@@ -1798,8 +1798,9 @@ a pointer compare because two equal strings are one object in the intern table
 — but pointer *order* is allocation order, so ordering gets nothing from the
 table beyond the equal case, and has to walk the bytes. That walk is the String
 method `compare` (`a.compare(b)`), and it has to be a native for the same reason
-`push` is: the finest handle ducktape has on a String's contents is `slice`, and
-comparing two one-byte slices would need the ordering being defined.
+`push` is: nothing hands a program a String's bytes. `slice` cuts characters,
+not bytes, and `matches_at` answers only equal-or-not — so a comparison written
+in ducktape would need the ordering being defined.
 
 `char` is ordered the same way, and by the same rule about where the impl
 goes: `std::cmp` imports `std::char` for it. That one needs no native at all —
@@ -2455,6 +2456,7 @@ impl Range   self.iter() -> RangeIter               # lives in std::iter
 
 impl String  self.len() -> int                      # @native, in bytes
              self.slice(from: int, to: int) -> String         # @native
+             self.matches_at(at: int, needle: String) -> bool # @native
              self.compare(other: String) -> int     # @native
              self.chars() -> CharIter               # lives in std::iter
              self.repeat(n: int) -> String
@@ -2498,9 +2500,12 @@ ordinary "cannot find 'print' in this scope" error. It is deliberately kept out
 of the prelude (which does cover `Option`/`Result`/`Ord`/`Display`): `print` is
 a plain function, not tied to any syntax, so it stays explicit.
 
-`String`'s `slice` and `std::fmt::float` are the std operations that can fail
-without a `Result`: a native reports a runtime error by setting `ctx->error`,
-and the VM raises it at the call site, exactly as `std::panic::panic` does.
+`String`'s `slice`, `matches_at` and `std::fmt::float` are the std operations
+that can fail without a `Result`: a native reports a runtime error by setting
+`ctx->error`, and the VM raises it at the call site, exactly as
+`std::panic::panic` does. All three fail only on an argument outside its
+domain — a range that is not within the string or does not fall on character
+boundaries, an offset past the end, a precision above 30.
 
 **An array grows.** `push` appends, reallocating the buffer behind the array
 when it is full; an array literal starts exact-fit, so `[1, 2, 3]` and `[]` are
@@ -2641,14 +2646,27 @@ byte offsets — it has to — and keeps them private for that reason. Going bac
 is `from_chars`, through a `StringBuf`, which `push_char` is what makes
 possible.
 
-Walking is a **runtime error if the string is not valid UTF-8**, which a
-program can provoke: `slice` cuts at byte offsets, so it can halve a multi-byte
-sequence. A String is a byte string; only a `char` promises to be a character.
-Because the walk is lazy the error belongs to the `next()` that reaches those
-bytes rather than to `chars()` itself, so a pipeline that stops earlier
-(`s.chars().take(2)`) never provokes it. The `pad_*` lang items still reject a
-halved string outright: they count characters with a native of their own, in
-one validating pass.
+**A `String` is guaranteed valid UTF-8** (milestone 101), so a walk over one
+cannot fail on its bytes. The guarantee is paid for at the two places a String
+can come from bytes nothing vetted — a source file, checked once when it is
+read, and a bytecode image's string table, checked once when it is loaded — and
+at `slice`, the only operation that can cut new bytes out of an old String:
+
+```
+"héllo".slice(0, 2);   # runtime error: string slice does not cut at a
+                       # character boundary — `é` is two bytes wide
+```
+
+Both ends of the range are checked, and the check is O(1): in valid UTF-8 a
+character starts exactly where the byte is not a continuation byte. Everything
+else that builds a String is valid by induction — a `StringBuf` takes only
+Strings, `char`s and digits, and concatenation and interpolation join Strings
+that were already valid.
+
+So a slice is still a *byte* range, and one that falls inside a character is now
+an error at the cut rather than a malformed String that travels until something
+decodes it. What used to be reachable — a halved sequence reaching `chars()`, or
+the `pad_*` lang items counting one — is unrepresentable.
 
 Everything else in `std::char` is ordinary ducktape over `code`/`from_code`
 (methods on `char`, `from_code` the associated constructor) — the one thing a
@@ -2711,12 +2729,24 @@ qualifiers is what methods retired.
 Within the module the two views of text stay apart, the milestone-26 way:
 
 - **A *position* is a byte offset**, because a position is one you will `slice`
-  at. `find` and `split` are `slice`+`==` and never inspect a byte on its own —
-  so `"héllo".find("llo")` is `Some(3)`, and that 3 feeds straight back into
-  `slice`. The cost is that `find` slices and interns a candidate substring at
-  every position (O(*n·m*) allocations), the honest price of a String whose only
-  reader is `slice`: there is no `byte_at`, so a window has to be cut out to be
-  compared.
+  at. `find` and `split` search with `s.matches_at(at, needle)` and never inspect
+  a byte on its own — so `"héllo".find("llo")` is `Some(3)`, and that 3 feeds
+  straight back into `slice`.
+
+  Searching **compares rather than cuts** as of milestone 101, and the change was
+  forced by the UTF-8 guarantee rather than chosen for speed: a search compares
+  at offsets it has no reason to believe in yet, and a String that guarantees its
+  own encoding cannot be cut at one of those. `matches_at` is total where the cut
+  is not — an offset past the end is `false`, and so is an offset inside a
+  character, because a non-empty needle begins with a lead byte and a lead byte
+  never sits where a continuation byte belongs. Only the offset itself is
+  checked, and being past `len` is a runtime error.
+
+  That same self-synchronisation is why **an offset `find` returns is always a
+  character boundary**, so it is always safe to `slice` at, and why `split` can
+  cut at every match it finds. Deleting the cut also deleted the interned
+  candidate window each position used to allocate: the search got about a fifth
+  faster on ASCII where those windows repeat, and more where they do not.
 - **A *character* is classified by its value**, so `trim` and `parse_int` cross
   to the `chars` view — whether something is a space or a digit is a fact about a
   character, not a byte, and an ASCII space is a single byte only by luck of the
@@ -2724,7 +2754,11 @@ Within the module the two views of text stay apart, the milestone-26 way:
   from either end, and the array a walk builds on request is what that needs.
 
 `starts_with`/`ends_with` need neither a position nor a classification, so they
-are the pure `slice`+`==` ones. The empty pattern is read consistently
+are the bare `matches_at` — `starts_with` is one call with no guard at all,
+since a needle longer than the string runs off the end and is `false`.
+`ends_with` keeps a length test because it *computes* a position (`n - sl`)
+instead of scanning to one, and that is the one arithmetic in the module that
+could name an offset outside the string. The empty pattern is read consistently
 everywhere: `s.starts_with("")` and `s.find("")` both succeed at 0, and
 `s.split("")` returns `s` whole in a one-element array (there is no position at
 which `""` is *not*, so the loop that finds one would never end). `split` yields
@@ -3040,7 +3074,8 @@ See the gaps table below for what suppression still cannot do.
 | writing your own `Display` for a container | rejected as a conflict with the std impl, which naming the trait makes visible |
 | Unicode case mapping, folding, or normalisation | `std::char`'s classifications and `to_upper`/`to_lower` are ASCII-only; `String` comparison is raw bytes |
 | indexing a `String` by character (`s[i]`) | there is none: `s.chars()` walks, because a byte offset is not a character position. `s.chars().collect()` is the array, and `s.chars().skip(i).next()` is the one character |
-| a `String` that is guaranteed valid UTF-8 | it is a byte string — `slice` cuts at byte offsets, so a walk over a halved sequence reports a runtime error when it reaches it (`chars()` itself never does: it is lazy) |
+| a `String` position that cannot be wrong | a position is a bare `int` byte offset, so cutting inside a character is a runtime error (milestone 101) rather than unrepresentable — an opaque `StrPos`, obtainable only from a search or a walk, would make it the latter |
+| reading a `String`'s bytes | there is none, and deliberately: `s.len()` counts them and `matches_at` compares them, but nothing hands one over. A `byte` would be the first sized integer in a language that has no others, so the shape it waits for is a packed `Bytes` object |
 | a *dynamic* width or precision in a format spec (`{v:>{n}}`) | the width and precision in a `{v:>8}` / `{f:.3}` spec are literals; a runtime value there has no spelling. The spec itself is sugar for `std::string::pad_*` / `std::fmt::float` (milestone 35) |
 | a downcast to a type that does not implement the trait, or binds a different associated type | rejected, rather than compiled as an always-`None` test: the identity is the vtable, and such a type has no table to recognise |
 | a trait's type arguments at a *bare* method call | the expected type breaks the tie between two impls of one generic trait, and pins an impl parameter the receiver cannot reach (`impl<T, U: From<T>> Into<U> for T`); with no expected type the first impl wins — or, where the parameter was only pinnable that way, no impl applies at all. The trait-qualified spelling (`into::<Fahrenheit>::into(c)`) settles it explicitly without an expected type |

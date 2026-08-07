@@ -1,0 +1,8 @@
+#! expect: is not valid UTF-8
+# The first of the two untrusted intakes. A string literal has no `\u{}`
+# escape, so raw source bytes are a String's only route to anything past
+# ASCII â€” which makes the file itself the thing to check. The comment below
+# holds one 0xFF, a byte that begins no sequence at all:
+# ÿ
+
+fun main() {}

@@ -22,13 +22,20 @@
 # Two views of text meet here, and the split between them is the milestone-26
 # rule that `std::string` and `std::char` were built around:
 #   - a *position* is a byte offset, because a position is one you will `slice`
-#     at — `find` and `split` are written on `slice` and `==`, and never look at
-#     a byte on its own;
+#     at — `find` and `split` search by comparing at one, and never look at a
+#     byte on its own;
 #   - a *character* is classified by its value, so `trim` and `parse_int` cross
 #     to the `chars` view — whether something is a space or a digit is a fact
 #     about a character, not a byte.
-# `starts_with` needs neither a position nor a classification, so it is the pure
-# `slice`+`==` one.
+# `starts_with` needs neither a position nor a classification, so it is the bare
+# `matches_at`.
+#
+# Searching is `matches_at` rather than `slice`+`==` as of milestone 101, and
+# the change was forced rather than chosen: a search compares *speculatively*,
+# at offsets it has no reason to believe in yet, and a String that guarantees
+# its own UTF-8 cannot be cut at one of those. The compare is total where the
+# cut is not, and it also deletes the interned candidate window every position
+# used to allocate.
 #
 # `s.len()` (bytes) and `cs.len()` (elements) both appear below, told apart by
 # their receiver's type rather than by a module qualifier. The impls those
@@ -50,35 +57,34 @@ use std::iter;
 impl String {
     # ── searching, by byte position ──────────────────────────────────────────
 
-    # Does `self` begin with `prefix`? A prefix longer than `self` cannot match,
-    # and the empty prefix always does — `self.slice(0, 0)` is `""`, which
-    # interns to the same pointer `""` does, so `==` answers yes without a
-    # special case.
+    # Does `self` begin with `prefix`? `matches_at` answers a prefix longer than
+    # `self` on its own — running off the end is `false`, not an error — so the
+    # length test the cutting version needed is gone, and the empty prefix
+    # matches everywhere including at 0.
     fun starts_with(self, prefix: String) -> bool {
-        var pl = prefix.len();
-        if pl > self.len() {
-            return false;
-        }
-        return self.slice(0, pl) == prefix;
+        return self.matches_at(0, prefix);
     }
 
+    # The one place a *position* is computed rather than scanned to, and the one
+    # that has to stay guarded: `n - sl` is only an offset in the string when the
+    # suffix is no longer than it.
     fun ends_with(self, suffix: String) -> bool {
         var sl = suffix.len();
         var n = self.len();
         if sl > n {
             return false;
         }
-        return self.slice(n - sl, n) == suffix;
+        return self.matches_at(n - sl, suffix);
     }
 
     # The byte offset of the first occurrence of `needle` in `self`, or `None`.
     # The empty needle is found at 0, matching `starts_with`'s reading of it.
     #
-    # This slices and interns a candidate substring at every position, so it is
-    # O(len(self) * len(needle)) allocations — the honest cost of a String whose
-    # only reader is `slice`, since there is no way to compare a window without
-    # cutting it out first. A byte-level scan would need a `byte_at` the language
-    # declines to offer (see `std::char`).
+    # The scan visits every byte offset, including ones inside a character, and
+    # does not have to skip them: a non-empty needle starts with a lead byte, so
+    # those offsets answer `false` of their own accord. Which is also why an
+    # offset this returns is always a character boundary, and so always safe to
+    # `slice` at.
     fun find(self, needle: String) -> Option<int> {
         var nl = needle.len();
         if nl == 0 {
@@ -87,7 +93,7 @@ impl String {
         var n = self.len();
         var i = 0;
         while i + nl <= n {
-            if self.slice(i, i + nl) == needle {
+            if self.matches_at(i, needle) {
                 return Option::Some(i);
             }
             i = i + 1;
@@ -108,6 +114,13 @@ impl String {
     # in a one-element array rather than one character per element: there is no
     # position at which `""` is *not*, so the loop that finds them would never
     # end.
+    #
+    # This is the one function that both searches and cuts, so it is where the
+    # two halves meet: every `slice` below is at a match position or at an end,
+    # and a match position is a character boundary (see `find`), so a separator
+    # can never split a character in half. The empty separator is turned away
+    # before the loop for its own reason, but it is also the only needle that
+    # could have matched inside one.
     fun split(self, sep: String) -> [String] {
         var parts: [String] = [];
         var sl = sep.len();
@@ -119,7 +132,7 @@ impl String {
         var start = 0;
         var i = 0;
         while i + sl <= n {
-            if self.slice(i, i + sl) == sep {
+            if self.matches_at(i, sep) {
                 parts.push(self.slice(start, i));
                 i = i + sl;
                 start = i;
