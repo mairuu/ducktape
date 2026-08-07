@@ -442,8 +442,10 @@ static bool run(Vm *vm, int stop_depth) {
       Value end = pop(vm), start = pop(vm);
       Value r = {.kind = VAL_RANGE};
       r.as.range.start = start.as.i;
-      r.as.range.end = end.as.i;
-      r.as.range.inclusive = inclusive;
+      // saturate rather than wrap: `a..=INT64_MAX` loses its last element
+      // instead of becoming an empty range.
+      r.as.range.end =
+          inclusive && end.as.i != INT64_MAX ? end.as.i + 1 : end.as.i;
       push(vm, r);
       break;
     }
@@ -454,17 +456,12 @@ static bool run(Vm *vm, int stop_depth) {
     }
     case OP_RANGE_TEST: {
       Value i = pop(vm), r = pop(vm);
-      push(vm, val_bool(r.as.range.inclusive ? i.as.i <= r.as.range.end
-                                             : i.as.i < r.as.range.end));
+      push(vm, val_bool(i.as.i < r.as.range.end));
       break;
     }
     case OP_RANGE_STOP: {
       Value r = pop(vm);
-      int64_t end = r.as.range.end;
-      if (r.as.range.inclusive && end != INT64_MAX) {
-        end++;
-      }
-      push(vm, val_int(end));
+      push(vm, val_int(r.as.range.end));
       break;
     }
 

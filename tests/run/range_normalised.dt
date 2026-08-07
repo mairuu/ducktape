@@ -1,0 +1,37 @@
+# `..=` is normalised to `..` at construction, so the two spellings are one
+# value: pins `print`, `==`, int64-wide bounds, and the INT64_MAX saturation.
+#> 0..6
+#> 0..6
+#> true
+#> false
+#> 0..3000000000
+#> 3
+#> true
+#> []
+#> [1, 2, 3]
+use std::io::print;
+
+fun main() {
+    print(0..=5);
+    print(0..6);
+
+    print((0..=5) == (0..6));
+    print((0..5) == (0..6));
+
+    # bounds are int64, so a range past 32 bits is exact
+    print(0..3000000000);
+    var n = 0;
+    for _i in 0..3000000000 {
+        n = n + 1;
+        if n > 2 { break; }
+    }
+    print(n);
+
+    # `..=INT64_MAX` saturates: it loses its last element rather than wrapping
+    var hi = 9223372036854775807;
+    print((0..=hi) == (0..hi));
+
+    # normalisation is arithmetic, not a special case
+    print((5..=4).iter().collect());
+    print((1..=3).iter().collect());
+}

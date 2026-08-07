@@ -204,11 +204,12 @@ static void w_const(BcWriter *w, Value v) {
   case VAL_UNIT:
     w_u8(w, BC_C_UNIT);
     break;
+  // unreachable: codegen never interns a range, so no pool holds one. Kept
+  // because the switch is over ValueKind.
   case VAL_RANGE:
     w_u8(w, BC_C_RANGE);
     w_u64(w, (uint64_t)v.as.range.start);
     w_u64(w, (uint64_t)v.as.range.end);
-    w_u8(w, v.as.range.inclusive ? 1 : 0);
     break;
   case VAL_FUN: {
     int idx = fun_index(w->exe, v.as.fun);
@@ -525,7 +526,6 @@ static Value r_const(BcReader *r) {
     Value v = {.kind = VAL_RANGE};
     v.as.range.start = (int64_t)r_u64(r);
     v.as.range.end = (int64_t)r_u64(r);
-    v.as.range.inclusive = r_u8(r) != 0;
     return v;
   }
   case BC_C_FUN: {

@@ -28,10 +28,11 @@ typedef struct {
     double f;
     bool b;
     uint32_t c;
+    // always half-open (`..=` normalised at OP_RANGE); the widest arm, so
+    // this is what sets sizeof(Value).
     struct {
       int64_t start;
       int64_t end;
-      bool inclusive;
     } range;
     FunDef *fun;
     Obj *obj;

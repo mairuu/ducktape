@@ -74,9 +74,10 @@ void value_print(Value v, FILE *out) {
   case VAL_UNIT:
     fprintf(out, "()");
     break;
+  // `0..=5` prints as `0..6`: the spelling is gone, only the bound is left.
   case VAL_RANGE:
-    fprintf(out, "%lld..%s%lld", (long long)v.as.range.start,
-            v.as.range.inclusive ? "=" : "", (long long)v.as.range.end);
+    fprintf(out, "%lld..%lld", (long long)v.as.range.start,
+            (long long)v.as.range.end);
     break;
   case VAL_FUN:
     fprintf(out, "<fun " SV_FMT ">", SV_ARG(v.as.fun->name));
@@ -191,10 +192,10 @@ bool value_equal(Value a, Value b) {
     return a.as.c == b.as.c;
   case VAL_UNIT:
     return true;
+  // `0..=5` and `0..6` are equal: normalisation made them one value.
   case VAL_RANGE:
     return a.as.range.start == b.as.range.start &&
-           a.as.range.end == b.as.range.end &&
-           a.as.range.inclusive == b.as.range.inclusive;
+           a.as.range.end == b.as.range.end;
   case VAL_FUN:
     return a.as.fun == b.as.fun;
   case VAL_OBJ: {

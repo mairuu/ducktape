@@ -19,7 +19,7 @@ points at a GC-managed heap object (`include/object.h`):
 | `VAL_BOOL` | `bool` |
 | `VAL_CHAR` | `uint32_t` — a Unicode scalar value |
 | `VAL_UNIT` | — |
-| `VAL_RANGE` | start, end (`int64_t`), inclusive flag |
+| `VAL_RANGE` | start, end (`int64_t`) — always half-open; see `OP_RANGE` |
 | `VAL_FUN` | `FunDef *` (top-level function or method — a callable with no captures) |
 | `VAL_OBJ` | `Obj *` — string, array, tuple, struct, enum instance, or closure, see "Heap & GC" |
 
@@ -90,7 +90,7 @@ Operands are u8 unless noted.
 | `OP_ADD/SUB/MUL/DIV/MOD` | int×int stays int; any float widens (matches checker); div/mod by zero int → runtime error; float mod = `fmod` |
 | `OP_NEG` `OP_NOT` `OP_EQ/NEQ/LT/LTEQ/GT/GTEQ` | comparisons widen like arithmetic |
 | `OP_CAST_INT` `OP_CAST_FLOAT` | dynamic: no-op if already the target kind |
-| `OP_RANGE incl` `OP_RANGE_START` `OP_RANGE_TEST` `OP_RANGE_STOP` | build range from end/start; TEST pops i+range, pushes `i < end` (or `<=`); STOP pops range, pushes the first int past the end (`end`, or `end + 1` when inclusive — saturating at `INT64_MAX`), which is what folds the two spellings into one bound for `std::iter`'s `RangeIter` |
+| `OP_RANGE incl` `OP_RANGE_START` `OP_RANGE_TEST` `OP_RANGE_STOP` | RANGE builds the half-open `start..end`, adding the 1 that `..=` means and saturating at `INT64_MAX`; TEST pops i+range and pushes `i < end`; STOP pops range and pushes `end`. Normalising at construction is what folds the two spellings into one value — nothing downstream holds a flag, `0..=5` and `0..6` are `==`, and `print` shows both as `0..6` |
 | `OP_JUMP u16` `OP_JUMP_IF_FALSE u16` `OP_LOOP u16` | JUMP_IF_FALSE does *not* pop the condition |
 | `OP_CALL argc` | callee value sits beneath the args |
 | `OP_RETURN` | pops result, tears down the frame (incl. callee slot), pushes result for the caller |
