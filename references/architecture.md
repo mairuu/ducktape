@@ -410,9 +410,11 @@ each one is the same question one segment further along:
   parts — module prefix, optional enum qualifier, names — and the walk separates
   them: it consumes the module, and what remains is arithmetic. One segment over
   a bare path is an item, two are an enum and its variant (`DeclUse.qualifier`
-  is the one in between); a braced path allows one over, and a glob needs
-  exactly one, since its last segment is always the enum (there is no module
-  glob, so nothing else it could be).
+  is the one in between); a braced path allows one over, and a glob allows one
+  or none — one segment left is an enum whose variants it takes, none left is
+  the module itself, whose items it takes. `DeclUse.qualifier` being empty is
+  the only thing that tells the two globs apart, which is why both linking
+  passes ask `link_pass_of` rather than each testing `is_glob` its own way.
 
   When the walk consumes *nothing below the root* and the path is short enough
   to be one (`a::V` bare, `a::{V, W}`, `a::*`), the head is read as a name in
@@ -461,14 +463,17 @@ each one is the same question one segment further along:
   and a plain one refuses in the usual words.
 
   **Three strengths of binding**, which is what a glob forced into the open.
-  A name written down is strongest; `from_glob` yields to it silently in either
-  order (`link_drop_glob_binding` tombstones a glob entry when something written
-  claims the name later); `from_prelude` yields to both — a glob may take a name
-  off the prelude, which is what makes `enum My { Some } use My::*;` mean
-  `My::Some`, and which needs the flag because the prelude links a pass earlier
-  than any glob. The one thing a glob *reports* is a second glob offering a
-  different variant for the same name: nothing else could tell them apart, and
-  resolution reads the first match.
+  A name written down is strongest; a glob yields to it silently in either
+  order; the prelude yields to both — a glob may take a name off the prelude,
+  which is what makes `enum My { Some } use My::*;` mean `My::Some`. The one
+  thing a glob *reports* is a second glob offering a different variant for the
+  same name: nothing else could tell them apart, and resolution reads the first
+  match.
+
+  A variant glob says this with flags (`from_glob`, `from_prelude`, and
+  `link_drop_glob_binding`'s tombstone) because it links in one pass, a phase
+  late, after the prelude has already bound. A **module glob does not need
+  them**: see "Module globs" below.
 
 - **Resolution adds no state** (`resolve_path`). The binding *is* the whole
   path, so the scope state answers `PATHRES_VARIANT` outright when a lone
@@ -486,6 +491,47 @@ special case: `std::option` and `std::result` each `pub use` their own two
 variants (a scope import of an own enum), and the prelude table names them
 beside `Option` and `Result`. `link_import_item`'s re-export branch does the
 rest, and `from_prelude` keeps them the weakest binding in the file.
+
+### Module globs
+
+`use a::*;` binds every item `a` exports. Items live in `tscope`/`vscope`, which
+have none of the machinery the variant table grew for the same job — no
+`from_glob`, no tombstone — so the question the feature really asks is how a
+*weak* binding is expressed there at all.
+
+**The answer is ordering, not a flag.** Every scope lookup returns the first
+match, so a binding's strength already *is* its position, and the three
+strengths become three passes over `Module.imports`: `LINK_WRITTEN`, then
+`LINK_GLOB`, then `LINK_PRELUDE` (`link_pass_of` decides which, and is the one
+question both linking passes ask). A written name binds before any glob can, so
+it wins in either written order without anything having to take a name back; a
+glob binds before the prelude, so it outranks it by the same silence. Each pass
+yields with the `link_name_bound` check that already existed. The prelude's own
+weakness used to rest on this too — `mod_inject_prelude` appends its synthesised
+imports last — and the passes only make that rule general.
+
+**The export set has one walk, `mod_walk_exports`, and two clients.** It visits
+`m`'s own `pub` items, the aliases of its `pub use`s, the variants a
+`pub use E::*;` bound (written down nowhere but the variant table), and — one
+hop further — whatever a `pub use a::*;` of its own re-exports. That last arm is
+what makes a **facade** writable: `std/collections.dt` re-exports two private
+children with `pub use …::*;` rather than a hand-kept list, so a type added below
+it is exported by construction. The recursion terminates because phase 0 already
+rejects dependency cycles.
+
+The two clients are enumeration (bind each name) and membership (does `a` export
+this one?), and they are the same walk with a visitor that stops early — because
+two resolvers that must agree can only be made to by asking the same question.
+Membership is `mod_find_use_alias`'s third route: a glob is the only import that
+binds names no declaration spells out, so `Module.glob_imports` is the record
+that it happened, and a *private* glob is deliberately still found there, so the
+answer is "imported but not re-exported" rather than "no such item".
+
+A **child module is not an item**, so a glob never binds a qualifier. This is
+the one rule with nothing else enforcing it: a module lives in no scope, so
+binding one would already be a silent no-op — until the name reaches
+`mod_find_use_alias`, where it would make `use facade::sub;` succeed and bind
+nothing.
 
 ### Where an `impl` applies
 

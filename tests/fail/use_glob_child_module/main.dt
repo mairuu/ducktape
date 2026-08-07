@@ -1,0 +1,8 @@
+#! expect: module 'facade' has no item named 'sub'
+# a glob re-exports a module's *items*, and a child module is not one — so the
+# facade below offers `thing`, never `sub`.
+mod facade;
+
+use facade::sub;
+
+fun main() {}

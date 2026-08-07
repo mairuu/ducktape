@@ -1,0 +1,10 @@
+#! expect: which another glob import already binds
+# two globs offering different items for one name: resolution reads the first
+# match, so this is the one thing a glob reports rather than yielding.
+mod pal;
+mod other;
+
+use pal::*;
+use other::*;
+
+fun main() {}

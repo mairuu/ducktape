@@ -1,7 +1,0 @@
-#! expect: there is no module glob
-# `*` names an enum's variants; a module's items have to be named.
-mod pal;
-
-use pal::*;
-
-fun main() {}

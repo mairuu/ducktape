@@ -1990,20 +1990,83 @@ static Decl *mod_find_own_decl(Module *m, StringView name) {
   return NULL;
 }
 
+// visit every name `m` exports, stopping early if `visit` returns true — which
+// is how membership is asked *without* a second traversal that could disagree
+// with this one. Four sources: m's own `pub` items, the aliases of its `pub
+// use`s, the variants a `pub use E::*;` bound (those are written nowhere but
+// the variant table), and — one hop further — whatever a `pub use a::*;`
+// re-exports. The module graph is a DAG, so the recursion terminates.
+typedef bool (*ExportVisitor)(void *ctx, StringView name);
+
+static bool mod_walk_exports(Module *m, ExportVisitor visit, void *ctx) {
+  if (m->ast == NULL) {
+    return false; // source never loaded; discovery reported it at the `mod`
+  }
+  for (int i = 0; i < m->ast->decl_count; i++) {
+    Decl *d = m->ast->decls[i];
+    if (!d->is_pub) {
+      continue;
+    }
+    if (d->kind == DECL_USE) {
+      // a module import binds a qualifier rather than an item, so it
+      // re-exports nothing — the same exclusion mod_find_use_alias makes.
+      if (d->as.use_decl.is_module_import) {
+        continue;
+      }
+      UseTarget *t = &d->as.use_decl.target;
+      for (int j = 0; j < t->count; j++) {
+        if (visit(ctx, t->aliases[j].alias)) {
+          return true;
+        }
+      }
+      continue;
+    }
+    StringView name;
+    // a `mod` is not an item: decl_item_name gives its name, and a glob would
+    // otherwise try to bind a module where a type or value is expected.
+    if (d->kind != DECL_MOD && decl_item_name(d, &name) && visit(ctx, name)) {
+      return true;
+    }
+  }
+
+  for (int i = 0; i < m->variant_import_count; i++) {
+    VariantImport *vi = &m->variant_imports[i];
+    // only the glob-bound ones: a variant named in a `pub use` was already
+    // visited above as that declaration's alias.
+    if (vi->name.len > 0 && vi->is_pub && vi->from_glob &&
+        visit(ctx, vi->name)) {
+      return true;
+    }
+  }
+
+  for (int i = 0; i < m->glob_import_count; i++) {
+    GlobImport *g = &m->glob_imports[i];
+    if (g->decl->is_pub && mod_walk_exports(g->source, visit, ctx)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool export_name_matches(void *ctx, StringView name) {
+  return sv_equal(*(StringView *)ctx, name);
+}
+
 // copy one resolved entry from `src`'s scopes into `dst`'s under `alias`.
 // a fun lives in both scopes, a struct/enum/trait only in the type scope.
 // `src == dst` is the std case: giving a builtin a second name in place.
-// `origin` is the alias that asked for the copy, stamped on both entries so a
-// later lookup can report the *import* rather than the binding it produced.
+// `origin` is the usage flag of the import that asked for the copy, stamped on
+// both entries so a later lookup can report the *import* rather than the
+// binding it produced. A glob passes one flag for every name it binds.
 static void link_copy_entry(TypeChecker *tc, Module *dst, Module *src,
-                            StringView name, UseAlias *origin, Span span) {
-  StringView alias = origin->alias;
+                            StringView name, StringView alias, bool *origin,
+                            Span span) {
   TypeEntry *src_te = tscope_lookup(&src->tscope, name);
   if (src_te != NULL) {
     TypeEntry *te = NULL;
     tscope_define(&dst->tscope, alias, src_te->type, tc->diags, span, &te);
     te->as = src_te->as;
-    te->origin = &origin->used;
+    te->origin = origin;
   }
 
   VarEntry *src_ve = vscope_lookup(&src->vscope, name, NULL);
@@ -2014,7 +2077,7 @@ static void link_copy_entry(TypeChecker *tc, Module *dst, Module *src,
     // FunDef, assigned program-wide by codegen, and travels with `ve->as`.
     vscope_define(&dst->vscope, alias, src_ve->type, tc->diags, span, &ve);
     ve->as = src_ve->as;
-    ve->origin = &origin->used;
+    ve->origin = origin;
   }
 }
 
@@ -2115,6 +2178,16 @@ static Decl *mod_find_use_alias(Module *m, StringView name) {
       if (sv_equal(target->aliases[j].alias, name)) {
         return decl;
       }
+    }
+  }
+  // the third route, and the only one no declaration in `m` spells out: a
+  // `use a::*;` binds names it does not write. The glob is not filtered on
+  // `pub` here — a private one still *has* the name, and the caller's
+  // "imported but not re-exported" is the truthful answer for it.
+  for (int i = 0; i < m->glob_import_count; i++) {
+    GlobImport *g = &m->glob_imports[i];
+    if (mod_walk_exports(g->source, export_name_matches, &name)) {
+      return g->decl;
     }
   }
   return NULL;
@@ -2309,7 +2382,7 @@ static void link_import_item(TypeChecker *tc, Module *m, Module *dep,
 
   // dep is resolved (topological order), so its scopes carry real types.
   // if they don't, resolving dep poisoned the decl — stay quiet.
-  link_copy_entry(tc, m, dep, a->name, a, a->span);
+  link_copy_entry(tc, m, dep, a->name, a->alias, &a->used, a->span);
 }
 
 // bind `dep` as a module qualifier in `m` under `a->alias` (`use a::b;` →
@@ -2376,10 +2449,122 @@ static void link_glob_variants(TypeChecker *tc, Module *m, EnumDef *enum_def,
   }
 }
 
+// which pass links this import. A binding's *strength* is its position — every
+// lookup returns the first match — so m81's three strengths are three passes
+// rather than a flag on every entry: written by name, then a glob, then the
+// prelude, which is why none of them has to take a name back from another.
+//
+// The *variant* glob is not one of them: it keeps its qualifier and is expanded
+// a phase later, once the enum has resolved. Both passes ask this one question,
+// because a module glob and a variant glob are told apart by nothing else.
+typedef enum { LINK_WRITTEN, LINK_GLOB, LINK_PRELUDE } LinkPass;
+
+static LinkPass link_pass_of(const DeclUse *use) {
+  if (use->from_prelude) {
+    return LINK_PRELUDE;
+  }
+  if (use->target.is_glob && use->qualifier.len == 0) {
+    return LINK_GLOB;
+  }
+  return LINK_WRITTEN;
+}
+
+// one name a module glob has bound in this pass, kept only so a *second* glob
+// offering a different item for the same name can be reported. A name written
+// by hand needs no entry: link_name_bound already sees it, and pass order put
+// it in first.
+typedef struct {
+  StringView name;
+  Module *source;
+} GlobBinding;
+
+typedef struct {
+  TypeChecker *tc;
+  Module *m;
+  Module *dep; // the module the glob being expanded names
+  Decl *decl;  // its `use`, for the span and the `pub`
+  bool *used;  // the whole glob's usage flag: one binding, many names
+  GlobBinding *bound;
+  int count, cap;
+} GlobBindCtx;
+
+// bind one exported name of `ctx->dep` into `ctx->m`. Mirrors
+// link_glob_variants for the other two namespaces: yields silently to anything
+// written by hand, and reports only a second glob that disagrees.
+static bool glob_bind_one(void *vctx, StringView name) {
+  GlobBindCtx *ctx = (GlobBindCtx *)vctx;
+
+  for (int i = 0; i < ctx->count; i++) {
+    if (!sv_equal(ctx->bound[i].name, name)) {
+      continue;
+    }
+    // the same module reached twice — a diamond of `pub use` — is one binding,
+    // not a clash.
+    if (ctx->bound[i].source != ctx->dep) {
+      diag_error(ctx->tc->diags, ctx->decl->as.use_decl.target.span,
+                 "glob import of module '" SV_FMT "' binds '" SV_FMT
+                 "', which another glob import already binds",
+                 SV_ARG(mod_label(ctx->dep)), SV_ARG(name));
+      diag_note(ctx->tc->diags, (Span){0},
+                "name the items you want instead of globbing");
+    }
+    return false;
+  }
+  if (link_name_bound(ctx->m, name)) {
+    return false; // written by name, or declared here: that binding stands
+  }
+
+  Span span = ctx->decl->as.use_decl.target.span;
+  // a variant `dep` bound bare is a bare name here too, so the glob carries
+  // the binding rather than hunting for an item under that name.
+  VariantImport *src = mod_find_variant_import(ctx->dep, name);
+  if (src != NULL) {
+    UseAlias a = {.name = name, .alias = name, .span = span};
+    VariantImport *vi =
+        variant_import_push(ctx->tc, ctx->m, &a, ctx->decl->is_pub,
+                            /*from_glob=*/true, /*from_prelude=*/false);
+    vi->enum_def = src->enum_def;
+    vi->variant = src->variant;
+    vi->origin = ctx->used;
+  } else {
+    link_copy_entry(ctx->tc, ctx->m, ctx->dep, name, name, ctx->used, span);
+  }
+
+  if (ctx->count == ctx->cap) {
+    int cap = ctx->cap ? ctx->cap * 2 : 8;
+    ctx->bound = al_realloc(ctx->tc->al, ctx->bound,
+                            sizeof(GlobBinding) * (size_t)ctx->cap,
+                            sizeof(GlobBinding) * (size_t)cap);
+    ctx->cap = cap;
+  }
+  ctx->bound[ctx->count++] = (GlobBinding){.name = name, .source = ctx->dep};
+  return false; // never stop early: a glob wants every name
+}
+
+// record `dep` as globbed by `m`, so the export walk can follow a `pub use
+// a::*;` one hop further. A glob writes no alias, so this list is the only
+// record that the import happened.
+static void mod_add_glob_import(TypeChecker *tc, Module *m, Module *dep,
+                                Decl *decl) {
+  if (m->glob_import_count == m->glob_import_cap) {
+    int cap = m->glob_import_cap ? m->glob_import_cap * 2 : 4;
+    m->glob_imports =
+        al_realloc(tc->al, m->glob_imports,
+                   sizeof(GlobImport) * (size_t)m->glob_import_cap,
+                   sizeof(GlobImport) * (size_t)cap);
+    m->glob_import_cap = cap;
+  }
+  m->glob_imports[m->glob_import_count++] =
+      (GlobImport){.source = dep, .decl = decl};
+}
+
 void tc_link_scope_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
   for (int i = 0; i < m->import_count; i++) {
     ModImport *imp = &m->imports[i];
     DeclUse *use = &imp->decl->as.use_decl;
+    if (link_pass_of(use) == LINK_GLOB) {
+      continue; // a module glob binds items, and did so in tc_link_imports
+    }
     bool glob = use->target.is_glob;
     if (!use->is_scope_import && !glob) {
       continue;
@@ -2428,10 +2613,33 @@ void tc_link_scope_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
   }
 }
 
-void tc_link_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
+// expand every `use a::*;` in `m`. Runs between the two named passes, so it
+// yields to anything written by hand without looking and outranks the prelude
+// without saying so.
+static void link_glob_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
+  GlobBindCtx ctx = {.tc = tc, .m = m};
+  for (int i = 0; i < m->import_count; i++) {
+    ModImport *imp = &m->imports[i];
+    if (link_pass_of(&imp->decl->as.use_decl) != LINK_GLOB ||
+        imp->module_index < 0) {
+      continue; // not a glob, or discovery already diagnosed it
+    }
+    ctx.dep = reg->modules[imp->module_index];
+    ctx.decl = imp->decl;
+    ctx.used = &imp->decl->as.use_decl.target.used;
+    mod_add_glob_import(tc, m, ctx.dep, imp->decl);
+    mod_walk_exports(ctx.dep, glob_bind_one, &ctx);
+  }
+}
+
+static void link_named_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg,
+                               LinkPass pass) {
   for (int i = 0; i < m->import_count; i++) {
     ModImport *imp = &m->imports[i];
     UseTarget *target = &imp->decl->as.use_decl.target;
+    if (link_pass_of(&imp->decl->as.use_decl) != pass) {
+      continue;
+    }
 
     // A scope import cannot say what it names until this module has resolved,
     // but it can *claim its name*, here, among the imports it was written
@@ -2470,6 +2678,12 @@ void tc_link_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
       }
     }
   }
+}
+
+void tc_link_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
+  link_named_imports(tc, m, reg, LINK_WRITTEN);
+  link_glob_imports(tc, m, reg);
+  link_named_imports(tc, m, reg, LINK_PRELUDE);
 }
 
 // did anything this declaration binds get named? Its aliases are the unit the

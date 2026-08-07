@@ -1408,17 +1408,22 @@ use Shape::Circle;           # ...then its variant
 use Option::Some;            # preluded, so this needs no other import
 ```
 
-`*` imports **every** variant of the qualifier enum, each under its own name:
+`*` imports **every** name its qualifier offers. What the qualifier is decides
+what that means, and the walk decides the qualifier: a segment that names a
+declared module is consumed, so anything left over is an enum.
 
 ```
-use Shape::*;                # an enum in scope
-use geo::Shape::*;           # or one named by module
+use Shape::*;                # an enum in scope: its variants
+use geo::Shape::*;           # or one named by module: its variants
+use geo::*;                  # a module: its items
 ```
 
-There is no module glob: `*` always names an enum's variants, never a module's
-items.
+A module glob binds exactly the set `use geo::{...}` could name one at a time —
+the module's own `pub` items, and whatever its `pub use` declarations re-export.
+A **child module is not an item**, so `use geo::*;` never binds a qualifier;
+reaching a child still takes `use geo::shape;`.
 
-That last, module-less reading is the only one decided by anything but the
+That module-less reading is the only one decided by anything but the
 declarations, and it is still deterministic: it applies exactly when the head
 segment names no declared child of the root. Declaring a module called `Event`
 in the same module that declares `enum Event` is already an error, so the two
@@ -1437,8 +1442,8 @@ quiet about it:
 - **written by name** — a declaration in the file, or a `use` naming the item.
   Two of these colliding is an error, reported against whichever came second.
 - **a glob** — yields silently to anything written by name, in either order.
-  Two globs offering *different* variants for one name is an error, since
-  nothing else could tell them apart; the same variant reached twice is not.
+  Two globs offering *different* things for one name is an error, since nothing
+  else could tell them apart; the same one reached twice is not.
 - **the prelude** — yields silently to both, which is what lets a module
   declare its own `Ok` or glob a `Some` of its own.
 
@@ -3058,7 +3063,6 @@ See the gaps table below for what suppression still cannot do.
 | `Display` for a `HashMap` / `HashSet` | none ships; iteration order is unspecified, so a rendering would have to sort and the key would need `Ord` on top of `Hash`. `m.keys()` and `m.values()` are the arrays |
 | bare type arguments on a method call (`it.fold<int>(0, f)`) | the turbofish is required: `it.fold::<int>(0, f)`. The bare form parses as comparisons, so it is reported as an unknown *field* plus, usually, an undefined variable for the type name — two diagnostics for one mistake. A note on the first names the turbofish |
 | an impl overriding a defaulted method restating its `where` | conformance compares signatures, which carry no bounds, so an override may quietly add or drop one; the trait's own clause is still discharged at every call through the trait |
-| glob imports (`use a::*`) | not parsed; name each item, or bind the module (`use a;`) and qualify. Nesting makes it *implementable* — it would be the natural way to write a facade — but it would be the first thing in the language to bind names nobody wrote |
 | re-exporting a module qualifier (`pub use a;`) | a qualifier is not an item; `pub use` re-exports named items only |
 | `pub` on a method | rejected — `pub fun` in an impl is "expected impl item", and `pub` is only ignored on the `impl` keyword itself. A method is as visible as the impl it sits in, which is why `std::array`'s raw `pop_last` and `std::iter`'s `char_at` are private *free functions* rather than methods. Struct **fields** do take `pub`: they are private to their module by default, and the diagnostic naming one says so |
 | overlap rules finer than "matching self types" | there is no orphan rule and no specialization: an impl may be written for any type, and two overlapping ones are simply refused wherever both are visible — a bound (`impl<T: Ord> W<T>` against `impl<T> W<T>`) or a narrower head (`impl [int]` against `impl<T> [T]`) is not a way to win a name |

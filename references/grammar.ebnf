@@ -55,10 +55,13 @@ useItem        = IDENT ( "as" IDENT )? ;
                     are an enum and one of its variants. Nothing here asks
                     whether a file exists. Where the walk consumes nothing
                     below the root, the head is read as an enum already in
-                    SCOPE, so `use E::V;` names no module at all. `*` takes
-                    every variant of the enum; there is no module glob, and a
-                    glob takes no `as`. `pub use` re-exports each alias —
-                    language.md "Modules" *)
+                    SCOPE, so `use E::V;` names no module at all. `*` is the
+                    same arithmetic one reading further: nothing left over
+                    takes every ITEM of the module, one segment left takes
+                    every VARIANT of that enum. A glob takes no `as`.
+                    `pub use` re-exports each alias, or — for a module glob —
+                    whatever its source exports, which is what makes a facade
+                    writable. language.md "Modules" *)
 
 varDecl        = "var" pattern ( ":" type )? "=" expr
                  ( "else" block )? ";" ;

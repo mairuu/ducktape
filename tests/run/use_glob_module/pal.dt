@@ -1,0 +1,6 @@
+pub struct Swatch { pub tone: int }
+pub enum Color { Red, Green }
+pub fun mix(a: int, b: int) -> int { return a + b; }
+
+# private: a glob binds what the module exports, not what it holds.
+fun secret() -> int { return 0; }

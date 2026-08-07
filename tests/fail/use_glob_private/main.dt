@@ -1,0 +1,7 @@
+#! expect: cannot find 'hidden' in this scope
+# a glob binds what a module exports, not what it holds.
+mod pal;
+
+use pal::*;
+
+fun main() { var _n = hidden(); }

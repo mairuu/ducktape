@@ -1,0 +1,7 @@
+#! expect: a glob import names the items of a module
+# `*` follows either a module or one of its enums, and nothing further.
+mod pal;
+
+use pal::Color::Red::*;
+
+fun main() {}

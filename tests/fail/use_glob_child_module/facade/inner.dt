@@ -1,0 +1,3 @@
+pub mod sub;
+
+pub fun thing() -> int { return 1; }

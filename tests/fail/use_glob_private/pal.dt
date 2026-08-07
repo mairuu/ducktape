@@ -1,0 +1,2 @@
+pub fun shown() -> int { return 1; }
+fun hidden() -> int { return 2; }

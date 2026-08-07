@@ -74,6 +74,15 @@ typedef struct {
   bool *origin; // the import's `used` flag, for the unused-import warning
 } VariantImport;
 
+// a module globbed by `use a::*;`. Every other import kind writes an alias, so
+// its source can be recovered from the declaration; a glob writes none, and the
+// export walk needs the module because a `pub use a::*;` re-exports whatever
+// `a` exports.
+typedef struct {
+  Module *source;
+  Decl *decl; // the `use` — its span, and whether it was a `pub use`
+} GlobImport;
+
 // one `mod x;` declaration, resolved to the module it names.
 typedef struct {
   StringView name;
@@ -131,6 +140,12 @@ struct Module {
   // resolution, a path expression, and a binding pattern.
   VariantImport *variant_imports;
   int variant_import_count, variant_import_cap;
+
+  // modules this one globs (`use a::*;`). Filled by tc_link_imports, read by
+  // the export walk — a glob is the only import whose names are not written
+  // down anywhere, so this list is the record that it happened.
+  GlobImport *glob_imports;
+  int glob_import_count, glob_import_cap;
 
   FunDef **funs;
   int fun_count, fun_cap;

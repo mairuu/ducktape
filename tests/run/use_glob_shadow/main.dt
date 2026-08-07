@@ -1,0 +1,26 @@
+# The three binding strengths: a name written by hand beats a glob whichever
+# side of it is written, a glob beats the prelude, and a declaration here beats
+# both.
+mod pal;
+mod other;
+
+use std::io::print;
+use other::Badge;   # written before the glob
+use pal::*;
+use other::Tag;     # and written after it
+
+struct Swatch;
+impl Swatch { fun name() -> String { return "mine"; } }
+
+fun main() {
+    print(Badge::name());
+    print(Tag::name());
+    print(Mark::name());    # only the glob binds this
+    print(Swatch::name());  # declared here, so the glob yielded
+    print(Option::name());  # a glob outranks the preluded Option
+}
+#> other
+#> other
+#> pal
+#> mine
+#> shadowed

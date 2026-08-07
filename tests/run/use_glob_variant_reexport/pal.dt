@@ -1,0 +1,5 @@
+pub enum Color { Red, Blue }
+
+# a variant glob, re-exported: the names it binds are written down nowhere but
+# the variant table, which is why the export walk has to read that too.
+pub use Color::*;

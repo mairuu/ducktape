@@ -1,0 +1,19 @@
+# `pub use x::*;` is a facade: it re-exports a private child's whole export set,
+# so a name below it is reachable without the facade listing it. All three
+# routes in are exercised here — a named item import, a qualified path, and a
+# glob *of* the facade, which is the one that makes the export walk recursive.
+mod shapes;
+
+use std::io::print;
+use shapes;
+use shapes::{Circle, area};
+use shapes::*;
+
+fun main() {
+    print(area(Circle { r: 2 }).to_string());
+    print(shapes::area(shapes::Circle { r: 3 }).to_string());
+    print(corner_name());
+}
+#> 12
+#> 27
+#> corner

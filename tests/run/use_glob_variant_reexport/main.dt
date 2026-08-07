@@ -1,0 +1,15 @@
+# a variant bound by `pub use E::*;` travels on through a module glob, under
+# its bare name, exactly as a named `pub use E::V;` would.
+mod pal;
+
+use std::io::print;
+use pal::*;
+
+fun main() {
+    var c = Red;
+    match c {
+        Red => print("red"),
+        Color::Blue => print("blue"),
+    }
+}
+#> red

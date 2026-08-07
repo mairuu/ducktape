@@ -6,8 +6,13 @@
 # one name, and which file holds it is a layout decision this group keeps to
 # itself. `hashset` still reaches `hashmap` — a private module is reachable from
 # everything in its declarer's subtree, which is where the two siblings live.
+#
+# Globbed rather than listed, because a facade that names its types has to be
+# edited every time one is added — and a type added below a private child with
+# nothing re-exporting it is reachable from nowhere, silently. `*` is the whole
+# export set by construction, which is what a facade means.
 mod hashmap;
 mod hashset;
 
-pub use std::collections::hashmap::{HashMap, MapIter};
-pub use std::collections::hashset::HashSet;
+pub use std::collections::hashmap::*;
+pub use std::collections::hashset::*;

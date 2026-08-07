@@ -594,6 +594,23 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   list cannot fork. Sabotage 5/5 bit. Left over: a builtin-named module is still
   only reachable through the type.
 
+- **100. The module glob** — `use a::*;` binds every item `a` exports, and
+  `pub use a::*;` re-exports them, which is what makes a facade writable.
+  Design: `language.md` "Modules", `architecture.md` "Module globs",
+  `grammar.ebnf` `useDecl`. **THE FINDING: the three binding strengths m81 wrote
+  down are three PASSES, not a flag.** A scope lookup returns the first match,
+  so a binding's strength already is its position — written, then glob, then
+  prelude — and the item scopes needed none of the `from_glob`/tombstone
+  machinery the variant table grew for the same job. `mod_walk_exports` is one
+  traversal with two clients (bind each name; does `a` export this one?), since
+  two resolvers can only be made to agree by asking the same question. Spent on
+  std: `std/collections.dt`'s facade is now `pub use …::*;`, so a type added
+  below its private children is exported by construction. Sabotage 8/8 bit —
+  **two were no-ops first**, and each named a real test gap: nothing globbed a
+  module that itself globbed, and nothing globbed one with a `pub mod` child.
+  Remainder: a module qualifier is still not re-exportable, so a facade can
+  offer every type below it and not the module they came from.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -753,6 +770,54 @@ as here.)
    ordering bug fixable on its own terms and does not need the trait hierarchy
    to address — and milestone 63 showed the other way out of it, since
    `std::hash` simply declines to implement `Hash for float` at all.
+
+3. **`String` is valid UTF-8, positioned by an opaque `StrPos`.** Designed,
+   unbuilt. Today a `String` is bytes that happen to be UTF-8, checked lazily at
+   the three natives that decode (`string_char_at`, `string_prev_boundary`,
+   `string_char_count`); only `slice` can create a bad one, by cutting a
+   sequence in half. The redesign guarantees validity and makes a position
+   **opaque**: a `StrPos` comes from a search or a walk, never from an `int`, so
+   a non-boundary cut stops being a runtime error and becomes unrepresentable.
+   That is what `CharIter` already does with its private byte offsets, promoted
+   from one struct's discipline to the language's rule. Counting stays a
+   separate verb from positioning (`s.take_chars(3)`, O(n), never mixed with a
+   `StrPos`), which is the one thing worth stealing from a character-indexed
+   design.
+
+   **The prerequisite is not the check — it is a byte-level compare.**
+   `std::text` slices *speculatively*: `find` cuts a candidate window at every
+   byte offset just to compare it, and `ends_with` cuts at `n - sl` before
+   knowing whether it matches, so a boundary-checked `slice` fails on inputs
+   that today correctly answer `false`. A `matches_at(s, at, needle)` native
+   fixes it and is total where a cut is not — a valid needle never begins with a
+   continuation byte, so a compare at a mid-sequence offset simply says no. It
+   also deletes `find`'s O(n·m) *allocations*. Rejected alternatives: Go-style
+   shared views (O(1) slicing, but interning dies and with it pointer-equal `==`
+   and cheap hashing), and Python-style character indexing (best ergonomics,
+   most C — two or three storage widths).
+
+   Also needed: validate the two untrusted intakes — the source file (`read_file`
+   never checks, and a literal has no `\u{}` escape, so raw source bytes are its
+   only route to non-ASCII) and the image string table. `StringBuf` is already
+   valid by induction and should say so.
+
+   **THE FINDING, on `byte`: it is not a scalar-shaped problem.** A new scalar
+   buys type-safety and not one byte of memory — a `Value` is as wide as its
+   widest arm however narrow the scalar is, and `ObjArray` stores `Value`s, so
+   `[byte]` costs what `[int]` costs. Packing is the whole reason to want a byte
+   type, and the scalar does not deliver it. Worse, 0..255 is the first member
+   of a family the language does not have: adding exactly one sized integer
+   while "no unsigned integer type" sits in the warts below is the worst of both
+   answers. So the byte story is a packed **`Bytes` object** whose elements are
+   range-checked `int`s — one object kind, the shape `ObjStrBuf` already is. It
+   stays separate from `StringBuf`, and the difference between them is the
+   invariant itself: `StringBuf` charges at the door (only chars and Strings go
+   in) so `build()` is free, `Bytes` lets anything in so its exit
+   (`String::from_utf8`) validates. Nothing consumes `Bytes` until there is I/O,
+   so it ships with the milestone that first has something to read — the string
+   work must only avoid foreclosing it, which `to_utf8`/`from_utf8` do. If a
+   `byte` scalar is ever wanted anyway, it belongs to an unsigned-integer
+   milestone that closes the `>>>` wart, not to this one.
 
 Not on the roadmap: the **REPL** is a side feature, not a milestone — it lives
 on the `feature/repl` branch (`--repl`, incremental compilation over one module
@@ -1087,14 +1152,10 @@ via `Module.decl_base`) and is not part of the main line.
 - an unsupported construct inside a trait method is reported at the coercion
   site that builds the vtable, since that is where the body is first demanded
   — the same "only seen where it is instantiated" limitation generics have
-- no glob `use a::*`. Module-qualified paths exist as of milestone 33 (`use
-  a::b;` binds `b`, then `b::thing`), but a *glob* still has no spelling, and a
-  `pub use` re-export names one item at a time — a façade module still lists
-  them, and a qualifier is not re-exportable (it is not an item). Milestone 95
-  made this load-bearing rather than merely tedious: `std::collections`'s
-  children are private, so its `pub use` lines are the *only* path to `HashMap`,
-  and a type added below the façade is reachable from nowhere with nothing
-  saying so
+- a **module qualifier is not re-exportable**: `pub use a;` binds `a` for the
+  importer and hands nothing on, because a qualifier is not an item. Milestone
+  100 globbed the items but left this — a facade can re-export every type below
+  it and still cannot offer the *module* the types came from
 - `pub` is ignored on the `impl` keyword and rejected on a method or a struct
   field (see above). Visibility exists at three grains and they do not compose:
   an item takes `pub`, a field takes `pub`, a `mod` takes `pub` — and a *method*

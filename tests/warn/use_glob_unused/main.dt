@@ -1,0 +1,8 @@
+#! expect: this glob binds nothing that is named
+# a glob is one binding however many names it expands to, so the warning is
+# about the whole line.
+mod pal;
+
+use pal::*;
+
+fun main() {}

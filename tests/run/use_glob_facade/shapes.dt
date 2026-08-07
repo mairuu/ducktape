@@ -1,0 +1,8 @@
+# both children are private: the globs below are the only path to their items.
+# `corner` is re-exported through *two* globs, which is what makes the export
+# walk recursive.
+mod circle;
+mod corner;
+
+pub use shapes::circle::*;
+pub use shapes::corner::*;

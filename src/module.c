@@ -663,10 +663,13 @@ bool mod_collect_imports(Module *m, ModuleRegistry *reg, DiagBag *diags,
     // With the module settled, what follows it is arithmetic rather than a
     // question about the filesystem: nothing is an item, one segment is an
     // item, two are an enum and one of its variants.
-    if (glob && rest != 1) {
+    // a glob is the same arithmetic one reading further: nothing left over
+    // names the module's own items, one segment names an enum's variants.
+    if (glob && rest > 1) {
       diag_error(diags, decl->as.use_decl.target.span,
-                 "a glob import names the variants of an enum "
-                 "(`use <module>::<Enum>::*;`), and there is no module glob");
+                 "a glob import names the items of a module "
+                 "(`use <module>::*;`) or the variants of one of its enums "
+                 "(`use <module>::<Enum>::*;`)");
       ok = false;
       continue;
     }

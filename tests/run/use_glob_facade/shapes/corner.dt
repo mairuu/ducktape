@@ -1,0 +1,1 @@
+pub fun corner_name() -> String { return "corner"; }

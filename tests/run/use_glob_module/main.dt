@@ -1,0 +1,19 @@
+# `use pal::*;` binds every item the module exports, under its own name.
+mod pal;
+
+use std::io::print;
+use pal::*;
+
+fun main() {
+    print(mix(2, 3).to_string());
+    var s = Swatch { tone: 7 };
+    print(s.tone.to_string());
+    var c = Color::Green;
+    match c {
+        Color::Red => print("red"),
+        Color::Green => print("green"),
+    }
+}
+#> 5
+#> 7
+#> green

@@ -1,0 +1,14 @@
+pub struct Tag;
+impl Tag { fun name() -> String { return "pal"; } }
+
+pub struct Mark;
+impl Mark { fun name() -> String { return "pal"; } }
+
+pub struct Swatch;
+impl Swatch { fun name() -> String { return "pal"; } }
+
+pub struct Option;
+impl Option { fun name() -> String { return "shadowed"; } }
+
+pub struct Badge;
+impl Badge { fun name() -> String { return "pal"; } }
