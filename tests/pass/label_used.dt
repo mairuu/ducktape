@@ -1,0 +1,27 @@
+# The silent half of `tests/warn/unused_label`: a label a `break` or a
+# `continue` names is read, on all four carriers, and an inner target does not
+# spend the outer's name for it.
+use std::io::print;
+
+fun main() {
+    var n = 'kept: loop {
+        break 'kept 7;
+    };
+
+    'wait: while n > 0 {
+        break 'wait;
+    }
+
+    'rows: for i in 0..2 {
+        for j in 0..2 {
+            if i == j { continue 'rows; }
+        }
+    }
+
+    var m = 'got: {
+        if n > 0 { break 'got 3; }
+        4
+    };
+
+    print("{n}{m}");
+}

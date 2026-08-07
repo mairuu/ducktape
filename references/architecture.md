@@ -2267,6 +2267,13 @@ unreachable by name from inside the inner one, and renaming is free. One list
 holds loops and labelled blocks together, so the rule spans both kinds without
 knowing there are two.
 
+`unused_label` is the same shape as `unused_variable` read on this list instead
+of the scope chain: `check_loop_target`'s *labelled* branch is the one place a
+name is resolved, so it is where `CheckLoop.used` is set — the unlabelled branch
+returns before it, which is the rule that a bare `break` is not a reader of the
+label it happens to leave. `check_loop_pop` then reports at the one place every
+frame is popped, so the four carriers share it rather than agreeing four times.
+
 What the frame accumulates is `break_type`, the **join of every exit's value**,
 which is the target's type — divergence and a value being the same answer read
 at two ends of the same range. `check_join_exit` folds one exit in, and every

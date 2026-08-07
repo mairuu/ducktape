@@ -4,13 +4,16 @@
 use std::panic::panic;
 
 # no exit reaches the end and there is no break, so the block is `!` — the
-# same answer a `loop` nothing leaves gives, arrived at from the other side
+# same answer a `loop` nothing leaves gives, arrived at from the other side.
+# The label going unread is the case under test, hence the allow.
+@allow("unused_label")
 fun spin() -> ! {
     'a: {
         loop { }
     }
 }
 
+@allow("unused_label")
 fun never_falls_out() -> ! {
     'a: {
         return panic("gone");

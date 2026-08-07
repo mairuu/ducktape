@@ -1,0 +1,9 @@
+#! expect: warning[unused_label]: unused label 'idle
+# The `while` carrier. See `unused_label.dt`.
+use std::io::print;
+
+fun main() {
+    'idle: while false {
+        print("never");
+    }
+}

@@ -20,6 +20,7 @@ void diag_init(DiagBag *db, Allocator *al) {
 static const char *const lint_names[LINT_COUNT] = {
     [LINT_UNUSED_VARIABLE] = "unused_variable",
     [LINT_UNUSED_IMPORT] = "unused_import",
+    [LINT_UNUSED_LABEL] = "unused_label",
     [LINT_UNREACHABLE_CODE] = "unreachable_code",
     [LINT_IRREFUTABLE_PATTERN] = "irrefutable_pattern",
     [LINT_ORPHAN_MODULE] = "orphan_module",

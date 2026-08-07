@@ -510,7 +510,7 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   since `check_flow_into` re-derives the coercion from the target anyway — so
   the test had to be sharpened to an `if` whose arms are two different impls.
   Left over: no label on a plain block (milestone 98), and no `unused_label`
-  lint.
+  lint (milestone 105).
 
 - **97. A warning you can insist on** (`9152764`) — `-Werror`, `-Werror=<lint>`,
   `-Wno-<lint>`, `-W<lint>`. Design: `language.md` "Lint levels from the command
@@ -565,7 +565,8 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   bites. Sabotage 7/7 bit, but **the depth one was a no-op at 612/612 first**:
   nothing in the suite opened a labelled block with a value already pending, so
   `break_depth = local_count` was indistinguishable from `= cg->depth` until a
-  test put one in an argument. Left over: no `unused_label` lint.
+  test put one in an argument. Left over: no `unused_label` lint (milestone
+  105).
 
 - **99. The types you cannot name** (`f4dec6d`) — `int`/`float`/`bool`/`char`; `()`
   and `!`. Design: `language.md` "Types" (the case rule, the two punctuation
@@ -716,6 +717,31 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   above, and an adjacency test whose fail case I had written as `a >> = 1`,
   which is refused by a different mechanism (`a > >= 1` is the real one).
   No new opcode, no image change. Remainder: none.
+
+- **105. `unused_label`** (`SHA`) — milestone 96's remainder and the smallest of
+  the lint family: one enum entry, one name string, one `bool` on `CheckLoop`.
+  Design: `language.md` "Expressions" (labels, and the block paragraph) + the
+  lint table, `architecture.md` `check_loop_pop`. The name string is the whole
+  registration — `@allow("unused_label")`, `-Werror=unused_label` and
+  `-Wno-unused_label` all worked before any of them was written, which is
+  milestone 89's table earning its keep a third time.
+  **THE FINDING: the lint's first act was to fail three tests, and all three
+  were right.** `tests/pass/block_label_types` and `tests/run/labelled_block`
+  hold labels written *to be inert* — one pinning that a labelled block nothing
+  breaks to still types `!`, one pinning milestone 98's rule that a bare
+  `break` names the loop and skips the block. A label that must go unread is
+  exactly what that rule can only be demonstrated by, so the lint is correct
+  and so is the code; `@allow` on the declaration is the answer.
+  **SECOND FINDING: that is also the argument against a `_` hatch.** Every
+  underscore opt-out elsewhere exists because some form *makes* you bind a name
+  (a pattern names all its fields, a signature names `self`); nothing makes you
+  write a label, and the only real consumers of a deliberately unread one are
+  tests of the label mechanism itself — which `@allow`'s declaration grain fits.
+  Sabotage 9/9, none a no-op, and 5–8 each bit **only** their own file: a warn
+  test matches one substring, so pinning the four carriers apart needed four
+  files rather than one with four cases. Remainder: a label named only from
+  inside a closure reports twice (the `break` errors, and the label is then
+  genuinely unread) — the m82 family, and only on a failing compile.
 
 ## Next (in recommended order)
 
@@ -923,6 +949,12 @@ via `Module.decl_base`) and is not part of the main line.
   `it.fold<int>(0, f)` parses as comparisons, so it reports an unknown *field*
   and then usually an undefined variable for the type name (milestone 71); a
   note on the first names the turbofish, which is as far as that site can see
+- a label whose only `break` sits inside a closure reports twice: the `break`
+  errors ("nothing labelled `'a` is in scope", since a closure resets the
+  target list) and the label is then genuinely unread, so `unused_label` fires
+  as well (milestone 105). Suppressing it precisely would mean keeping the
+  outer target list reachable across the closure boundary just to mark it —
+  machinery for a compile that fails either way
 - two arms that are both wrong under one `dyn` expectation report twice, once
   each, since each arm is checked against the expectation rather than against
   its neighbour. That is the array literal's behaviour per element and is
@@ -979,10 +1011,6 @@ via `Module.decl_base`) and is not part of the main line.
 - a refutable `var` binding whose column type inference never pinned down is
   accepted (the tri-state answer reports nothing) and traps at runtime via
   `OP_MATCH_FAIL` instead of at compile time
-- there is no `unused_label` lint — a label nothing names costs a reader the
-  same as an unused binding, and milestone 92's machinery is the shape it would
-  take. Milestone 98 widened what one can name (a block as well as a loop)
-  without adding the question
 - a lint's level is **all-or-nothing over a compile**: `-W` (milestone 97) takes
   no module path, so one module cannot be held to a level the rest is not, and
   the only per-declaration control is `@allow`, which only goes downwards. Nor

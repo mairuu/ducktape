@@ -1,0 +1,9 @@
+#! expect: warning[unused_label]: unused label 'rows
+# The `for` carrier. See `unused_label.dt`.
+use std::io::print;
+
+fun main() {
+    'rows: for _i in 0..2 {
+        print("row");
+    }
+}

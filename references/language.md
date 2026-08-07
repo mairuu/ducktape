@@ -222,7 +222,13 @@ under the field's name, so ignoring one field takes the long form
   nowhere else — a closure body cannot see one, exactly as a bare `break`
   cannot escape a closure. A label an enclosing loop already declared is an
   error rather than a shadowing: the outer one would be unreachable by name,
-  and there is no reason to write it.
+  and there is no reason to write it. For the same reason a label no
+  `break`/`continue` ever names is an `unused_label` warning — an unlabelled
+  exit reaches the innermost loop without spelling anything, so it is not a
+  reader of the name. There is no `_` opt-out: every such hatch elsewhere
+  exists because some form *makes* you bind a name, and nothing makes you write
+  a label, so `@allow("unused_label")` covers the one case that wants it — a
+  label written to be inert.
 - A **block** may be labelled too, which is the one thing a label names that is
   not a loop: `'a: { .. break 'a v; .. }` leaves the block early with a value.
   A block has two kinds of exit — every `break` naming it, and running off the
@@ -254,7 +260,9 @@ under the field's name, so ignoring one field takes the long form
   runs once, so there is no next turn to go to. Otherwise a block is an ordinary
   target — it shares one scope with the loops, so a label a loop declared cannot
   be reused by a block inside it or the reverse, and one `break` may leave a
-  block and several loops at once.
+  block and several loops at once. `unused_label` reads harder here than on a
+  loop: since no bare `break` can name a block, an unread label means nothing
+  leaves the block early at all, and it is an ordinary block wearing a name.
 - Ranges: `a..b`, `a..=b` — int-only, first-class values (`var r = 0..10;`) of
   type `range`, which is nameable (`fun span(r: range)`) and carries one
   method, `r.iter()`.
@@ -3013,13 +3021,14 @@ HashSet::with_capacity(n); s.capacity(); s.reserve(n);   # forwarded, all three
 ## Warnings and `@allow`
 
 A warning is advice, so by default it never fails the build: the compiler exits
-0 and the program runs. There are five, and each has a **name**, which is what
+0 and the program runs. There are six, and each has a **name**, which is what
 the report prints, what silences it, and what a `-W` flag takes:
 
 | Lint | What it says |
 |---|---|
 | `unused_variable` | a binding nothing ever names (above, "Statements and blocks") |
 | `unused_import` | a `use` binding a name nothing writes, whose impls arrive anyway ("Modules") |
+| `unused_label` | a loop's or block's label no `break`/`continue` names ("Expressions") |
 | `unreachable_code` | a statement below one that leaves the block ("`std::panic`") |
 | `irrefutable_pattern` | an `if var`/`while var` header whose test has one answer ("`if var` and `while var`") |
 | `orphan_module` | a `.dt` file in a module's directory that no `mod` claims ("Modules") |
@@ -3057,7 +3066,8 @@ A declaration is the smallest thing an allow can cover: there are no attributes
 on statements or expressions, and none on a *trait item* either, so an allow
 over a default method body is written on the trait. For a single binding the `_`
 prefix stays the finer tool — it says "deliberate" where an `@allow` says "don't
-ask about this function".
+ask about this function". `unused_label` has no such finer tool, and the
+declaration grain is the only one it gets.
 
 Warnings are dropped entirely for the embedded standard library, which has no
 reader to advise; naming a std file on the command line makes you that reader.
@@ -3139,7 +3149,6 @@ See the gaps table below for what suppression still cannot do.
 | top-level `var` (globals) | parses, then a registration diagnostic: move it into a function |
 | a `break` that carries a value out of a `while`/`for` | `loop { break x; }` works (milestone 87), but the other two loops also leave by *finishing*, and that exit has no value to join with — so `break x` in one is an error and both stay `()` |
 | `continue` naming a labelled block | a block runs once, so there is no next turn to reach — a label on a block buys an exit, not an iteration |
-| a lint for a label nothing names | an unused label costs a reader what an unused binding does, and milestone 92's machinery is the shape it would take, but no `unused_label` is emitted |
 | reading `while true { }` as endless | its condition is an expression, and the checker reads types rather than values — `loop { }` is the spelling that asks no condition (milestone 86) |
 | `!` in a position asking a structural question | `if panic("x") { }`, `for x in panic("x")`, and `r?` inside a `-> !` function are all refused: those sites ask "is it a `bool`/an `Iterator`/the same enum?", not "does it flow here?", and `!` answers none of them. Harmless, since the code below is unreachable either way |
 | tuple-struct struct-patterns `Pair { a, b }` | write the constructor spelling `Pair(a, b)` — "matching tuple struct with struct pattern syntax is not allowed" |

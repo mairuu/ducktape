@@ -1,0 +1,11 @@
+#! expect: warning[unused_label]: unused label 'blk
+# The block carrier, where an unread label says more than on a loop: no bare
+# `break` can name a block (m98), so nothing names this one and nothing can
+# leave the block early at all — it is an ordinary block wearing a name.
+use std::io::print;
+
+fun main() {
+    'blk: {
+        print("plain");
+    }
+}

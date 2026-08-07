@@ -537,6 +537,11 @@ typedef struct CheckLoop {
   // reachable only as the innermost loop, so an inner unlabelled loop never
   // hides an outer labelled one from a `break` that names it.
   LoopLabel label;
+  // did an exit ever *name* the label — the `unused_label` question. Only a
+  // labelled `break`/`continue` sets it: an unlabelled one reaches the
+  // innermost loop without spelling anything, so it is not a reader of the
+  // name.
+  bool used;
   // The join of every exit's value so far, or NULL while none has landed —
   // which is the whole of the target's type. NULL after the body means nothing
   // leaves (no break at all, or every one of them diverging before it does),

@@ -1,0 +1,10 @@
+#! expect: warning[unused_label]: unused label 'outer
+# A label on a `loop` that nothing names. The bare `break` is what makes the
+# rule a rule: it leaves the loop without spelling the name, so it is not a
+# reader of it. The other three carriers are one file each, because a warn
+# test matches a single substring and could not otherwise pin them apart.
+fun main() {
+    'outer: loop {
+        break;
+    }
+}

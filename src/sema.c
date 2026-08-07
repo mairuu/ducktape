@@ -4710,6 +4710,7 @@ static CheckLoop *check_loop_target(CheckCtx *ctx, LoopLabel label, Span span,
   }
   for (CheckLoop *loop = ctx->loops; loop != NULL; loop = loop->parent) {
     if (sv_equal(loop->label.name, label.name)) {
+      loop->used = true;
       return loop;
     }
   }
@@ -4737,6 +4738,23 @@ static void check_label_shadow(CheckCtx *ctx, LoopLabel label) {
       diag_note(ctx->diags, loop->label.span, "the enclosing %s is here", what);
       return;
     }
+  }
+}
+
+// Leave a break target, reporting a label nothing named. There is no `_`
+// escape hatch here and no need of one: every such hatch elsewhere exists
+// because some form *makes* you bind a name (a pattern names all its fields, a
+// signature names `self`), and nothing makes you write a label — so a label
+// that goes unread has no reason to have been typed. `@allow` remains for the
+// case where the name is documentation.
+static void check_loop_pop(CheckCtx *ctx, CheckLoop *frame) {
+  ctx->loops = frame->parent;
+  if (frame->label.name.len > 0 && !frame->used) {
+    // for a block this says more than for a loop: a bare `break` never names a
+    // block, so an unread label means nothing can leave it early at all, and
+    // the block is an ordinary one wearing a name.
+    diag_warning(ctx->diags, LINT_UNUSED_LABEL, frame->label.span,
+                 "unused label " SV_FMT, SV_ARG(frame->label.name));
   }
 }
 
@@ -8495,7 +8513,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     // evidence for no type), so with every exit a `break` the answer is theirs
     // alone — and with no exit at all the block is `!`, just like a `loop`.
     if (labelled) {
-      ctx->loops = frame.parent;
+      check_loop_pop(ctx, &frame);
       Span exit_span =
           block->tail_expr != NULL ? block->tail_expr->span : expr->span;
       check_join_exit(ctx, &frame, block->tail_expr, result, exit_span);
@@ -9119,7 +9137,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     ctx->loops = &frame;
     resolve_expr(ctx, wh->body, NULL);
     ctx->vscope = vscope_pop(ctx->vscope, ctx->diags);
-    ctx->loops = frame.parent;
+    check_loop_pop(ctx, &frame);
 
     result = bound ? ctx->tc->t_unit : ctx->tc->t_poison;
     break;
@@ -9138,7 +9156,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
                        .parent = ctx->loops};
     ctx->loops = &frame;
     resolve_expr(ctx, lp->body, NULL);
-    ctx->loops = frame.parent;
+    check_loop_pop(ctx, &frame);
 
     // this is the whole rule the keyword buys, now that a break can say what
     // it leaves with: the breaks are the only exits, so their join is the
@@ -9179,7 +9197,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     ctx->loops = &frame;
     resolve_expr(ctx, for_->body, NULL);
     ctx->vscope = vscope_pop(ctx->vscope, ctx->diags);
-    ctx->loops = frame.parent;
+    check_loop_pop(ctx, &frame);
 
     result = ctx->tc->t_unit;
     break;

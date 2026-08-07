@@ -40,7 +40,9 @@ fun classify(n: int) -> string {
 
 # a bare `break` inside a labelled block names the innermost *loop*, never the
 # block — so `4` here and not `100`, which is what labelling a block would cost
-# if it took the bare break away from the loop around it
+# if it took the bare break away from the loop around it. Nothing naming 'blk
+# is the whole point, so the `unused_label` it earns is allowed rather than fixed.
+@allow("unused_label")
 fun bare_break_leaves_the_loop() -> int {
     var n = 0;
     while n < 100 {
