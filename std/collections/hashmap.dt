@@ -27,6 +27,7 @@ use std::option::Option;
 use std::hash::{Hash, hash_of};
 use std::panic::panic;
 use std::iter::Iterator;
+use std::array;
 
 # The three states a slot can be in. `Tomb` is the price of open addressing: a
 # removal cannot simply empty a slot, because a probe that stopped there would
@@ -46,22 +47,14 @@ enum Slot<K, V> {
     Full(K, V),
 }
 
+# `Empty` carries no payload, so every free slot is the *same* interned instance
+# (milestone 67) — which is exactly the condition `fill` needs. Its one trap is
+# that it copies rather than clones, and a copied reference is n names for one
+# object; here that was already the case, because the loop this replaced pushed
+# the same singleton `n` times. A fieldless variant has no observable identity
+# for the sharing to be observable *through*.
 fun empty_slots<K, V>(n: int) -> [Slot<K, V>] {
-    var slots: [Slot<K, V>] = [];
-    # `Slot::Empty` used to need an annotated local here: the argument hint
-    # solved the variant only as far as `Slot<_, _>`, because `K` and `V` are
-    # named the same in this function as in the enum and the seeding step read
-    # that coincidence as "the hint says nothing". Fixed, so the constructor
-    # goes inline. It costs nothing to build one per slot either: `Empty`
-    # carries no payload, so every free slot is the *same* interned instance,
-    # and a fresh table of any size allocates once for its marker rather than
-    # `n` times.
-    var i = 0;
-    while i < n {
-        slots.push(Slot::Empty);
-        i += 1;
-    }
-    return slots;
+    return array::fill(n, Slot::Empty);
 }
 
 # The smallest power of two at least `n`, and never below 8 — a table small
@@ -407,8 +400,12 @@ impl<K: Hash, V> HashMap<K, V> {
     }
 
     # The keys, in the same unspecified order.
+    #
+    # The walk is over slots and cannot be shortened, but the answer's length is
+    # known before it starts — so `reserve` trades the log(live) regrowths, each
+    # copying everything written so far, for one allocation.
     fun keys(self) -> [K] {
-        var out: [K] = [];
+        var out: [K] = array::with_capacity(self.live);
         var it = self.iter();
         for pair in it {
             out.push(pair.0);
@@ -417,7 +414,7 @@ impl<K: Hash, V> HashMap<K, V> {
     }
 
     fun values(self) -> [V] {
-        var out: [V] = [];
+        var out: [V] = array::with_capacity(self.live);
         var it = self.iter();
         for pair in it {
             out.push(pair.1);

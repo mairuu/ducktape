@@ -1465,6 +1465,12 @@ goes; the ~15ns that stays is the allocation, which no native deletes. `clear`
 is the outlier only because its loop was *inside std* — it walked `pop_last`
 one element at a time to reach a state that is one assignment to `count`.
 
+`std::collections::hashmap` is the first consumer: `empty_slots` was this exact
+loop, and one `array::fill` makes `HashMap::with_capacity(20000)` 5.1x faster
+(34 → 6.5ns per slot). Building a map by insertion gains only 11%, which is the
+same rule read the other way — the probe, not the slot array, is where that
+workload's iterations are.
+
 **What this does not license.** A native's argument for existing is deleted
 iterations, not familiarity: a map in C would delete none (`std::collections`
 is already one interpreted probe per lookup either way, and `hash_mix` is
