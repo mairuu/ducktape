@@ -879,6 +879,7 @@ static String read_file(const char *path, Allocator *al) {
   char *buffer = al_alloc(al, sizeof(char) * (file_size + 1));
   if (buffer == NULL) {
     fprintf(stderr, "not enough memory to read '%s'.\n", path);
+    fclose(file);
     return str_null();
   }
 
@@ -886,6 +887,7 @@ static String read_file(const char *path, Allocator *al) {
   if (bytes_read < file_size) {
     fprintf(stderr, "could not read file '%s'.\n", path);
     al_free(al, buffer, sizeof(char) * (file_size + 1));
+    fclose(file);
     return str_null();
   }
 
@@ -895,7 +897,9 @@ static String read_file(const char *path, Allocator *al) {
   // the first of the two untrusted intakes (the other is an image's string
   // table). A literal has no `\u{}` escape, so raw source bytes are the only
   // route a String has to anything non-ASCII — checking the file once here is
-  // what lets every String downstream be valid UTF-8 by construction.
+  // what lets every String downstream be valid UTF-8 by construction. The
+  // embedded std does not come through here and is trusted rather than checked,
+  // which is a wart and written down as one.
   if (!utf8_validate(buffer, (int)bytes_read)) {
     fprintf(stderr, "'%s' is not valid UTF-8.\n", path);
     al_free(al, buffer, sizeof(char) * (file_size + 1));
