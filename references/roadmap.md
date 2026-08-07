@@ -673,6 +673,26 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   Remainder: `slice` takes two independent positions rather than a range, so a
   reversed pair is still a runtime error; and there is no reverse search.
 
+- **103. `String` → `string`, `Range` → `range`** (`TBD`) — the naming half the
+  positional work left. The case rule now has no exceptions: lowercase is an
+  immutable value with no identity, PascalCase has identity or was declared, so
+  `StringBuf` keeps its capital because which buffer you hold is observable.
+  Design: `language.md` "Types" + "Module-qualified paths" + the gaps table.
+  479 lines across 143 `.dt` files, plus `type_named_builtin` and the two type
+  printers; everything else was comment and prose.
+  **THE FINDING: a rename with no semantic content found a false diagnostic.**
+  Milestone 99's escape hatch for a builtin-named module — "it is reached
+  through the type anyway" — held only because `std::char` is all `impl char`.
+  Renaming the type made `std::string` the second such module and the first one
+  that bites: its free builders (`join`, `concat`, `from_chars`) stay free
+  because their receiver is a `[string]`, so nothing owns them, and
+  `string::concat(..)` now resolves the *type*. The note pointed the way out
+  "through their full path" — which is not a spelling the language has, since a
+  qualifier must be a bound single segment. The remedies that exist are
+  `use std::string::concat;` and `use std::string as strings;`, and the note
+  says that instead; `tests/fail/builtin_name_module_std.dt` pins it.
+  Remainder: the shadowing itself still stands, now with a std module behind it.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -698,9 +718,9 @@ nothing infers one.)
 1. **Growing std on top of the natives** — the mechanism landed in milestone
    16 with a deliberately small registry, and the pieces with a design question
    behind them are done: a growable `ObjArray` (milestone 23, so `std::array`
-   has `push`/`pop`), a growable text buffer (milestone 24, so a `String` can be
+   has `push`/`pop`), a growable text buffer (milestone 24, so a `string` can be
    *built* rather than concatenated), and string ordering (milestone 25, so
-   `impl Ord for String` exists and text sorts). What is left is breadth, and
+   `impl Ord for string` exists and text sorts). What is left is breadth, and
    each piece is one registry entry plus a decision about the type it needs.
    Every piece with a design question behind it is now done — the last open one,
    padding, is milestone 34 (below).
@@ -710,9 +730,9 @@ nothing infers one.)
    `(0..n).iter()`. The design question it recorded — what an array iterator
    holds, when the language has no borrow to hold — was answered "the array,
    and nothing snapshotted", which is what `for x in xs` re-reading the length
-   each turn already said. **A `String`'s characters as a walk** is the next of
+   each turn already said. **A `string`'s characters as a walk** is the next of
    these, milestone 61, and it answered the same question the other way for the
-   same kind of reason: a String is immutable, so its iterator snapshots. What
+   same kind of reason: a string is immutable, so its iterator snapshots. What
    is left of this item is ordinary breadth. **A sorted `[T]`** is milestone 62,
    and it needed nothing from the language at all — one `.dt` file whose whole
    content is decisions. **A map or set type** was the last piece with a design
@@ -833,26 +853,9 @@ as here.)
    to address — and milestone 63 showed the other way out of it, since
    `std::hash` simply declines to implement `Hash for float` at all.
 
-3. **The naming half of the string redesign: `String` should be `string`.**
-   The positional half is milestone 102; this is what it left. Milestone 99 kept
-   `String`, `StringBuf` and `Range` capitalised on the grounds that each "has an
-   impl block and a method API" — but `std/char.dt` is entirely `impl char`, so
-   that never separated them from the lowercase four, and milestones 101 and 102
-   settled it the rest of the way: a type whose UTF-8 is compiler-enforced, whose
-   cuts are made at positions the compiler hands out, and which a program could
-   not have written itself, is the least plausible member of that list. The rule
-   that covers every case without an exception is **lowercase = an immutable
-   value with no identity; PascalCase = has identity, or is declared** — so
-   `String` → `string` and `Range` → `range` move, `StringBuf` stays and stops
-   being an exception (it is mutable, so its identity is observable), and a
-   future `Bytes` stays for the same reason. `StrPos` stays too: it is declared,
-   in `std::text`, like any other struct.
-
-   Costs a rename of the same shape as 99's — 490 occurrences across 138 `.dt`
-   files at the time of measuring — plus the `type_named_builtin` entries. The
-   one argument against is that a Rust reader's `String` stops transferring for
-   free, which is worth little here: ducktape has no `str`/`String` split to
-   inherit, and `char`/`string` reads as the pair it is.
+3. **A packed `Bytes` object, with the milestone that first has something to
+   read.** The naming half of the string redesign is milestone 103; this is the
+   piece it left standing, and it was already decided there.
 
    **THE FINDING, on `byte`: it is not a scalar-shaped problem.** A new scalar
    buys type-safety and not one byte of memory — a `Value` is as wide as its
@@ -863,10 +866,12 @@ as here.)
    while "no unsigned integer type" sits in the warts below is the worst of both
    answers. So the byte story is a packed **`Bytes` object** whose elements are
    range-checked `int`s — one object kind, the shape `ObjStrBuf` already is. It
+   keeps the capital under milestone 103's rule, for the same reason
+   `StringBuf` does: it is mutable, so which buffer you hold is observable. It
    stays separate from `StringBuf`, and the difference between them is the
-   invariant itself: `StringBuf` charges at the door (only chars and Strings go
+   invariant itself: `StringBuf` charges at the door (only chars and strings go
    in) so `build()` is free, `Bytes` lets anything in so its exit
-   (`String::from_utf8`) validates. Nothing consumes `Bytes` until there is I/O,
+   (`string::from_utf8`) validates. Nothing consumes `Bytes` until there is I/O,
    so it ships with the milestone that first has something to read — the string
    work must only avoid foreclosing it, which `to_utf8`/`from_utf8` do. If a
    `byte` scalar is ever wanted anyway, it belongs to an unsigned-integer
@@ -970,7 +975,11 @@ via `Module.decl_base`) and is not part of the main line.
   a builtin name resolves before any module, so `char::` reaches the *type*'s
   items. That is why std's spelling works — `std::char` is all `impl char` — and
   why a free function in such a module has no bare path at all. Milestone 99
-  chose a note over a refusal here; the shadowing itself stands
+  chose a note over a refusal here; the shadowing itself stands, and milestone
+  103 made `std::string` the second instance and the first one that bites:
+  `join`/`concat`/`from_chars` now need `use std::string::join;` or
+  `use std::string as strings;`. A qualifier must be a bound single segment, so
+  there is no `std::string::concat(..)` spelling to fall back on either
 - an allow's grain is a whole **declaration**, since an attribute is what
   carries one. There is no statement or expression form, and none on a trait
   item — a default body is covered by its trait, one scope wider than it
@@ -1068,14 +1077,14 @@ via `Module.decl_base`) and is not part of the main line.
   `std::cmp` needs but cannot reach as a method without closing the
   `array → option → cmp` cycle (a method needs its impl visible; a free
   `@intrinsic` does not)
-- shipping an inherent method on a primitive widely (`impl String`, `impl<T> [T]`,
-  `impl char` since milestone 40, and a *second* `impl String` in `std::text`
+- shipping an inherent method on a primitive widely (`impl string`, `impl<T> [T]`,
+  `impl char` since milestone 40, and a *second* `impl string` in `std::text`
   since milestone 41) means a program importing that module cannot add its own
   inherent method of the same name. The `Display`/`Ord`-for-containers cost, one
   level over. **Milestone 68 gave it the missing diagnostic** — it is now an
   error where the impl is written rather than a silent first-wins shadowing — so
   what remains is the name budget itself, not the silence. Note this is only a
-  problem *across* names: two std impls for `String` coexist fine because their
+  problem *across* names: two std impls for `string` coexist fine because their
   names are disjoint, which is what milestone 41 relies on and what milestone 68
   turned from a convention into a rule
 - a native's C signature is not checked against its ducktape one — the registry
@@ -1102,7 +1111,7 @@ via `Module.decl_base`) and is not part of the main line.
   or a divide-back check the module has not been given a reason to write. So the
   `Option` it returns distinguishes "not a number" from a number, but not a
   number too large from one that fits
-- `String` ordering is raw bytes: no locale, no case-insensitive compare, no
+- `string` ordering is raw bytes: no locale, no case-insensitive compare, no
   Unicode normalisation, so `"Zebra"` sorts before `"apple"` and two strings
   that are canonically equivalent are simply different. Since milestone 26 a
   case-insensitive compare *is* expressible — `chars` plus `std::char::to_lower`
@@ -1112,25 +1121,25 @@ via `Module.decl_base`) and is not part of the main line.
   `is_alpha('é')` is false, `to_upper('é')` is unchanged, and nothing warns.
   Full Unicode case mapping is a table rather than a range test, and there is no
   way to ship a partial one that is not silently wrong for most of the world
-- a `String` is guaranteed valid UTF-8 (milestone 101), but a *position* into
+- a `string` is guaranteed valid UTF-8 (milestone 101), but a *position* into
   one is still a bare `int` byte offset, so cutting inside a character is a
   runtime error rather than something that cannot be written. An opaque
   `StrPos`, obtainable only from a search or a walk, would make it the latter
   and is roadmap item 3 below. The check itself is not the cost the byte-indexed
   API was avoiding — it is two O(1) tests at `slice` — but the *spelling* is
   still one that lets a program name a position it did not get from the string
-- nothing hands over a `String`'s bytes: `len` counts them, `matches_at`
+- nothing hands over a `string`'s bytes: `len` counts them, `matches_at`
   compares them, and there it stops. A `byte` scalar is the wrong shape for the
   gap (see item 3 below — it buys no packing, and 0..255 would be the only sized
   integer in a language that has none), so what fills it is a packed `Bytes`
   object, and nothing needs one until there is I/O to read
-- getting one `char` out of a String once meant building the whole `[char]`,
+- getting one `char` out of a string once meant building the whole `[char]`,
   since the conversion was the only reader. Fixed in milestone 61: `chars` is a
   lazy walk, so `s.chars().next()` decodes one character and
   `s.chars().take(3)` decodes three. The byte/character question is still
   answered milestone 26's way — the walk holds byte offsets and keeps them
-  private, so no *program* ever indexes a String by one
-- `Ord` ships for `int`, `float`, `char`, `String`, `Option<T>`, `[T]` and
+  private, so no *program* ever indexes a string by one
+- `Ord` ships for `int`, `float`, `char`, `string`, `Option<T>`, `[T]` and
   `(A, B)` (the last two as of milestone 36), so an array of strings sorts and a
   tuple compares field by field without a per-program impl. As with `Display`,
   shipping them takes the pair away from a program that would write its own, and
@@ -1143,14 +1152,14 @@ via `Module.decl_base`) and is not part of the main line.
   side the NaN is and a `[float]` with a NaN has a defined sort. What the
   placement ignores is the sign bit and payload: `-NaN` and `+NaN` are one
   order, unlike Rust's `total_cmp`, since nothing has needed to tell them apart.
-  `String` never had this problem: every byte string is ordered against every
+  `string` never had this problem: every byte string is ordered against every
   other
 - a `StringBuf` grows but never shrinks its *buffer*: `b.clear()` drops the
   length to zero so one buffer can be reused across iterations, but the capacity
   it grew to is kept, and released only when the buffer is collected
-- a `StringBuf` can be appended to from a `String`, a `char` (milestone 26) or an
+- a `StringBuf` can be appended to from a `string`, a `char` (milestone 26) or an
   `int`'s digits (`b.push_int(n)`, no `"{n}"` interned to carry them), but not
-  from a *slice* of a String, so a `b.push_slice(s, from, to)` that avoids
+  from a *slice* of a string, so a `b.push_slice(s, from, to)` that avoids
   interning the window first is the natural next entry; it has not been needed yet
 - a panic message can only name the value that caused it where the type
   parameter is bounded: `"{e}"` needs `E: Display`, and `Option`/`Result`'s

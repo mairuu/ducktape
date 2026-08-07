@@ -3,7 +3,7 @@
 # forwarding it to a function requiring a *different* trait is an error —
 # `impl Show for int` does not help, since `U` is not int here.
 trait Show {
-  fun show(self) -> String;
+  fun show(self) -> string;
 }
 
 trait Other {
@@ -11,15 +11,15 @@ trait Other {
 }
 
 impl Show for int {
-  fun show(self) -> String {
+  fun show(self) -> string {
     return "i";
   }
 }
 
-fun describe<T: Show>(v: T) -> String {
+fun describe<T: Show>(v: T) -> string {
   return v.show();
 }
 
-fun relay<U: Other>(v: U) -> String {
+fun relay<U: Other>(v: U) -> string {
   return describe(v);
 }

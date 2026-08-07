@@ -37,8 +37,8 @@ impl Iterator for Counter {
 struct Words { i: int }
 
 impl Iterator for Words {
-    type Item = String;
-    fun next(self) -> Option<String> {
+    type Item = string;
+    fun next(self) -> Option<string> {
         var v = self.i;
         self.i += 1;
         if v == 0 { return Option::Some("pear"); }
@@ -68,7 +68,7 @@ fun largest<I: Iterator>(it: I) -> Option<I.Item> where I.Item: Ord {
 
 # two predicates naming the same projection merge into one constraint, the same
 # reading `T: A, T: B` already gets — here the body needs both at once
-fun describe_smallest<I: Iterator>(it: I) -> String
+fun describe_smallest<I: Iterator>(it: I) -> string
     where I.Item: Ord, I.Item: Display
 {
     var best = it.next();
@@ -92,7 +92,7 @@ fun describe_smallest<I: Iterator>(it: I) -> String
 }
 
 # the same bound written with `+` instead of two predicates
-fun bounds_together<I: Iterator>(it: I) -> String where I.Item: Ord + Display {
+fun bounds_together<I: Iterator>(it: I) -> string where I.Item: Ord + Display {
     return describe_smallest(it);
 }
 

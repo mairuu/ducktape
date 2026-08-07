@@ -1,6 +1,6 @@
 # The other half of the vtable key: the trait *reference*, not the trait.
 #
-# `dyn Sink<int>` and `dyn Sink<String>` over one self type are two tables,
+# `dyn Sink<int>` and `dyn Sink<string>` over one self type are two tables,
 # because each names a different impl — the rule `cg_vtable_for` was written to
 # in milestone 56. A downcast reads its key from the operand's `dyn`, so it asks
 # about the same reference the value was written as, and one concrete type can
@@ -23,8 +23,8 @@ struct ints { n: int }
 impl Sink<int> for Any {
     fun put(self, v: int) -> int { v + self.n }
 }
-impl Sink<String> for Any {
-    fun put(self, _v: String) -> int { self.n }
+impl Sink<string> for Any {
+    fun put(self, _v: string) -> int { self.n }
 }
 impl Sink<int> for ints {
     fun put(self, v: int) -> int { v }
@@ -36,7 +36,7 @@ fun is_it<T, S: Sink<T>>(d: dyn Sink<T>) -> bool {
 
 fun main() {
     var a: dyn Sink<int> = Any { n: 1 };
-    var b: dyn Sink<String> = Any { n: 1 };
+    var b: dyn Sink<string> = Any { n: 1 };
 
     # recognised through either reference — the tables differ, the type does not
     print((a as? Any).is_some());
@@ -57,6 +57,6 @@ fun main() {
 #> true
     print(is_it::<int, ints>(a));
 #> false
-    print(is_it::<String, Any>(b));
+    print(is_it::<string, Any>(b));
 #> true
 }

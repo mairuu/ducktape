@@ -1,7 +1,7 @@
-#! expect: type 'S' does not implement trait 'into<String>'
+#! expect: type 'S' does not implement trait 'into<string>'
 # `U: into<T>` is checked with `T`'s own solution substituted in: the bound is
 # opened alongside the parameter it mentions, so what reaches the check is
-# `into<String>` and not the literal `into<T>`, which no impl heads and which
+# `into<string>` and not the literal `into<T>`, which no impl heads and which
 # would have made every such bound vacuous.
 
 trait into<T> {
@@ -19,5 +19,5 @@ fun conv<T, U: into<T>>(v: U) -> T {
 }
 
 fun main() {
-    var x: String = conv(S { n: 5 });
+    var x: string = conv(S { n: 5 });
 }

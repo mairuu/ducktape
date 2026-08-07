@@ -6,13 +6,13 @@ use std::io::print;
 use std::option::{Option, Some, None};
 use std::iter::{Iterator, DoubleEnded};
 
-trait Shape { fun name(self) -> String; }
+trait Shape { fun name(self) -> string; }
 struct Sq;
 struct Tri;
 struct Circle { r: int }
-impl Shape for Sq { fun name(self) -> String { return "sq"; } }
-impl Shape for Tri { fun name(self) -> String { return "tri"; } }
-impl Shape for Circle { fun name(self) -> String { return "circle{self.r}"; } }
+impl Shape for Sq { fun name(self) -> string { return "sq"; } }
+impl Shape for Tri { fun name(self) -> string { return "tri"; } }
+impl Shape for Circle { fun name(self) -> string { return "circle{self.r}"; } }
 
 # an `else if` chain: the else branch is an `if`, so the expectation threads
 # down it by the same recursion that carried it into the arms.
@@ -36,7 +36,7 @@ fun wrap<T: Shape>(v: T, c: bool) -> dyn Shape {
 
 struct Holder { s: dyn Shape }
 
-fun takes(s: dyn Shape) -> String { return s.name(); }
+fun takes(s: dyn Shape) -> string { return s.name(); }
 
 # an upcast in the arms: both branches are already trait objects, of a
 # subtrait, so each arm swaps tables rather than building one.

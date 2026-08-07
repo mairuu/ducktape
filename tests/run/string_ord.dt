@@ -1,9 +1,9 @@
-# `impl Ord for String` — the point where interning stops paying.
+# `impl Ord for string` — the point where interning stops paying.
 #
-# `==` on a String is a pointer compare, because two equal strings are one
+# `==` on a string is a pointer compare, because two equal strings are one
 # object in the heap's intern table. Ordering gets nothing from that table:
 # pointer order is allocation order. So the comparison is a real walk over the
-# bytes, and it is a native because ducktape has no handle on a String's
+# bytes, and it is a native because ducktape has no handle on a string's
 # contents finer than `slice` — and comparing two one-byte slices would need
 # exactly the ordering being defined.
 #> 0
@@ -29,7 +29,7 @@ use std::io::print;
 use std::cmp::{max, min, clamp};
 
 fun main() {
-    # the raw native, a String method. Equal strings are the same pointer,
+    # the raw native, a string method. Equal strings are the same pointer,
     # which is the one shortcut the intern table hands it
     print("apple".compare("apple"));
     print("apple".compare("banana"));
@@ -49,7 +49,7 @@ fun main() {
     print("apple".ge("apple"));
     print("Zebra".gt("apple")); # uppercase sorts first: byte order, not locale
 
-    # the generics of std::cmp, instantiated at String for the first time
+    # the generics of std::cmp, instantiated at string for the first time
     print(max("apple", "pear"));
     print(min("apple", "pear"));
     print(clamp("z", "a", "m"));
@@ -71,7 +71,7 @@ fun main() {
 
 # selection sort, so the comparison is the only interesting part — and since
 # milestone 38 it is spelled `<`, which desugars to `xs[j].cmp(xs[least]) < 0`.
-fun sort(xs: [String]) {
+fun sort(xs: [string]) {
     var i = 0;
     while i < xs.len() {
         var least = i;

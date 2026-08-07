@@ -63,7 +63,7 @@ void value_print(Value v, FILE *out) {
     fprintf(out, v.as.b ? "true" : "false");
     break;
   case VAL_CHAR: {
-    // undecorated, like the String below: `print` shows the character, not
+    // undecorated, like the string below: `print` shows the character, not
     // the literal that spells it. A char is always a scalar value, so the
     // encode cannot fail.
     char buf[UTF8_MAX_BYTES];
@@ -88,7 +88,7 @@ void value_print(Value v, FILE *out) {
       fprintf(out, "%s", val_as_string(v)->chars);
       break;
     case OBJ_STRBUF: {
-      // decorated, unlike the String above it: the whole of a StringBuf is
+      // decorated, unlike the string above it: the whole of a StringBuf is
       // that it is *not* one yet, so the debug view says which it is looking
       // at. The bytes are not NUL-terminated — only `build` produces that.
       ObjStrBuf *buf = val_as_strbuf(v);
@@ -207,7 +207,7 @@ bool value_equal(Value a, Value b) {
       return a.as.obj == b.as.obj; // interned
     case OBJ_STRBUF: {
       // *not* interned, so this is the one place the two kinds visibly differ:
-      // a String compares by pointer, a buffer has to compare its bytes.
+      // a string compares by pointer, a buffer has to compare its bytes.
       ObjStrBuf *x = val_as_strbuf(a), *y = val_as_strbuf(b);
       // an empty buffer has no allocation at all, so the length test comes
       // first: memcmp is not defined on a NULL pointer even for zero bytes.

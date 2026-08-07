@@ -185,7 +185,7 @@ static void skip_whitespace(Scanner *s) {
   }
 }
 
-// ── String scanning ──────────────────────────────────────────────────────────
+// ── string scanning ──────────────────────────────────────────────────────────
 
 static Token scan_string(Scanner *s) {
   while (!is_at_end(s) && peek(s) != '"') {
@@ -216,7 +216,7 @@ static Token scan_string(Scanner *s) {
       if (s->interp_depth < 8) {
         s->interp_braces[s->interp_depth++] = s->brace_depth;
       } else {
-        return error_token(s, "String interpolation is too deep.");
+        return error_token(s, "string interpolation is too deep.");
       }
 
       return make_token(s, TOKEN_INTERPOLATION);

@@ -17,7 +17,7 @@ use std::io::print;
 use std::sort;
 use std::string::from_chars;
 
-struct Row { tag: String, n: int }
+struct Row { tag: string, n: int }
 
 # a plain top-level function, passed by name: a comparator arrives as a value,
 # and a non-capturing function is a `VAL_FUN` rather than a closure
@@ -26,7 +26,7 @@ fun by_value(a: int, b: int) -> int {
 }
 
 fun main() {
-    # the comparator allocates on every call — a String per comparison — so the
+    # the comparator allocates on every call — a string per comparison — so the
     # heap grows while the sort holds its scratch
     var xs = [5, 3, 8, 1, 2];
     xs.sort_by(|a, b| "{a}:{b}".len() * 0 + (a - b));
@@ -40,7 +40,7 @@ fun main() {
         Row { tag: "b", n: 2 },
     ];
     rows.sort_by(|a, b| "{a.tag}{a.n}".compare("{b.tag}{b.n}"));
-    var labels: [String] = [];
+    var labels: [string] = [];
     for r in rows {
         labels.push("{r.tag}{r.n}");
     }

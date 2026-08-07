@@ -1,5 +1,5 @@
-#! expect: expected 'String' but got 'StringBuf'
-# The two are distinct types on purpose, and this is the whole reason: a String
+#! expect: expected 'string' but got 'StringBuf'
+# The two are distinct types on purpose, and this is the whole reason: a string
 # is interned, so it is filed under the hash of its bytes and two equal strings
 # are one pointer. A buffer whose bytes change cannot be that. `build` is the
 # only way across.
@@ -8,5 +8,5 @@ use std::string::buf;
 fun main() {
     var b = StringBuf::new();
     b.push("hello");
-    var s: String = b;
+    var s: string = b;
 }

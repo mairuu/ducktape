@@ -58,7 +58,7 @@ impl<T> Option<T> {
     }
 
     # `unwrap` with a message of your own, saying what was expected.
-    fun expect(self, message: String) -> T {
+    fun expect(self, message: string) -> T {
         match self {
             Option::Some(v) => { return v; },
             Option::None => { return panic(message); },
@@ -140,7 +140,7 @@ impl<T: Ord> Ord for Option<T> {
 # program that imports `Option` gets its rendering, and one that doesn't is
 # free to define its own.
 impl<T: Display> Display for Option<T> {
-    fun to_string(self) -> String {
+    fun to_string(self) -> string {
         match self {
             Option::Some(v) => { return "Some(" + v.to_string() + ")"; },
             Option::None => { return "None"; },

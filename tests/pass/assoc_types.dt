@@ -10,7 +10,7 @@ trait Drawable {
 }
 
 impl Drawable for Point {
-    type Color = String;
+    type Color = string;
 
     fun draw(self) {}
 

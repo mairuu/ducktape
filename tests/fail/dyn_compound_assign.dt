@@ -5,11 +5,11 @@
 # `Add`, not whether a `Tri` can become one.
 use std::ops::Add;
 
-trait Shape { fun name(self) -> String; }
+trait Shape { fun name(self) -> string; }
 struct Sq;
 struct Tri;
-impl Shape for Sq { fun name(self) -> String { return "sq"; } }
-impl Shape for Tri { fun name(self) -> String { return "tri"; } }
+impl Shape for Sq { fun name(self) -> string { return "sq"; } }
+impl Shape for Tri { fun name(self) -> string { return "tri"; } }
 
 fun main() {
     var x: dyn Shape = Sq;

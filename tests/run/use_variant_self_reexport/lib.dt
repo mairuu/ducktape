@@ -5,7 +5,7 @@ pub enum Event { A, B }
 pub use Event::A;
 use Event::B;
 
-pub fun b_name() -> String {
+pub fun b_name() -> string {
   match B {
     A => { return "a"; },
     B => { return "b"; },

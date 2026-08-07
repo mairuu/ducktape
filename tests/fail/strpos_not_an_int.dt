@@ -5,5 +5,5 @@
 use std::text;
 
 fun main() {
-    var _s: String = "hello".slice(0, 4);
+    var _s: string = "hello".slice(0, 4);
 }

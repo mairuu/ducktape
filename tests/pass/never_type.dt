@@ -15,7 +15,7 @@ fun an_int() -> int {
     return unreachable();
 }
 
-fun a_string() -> String {
+fun a_string() -> string {
     return unreachable();
 }
 

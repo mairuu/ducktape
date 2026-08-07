@@ -1,6 +1,6 @@
 #! expect: expected a positive count, got -3
 # Saying more than "assertion failed" means saying it yourself. The message is
-# an ordinary interpolated String, built before the call like any argument.
+# an ordinary interpolated string, built before the call like any argument.
 use std::assert::assert_with;
 
 fun check(n: int) {

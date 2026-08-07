@@ -272,7 +272,7 @@ typedef enum {
 static bool parse_path(Parser *p, PathParseMode mode, Path *out);
 
 // The `<..>` after a `dyn Trait`: the trait's own type arguments, then its
-// associated-type bindings (`<int, Item = String>`). Writes each list into its
+// associated-type bindings (`<int, Item = string>`). Writes each list into its
 // out-parameter and returns false on a parse error.
 static bool parse_dyn_args(Parser *p, TypeNode ***out_args, int *out_arg_count,
                            AssocBindingNode **out_bindings,
@@ -515,7 +515,7 @@ static bool parse_dyn_args(Parser *p, TypeNode ***out_args, int *out_arg_count,
     if (bindings_count > 0) {
       error_at(p, current_tok_span(p),
                "a trait's type arguments come before its associated-type "
-               "bindings, as in 'dyn Trait<int, Item = String>'");
+               "bindings, as in 'dyn Trait<int, Item = string>'");
       return false;
     }
 

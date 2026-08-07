@@ -41,14 +41,14 @@ fun square<T: Scale>(v: T) -> T { return v.scale(v); }
 fun square_explicit<T: Scale<T>>(v: T) -> T { return v.scale(v); }
 
 # a default may be a concrete type rather than `Self`.
-trait Joined<Sep = String> {
-    fun joined(self, sep: Sep) -> String;
+trait Joined<Sep = string> {
+    fun joined(self, sep: Sep) -> string;
 }
 
-struct Pair { a: String, b: String }
+struct Pair { a: string, b: string }
 
 impl Joined for Pair {
-    fun joined(self, sep: String) -> String { return "{self.a}{sep}{self.b}"; }
+    fun joined(self, sep: string) -> string { return "{self.a}{sep}{self.b}"; }
 }
 
 fun main() {

@@ -32,8 +32,8 @@ impl Iterator for Counter {
 struct Words { i: int }
 
 impl Iterator for Words {
-    type Item = String;
-    fun next(self) -> Option<String> {
+    type Item = string;
+    fun next(self) -> Option<string> {
         if self.i >= 3 { return Option::None; }
         var v = self.i;
         self.i += 1;
@@ -83,7 +83,7 @@ fun main() {
 #> 4
 
     # the flattened element type is the *inner* iterator's, not the source's:
-    # an int source with a String inner yields Strings
+    # an int source with a string inner yields Strings
     print(Counter::to(2).flat_map(|_n| Words { i: 0 }).collect());
 #> [ab, , c, ab, , c]
 

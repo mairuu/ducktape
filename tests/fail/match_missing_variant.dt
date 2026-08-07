@@ -7,7 +7,7 @@ enum Shape {
     Point,
 }
 
-fun name(s: Shape) -> String {
+fun name(s: Shape) -> string {
     return match s {
         Shape::Circle(_) => "circle",
         Shape::Rect { w: _, h: _ } => "rect",

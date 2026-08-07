@@ -1,11 +1,11 @@
 # a generic definition in a dependency: it gets no slot at link time, and the
 # copies come from call sites in another module entirely.
 pub trait Label {
-  fun label(self) -> String;
+  fun label(self) -> string;
 
   # a default body: written here, but instantiated only at the receiver types
   # the importer's impls introduce — its copies come from another module too.
-  fun shout(self) -> String {
+  fun shout(self) -> string {
     return "{self.label()}!";
   }
 }
@@ -29,12 +29,12 @@ pub fun swap<T>(p: Pair<T>) -> Pair<T> {
   return Pair { a: p.b, b: p.a };
 }
 
-pub fun tag<T: Label>(v: T) -> String {
+pub fun tag<T: Label>(v: T) -> string {
   return "<{v.label()}>";
 }
 
 # through a bound, the body a call reaches may be an impl's method or the
 # trait's default — only the instantiated `T` decides which
-pub fun loud<T: Label>(v: T) -> String {
+pub fun loud<T: Label>(v: T) -> string {
   return v.shout();
 }

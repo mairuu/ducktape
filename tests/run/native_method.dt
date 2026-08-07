@@ -15,9 +15,9 @@
 use std::io::print;
 
 # A native method: its body is the C function `string_len`, reached by name.
-impl String {
+impl string {
     @native("string_len") fun byte_count(self) -> int;
-    @native("string_slice") fun sub(self, from: int, to: int) -> String;
+    @native("string_slice") fun sub(self, from: int, to: int) -> string;
 }
 
 # An intrinsic method: `self.elem_count()` lowers to the OP_LEN opcode inline,
@@ -30,7 +30,7 @@ impl<T> [T] {
 # A native method satisfying a trait: it takes an ordinary vtable slot, so a
 # `dyn` receiver dispatches to it dynamically like any other method.
 trait Measure { fun size(self) -> int; }
-impl Measure for String {
+impl Measure for string {
     @native("string_len") fun size(self) -> int;
 }
 

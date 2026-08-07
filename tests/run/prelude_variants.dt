@@ -8,7 +8,7 @@ fun half(n: int) -> Option<int> {
   return None;
 }
 
-fun parse(s: String) -> Result<int, String> {
+fun parse(s: string) -> Result<int, string> {
   if s == "1" {
     return Ok(1);
   }

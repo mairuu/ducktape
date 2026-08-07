@@ -325,7 +325,7 @@ EXPONENT       = ( "e" | "E" ) ( "+" | "-" )? DIGIT+ ;
 (* ── strings and characters ───────────────────────────────────────────── *)
 
 interpString   = '"' ( TEXT | "{" expr formatSpec? "}" )* '"' ;
-                 (* segments must be int/float/bool/char/String, or a type
+                 (* segments must be int/float/bool/char/string, or a type
                     implementing std::fmt::Display; escapes:
                     \n \t \r \" \\ \{ *)
 formatSpec     = ":" ( CHAR? ( "<" | ">" | "^" ) INT ( "." INT )?

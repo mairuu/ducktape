@@ -57,6 +57,6 @@ fun main() {
     print([(1, 9), (1, 2)].cmp([(1, 9), (1, 3)]));
     print([[1, 2], [3]].cmp([[1, 2], [4]]));
 
-    # String elements, so the array impl reaches impl Ord for String
+    # string elements, so the array impl reaches impl Ord for string
     print(["apple", "pear"].cmp(["apple", "peach"]));
 }

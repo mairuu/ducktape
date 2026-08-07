@@ -21,13 +21,13 @@ trait Shape {
 }
 
 trait Named {
-    fun name(self) -> String;
+    fun name(self) -> string;
 }
 
 # two supers at once, and a default body leaning on both: inside a trait, `Self`
 # is bounded by the trait being declared, so it offers the closure too.
 trait Described: Shape + Named {
-    fun describe(self) -> String where Self.Unit: Display {
+    fun describe(self) -> string where Self.Unit: Display {
         return "{self.name()} of {self.area()}";
     }
 }
@@ -36,7 +36,7 @@ trait Described: Shape + Named {
 trait Tagged: Described {
     # a `where` on the signature is an obligation each call site discharges, so
     # calling a method that carries one means carrying it too
-    fun tag(self) -> String where Self.Unit: Display {
+    fun tag(self) -> string where Self.Unit: Display {
         return "[{self.describe()}]";
     }
 }
@@ -49,7 +49,7 @@ impl Shape for Sq {
     fun area(self) -> int { return self.side * self.side; }
 }
 impl Named for Sq {
-    fun name(self) -> String { return "square"; }
+    fun name(self) -> string { return "square"; }
 }
 impl Described for Sq {}
 impl Tagged for Sq {}
@@ -59,11 +59,11 @@ impl Shape for Dot {
     fun area(self) -> int { return 0; }
 }
 impl Named for Dot {
-    fun name(self) -> String { return "dot"; }
+    fun name(self) -> string { return "dot"; }
 }
 impl Described for Dot {
     # an impl may override a provided method; the super's are inherited as usual
-    fun describe(self) -> String { return "just a dot"; }
+    fun describe(self) -> string { return "just a dot"; }
 }
 
 # one bound, three traits' worth of methods — and `Self.Unit` reached through
@@ -76,11 +76,11 @@ fun report<T: Tagged>(v: T) where T.Unit: Display {
 
 # a bound on the sub satisfies a parameter bounded by the super: the entailment
 # read in the other direction
-fun shout<T: Named>(v: T) -> String {
+fun shout<T: Named>(v: T) -> string {
     return "{v.name()}!";
 }
 
-fun relay<T: Described>(v: T) -> String {
+fun relay<T: Described>(v: T) -> string {
     return shout(v);
 }
 

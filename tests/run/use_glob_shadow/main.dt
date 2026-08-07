@@ -10,7 +10,7 @@ use pal::*;
 use other::Tag;     # and written after it
 
 struct Swatch;
-impl Swatch { fun name() -> String { return "mine"; } }
+impl Swatch { fun name() -> string { return "mine"; } }
 
 fun main() {
     print(Badge::name());

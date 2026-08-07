@@ -1,4 +1,4 @@
-#! expect: 'Words' cannot be a 'dyn Iterator<Item = int>': it implements 'Iterator' with 'Item' = 'String'
+#! expect: 'Words' cannot be a 'dyn Iterator<Item = int>': it implements 'Iterator' with 'Item' = 'string'
 # Implementing the trait is not the whole question a `dyn` asks, and a downcast
 # asks it in the other direction: a type whose impl binds a different associated
 # type satisfies `Iterator` and still can never be *behind this* trait object.
@@ -17,10 +17,10 @@ impl Iterator for Count {
     }
 }
 
-struct Words { w: String }
+struct Words { w: string }
 impl Iterator for Words {
-    type Item = String;
-    fun next(self) -> Option<String> { return Option::None; }
+    type Item = string;
+    fun next(self) -> Option<string> { return Option::None; }
 }
 
 fun main() {

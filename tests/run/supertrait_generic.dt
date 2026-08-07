@@ -26,10 +26,10 @@ impl Src<int> for Five {
 }
 impl Twice<int> for Five {}
 
-impl Src<String> for Word {
-    fun get(self) -> String { return "hi"; }
+impl Src<string> for Word {
+    fun get(self) -> string { return "hi"; }
 }
-impl Twice<String> for Word {}
+impl Twice<string> for Word {}
 
 # `S: Twice<T>` entails `S: Src<T>`, arguments and all — trait references are
 # interned, so the comparison covers them without a special case
@@ -48,7 +48,7 @@ fun main() {
 #> (hi, hi)
     print(both::<int, Five>(Five));
 #> (5, 5)
-    print(both::<String, Word>(Word));
+    print(both::<string, Word>(Word));
 #> (hi, hi)
 
     # and through a trait object, whose vtable carries the super's `get`

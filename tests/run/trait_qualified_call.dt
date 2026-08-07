@@ -45,8 +45,8 @@ impl Pack<int> for Brick {
     }
 }
 
-impl Pack<String> for Brick {
-    fun pack(self, _item: String) -> int {
+impl Pack<string> for Brick {
+    fun pack(self, _item: string) -> int {
         return self.kg;
     }
 }
@@ -70,5 +70,5 @@ fun main() {
     var b = Brick { kg: 10 };
     var word = "x";
     print("{Pack::<int>::pack(b, 5)}");    # the int impl: 10 + 5
-    print("{Pack::<String>::pack(b, word)}"); # the String impl: 10
+    print("{Pack::<string>::pack(b, word)}"); # the string impl: 10
 }

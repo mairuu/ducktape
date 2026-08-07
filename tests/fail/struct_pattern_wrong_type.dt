@@ -1,10 +1,10 @@
 #! expect: struct pattern 'B' does not match expected type 'A'
 # the path names *a* struct, but field types are read off it while the value
-# has A's layout — so without this check `x` binds as String over an int.
+# has A's layout — so without this check `x` binds as string over an int.
 use std::io::print;
 
 struct A { x: int }
-struct B { x: String }
+struct B { x: string }
 
 fun main() {
     var a = A { x: 1 };

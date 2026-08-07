@@ -86,7 +86,7 @@ impl<T, E> Result<T, E> {
 
     # `unwrap` with a message of your own — the message says what the caller
     # was expecting, which is the part a stack trace cannot recover.
-    fun expect(self, message: String) -> T {
+    fun expect(self, message: string) -> T {
         match self {
             Result::Ok(v) => { return v; },
             Result::Err(_) => { return panic(message); },
@@ -123,7 +123,7 @@ impl<T, E> Result<T, E> {
 # As with `Option`, rendered the way it is written, and implemented here rather
 # than in `std::fmt` so that the impl travels with the type.
 impl<T: Display, E: Display> Display for Result<T, E> {
-    fun to_string(self) -> String {
+    fun to_string(self) -> string {
         match self {
             Result::Ok(v) => { return "Ok(" + v.to_string() + ")"; },
             Result::Err(e) => { return "Err(" + e.to_string() + ")"; },

@@ -1,5 +1,5 @@
-#! expect: no method named 'filter' found for type 'Range'
-# The same seam on the other source: a `Range` gains exactly one method,
+#! expect: no method named 'filter' found for type 'range'
+# The same seam on the other source: a `range` gains exactly one method,
 # `iter()`, and everything else is on the `RangeIter` that returns.
 fun main() {
     var evens = (0..10).filter(|v| v % 2 == 0);

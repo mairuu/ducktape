@@ -19,7 +19,7 @@ struct Point { x: int, y: int }
 
 # an `else if var` chains the way an `else if` does: the second pattern is
 # tested only once the first has failed.
-fun describe(s: Shape) -> String {
+fun describe(s: Shape) -> string {
     if var Shape::Circle(r) = s {
         return "circle {r}";
     } else if var Shape::Rect(w, h) = s {

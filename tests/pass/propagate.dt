@@ -4,11 +4,11 @@ enum Result<T, E> {
     Err(E),
 }
 
-fun parse_num(_s: String) -> Result<int, String> {
+fun parse_num(_s: string) -> Result<int, string> {
     Result::Ok(42)
 }
 
-fun double_num(s: String) -> Result<int, String> {
+fun double_num(s: string) -> Result<int, string> {
     var n = parse_num(s)?;
     Result::Ok(n * 2)
 }

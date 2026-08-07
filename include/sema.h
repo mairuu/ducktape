@@ -125,7 +125,7 @@ bool impl_shadows_enum_variant(ImplDef *impl, StringView *out_name);
 // `trait_ref` narrows the search to impls of that trait reference (a TY_TRAIT,
 // with its type arguments), or NULL for "any trait" — which is what a receiver
 // wants, since a method may come from any impl. Codegen passes one when the
-// call was resolved through a bound: `Into<int>` and `Into<String>` are two
+// call was resolved through a bound: `Into<int>` and `Into<string>` are two
 // impls for one type, and only the bound says which body was meant.
 MethodDef *impl_index_method(ImplIndex *idx, Type *self_type, Type *trait_ref,
                              StringView name, Type *ret_hint,

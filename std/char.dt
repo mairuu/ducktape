@@ -1,9 +1,9 @@
 # std::char — a Unicode scalar value.
 #
-# A `String` is bytes and a `char` is a character, and those are two different
+# A `string` is bytes and a `char` is a character, and those are two different
 # things: `std::string::len` counts bytes, `slice` cuts at byte offsets, and
 # `compare` walks bytes. That was consistent while nothing could look *inside*
-# a String, and a char is the first thing that can — so the two views stay
+# a string, and a char is the first thing that can — so the two views stay
 # apart and the crossing between them is `std::string::chars`, a conversion,
 # never an index. There is deliberately no `char_at(s, i)`: a byte offset is
 # not a character position, and that spelling would make confusing the two the

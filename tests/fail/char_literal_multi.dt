@@ -1,5 +1,5 @@
 #! expect: a character literal holds exactly one character
-# `'ab'` is two characters. A String is the type that holds a sequence of them,
+# `'ab'` is two characters. A string is the type that holds a sequence of them,
 # and the two spellings are what tell the reader which is meant.
 fun main() {
     var c = 'ab';

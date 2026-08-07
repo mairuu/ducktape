@@ -51,7 +51,7 @@ fun blank_renamed<A, B>() -> Slot<A, B> {
     return Slot::Empty;
 }
 
-fun describe<K, V>(s: Slot<K, V>) -> String {
+fun describe<K, V>(s: Slot<K, V>) -> string {
     return match s {
         Slot::Empty => "empty",
         Slot::Full(_, _) => "full",
@@ -60,8 +60,8 @@ fun describe<K, V>(s: Slot<K, V>) -> String {
 
 fun main() {
     # one generic function, two instantiations in one program
-    var a: [Slot<int, String>] = fill::<int, String>(3);
-    var b: [Slot<String, int>] = fill::<String, int>(2);
+    var a: [Slot<int, string>] = fill::<int, string>(3);
+    var b: [Slot<string, int>] = fill::<string, int>(2);
     print("{a.len()} {b.len()}");
 
     var d0 = describe(a[0]);
@@ -77,10 +77,10 @@ fun main() {
     };
     print("{payload}");
 
-    var one: Slot<int, String> = blank::<int, String>();
-    var two: Slot<String, int> = blank_renamed::<String, int>();
+    var one: Slot<int, string> = blank::<int, string>();
+    var two: Slot<string, int> = blank_renamed::<string, int>();
     var three: Slot<Slot<int, int>, int> = nested::<int>();
-    var _four: Marker<String> = marker::<String>();
+    var _four: Marker<string> = marker::<string>();
     var five = a[3].cleared();
 
     var d1 = describe(one);

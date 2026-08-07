@@ -34,28 +34,28 @@ enum Opt {
     None,
 }
 
-fun describe_int(n: int) -> String {
+fun describe_int(n: int) -> string {
     return match n {
         1 => "literal-one",
         _ => "other-{n}",
     };
 }
 
-fun describe_point(p: Point) -> String {
+fun describe_point(p: Point) -> string {
     return match p {
         Point { x: 1, y } if y > 0 => "struct x=1 y positive: {y}",
         Point { x, y } => "struct fallback {x} {y}",
     };
 }
 
-fun describe_pair(pair: (int, int)) -> String {
+fun describe_pair(pair: (int, int)) -> string {
     return match pair {
         (1, 2) => "tuple exact",
         (a, b) => "tuple bound {a} {b}",
     };
 }
 
-fun describe_opt(o: Opt) -> String {
+fun describe_opt(o: Opt) -> string {
     return match o {
         Opt::Some(Point { x: 3, y }) => "nested x=3 y={y}",
         Opt::Some(Point { x, y }) => "nested other {x} {y}",
@@ -63,7 +63,7 @@ fun describe_opt(o: Opt) -> String {
     };
 }
 
-fun describe_shape(s: Shape) -> String {
+fun describe_shape(s: Shape) -> string {
     return match s {
         Shape::Circle(_) => "Circle area",
         Shape::Rect { w: _, h: _ } => "Rect area",
@@ -71,7 +71,7 @@ fun describe_shape(s: Shape) -> String {
     };
 }
 
-fun describe_tuple_struct(p: Pair) -> String {
+fun describe_tuple_struct(p: Pair) -> string {
     return match p {
         Pair(a, b) => "tuple struct {a} {b}",
     };

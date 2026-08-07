@@ -39,7 +39,7 @@
 # `std::char` for `c.code()`, which is the whole of `impl Hash for char`. It is
 # an impl-poor module — one inherent `impl char` and nothing else — so the
 # transitive impl visibility this hands every dependent costs about as little as
-# an import can. `std::string` is deliberately *not* imported: a String's hash
+# an import can. `std::string` is deliberately *not* imported: a string's hash
 # comes from the native below, which needs no method on the type.
 use std::char;
 
@@ -65,12 +65,12 @@ fun len<T>(xs: [T]) -> int;
 @native("hash_mix")
 fun mix(state: int, value: int) -> int;
 
-# A String's hash, which the heap computed when it interned the bytes and kept
+# A string's hash, which the heap computed when it interned the bytes and kept
 # in order to find the string's bucket. So this is a **field read**, and the one
 # type whose hash would otherwise be a walk over its bytes is the one type here
 # that costs nothing.
 @native("hash_string")
-fun string_hash(s: String) -> int;
+fun string_hash(s: string) -> int;
 
 # ── the accumulator ───────────────────────────────────────────────────────────
 
@@ -100,7 +100,7 @@ impl Hasher {
         self.state = mix(self.state, n);
     }
 
-    fun write_string(self, s: String) {
+    fun write_string(self, s: string) {
         self.state = mix(self.state, string_hash(s));
     }
 
@@ -156,7 +156,7 @@ impl Hash for int {
     }
 }
 
-impl Hash for String {
+impl Hash for string {
     fun hash(self, h: Hasher) {
         h.write_string(self);
     }

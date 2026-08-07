@@ -51,7 +51,7 @@ fun main() {
     var three = "three";
     var missing = "nope";
 
-    var m: HashMap<String, int> = HashMap::new();
+    var m: HashMap<string, int> = HashMap::new();
     print("empty: {m.len()} {m.is_empty()}");
 
     m.insert(one, 1);

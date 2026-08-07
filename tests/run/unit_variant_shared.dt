@@ -39,12 +39,12 @@ struct Marker;
 # a method on a fieldless struct receives the shared object as `self`, which is
 # the one place the sharing could have shown up as a wrong receiver
 impl Display for Marker {
-    fun to_string(self) -> String {
+    fun to_string(self) -> string {
         return "Marker";
     }
 }
 
-fun describe(s: Slot) -> String {
+fun describe(s: Slot) -> string {
     match s {
         Slot::Empty => { return "Empty"; },
         Slot::Tomb => { return "Tomb"; },

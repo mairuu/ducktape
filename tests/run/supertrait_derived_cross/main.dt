@@ -9,8 +9,8 @@ use traits::{Greet, Loud, greet};
 struct P;
 
 impl Loud for P {
-    fun name(self) -> String { return "p"; }
-    fun shout(self) -> String { return "HI"; }
+    fun name(self) -> string { return "p"; }
+    fun shout(self) -> string { return "HI"; }
 }
 
 fun main() {

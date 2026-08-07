@@ -10,7 +10,7 @@ use std::io::print;
 struct Tag;
 
 impl Display for Tag {
-    fun to_string(self) -> String { return "tag"; }
+    fun to_string(self) -> string { return "tag"; }
 }
 
 fun biggest<T: Ord>(a: T, b: T) -> T {

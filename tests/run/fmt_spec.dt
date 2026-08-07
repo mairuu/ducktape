@@ -1,7 +1,7 @@
 # A `{v:>8}` format spec (milestone 35) is pure front-end sugar: the checker
 # desugars it into the `std::string::pad_*` and `std::fmt::float` calls it would
 # otherwise nest in the braces, so nothing downstream of the checker changes. The
-# value is rendered to a String first — through `float` for a precision, through
+# value is rendered to a string first — through `float` for a precision, through
 # the ordinary segment path otherwise — and then padded, which is why a spec is
 # only ever shorthand and never a new runtime. The imports below are what the
 # desugaring needs *present in the program*; a user need not name them, and here
@@ -27,7 +27,7 @@ fun main() {
     print("[{42:<6}]");
     print("[{42:^7}]");
 
-    # a String value pads the same way a number does
+    # a string value pads the same way a number does
     print("[{"hi":>6}]");
 
     # a fill character, written as a char literal so it tokenises unambiguously;

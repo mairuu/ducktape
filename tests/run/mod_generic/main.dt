@@ -14,13 +14,13 @@ use std::io::print;
 use util::{Pair, swap, tag, loud, Label};
 
 impl Label for int {
-  fun label(self) -> String {
+  fun label(self) -> string {
     return "int {self}";
   }
 }
 
 impl Label for bool {
-  fun label(self) -> String {
+  fun label(self) -> string {
     return "bool {self}";
   }
 }
@@ -30,7 +30,7 @@ fun main() {
   print(p.left());
   print(swap(p).left());
 
-  var s = Pair::<String>::new("a", "b");
+  var s = Pair::<string>::new("a", "b");
   print(swap(s).left());
 
   print(tag(7));

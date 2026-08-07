@@ -22,15 +22,15 @@ use std::io::print;
 fun id(n: int) -> int { n }
 fun add(a: int, b: int) -> int { a + b }
 
-trait Shape { fun name(self) -> String; }
+trait Shape { fun name(self) -> string; }
 struct Sq { n: int }
 struct Ci { n: int }
-impl Shape for Sq { fun name(self) -> String { "square" } }
-impl Shape for Ci { fun name(self) -> String { "circle" } }
+impl Shape for Sq { fun name(self) -> string { "square" } }
+impl Shape for Ci { fun name(self) -> string { "circle" } }
 
 # the shape the feature exists for: an early answer with no sentinel to invent
 # and no flag to check on the way out
-fun classify(n: int) -> String {
+fun classify(n: int) -> string {
     'a: {
         if n < 0 { break 'a "negative"; }
         if n == 0 { break 'a "zero"; }
@@ -133,7 +133,7 @@ fun under_a_pending_value(k: int) -> int {
 
 # the `dyn` expectation reaches every exit, the tail included — m82's coercion
 # sites, one per exit rather than one per arm
-fun pick(c: bool) -> String {
+fun pick(c: bool) -> string {
     var s: dyn Shape = 'a: {
         if c { break 'a Sq { n: 1 }; }
         Ci { n: 2 }

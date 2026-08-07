@@ -7,7 +7,7 @@ shift, symbols don't.
 
 Hand-written; `scanner_tokenise_all` produces the whole token array up front.
 Tokens carry a `StringView` lexeme borrowed from the source buffer plus
-line/col. String interpolation is lexed with a brace-depth stack
+line/col. string interpolation is lexed with a brace-depth stack
 (`interp_braces`): `"a {x} b"` becomes `TOKEN_INTERPOLATION` segments, and a
 `}` at the recorded depth resumes string scanning. Logic operators are the
 keywords `and`/`or`/`not`; `|` is `TOKEN_PIPE` (closure delimiter only).
@@ -734,7 +734,7 @@ there more than one candidate". `assoc_candidates_differ_in_args` asks whether
 the candidates disagree about the arguments they *take*, comparing parameter
 lists only:
 
-- `into<Fahrenheit>` and `into<String>` for `Celsius` both take `(Celsius)` and
+- `into<Fahrenheit>` and `into<string>` for `Celsius` both take `(Celsius)` and
   differ in their return type. The return-type tie-break is what settles them,
   and running argument selection would report an ambiguity instead.
 - A supertrait-derived impl (milestone 74) shares the written impl's `MethodDef`
@@ -872,10 +872,10 @@ so the flag and all three of its readers are gone.
 
 ### Interpolation and `Display`
 
-`"{v}"` has to turn `v` into a String, and the question that shapes the whole
+`"{v}"` has to turn `v` into a string, and the question that shapes the whole
 design is *who decides how*. Two answers, and both are used:
 
-- **A primitive renders itself.** int, float, bool and String are handled by
+- **A primitive renders itself.** int, float, bool and string are handled by
   the VM's `stringify` (`src/vm.c`), which has known how since the feature
   existed — char joined them in milestone 26, rendered by `utf8_encode`.
   `check_interpol_seg` lets those five through untouched — no call is emitted
@@ -889,7 +889,7 @@ that is what `check_interpol_seg` rewrites it into: it builds an
 consequence is the whole point — dispatch through a trait bound, through a
 `dyn`, an inherited default body, and monomorphising the instance all arrive
 already working, and **codegen, `OP_INTERP`, the VM and the image format need
-no change at all**, because the segment now simply evaluates to a String, which
+no change at all**, because the segment now simply evaluates to a string, which
 `stringify` passes straight through.
 
 Two details make the rewrite safe:
@@ -923,12 +923,12 @@ body, answer from the trait they name.
 spec (milestone 35) is parsed into a `FormatSpec` on the `interpolSeg` — one
 alignment (`<` `>` `^`) with a width, an optional fill char, and an optional
 `.N` precision, or a `.N` alone — and `check_interpol_seg` rewrites the segment
-into ordinary calls: the value is rendered to a `String` (through
+into ordinary calls: the value is rendered to a `string` (through
 `std::fmt::float` for a precision, through a nested `{v}` interpolation
 otherwise, so a primitive and a `Display` type render the same way they always
 do), and if a width was given the render is wrapped in the matching
 `std::string::pad_start`/`pad_end`/`pad_center`. Nothing downstream of the
-checker sees a `FormatSpec`: the segment simply evaluates to a `String`, so
+checker sees a `FormatSpec`: the segment simply evaluates to a `string`, so
 codegen, `OP_INTERP`, the VM and the image format are untouched — the same shape
 the `to_string` rewrite has.
 
@@ -948,7 +948,7 @@ two-segment path (so codegen skips the local-name lookup) rather than routing
 through `resolve_callee`, which resolves by name and would fail.
 
 The `pad_*` are non-generic ducktape functions and `float` a non-generic native,
-so the calls need no inference — the render is a `String`, the width and
+so the calls need no inference — the render is a `string`, the width and
 precision `int` literals, the fill a `char` literal, all correct by
 construction, which is why the rewrite validates only the value's own type (a
 precision requires a `float`).
@@ -966,7 +966,7 @@ it builds an `EXPR_METHOD_CALL` for `a.cmp(b)`, resolves it with
 re-resolve), then sets `binary->left` to that call and `binary->right` to a `0`
 literal, leaving the operator untouched. The outer node is now an `int OP int`
 comparison — so codegen, `OP_LT` and the VM need no change, the mirror of the
-`to_string` rewrite evaluating to a `String`.
+`to_string` rewrite evaluating to a `string`.
 
 Two things carry over from the `Display` design intact:
 
@@ -1027,7 +1027,7 @@ of overwriting the site, because a `+=` has to keep its own node.
 #### A compound assignment asks the same question (milestone 83)
 
 `a op= b` **is** `a = a op b`, and `resolve_arith_op` is that sentence factored
-out — the String case, the numeric widening, and the fallback to
+out — the string case, the numeric widening, and the fallback to
 `rewrite_ops_call` — so `EXPR_BINARY` and `EXPR_ASSIGN` cannot disagree about
 what an operator means. `compound_binary_op` maps `+=` to `+`, which is the
 whole language rule.
@@ -1209,9 +1209,9 @@ The table is a process global, because pointer identity means two `Type *`
 compare equal only if one table produced them. Its entries — and the array —
 are compiler-arena memory, so `type_intern_reset` runs in `compiler_destroy`
 before that arena goes; nothing may hold a `Type *` across it. Singletons: int, float, bool,
-`char` (`TY_CHAR`), String, `StringBuf` (`TY_STRBUF`), `()` (unit), `!`
+`char` (`TY_CHAR`), string, `StringBuf` (`TY_STRBUF`), `()` (unit), `!`
 (`TY_NEVER` — produced by blocks ending in `return`, unifies with anything),
-`Range` (`TY_RANGE`, int-only), and `TY_POISON`.
+`range` (`TY_RANGE`, int-only), and `TY_POISON`.
 
 `TY_NEVER` is also writable, and is one of the two types a *name* cannot reach:
 `()` and `!` are punctuation, parsed as `TYNODE_UNIT` and `TYNODE_NEVER` rather
@@ -1237,19 +1237,19 @@ nothing else about it: it is inert in every switch it appears in (a singleton
 to `subst_apply`, `infer_unify` and `infer_apply`) and is deliberately *absent*
 from `interp_render_bare`'s primitive list, so `"{b}"` goes down the `Display`
 path and reports that a buffer has no impl. That is the same arrangement
-`String` already has — a builtin *type* whose operations live in std — so it is
+`string` already has — a builtin *type* whose operations live in std — so it is
 not another lang item in the sense `Display` is (see "Interpolation and
 `Display`"): the compiler knows the type, never a std item.
 
-`Range` joined that list in milestone 60, and it is the cheapest entry yet: the
+`range` joined that list in milestone 60, and it is the cheapest entry yet: the
 type had existed since ranges did, so the whole change is `t_range` on the
 `TypeChecker` and a line in `type_named_builtin`. Everything it buys follows
 from being *nameable* rather than from anything new — a range can be a
-parameter (`fun span(r: Range)`), and `impl Range { .. }` has a self type to
+parameter (`fun span(r: range)`), and `impl range { .. }` has a self type to
 write, which is what let `std::iter` hang `iter()` off one. Note the ordering
 consequence a builtin name carries: `type_named_builtin` is consulted before
-the type scope, so a program's own `struct Range` is declared but never
-reachable by name — the same thing `struct String` has always done.
+the type scope, so a program's own `struct range` is declared but never
+reachable by name — the same thing `struct string` has always done.
 
 `infer_unify(a, b)` is **directional**: `a` is the expectation. Only two rules
 read that direction — the `dyn` coercions offered beside it, and `TY_NEVER`.
@@ -1482,8 +1482,8 @@ struct's, and the backend never sees one at all.
 Selection asks about the pair. `impl_applies` takes a nullable `trait_ref`
 alongside the self type, and matches the impl's head against *both* — so an
 impl's own parameters may be pinned by either half (`impl<T> Into<T> for
-Wrap<T>` by the receiver, `impl<T: Display> Into<String> for T` by both), and
-`impl Into<int> for S` no longer answers `S: Into<String>`. Coherence
+Wrap<T>` by the receiver, `impl<T: Display> Into<string> for T` by both), and
+`impl Into<int> for S` no longer answers `S: Into<string>`. Coherence
 (`impl_defs_conflict`) asks the same question from both sides, which is what
 lets one type implement one trait at several arguments.
 
@@ -1759,7 +1759,7 @@ built, since the type it names is usually a *sibling* parameter the same call is
 solving. And `impl_bounds_satisfied` asks at impl selection, which for this
 predicate kind is not a nicety: an `impl<I, J: Iterator<Item = I.Item>> Iterator
 for Chain<I, J>` that applied to a `Chain<Counter, Words>` would compile
-`Words`'s `String`s as the `int`s the impl bound `Item` to. (Selection had never
+`Words`'s `string`s as the `int`s the impl bound `Item` to. (Selection had never
 looked at associated-type bounds at all, so `where I.Item: Ord` on an impl was
 unchecked there too.)
 
@@ -2095,7 +2095,7 @@ containment is also what surfaced the flat/own indexing bug
 `dyn_assoc_bindings_agree` had carried since supertraits arrived: its binding
 table is numbered over the closure, and it was indexing the trait's *own*
 `assoc_types`, so on a sub whose associated types are all inherited it checked
-nothing and `dyn DoubleEnded<Item = String>` accepted an `Item = int` impl
+nothing and `dyn DoubleEnded<Item = string>` accepted an `Item = int` impl
 (`tests/fail/dyn_assoc_super_binding.dt`).
 
 The result is recorded in the same `Expr.coerce_dyn` the coercion uses; codegen

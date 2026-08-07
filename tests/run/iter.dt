@@ -34,16 +34,16 @@ impl Iterator for Counter {
     }
 }
 
-# a second iterator whose Item is a String, proving the element type is general
-pub struct Repeat { s: String, left: int }
+# a second iterator whose Item is a string, proving the element type is general
+pub struct Repeat { s: string, left: int }
 
 impl Repeat {
     fun times(n: int) -> Repeat { Repeat { s: "", left: n } }
 }
 
 impl Iterator for Repeat {
-    type Item = String;
-    fun next(self) -> Option<String> {
+    type Item = string;
+    fun next(self) -> Option<string> {
         if self.left <= 0 { return Option::None; }
         self.left -= 1;
         self.s = self.s + "a";

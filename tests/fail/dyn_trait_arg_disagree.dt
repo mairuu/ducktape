@@ -1,4 +1,4 @@
-#! expect: type mismatch: expected 'int' but got 'String'
+#! expect: type mismatch: expected 'int' but got 'string'
 # Unifying a `dyn`'s arguments is what makes them able to *disagree*: the
 # first argument solves `T`, so the second is checked against it. The message
 # names the one argument that differs, as it does for any other composite.
@@ -7,12 +7,12 @@ trait Src<T> { fun get(self) -> T; }
 struct Five;
 struct Word;
 impl Src<int> for Five { fun get(self) -> int { return 5; } }
-impl Src<String> for Word { fun get(self) -> String { return "w"; } }
+impl Src<string> for Word { fun get(self) -> string { return "w"; } }
 
 fun both<T>(a: dyn Src<T>, b: dyn Src<T>) -> T { return b.get(); }
 
 fun main() {
     var s: dyn Src<int> = Five;
-    var w: dyn Src<String> = Word;
+    var w: dyn Src<string> = Word;
     var x = both(s, w);
 }

@@ -5,12 +5,12 @@
 # reason is a dependency cycle rather than taste: `std::cmp` imports
 # `std::string` (for `compare`, since milestone 25), `std::option` imports
 # `std::cmp`, and every function below either answers with an `Option` or builds
-# a `[String]`. So `std::string` importing `Option` or array `push` would close
+# a `[string]`. So `std::string` importing `Option` or array `push` would close
 # the loop `string → option → cmp → string`, which the dependency graph rejects
 # outright. `std::string` reaches nothing above the buffer it builds through, so
 # the operations that reach past it live one module up.
 #
-# They are still *methods on `String`* (milestone 41): a second `impl String`,
+# They are still *methods on `string`* (milestone 41): a second `impl string`,
 # one module up from the leaf's. Two inherent impls for one type coexist because
 # their method names are disjoint and neither is a trait impl, so coherence has
 # no say — the impl index simply finds each method by name in whichever visible
@@ -37,7 +37,7 @@
 # module that declares it, so the module that mints positions must also be the
 # one that cuts at them. The two natives below are the raw byte-indexed forms,
 # private free functions for the reason `std::array`'s `pop_last` is one: an
-# impl method has no visibility control, so a `String` method taking an `int`
+# impl method has no visibility control, so a `string` method taking an `int`
 # would be callable everywhere the impl is, and the opacity would be a
 # suggestion.
 #
@@ -49,14 +49,14 @@
 #
 # Searching is `matches_at` rather than `slice`+`==` as of milestone 101, and
 # the change was forced rather than chosen: a search compares *speculatively*,
-# at offsets it has no reason to believe in yet, and a String that guarantees
+# at offsets it has no reason to believe in yet, and a string that guarantees
 # its own UTF-8 cannot be cut at one of those. The compare is total where the
 # cut is not, and it also deletes the interned candidate window every position
 # used to allocate.
 #
 # `s.len()` (bytes) and `cs.len()` (elements) both appear below, told apart by
 # their receiver's type rather than by a module qualifier. The impls those
-# receivers need — `String`, `[T]`, `StringBuf`, `char` — arrive transitively
+# receivers need — `string`, `[T]`, `StringBuf`, `char` — arrive transitively
 # through the two imports below rather than being named here: an import that
 # binds a name nothing writes is reported as unused (milestone 92), and
 # reachability cannot tell a deliberate restatement from a leftover.
@@ -72,7 +72,7 @@ use std::option::Option;
 use std::iter;
 use std::panic::panic;
 
-# A position in a `String`, in bytes, that a program cannot make up. Every one
+# A position in a `string`, in bytes, that a program cannot make up. Every one
 # of these is a character boundary in the string it names, because the only
 # things that mint one are the two ends of a string and a search that lands on a
 # match — and a match is a boundary by UTF-8's self-synchronisation (see `find`).
@@ -89,7 +89,7 @@ use std::panic::panic;
 # public and neither field is: an `int` that came out of a position cannot be
 # turned back into one.
 pub struct StrPos {
-    s: String,
+    s: string,
     off: int,
 }
 
@@ -100,14 +100,14 @@ impl StrPos {
 }
 
 # The byte-indexed natives, private so that nothing outside this file can reach
-# a `String` operation that takes a bare offset.
+# a `string` operation that takes a bare offset.
 @native("string_slice")
-fun slice_bytes(s: String, from: int, to: int) -> String;
+fun slice_bytes(s: string, from: int, to: int) -> string;
 
 @native("string_matches_at")
-fun matches_at_bytes(s: String, at: int, needle: String) -> bool;
+fun matches_at_bytes(s: string, at: int, needle: string) -> bool;
 
-impl String {
+impl string {
     # ── the two positions every string has ───────────────────────────────────
     #
     # Where a program's positions come from when it is not searching. Both ends
@@ -130,7 +130,7 @@ impl String {
     # unreachable from safe source, because every position `self` mints
     # satisfies both. What survives is the *order*: `s.slice(s.end(),
     # s.start())` is two of `self`'s own positions in the wrong sequence.
-    fun slice(self, from: StrPos, to: StrPos) -> String {
+    fun slice(self, from: StrPos, to: StrPos) -> string {
         if from.s != self or to.s != self {
             panic("string position is not a position in this string");
         }
@@ -140,7 +140,7 @@ impl String {
     # Does `needle` sit at `at`? Total in its needle — running off the end is
     # `false`, not an error — and `at` is checked for the same reason `slice`
     # checks its ends.
-    fun matches_at(self, at: StrPos, needle: String) -> bool {
+    fun matches_at(self, at: StrPos, needle: string) -> bool {
         if at.s != self {
             panic("string position is not a position in this string");
         }
@@ -156,7 +156,7 @@ impl String {
     # and mints no `StrPos` at all.
 
     # The first `n` characters of `self`, or all of them if it is shorter.
-    fun take_chars(self, n: int) -> String {
+    fun take_chars(self, n: int) -> string {
         var b = StringBuf::new();
         var i = 0;
         for c in self.chars() {
@@ -170,7 +170,7 @@ impl String {
     }
 
     # `self` without its first `n` characters, or empty if it is shorter.
-    fun drop_chars(self, n: int) -> String {
+    fun drop_chars(self, n: int) -> string {
         var b = StringBuf::new();
         var i = 0;
         for c in self.chars() {
@@ -188,14 +188,14 @@ impl String {
     # `self` on its own — running off the end is `false`, not an error — so the
     # length test the cutting version needed is gone, and the empty prefix
     # matches everywhere including at 0.
-    fun starts_with(self, prefix: String) -> bool {
+    fun starts_with(self, prefix: string) -> bool {
         return matches_at_bytes(self, 0, prefix);
     }
 
     # The one place a *position* is computed rather than scanned to, and the one
     # that has to stay guarded: `n - sl` is only an offset in the string when the
     # suffix is no longer than it.
-    fun ends_with(self, suffix: String) -> bool {
+    fun ends_with(self, suffix: string) -> bool {
         var sl = suffix.len();
         var n = self.len();
         if sl > n {
@@ -212,7 +212,7 @@ impl String {
     # those offsets answer `false` of their own accord. Which is also why a
     # position this mints is always a character boundary, and so always safe to
     # `slice` at — the induction the opaque type rests on.
-    fun find(self, needle: String) -> Option<StrPos> {
+    fun find(self, needle: string) -> Option<StrPos> {
         var nl = needle.len();
         if nl == 0 {
             return Option::Some(StrPos { s: self, off: 0 });
@@ -228,7 +228,7 @@ impl String {
         return Option::None;
     }
 
-    fun contains(self, needle: String) -> bool {
+    fun contains(self, needle: string) -> bool {
         return self.find(needle).is_some();
     }
 
@@ -248,8 +248,8 @@ impl String {
     # split a character in half. The empty separator is turned away before the
     # loop for its own reason, but it is also the only needle that could have
     # matched inside one.
-    fun split(self, sep: String) -> [String] {
-        var parts: [String] = [];
+    fun split(self, sep: string) -> [string] {
+        var parts: [string] = [];
         var sl = sep.len();
         if sl == 0 {
             parts.push(self);
@@ -279,7 +279,7 @@ impl String {
     # begins one needle's length further on — and that is arithmetic, which is
     # exactly what a `StrPos` does not offer. So the step past a match stays
     # inside the module, where the offsets are still ints, and comes out as this.
-    fun split_once(self, sep: String) -> Option<(String, String)> {
+    fun split_once(self, sep: string) -> Option<(string, string)> {
         var sl = sep.len();
         var n = self.len();
         var i = 0;
@@ -301,7 +301,7 @@ impl String {
     # space is a single byte only by luck of the encoding — so the honest
     # spelling walks characters, not bytes, and rebuilds the middle through a
     # buffer rather than assuming a trimmed edge lands on a byte boundary.
-    fun trim(self) -> String {
+    fun trim(self) -> string {
         var cs = self.chars().collect();
         var n = cs.len();
         var lo = 0;

@@ -6,20 +6,20 @@
 # relation over: silently preferring either is the bug, so it is an error
 # where the second definition is written.
 trait Greet {
-    fun name(self) -> String;
+    fun name(self) -> string;
 }
 
 trait Loud: Greet {
-    fun shout(self) -> String;
+    fun shout(self) -> string;
 }
 
 struct P;
 
 impl Loud for P {
-    fun name(self) -> String { return "from-loud"; }
-    fun shout(self) -> String { return "HI"; }
+    fun name(self) -> string { return "from-loud"; }
+    fun shout(self) -> string { return "HI"; }
 }
 
 impl Greet for P {
-    fun name(self) -> String { return "from-greet"; }
+    fun name(self) -> string { return "from-greet"; }
 }

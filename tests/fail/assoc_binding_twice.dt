@@ -1,10 +1,10 @@
-#! expect: is bound twice, to 'int' and to 'String'
+#! expect: is bound twice, to 'int' and to 'string'
 # Two bindings for one associated type are a contradiction rather than a
 # refinement — the projection is one type, and the second spelling would
 # silently win whichever way the list happened to be walked.
 use std::iter::Iterator;
 use std::option::Option;
 
-fun f<J: Iterator<Item = int> + Iterator<Item = String>>(j: J) -> int {
+fun f<J: Iterator<Item = int> + Iterator<Item = string>>(j: J) -> int {
     return 1;
 }

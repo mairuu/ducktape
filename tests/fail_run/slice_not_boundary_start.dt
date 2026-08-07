@@ -5,7 +5,7 @@
 use std::io::print;
 
 @native("string_slice")
-fun raw_slice(s: String, from: int, to: int) -> String;
+fun raw_slice(s: string, from: int, to: int) -> string;
 
 fun main() {
     print(raw_slice("é", 1, 2));

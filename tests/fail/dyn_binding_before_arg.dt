@@ -9,7 +9,7 @@ trait Pipe<T> {
     fun pipe(self, v: T) -> Self.Out;
 }
 
-fun run(p: dyn Pipe<Out = int, String>) -> int {
+fun run(p: dyn Pipe<Out = int, string>) -> int {
     return p.pipe("x");
 }
 

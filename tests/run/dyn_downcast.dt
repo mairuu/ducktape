@@ -44,7 +44,7 @@ impl Shape for int {
 
 # The shape a downcast is for: recover what can be recovered, fall back on the
 # trait for everything else.
-fun describe(s: dyn Shape) -> String {
+fun describe(s: dyn Shape) -> string {
     match s as? Sq {
         Option::Some(q) => { return "square {q.side}"; },
         Option::None => {},

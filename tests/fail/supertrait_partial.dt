@@ -5,17 +5,17 @@
 # missing — "does not implement" alone sends the reader looking for a missing
 # *impl* when the fix is a missing method.
 trait Greet {
-    fun name(self) -> String;
+    fun name(self) -> string;
     fun age(self) -> int;
 }
 
 trait Loud: Greet {
-    fun shout(self) -> String;
+    fun shout(self) -> string;
 }
 
 struct P;
 
 impl Loud for P {
-    fun name(self) -> String { return "p"; }
-    fun shout(self) -> String { return "HI"; }
+    fun name(self) -> string { return "p"; }
+    fun shout(self) -> string { return "HI"; }
 }

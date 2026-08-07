@@ -32,7 +32,7 @@ impl Counter {
     fun tick(self) -> int { self.n += 1; return 0; }
 }
 
-fun show(v: V2) -> String { return "({v.x},{v.y})"; }
+fun show(v: V2) -> string { return "({v.x},{v.y})"; }
 
 # the operator reached through a bound rather than a concrete impl
 fun bump<T: Add<Output = T>>(a: T, b: T) -> T {

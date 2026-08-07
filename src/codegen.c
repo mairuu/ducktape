@@ -2630,7 +2630,7 @@ static void compile_expr_inner(Cg *cg, Expr *expr) {
     emit_const(cg, val_obj(&cg_decode_string(cg, expr->as.string.value)->obj));
     break;
   case EXPR_CHAR:
-    // already decoded by the parser, which is the difference from a String:
+    // already decoded by the parser, which is the difference from a string:
     // a char is a value, so it needs no heap object and no intern.
     emit_const(cg, val_char(expr->as.char_val));
     break;

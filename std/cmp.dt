@@ -2,13 +2,13 @@
 #
 # Written in ducktape, not in C: `impl Ord for int` is legal, so the standard
 # library can extend the primitives with the same trait machinery user code
-# uses. Only `String` reaches for a native, and it does so through
+# uses. Only `string` reaches for a native, and it does so through
 # `std::string` rather than declaring one here.
 #
 # That import is the module's one real cost, because impl visibility is
 # transitive: importing `std::string` hands every dependent of `std::cmp`
 # whatever impls `std::string` ships. It ships none — it is a module of free
-# functions — so the set grows by exactly the `impl Ord for String` below. The
+# functions — so the set grows by exactly the `impl Ord for string` below. The
 # other direction would not have been so cheap: putting the impl in
 # `std::string` would hand a program that only wanted `len` the three impls
 # here, and with them coherence's refusal to let it write its own `impl Ord
@@ -16,7 +16,7 @@
 # code, so the dependency points at the impl-poor module.
 #
 # Placing the impl beside the *trait* is also what `std::fmt` already does:
-# `impl Display for String` lives there, not in `std::string`.
+# `impl Display for string` lives there, not in `std::string`.
 #
 # `Ord` is deliberately *not* object-safe — `other: Self` means a caller has to
 # know the concrete type — so it is a bound, never a `dyn Ord`. That is the
@@ -25,7 +25,7 @@
 
 # Imported as modules, not by item: `compare` and `code` are methods now
 # (milestone 40), and a method travels with its impl by reachability rather than
-# through a named import — so the `use` is only here to make `impl String` and
+# through a named import — so the `use` is only here to make `impl string` and
 # `impl char` visible, and the receiver spellings `self.compare(..)` /
 # `self.code()` do the rest.
 use std::string;
@@ -103,19 +103,19 @@ impl Ord for float {
 # The one impl here that is not a comparison the VM could already make. `<` and
 # `>` stay numeric-only opcodes — ordering anything else is a trait, not an
 # operator — so this is the whole of how a program compares two Strings.
-impl Ord for String {
-    fun cmp(self, other: String) -> int {
+impl Ord for string {
+    fun cmp(self, other: string) -> int {
         return self.compare(other);
     }
 }
 
-# Code-point order, which is what a char *is*: unlike `String` this needs no
+# Code-point order, which is what a char *is*: unlike `string` this needs no
 # native at all, because `c.code()` already hands the comparison two ints and
 # `<` is a numeric opcode. The dependency costs only `std::char`'s own `char`
 # methods — it ships that one impl and nothing else, and neither does what it
 # imports.
 #
-# It agrees with `impl Ord for String` on one-character strings, since UTF-8
+# It agrees with `impl Ord for string` on one-character strings, since UTF-8
 # byte order and code-point order are the same order. It disagrees with a
 # reader's expectations in the same places: 'Z' sorts before 'a'.
 impl Ord for char {

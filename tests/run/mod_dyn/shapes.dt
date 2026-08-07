@@ -1,6 +1,6 @@
 pub trait Shape {
     fun area(self) -> int;
-    fun describe(self) -> String {
+    fun describe(self) -> string {
         return "area {self.area()}";
     }
 }

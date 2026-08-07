@@ -1,4 +1,4 @@
-#! expect: does not satisfy 'I.Item = String'
+#! expect: does not satisfy 'I.Item = string'
 # A trait object satisfies the trait it names (milestone 56), and nothing more.
 # Its associated bindings are part of the type, so they are checked against the
 # bound's equality clause the same way a concrete impl's are — the trait object
@@ -14,7 +14,7 @@ impl Iterator for Counter {
     fun next(self) -> Option<int> { return Option::None; }
 }
 
-fun joined<I: Iterator<Item = String>>(it: I) -> int { return 0; }
+fun joined<I: Iterator<Item = string>>(it: I) -> int { return 0; }
 
 fun main() {
     var d: dyn Iterator<Item = int> = Counter { n: 0 };

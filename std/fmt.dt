@@ -8,7 +8,7 @@
 # against this trait and rewritten into the call `v.to_string()`.
 #
 # The primitives are not routed through it: the VM has always rendered an int,
-# float, bool and String itself, which is what lets a program interpolate one
+# float, bool and string itself, which is what lets a program interpolate one
 # without importing anything. The impls below exist for the *other* direction —
 # so a `T: Display` generic can be instantiated at a primitive — and each is
 # written by interpolating `self`, which is that same built-in path. That makes
@@ -21,35 +21,35 @@
 
 @lang("display")
 pub trait Display {
-  fun to_string(self) -> String;
+  fun to_string(self) -> string;
 }
 
 impl Display for int {
-  fun to_string(self) -> String {
+  fun to_string(self) -> string {
     return "{self}";
   }
 }
 
 impl Display for float {
-  fun to_string(self) -> String {
+  fun to_string(self) -> string {
     return "{self}";
   }
 }
 
 impl Display for bool {
-  fun to_string(self) -> String {
+  fun to_string(self) -> string {
     return "{self}";
   }
 }
 
 impl Display for char {
-  fun to_string(self) -> String {
+  fun to_string(self) -> string {
     return "{self}";
   }
 }
 
-impl Display for String {
-  fun to_string(self) -> String {
+impl Display for string {
+  fun to_string(self) -> string {
     return self;
   }
 }
@@ -65,7 +65,7 @@ impl Display for String {
 #
 # The element goes through `Display` in turn, which is the whole point — a
 # `[Point]` renders with `Point`'s own `to_string`, not with the runtime's
-# structural walk. It also means a `String` element renders bare: `Display`
+# structural walk. It also means a `string` element renders bare: `Display`
 # answers "render this for a reader", and quoting is a debugging affordance.
 # `print` still shows the structural view, and the two only agree by
 # coincidence of taste on the separators below.
@@ -75,7 +75,7 @@ impl Display for String {
 # has no `Display` is an error at the interpolation, naming `Widget`.
 
 impl<T: Display> Display for [T] {
-  fun to_string(self) -> String {
+  fun to_string(self) -> string {
     var out = "[";
     var first = true;
     for item in self {
@@ -92,14 +92,14 @@ impl<T: Display> Display for [T] {
 # Arity is per-impl: a tuple's length is part of its type and the language has
 # no way to be generic over it, so a 3-tuple would need its own impl below.
 impl<A: Display, B: Display> Display for (A, B) {
-  fun to_string(self) -> String {
+  fun to_string(self) -> string {
     return "(" + self.0.to_string() + ", " + self.1.to_string() + ")";
   }
 }
 
 # The trait as a function, for the places a method call cannot go: a value
-# passed to something expecting a `String`, or a pipe stage.
-pub fun to_string<T: Display>(value: T) -> String {
+# passed to something expecting a `string`, or a pipe stage.
+pub fun to_string<T: Display>(value: T) -> string {
   return value.to_string();
 }
 
@@ -109,4 +109,4 @@ pub fun to_string<T: Display>(value: T) -> String {
 # runtime error.
 @native("fmt_float")
 @lang("float")
-pub fun float(value: float, precision: int) -> String;
+pub fun float(value: float, precision: int) -> string;

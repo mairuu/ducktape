@@ -27,7 +27,7 @@ A `char` is a plain value, not a heap object, which is the whole of its cost in
 the runtime: no allocation, no interning, no GC involvement, and `==` is a
 comparison of two `uint32_t`. It is stored decoded — a scalar value rather than
 its UTF-8 bytes — so the encoding appears only at the two edges where a char
-meets a String: `value_print`/`stringify` on the way out (`utf8_encode`), and
+meets a string: `value_print`/`stringify` on the way out (`utf8_encode`), and
 `string_char_at`/`string_prev_boundary`/`strbuf_push_char` in the native
 registry (`string_char_count` counts without producing a char). Both go
 through `string_utils.h`, which validates strictly: an overlong encoding, a
@@ -35,7 +35,7 @@ surrogate half and anything past U+10FFFF are rejected rather than round-
 tripped, so a `VAL_CHAR` that exists is always encodable and no output path
 needs a failure case. The same decoder, run to the end of a buffer, is
 `utf8_validate` — what the two untrusted intakes check with, and so what makes
-every `ObjString` valid UTF-8 (see "A `String` is valid UTF-8" below).
+every `ObjString` valid UTF-8 (see "A `string` is valid UTF-8" below).
 
 `value_equal` (`src/value.c`) is the one equality used by `OP_EQ`/`OP_NEQ`:
 strings compare by pointer (interning makes that correct); arrays, tuples,
@@ -115,7 +115,7 @@ Operands are u8 unless noted.
 | `OP_DYN_UPCAST pair(u16)` | pops a `dyn Sub`, pushes the same inner value carrying the `dyn Super` table. The table is found on the one the value already holds (`VTable.upcasts`), since the site knows both traits and no concrete type |
 | `OP_MATCH_FAIL` | runtime error "no match arm matched" — a backstop; the checker enforces exhaustiveness, but guards can still fail every arm |
 
-`OP_ADD` additionally handles `String + String` (interned concat) alongside
+`OP_ADD` additionally handles `string + string` (interned concat) alongside
 its numeric cases; the checker guarantees operand kinds so no other opcode
 needs a string case.
 
@@ -163,7 +163,7 @@ Two consequences worth knowing:
 
 - **A generic enum shares one singleton across every type argument.** There is
   one `EnumDef` per source enum (instantiation monomorphises *functions*, never
-  defs), so `Option::<int>::None` and `Option::<String>::None` are literally the
+  defs), so `Option::<int>::None` and `Option::<string>::None` are literally the
   same object. Types are erased at runtime, so this was already indistinguishable
   — those two values compared equal before the change too.
 - **The def is a GC root, not a weak cache.** `heap_collect` marks
@@ -180,21 +180,21 @@ in the intern table, so its bytes cannot change (see below); a buffer is out of
 it, so they can. Nothing else about the two differs, and `StringBuf`'s `build`
 method is the door — one `heap_intern` of the bytes written so far.
 
-String identity is pointer identity — `heap_intern` looks up an
+string identity is pointer identity — `heap_intern` looks up an
 open-addressing table (FNV-1a hash, linear probing, tombstone deletes)
 before allocating, so `==` on strings is a pointer compare. Codegen interns
 string *literals* at compile time (`cg_decode_string` in `src/codegen.c`,
 decoding the scanner's `\n \t \r \" \\ \{` escapes); the VM interns at
 runtime for `+` concat (`heap_concat`) and interpolation (`OP_INTERP`,
 `stringify` in `src/vm.c`). `stringify` handles only the four primitives and
-passes a String straight through, which is the whole reason `Display` cost the
+passes a string straight through, which is the whole reason `Display` cost the
 runtime nothing: the checker rewrites a non-primitive segment into a
-`to_string()` call, so by the time `OP_INTERP` sees it, it is a String.
+`to_string()` call, so by the time `OP_INTERP` sees it, it is a string.
 
 **Interning buys equality and nothing else.** `==` is a pointer compare because
 the table guarantees one object per distinct byte string, but pointer *order* is
 allocation order — arbitrary, and different between a run and a `--emit-bc`
-replay of it. So `string_cmp`, the native under `impl Ord for String`, gets
+replay of it. So `string_cmp`, the native under `impl Ord for string`, gets
 exactly one shortcut from the table (identical pointers answer 0) and otherwise
 walks the bytes: `memcmp` over the shared prefix, then the shorter one first if
 that ties. It cannot tie *at equal length* — equal bytes at equal length would
@@ -306,7 +306,7 @@ over:
 of it: one to four bytes into a stack array, then the identical reserve-copy-
 advance. That it needed no new rule is the point — a char's bytes are bytes.
 It is also the append an array of parts could never have offered, since there
-is no String to hold one character, which is what makes `from_chars` ducktape
+is no string to hold one character, which is what makes `from_chars` ducktape
 rather than a native. `strbuf_push_int` is the third of the same shape —
 `snprintf` a signed decimal into a 24-byte stack array (an int64_t is at most 20
 digits and a sign, so it cannot overrun), then the same reserve-copy-advance —
@@ -635,7 +635,7 @@ rebuilding it. So a type argument changes one thing and one thing only about
 the code compiled from a body: **which function a call resolves to.**
 
 ```
-fun describe<T: Show>(v: T) -> String { v.show() }
+fun describe<T: Show>(v: T) -> string { v.show() }
 ```
 
 `v.show()` is a different body for `T = int` than for `T = bool`, and the
@@ -716,7 +716,7 @@ Two call shapes need more than the recorded arguments:
   instantiation's terms and re-runs `impl_index_method` to find the body,
   falling back to `impl_index_default_method` when the impl inherited it.
   Passing the reference is what tells `impl Into<int> for S` from
-  `impl Into<String> for S`, which the receiver alone cannot. This is the one
+  `impl Into<string> for S`, which the receiver alone cannot. This is the one
   place codegen consults an impl index — and since impls became
   module-granular, *which* index is a question of its own.
 
@@ -807,13 +807,13 @@ keeping the slot (rather than compacting the table) is what keeps
 Note what the runtime `VTable` does **not** hold: the trait and the self type.
 Those are compiler bookkeeping the VM never reads — the serialization rule,
 one level over. **Nor does it hold the associated-type bindings.** A
-`dyn Iterator<Item = int>` and a `dyn Iterator<Item = String>` are different
+`dyn Iterator<Item = int>` and a `dyn Iterator<Item = string>` are different
 types to the checker and the same shape to the VM, because an associated type
 is erased exactly as a type argument is — so naming one at a coercion site
 changed nothing in codegen, the vtable, the opcodes or the image format. The
 memo key stays `(trait reference, self type)`, which still determines the
 bindings: an impl binds each associated type once. The *reference* rather than
-the trait, since milestone 28: `dyn Into<int>` and `dyn Into<String>` over one
+the trait, since milestone 28: `dyn Into<int>` and `dyn Into<string>` over one
 self type name two impls, so they are two tables — and a trait's type argument
 is erased at runtime exactly as an associated type is, so that is again the
 only thing that changed.
@@ -850,10 +850,10 @@ so a program that only ever asks whether something is a `Point` still slots
 that table.
 
 Two things fall out of the key being the type rather than the value's shape.
-`Box<int>` and `Box<String>` share one `StructDef` — structs are not
+`Box<int>` and `Box<string>` share one `StructDef` — structs are not
 monomorphised — yet they are distinct interned types and so two tables, which
 is why erasure never bites. And since the key is the trait *reference*, one
-self type behind `dyn Sink<int>` and `dyn Sink<String>` has two tables; a
+self type behind `dyn Sink<int>` and `dyn Sink<string>` has two tables; a
 downcast reads its half of the key off the operand, so it always asks about the
 reference the value was written as.
 
@@ -1310,15 +1310,15 @@ going forwards, instead of being walked off the front of the string.
 the answer at an offset inside a character is `false` rather than an error,
 because the encoding puts a continuation byte where the needle has a lead one.
 
-**A `String` is valid UTF-8, and three places pay for it.** Two are intakes —
+**A `string` is valid UTF-8, and three places pay for it.** Two are intakes —
 `read_file` checks a source file's bytes (`src/module.c`), and the image loader
 checks every entry of the string table before anything is interned from it
 (`src/bytecode.c`, beside the older `BC_C_CHAR` scalar-value check). The third
-is `string_slice`, the only native that cuts new bytes out of an old String: it
+is `string_slice`, the only native that cuts new bytes out of an old string: it
 requires both ends to be character boundaries, which is O(1) in valid UTF-8
 (`utf8_is_boundary` — a character starts where the byte is not a continuation
 byte). Every other producer is valid by induction, `ObjStrBuf` included, since
-its appends take a String, a `char` or decimal digits.
+its appends take a string, a `char` or decimal digits.
 
 The guarantee is what lets the decoding natives stop asking about the bytes:
 `string_char_at` and `string_prev_boundary` now report "string offset is not a
@@ -1357,7 +1357,7 @@ the opcode is emitted bare with nothing to encode an operand into.
 
 **A method may be native too.** `resolve_impl_decl` runs the same
 `tc_bind_native` on an impl method's `FunDef` that `tc_register_fun` runs on a
-top-level one, so `impl String { @native("string_len") fun len(self) -> int; }`
+top-level one, so `impl string { @native("string_len") fun len(self) -> int; }`
 binds exactly as a free native declaration does — which, since milestone 40, is
 how `std::string` spells `len`. `self` is an ordinary parameter
 (`is_self` set), and the receiver's value is what the free-function form would

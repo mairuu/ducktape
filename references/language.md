@@ -37,7 +37,7 @@ trait Into<T> {                      # a trait may take type parameters
 impl Drawable for Point<int> { ... } # trait impl
 impl<T> Box<T> { ... }               # generic inherent impl
 impl Point<int> {
-    type Color = String;             # associated type
+    type Color = string;             # associated type
     fun new(x: int, y: int) -> Self { Point { x: x, y: y } }
 }
 ```
@@ -49,10 +49,10 @@ case for it) — declare variables inside functions only.
 
 | Syntax | Meaning |
 |---|---|
-| `int` `float` `bool` `String` | primitives |
+| `int` `float` `bool` `string` | primitives |
 | `char` | one Unicode scalar value — see "`std::char`" |
 | `StringBuf` | a growable text buffer — see "`std::string::buf`" |
-| `Range` | what `a..b` / `a..=b` evaluate to — see "`std::iter`" |
+| `range` | what `a..b` / `a..=b` evaluate to — see "`std::iter`" |
 | `()` | unit |
 | `!` | code that does not come back — see "`std::panic`" |
 | `(A, B)` | tuple |
@@ -62,12 +62,12 @@ case for it) — declare variables inside functions only.
 | `dyn Drawable`, `dyn Into<int>`, `dyn Iterator<Item = int>` | trait object — see "Trait objects" |
 | `Self`, `Self.Color`, `Point.Color` | self type, associated types |
 
-The case tells you where a type comes from, but the implication runs one way.
-**Lowercase** is always the language's own — `int`, `float`, `bool`, `char`.
-**PascalCase** is usually a type someone declared or a parameter standing for
-one, with three exceptions: `String`, `StringBuf` and `Range` are builtins too,
-resolved before any scope exactly as the lowercase four are. Whether those three
-should keep the capital is open (roadmap item 3).
+The case says what a type *is*, and the rule has no exceptions.
+**Lowercase** is an immutable value with no identity — `int`, `float`, `bool`,
+`char`, `string`, `range` — and all six are builtins, resolved before any scope.
+**PascalCase** has identity or was declared: `StringBuf` is builtin too, but it
+is mutable, so which buffer you hold is observable; everything else under the
+capital is a program's own type or a parameter standing for one.
 
 The two types you cannot hold a value of are **punctuation**: `()` and `!` are
 parsed as types of their own rather than resolved as names, so neither can be
@@ -135,7 +135,7 @@ under the field's name, so ignoring one field takes the long form
   without a point (`1e-7`, `3E2`, `1.5e+10`). `1e` with no digits after it is
   the `int` `1` followed by the identifier `e`.
 - Arithmetic `+ - * / %` on numerics; `int op float` widens to `float`.
-  `+` also concatenates `String`s. Two numeric operands stay a built-in opcode
+  `+` also concatenates `string`s. Two numeric operands stay a built-in opcode
   (no import, no frame); a non-numeric operand desugars to `std::ops`, so
   `a + b` becomes `a.add(b)` — see `std::ops` below. On an unbounded generic
   the diagnostic asks for the bound (`add the bound 'T: Add'`) rather than
@@ -143,7 +143,7 @@ under the field's name, so ignoring one field takes the long form
 - Comparison `< <= > >=`: numeric operands stay a built-in opcode (no import,
   no frame); a non-numeric operand desugars to `std::cmp::Ord`, so `a < b`
   becomes `a.cmp(b) < 0`, dispatched by the ordinary method machinery. A `Point`
-  with `impl Ord for Point`, a bounded `T: Ord`, a `char`, a `String` — all
+  with `impl Ord for Point`, a bounded `T: Ord`, a `char`, a `string` — all
   compare with the operator. Without `std::cmp` in the program the operator has
   no trait to name (the diagnostic says so), and on an unbounded generic it asks
   for the `T: Ord` bound. Only `cmp` is named by the rewrite, so `lt`/`le`/`gt`/
@@ -169,7 +169,7 @@ under the field's name, so ignoring one field takes the long form
     `x`; an out-of-range index already reports here rather than guessing.
   - **`<<`, `>>` and `>>>` are runs of adjacent angle brackets, not tokens.**
     The scanner cannot fuse them, because a nested generic closes with a run of
-    `>` (`HashMap<String, Option<int>>`); the parser fuses them instead, and
+    `>` (`HashMap<string, Option<int>>`); the parser fuses them instead, and
     requires that no whitespace separate them. `a > > b` is therefore two
     comparisons and `a >> b` is a shift — the one place in the grammar where
     whitespace changes a parse.
@@ -180,7 +180,7 @@ under the field's name, so ignoring one field takes the long form
   - They are the only binary operators whose operand type is known before the
     operands are, so they **drive** inference instead of merely checking it:
     `|x| x | 1` solves `x` where `|x| x + 1` cannot (`+` might be int, float,
-    String, or a call to `Add`).
+    string, or a call to `Add`).
 - `int` arithmetic **wraps** silently on overflow, two's complement
   (`4611686018427387904 * 4` is `0`). There is no checked or saturating form.
 - `%` keeps the **sign of its left operand**: `(0 - 17) % 5` is `-2`, not `3`.
@@ -224,7 +224,7 @@ under the field's name, so ignoring one field takes the long form
   join of all of them:
 
   ```
-  fun classify(n: int) -> String {
+  fun classify(n: int) -> string {
       'a: {
           if n < 0 { break 'a "negative"; }
           if n == 0 { break 'a "zero"; }
@@ -250,13 +250,13 @@ under the field's name, so ignoring one field takes the long form
   be reused by a block inside it or the reverse, and one `break` may leave a
   block and several loops at once.
 - Ranges: `a..b`, `a..=b` — int-only, first-class values (`var r = 0..10;`) of
-  type `Range`, which is nameable (`fun span(r: Range)`) and carries one
+  type `range`, which is nameable (`fun span(r: range)`) and carries one
   method, `r.iter()`.
 - Casts: `x as T` — only `int`↔`float` and identity casts. The separate `x as?
   T` is the fallible **downcast** of a trait object (see "Trait objects"),
   which yields an `Option<T>` rather than a `T`.
-- String interpolation: `"x = {x}"` — a primitive segment (int/float/bool/
-  String) renders itself; anything else must implement `std::fmt::Display`. A
+- string interpolation: `"x = {x}"` — a primitive segment (int/float/bool/
+  string) renders itself; anything else must implement `std::fmt::Display`. A
   `:` format spec (`"{v:>8}"`, `"{f:.3}"`) is sugar for the `std::string::pad_*`
   and `std::fmt::float` calls — see `std::fmt`.
 - Calls: `f(a, b)`; functions are first-class (`var g = f; g(1)`).
@@ -412,7 +412,7 @@ under the field's name, so ignoring one field takes the long form
   constraint goes on it (`where I.Item: Ord`) and writing `where J.Item: Ord`
   is an error naming the spelling to use. And the promise has to hold: it is
   discharged where the parameter is bound, both at a call ("type 'Words' does
-  not satisfy 'J.Item = int': its 'Item' is 'String', not 'int'") and at impl
+  not satisfy 'J.Item = int': its 'Item' is 'string', not 'int'") and at impl
   selection, so an adapter built from mismatched sources finds no impl rather
   than compiling one element type as another.
 
@@ -546,7 +546,7 @@ trait Into<T> {
 }
 
 impl Into<Fahrenheit> for Celsius { fun into(self) -> Fahrenheit { .. } }
-impl Into<String>     for Celsius { fun into(self) -> String { .. } }
+impl Into<string>     for Celsius { fun into(self) -> string { .. } }
 ```
 
 They behave as ordinary generic parameters of every signature the trait
@@ -560,7 +560,7 @@ a bare `into` is not a usable reference, since it has said nothing about what
 it converts to.
 
 The arguments are part of what a bound asks for: `impl Into<int> for S` does
-not answer `T: Into<String>` (`tests/fail/trait_type_arg_unsatisfied.dt`).
+not answer `T: Into<string>` (`tests/fail/trait_type_arg_unsatisfied.dt`).
 They are equally part of coherence, so one type may implement one trait
 several times as long as the arguments differ — `Celsius` above is two impls,
 not a conflict.
@@ -742,7 +742,7 @@ print(total(d));   # 3
 It satisfies that trait and no other: a `dyn Display` still fails a `T: Ord`
 bound. Its associated bindings are part of the type, so they are checked
 against the bound's own clauses — a `dyn Iterator<Item = int>` does not satisfy
-`I: Iterator<Item = String>` — and they are what a `where I.Item: Ord`
+`I: Iterator<Item = string>` — and they are what a `where I.Item: Ord`
 discharges against. See `tests/run/dyn_bound.dt`,
 `tests/fail/dyn_bound_wrong_trait.dt` and
 `tests/fail/dyn_bound_item_mismatch.dt`.
@@ -768,7 +768,7 @@ declares. Every one is **required**, whether or not a method mentions it:
 (`tests/fail/dyn_assoc_missing.dt`).
 
 The binding is part of the type. `dyn Iterator<Item = int>` and
-`dyn Iterator<Item = String>` are two types; a default body reached through
+`dyn Iterator<Item = string>` are two types; a default body reached through
 each is a separate instantiation, and coercing to one needs an impl that
 binds the same type — implementing the trait is no longer enough
 (`tests/fail/dyn_assoc_mismatch.dt`). The binding may itself be a type
@@ -778,7 +778,7 @@ it. See `tests/run/dyn_assoc.dt`.
 The bracket list carries **two different things**: the trait's own type
 arguments, which are positional, and its associated-type bindings, which are
 named — `dyn Into<int>`, `dyn Iterator<Item = int>`, or
-`dyn Pipe<String, Out = int>` for a trait with both. Arguments come first
+`dyn Pipe<string, Out = int>` for a trait with both. Arguments come first
 (`tests/fail/dyn_binding_before_arg.dt`). A trait argument may also be left to
 the impl to solve (`[dyn Into<T>]`), which works exactly when one visible impl
 answers: a type implementing the trait at two different arguments is a
@@ -810,7 +810,7 @@ The coercion is one-way, but the *question* it answers can be asked backwards.
 `d as? T` recovers one concrete type from a trait object:
 
 ```
-fun describe(s: dyn Shape) -> String {
+fun describe(s: dyn Shape) -> string {
     match s as? Sq {
         Option::Some(q) => { return "square {q.side}"; },
         Option::None => {},
@@ -839,11 +839,11 @@ and still could never be behind *this* trait object
 Two consequences of the identity being the vtable rather than a runtime tag:
 
 - **Generic types keep their arguments.** A `Box<int>` behind a `dyn Tag` is
-  not a `Box<String>`, even though the two share one definition at runtime —
+  not a `Box<string>`, even though the two share one definition at runtime —
   the tables are keyed by the type, which still exists where the table is
   built.
 - **The trait argument is part of the key.** `dyn Sink<int>` and
-  `dyn Sink<String>` over one self type are two tables, and a downcast asks
+  `dyn Sink<string>` over one self type are two tables, and a downcast asks
   through whichever reference its operand was written as, so one type can be
   recognised through either.
 
@@ -883,7 +883,7 @@ inner value rather than copying it, so the upcast object and the original are
 the same object, and `as?` still recovers the concrete type through either.
 
 A supertrait is matched **restated in the source's type arguments**: a
-`dyn Twice<int>` is a `dyn Src<int>` and not a `dyn Src<String>`
+`dyn Twice<int>` is a `dyn Src<int>` and not a `dyn Src<string>`
 (`tests/fail/dyn_upcast_wrong_arg.dt`). Associated-type bindings carry across
 and must agree (`tests/fail/dyn_upcast_assoc_mismatch.dt`); an unrelated trait
 is an ordinary type mismatch (`tests/fail/dyn_upcast_unrelated.dt`). See
@@ -921,7 +921,7 @@ would reach no arm; use `match`, or the `else` below.
 Matches must be **exhaustive**; a gap is a compile error naming the missing
 enum variant where it can (`match is not exhaustive: 'Shape::Point' is not
 covered`). A guarded arm never counts towards coverage — whether it matches is
-a runtime question. Types with no enumerable domain (`int`, `float`, `String`)
+a runtime question. Types with no enumerable domain (`int`, `float`, `string`)
 therefore always need a `_` or a binding arm.
 
 ### `if var` and `while var`
@@ -1014,7 +1014,7 @@ are fully checked.
 
 `for x in it` over a value that is neither an array nor a range requires the
 type to implement `Iterator` (`std::iter`, preluded). An array and a range
-reach the trait through `xs.iter()` / `(0..n).iter()`, and a `String`'s
+reach the trait through `xs.iter()` / `(0..n).iter()`, and a `string`'s
 characters through `s.chars()` — see "Sources" at the end of this section:
 
 ```
@@ -1164,7 +1164,7 @@ and ask whether it is `Ord`, which is the question the coercion could not.
 on an element had nothing to bound, so reducing a sequence meant spelling the
 operation out through `fold`. Both return an `Option` for the reason `max` does
 — there is no way to write "the identity element of `T`" — so an empty sequence
-answers `None` and the caller decides with `unwrap_or(0)`. `impl Add for String`
+answers `None` and the caller decides with `unwrap_or(0)`. `impl Add for string`
 is why they are not numeric-only: a sequence of words sums to a sentence.
 
 `chain(other)` is the one that needed a predicate rather than a bound. Its
@@ -1234,7 +1234,7 @@ returns a `Rev<Self>`), which does not stop a trait object being reversed by a
 Everything above wraps an iterator, and an array and a range are *not* ones:
 `for x in xs` and `for i in 0..n` reach them by a desugaring, not through the
 trait. `std::iter` ships the seeds that connect them, and the one that connects
-a `String`:
+a `string`:
 
 ```
 xs.iter()        # -> ArrayIter<T>, Item = T
@@ -1267,7 +1267,7 @@ end index, so:
 - popping ends the walk early rather than reading off the end;
 - no interleaving of the two can produce an out-of-bounds read.
 
-A `Range` is a value, so a `RangeIter` shares nothing and cannot be disturbed;
+A `range` is a value, so a `RangeIter` shares nothing and cannot be disturbed;
 `var r = 0..3;` seeds as many identical walks as it is asked for. It holds one
 **exclusive** bound rather than the range, which is where `a..b` and `a..=b`
 stop being two things — `(0..4).iter()` and `(0..=3).iter()` are the same
@@ -1276,7 +1276,7 @@ carrying a distinction the sequence does not have.
 
 **A `CharIter` holds the string and two byte offsets**, and it *does* snapshot
 its end — the opposite of `ArrayIter`, for a reason that is the objects' rather
-than a preference: a `String` is interned and immutable, so there is nothing
+than a preference: a `string` is interned and immutable, so there is nothing
 underneath an offset that could change and nothing to re-read. It is the one
 source that has to decode to move: forwards by the width the character's own
 value implies (a scalar value determines its encoding), backwards by the
@@ -1525,11 +1525,15 @@ an enum variant — without pulling it into scope by name:
 
 ```
 use std::io;
-use std::string;
+use std::string as strings;         # the bare name belongs to the type `string`
 
-io::print(string::concat(parts));   # `print` and `concat`, each named
+io::print(strings::concat(parts));  # `print` and `concat`, each named
                                     # through its module without an import
 ```
+
+The alias is not decoration: a builtin type name is answered before any module
+binding, so `std::string` is the one std module whose free items the bare
+qualifier cannot reach — see the gaps table.
 
 (The primitives' operations — `s.len()`, `xs.push(v)` — are *methods* now, told
 apart by their receiver's type, so a qualifier is for the free functions and
@@ -1570,7 +1574,7 @@ which is worth knowing before writing your own method on a primitive: `use
 std::array;` reaches `std::option` (that is what `pop` returns), and so
 `std::fmt` and `std::cmp` beyond it, and `std::string` beyond *that* — so every
 impl those modules ship is visible too, and since milestone 40 that includes
-inherent methods on the primitives (`impl<T> [T]`, `impl String`, `impl char`,
+inherent methods on the primitives (`impl<T> [T]`, `impl string`, `impl char`,
 `impl StringBuf`). Importing `std::array` therefore also means you cannot add
 your own inherent `[T]` method of a name it already spends (`len`, `push`, …) —
 since milestone 68 that is an error where the impl is written, rather than the
@@ -1579,8 +1583,8 @@ silent loss it used to be.
 That chain is why the direction of a std module's own imports is a design
 decision rather than bookkeeping: what an import costs its dependents is the
 *impls* the imported module ships, not its size. `std::cmp` imports
-`std::string` and `std::char` for `impl Ord for String` / `impl Ord for char`,
-and the cost it passes on is those modules' own `impl String` / `impl char` —
+`std::string` and `std::char` for `impl Ord for string` / `impl Ord for char`,
+and the cost it passes on is those modules' own `impl string` / `impl char` —
 one type's methods each, on a type the importer did not itself define, rather
 than a trait impl coherence could take away.
 
@@ -1599,7 +1603,7 @@ visible.
 
 **Inherent methods have the same rule at a finer grain: the name rather than
 the impl head.** Splitting a type's methods across several `impl Point` blocks
-is ordinary — `String`'s live in three std modules — but one type spends an
+is ordinary — `string`'s live in three std modules — but one type spends an
 inherent name once:
 
 ```
@@ -1695,8 +1699,8 @@ module that does not exist is an error listing the ones that do.
 
 ```
 pub fun assert(condition: bool)                       # "assertion failed"
-pub fun assert_with(condition: bool, message: String)
-pub fun assert_else(condition: bool, message: fun() -> String)
+pub fun assert_with(condition: bool, message: string)
+pub fun assert_else(condition: bool, message: fun() -> string)
 pub fun assert_eq<T: Display>(left: T, right: T)      # "assertion failed: 1 == 2"
 pub fun assert_ne<T: Display>(left: T, right: T)
 ```
@@ -1720,7 +1724,7 @@ already established for the same reason.
 `==` lowers to `OP_EQ`, which reads no static type and walks any pair of values
 structurally, so two values of a type with no impls at all can be compared. The
 whole `T: Display` bound is bought by the failure *message* — the runtime can
-render any value, but only to stdout, and `panic` takes a `String` that nothing
+render any value, but only to stdout, and `panic` takes a `string` that nothing
 structural produces. So it is a consumer of equality that specifically does not
 motivate an `Eq` trait (see `roadmap.md` item 2): it wants a way to print, and
 it has one (`tests/fail/assert_eq_needs_display.dt`).
@@ -1729,7 +1733,7 @@ it has one (`tests/fail/assert_eq_needs_display.dt`).
 `std::fmt`'s impls, impl visibility is transitive, and a program that only
 wanted `panic("...")` must not inherit them — nor coherence's refusal to let it
 write its own `impl Display for int`. Same argument `std::cmp` makes about
-where `impl Ord for String` belongs; the dependency points at the impl-poor
+where `impl Ord for string` belongs; the dependency points at the impl-poor
 module, so `assert` imports `panic` and never the reverse.
 
 There is **no conditional compilation**, so nothing here vanishes from a
@@ -1750,7 +1754,7 @@ pub fun min<T: Ord>(a: T, b: T) -> T
 pub fun clamp<T: Ord>(v: T, lo: T, hi: T) -> T
 ```
 
-`Ord` is implemented for `int`, `float`, `char` and `String`, which is the point worth
+`Ord` is implemented for `int`, `float`, `char` and `string`, which is the point worth
 noticing: **a trait can be implemented for a primitive**, so the standard
 library extends the built-in types with exactly the machinery user code uses.
 Your own types join the same trait and `max`/`min` work on them unchanged
@@ -1779,10 +1783,10 @@ a *spelling* for `OP_LEN` rather than a definition a module owns — so `std::cm
 names the opcode a second time and the cycle that blocks the impl's type does
 not block the length it needs.
 
-**`String` is ordered by a trait, not by a built-in opcode** — but since
-milestone 38 the operator reaches that trait: `a < b` on a String desugars to
+**`string` is ordered by a trait, not by a built-in opcode** — but since
+milestone 38 the operator reaches that trait: `a < b` on a string desugars to
 `a.cmp(b) < 0`, so comparing two Strings is `a < b`, `a.lt(b)`, or `max`/`min`/
-`clamp`, all reaching `impl Ord for String` (`tests/run/string_ord.dt`):
+`clamp`, all reaching `impl Ord for string` (`tests/run/string_ord.dt`):
 
 ```
 use std::cmp::{Ord, max};
@@ -1794,12 +1798,12 @@ The comparison is by *bytes*, which for well-formed UTF-8 is code-point order:
 a multi-byte sequence's lead byte is above every ASCII byte. A prefix sorts
 before what extends it, and there is no locale, case-folding or normalisation.
 
-The interesting part is what interning does *not* buy here. `==` on a String is
+The interesting part is what interning does *not* buy here. `==` on a string is
 a pointer compare because two equal strings are one object in the intern table
 — but pointer *order* is allocation order, so ordering gets nothing from the
-table beyond the equal case, and has to walk the bytes. That walk is the String
+table beyond the equal case, and has to walk the bytes. That walk is the string
 method `compare` (`a.compare(b)`), and it has to be a native for the same reason
-`push` is: nothing hands a program a String's bytes. `slice` cuts characters,
+`push` is: nothing hands a program a string's bytes. `slice` cuts characters,
 not bytes, and `matches_at` answers only equal-or-not — so a comparison written
 in ducktape would need the ordering being defined.
 
@@ -1812,13 +1816,13 @@ them.
 The impl lives in `std::cmp`, beside the trait, so `std::cmp` imports
 `std::string` (and `std::char`) rather than the other way round. That direction
 is deliberate: impl visibility is transitive through `use`, so importing them
-brings their `impl String` / `impl char` (the methods `compare` and `code` live
+brings their `impl string` / `impl char` (the methods `compare` and `code` live
 on) into every `use std::cmp::…` — one type's methods each, and nothing a
 program did not already reach through `std::cmp`.
 Putting the impl in `std::string` would have handed a program that only wanted
 `len` every `Ord` impl — and with them coherence's refusal to let it write
 its own `impl Ord for int`. **An import's cost is measured in impls, not in
-code.** `impl Display for String` living in `std::fmt` sets the same precedent.
+code.** `impl Display for string` living in `std::fmt` sets the same precedent.
 
 `float` is ordered by IEEE comparison, which is *not* a total order: every
 `<`/`>`/`==` involving a NaN is false. `Ord` promises a total order, so the impl
@@ -1902,7 +1906,7 @@ nobody could implement.
 
 Only two conversions ship, and the restraint is the point: an import's cost is
 measured in impls (see `std::cmp`). Both are lossless. There is no
-`From<T> for String` — rendering is `Display`'s question and `to_string`
+`From<T> for string` — rendering is `Display`'s question and `to_string`
 already answers it — and no `From<float> for int`, since `as int` truncates
 and which way it should round is a question a fallible conversion would have
 to ask. `From` is not object-safe (it produces a `Self`), while `into` is; see
@@ -1912,13 +1916,13 @@ to ask. `From` is not object-safe (it produces a `Self`), while `into` is; see
 
 ```
 pub trait Display {
-    fun to_string(self) -> String;
+    fun to_string(self) -> string;
 }
 
-pub fun to_string<T: Display>(value: T) -> String
-pub fun float(value: float, precision: int) -> String   # @native
+pub fun to_string<T: Display>(value: T) -> string
+pub fun float(value: float, precision: int) -> string   # @native
 
-impl Display for int / float / bool / String
+impl Display for int / float / bool / string
 impl<T: Display> Display for [T]
 impl<A: Display, B: Display> Display for (A, B)
 ```
@@ -1930,7 +1934,7 @@ means, and that cannot be left to whatever happens to be in scope.
 
 So `"{v}"` splits in two:
 
-- a **primitive** segment (int, float, bool, String) renders itself. This is
+- a **primitive** segment (int, float, bool, string) renders itself. This is
   the path the VM has always had, and it is what lets a program interpolate a
   number without importing anything.
 - **anything else** must implement `Display`, and the segment *is* the call
@@ -1940,11 +1944,11 @@ So `"{v}"` splits in two:
 
 ```
 impl Display for Point {
-    fun to_string(self) -> String { return "({self.x}, {self.y})"; }
+    fun to_string(self) -> string { return "({self.x}, {self.y})"; }
 }
 
 print("{p}");                              # (1, 2)
-fun label<T: Display>(v: T) -> String { return "[{v}]"; }
+fun label<T: Display>(v: T) -> string { return "[{v}]"; }
 var xs: [dyn Display] = [p, Colour::Red];
 ```
 
@@ -1972,7 +1976,7 @@ An impl belongs beside the type it is for, so only the first two live in
 them, since a module only selects from impls it can reach.
 
 The element goes through `Display` in turn, which is the point: a `[Point]`
-renders with `Point`'s own `to_string`. It also means a `String` element renders
+renders with `Point`'s own `to_string`. It also means a `string` element renders
 bare (`[a, b]`, not `["a", "b"]`) — `Display` answers "render this for a
 reader", and quoting is a debugging affordance. Arity is per-impl: a tuple's
 length is part of its type and nothing can be generic over it, so a 3-tuple
@@ -2005,8 +2009,8 @@ gives the shortest decimal that round-trips, which is the only rendering the VM
 has. `float` renders a `float` to a fixed precision, and `std::string`'s
 `pad_start`/`pad_end`/`pad_center` lay a rendered string out to a width. Width
 there is a *character* count, not bytes, since alignment is a display question;
-the value has to be rendered to a `String` first, which is exactly why these are
-String→String operations.
+the value has to be rendered to a `string` first, which is exactly why these are
+string→string operations.
 
 A format spec is the terse spelling of those calls (milestone 35):
 
@@ -2023,7 +2027,7 @@ The spec is `:` then an alignment (`<` `>` `^`) with a width, an optional
 leading fill char, and an optional `.N` precision — or a `.N` alone. It is
 sugar and nothing more: the checker rewrites the segment into the same `pad_*`
 and `float` calls you could write by hand, so codegen, the VM and the image
-format never see a spec. The value is rendered to a `String` first (a primitive
+format never see a spec. The value is rendered to a `string` first (a primitive
 via the VM, a `Display` type via `to_string`), which is why a width applies to
 anything renderable while a precision applies only to a `float`. Because the
 compiler generates the `pad_*`/`float` calls, it must resolve those names
@@ -2065,7 +2069,7 @@ var d = -c;                                        # (-11, -22)
 
 fun twice<T: Add<Output = T>>(v: T) -> T { return v + v; }
 print(twice(3));                                   # 6      — via impl Add for int
-print(twice("ab"));                                # abab   — via impl Add for String
+print(twice("ab"));                                # abab   — via impl Add for string
 ```
 
 Three things are worth knowing about the shape:
@@ -2073,7 +2077,7 @@ Three things are worth knowing about the shape:
 - **A numeric operand never reaches for these.** `1 + 2` is still `OP_ADD` — no
   import, no frame, no impl lookup — exactly as `1 < 2` stays an opcode and
   `"{1}"` stays the VM's own rendering. The impls `std::ops` ships for `int`,
-  `float` and `String` are not what makes `1 + 2` work; they exist so a generic
+  `float` and `string` are not what makes `1 + 2` work; they exist so a generic
   bounded `T: Add` can instantiate at a primitive, and each of their bodies is
   the built-in path (`return self + other;` on two Ints is the opcode, so it
   does not call itself).
@@ -2092,8 +2096,8 @@ Three things are worth knowing about the shape:
   `v * 2.0` asks whether `V2` implements `Mul<float>`. `Rhs` defaults to `Self`,
   so a bare `Mul` still means `Mul<V2>` and every homogeneous impl and `T: Add`
   bound reads exactly as before. `Neg` has no right operand and no parameter.
-  A pair no impl heads says so — `cannot apply '*' to 'V2' and 'String': 'V2'
-  does not implement 'Mul<String>'` (`tests/fail/ops_rhs_mismatch.dt`), and an
+  A pair no impl heads says so — `cannot apply '*' to 'V2' and 'string': 'V2'
+  does not implement 'Mul<string>'` (`tests/fail/ops_rhs_mismatch.dt`), and an
   operand inference has not solved is reported as the failure to *choose* that
   it is (`tests/fail/ops_rhs_unsolved.dt`). See
   `tests/run/ops_heterogeneous.dt`.
@@ -2159,7 +2163,7 @@ impl<T> Option<T> {
     fun is_some(self) -> bool
     fun is_none(self) -> bool
     fun unwrap(self) -> T                # panics on None
-    fun expect(self, message: String) -> T
+    fun expect(self, message: string) -> T
     fun unwrap_or(self, fallback: T) -> T
     fun unwrap_or_else(self, fallback: fun() -> T) -> T
     fun map<U>(self, f: fun(T) -> U) -> Option<U>
@@ -2193,7 +2197,7 @@ it against a program's own import of `std::cmp` (`tests/run/std_option.dt`).
 
 ```
 @native("panic_abort")
-pub fun panic(message: String) -> !;
+pub fun panic(message: string) -> !;
 ```
 
 `panic` is the only std function that promises never to come back, and `!`
@@ -2274,7 +2278,7 @@ native sets, so the VM reports it at the call site, prints the frames beneath
 it, and stops. Recovering would need a story for what a half-finished frame
 leaves behind, and the language has none.
 
-The message is an ordinary `String`, so a call site can build one by
+The message is an ordinary `string`, so a call site can build one by
 interpolation. A panic *inside* a generic can name the value that caused it
 only where the type parameter is bounded (`E: Display`); `Option::unwrap` and
 `Result::unwrap` are not, so their messages are fixed and `expect` takes one
@@ -2291,7 +2295,7 @@ impl<T, E> Result<T, E> {
     fun ok(self) -> Option<T>            # discard the error
     fun err(self) -> Option<E>
     fun unwrap(self) -> T                # panics on Err
-    fun expect(self, message: String) -> T
+    fun expect(self, message: string) -> T
     fun unwrap_or(self, fallback: T) -> T
     fun unwrap_or_else(self, fallback: fun(E) -> T) -> T
     fun map<U>(self, f: fun(T) -> U) -> Result<U, E>
@@ -2352,7 +2356,7 @@ An **impl method** may carry an attribute too, so a primitive's operation can be
 spelled `s.len()` rather than as a free `string::len(s)`:
 
 ```
-impl String {
+impl string {
     @native("string_len") fun len(self) -> int;
 }
 impl<T> [T] {
@@ -2401,10 +2405,10 @@ on a non-primitive calls `Display`'s `to_string`, `a < b` on a non-numeric calls
 standard library marks them with a third attribute, `@lang("…")`:
 
 ```
-@lang("display") pub trait Display { fun to_string(self) -> String; }
+@lang("display") pub trait Display { fun to_string(self) -> string; }
 @lang("ord")     pub trait Ord     { fun cmp(self, other: Self) -> int; }
 @lang("add")     pub trait Add     { type Output; fun add(self, o: Self) -> Self.Output; }
-@native("fmt_float") @lang("float") pub fun float(v: float, p: int) -> String;
+@native("fmt_float") @lang("float") pub fun float(v: float, p: int) -> string;
 ```
 
 The six operator traits are one key each (`add`/`sub`/`mul`/`div`/`rem`/`neg`),
@@ -2451,29 +2455,29 @@ impl<T> [T]  self.len() -> int                      # @intrinsic (OP_LEN)
              self.lower_bound(target: T) -> int     # std::sort, needs T: Ord
              self.binary_search(target: T) -> Option<int>   # std::sort, T: Ord
 
-impl Range   self.iter() -> RangeIter               # lives in std::iter
+impl range   self.iter() -> RangeIter               # lives in std::iter
              (std::iter also: private free `range_start`/`range_stop`,
               the two @intrinsics that read a range's bounds)
 
-impl String  self.len() -> int                      # @native, in bytes
-             self.compare(other: String) -> int     # @native
+impl string  self.len() -> int                      # @native, in bytes
+             self.compare(other: string) -> int     # @native
              self.chars() -> CharIter               # lives in std::iter
-             self.repeat(n: int) -> String
+             self.repeat(n: int) -> string
              (std::iter also: private free `char_at`/`prev_boundary`, the two
               @natives a character walk needs; std::string keeps a private
               free `char_width`, the @native the pad_* lang items count with)
-             std::string free: join(parts: [String], sep: String) -> String
-                              concat(parts: [String]) -> String
-                              from_chars(cs: [char]) -> String
+             std::string free: join(parts: [string], sep: string) -> string
+                              concat(parts: [string]) -> string
+                              from_chars(cs: [char]) -> string
                               pad_start/pad_end/pad_center(s, width, fill)  # lang items
 
 impl StringBuf  StringBuf::new() -> StringBuf        # @native (associated)
-             self.push(s: String)                   # @native
+             self.push(s: string)                   # @native
              self.push_char(c: char)                # @native
              self.push_int(n: int)                  # @native
              self.len() -> int                      # @native
              self.clear()                           # @native
-             self.build() -> String                 # @native
+             self.build() -> string                 # @native
              self.is_empty() -> bool
 
 impl char    self.code() -> int                     # @native
@@ -2484,14 +2488,14 @@ impl char    self.code() -> int                     # @native
              self.to_lower() -> char                # ASCII only
              self.to_digit() -> int
 
-std::fmt     float(value: float, precision: int) -> String   # @native, free (lang item)
+std::fmt     float(value: float, precision: int) -> string   # @native, free (lang item)
 ```
 
 `print` stays a free function because it is a general operation over any `T`,
 not a method on one type; the `pad_*` and `float` functions stay free because
 they are lang items the `{v:>8}` / `{f:.3}` format spec desugars into, so their
 meaning cannot depend on what a program imported; `join`/`concat`/`from_chars`
-stay free because their receiver is a `[String]` / `[char]`, not a `String`.
+stay free because their receiver is a `[string]` / `[char]`, not a `string`.
 
 **`print` is not a builtin and is not in scope by default** — `use
 std::io::print;` is a real import of a real module, and forgetting it is an
@@ -2536,8 +2540,8 @@ contract is "n values in, one out" and it has no handle on the `VariantDef` an
 enum instance needs, so a native *cannot* build an `Option` at all. Popping
 does not release capacity; the buffer is returned when the array is collected.
 
-**A `String` is built with a `StringBuf`, which lives in `std::string::buf`.** `a +
-b` allocates a new String and interns it, so growing one a piece at a time
+**A `string` is built with a `StringBuf`, which lives in `std::string::buf`.** `a +
+b` allocates a new string and interns it, so growing one a piece at a time
 re-interns the whole accumulation at every step. A buffer appends in place
 instead, and `build` interns once:
 
@@ -2558,8 +2562,8 @@ constructor. A method resolves on its receiver, so `b.len()`, `s.len()` and
 had to dodge (`buf_len`, `push_str`) and later disambiguate with a qualifier is
 gone, since a method names the operation and the receiver names which one.
 
-`StringBuf` is a *separate type* from `String`, not a mutable flavour of one,
-and the reason is interning: a String is filed in the runtime's table under the
+`StringBuf` is a *separate type* from `string`, not a mutable flavour of one,
+and the reason is interning: a string is filed in the runtime's table under the
 hash of its bytes, and two equal strings are the same pointer — which is what
 makes `==` on strings a pointer compare. Bytes that change cannot be in that
 table. So a buffer is the object deliberately kept out of it, and `build` is a
@@ -2576,18 +2580,18 @@ Two smaller consequences, both visible from a program:
   debug view says which of the two kinds it is looking at.
 
 Seven of `StringBuf`'s methods are written in C — existing (the associated
-`new`), growing (from a String, a char or an int's digits), emptying, its
-length, and becoming a String — and `is_empty` is ducktape on `len`. `push_int`
-puts a number's digits in without interning a `"{n}"` String to carry them, and
+`new`), growing (from a string, a char or an int's digits), emptying, its
+length, and becoming a string — and `is_empty` is ducktape on `len`. `push_int`
+puts a number's digits in without interning a `"{n}"` string to carry them, and
 `clear` drops the length to zero while keeping the capacity, so one buffer can be
 reused across a loop. `std::string`'s `repeat` method and its free `join`,
-`concat` and `from_chars` are the String-shaped conveniences on top, built
+`concat` and `from_chars` are the string-shaped conveniences on top, built
 through the buffer, the same split `std::array` makes; `repeat` is the one that
-shows what the buffer buys — it copies bytes straight in, allocating no String
+shows what the buffer buys — it copies bytes straight in, allocating no string
 per copy. `std::string` reaches only `std::string::buf`, which imports nothing and
 ships only methods on its own `StringBuf`, so importing `std::string` hands a
 program no impls for a type it did not itself name beyond that one — the property
-that makes it safe for `std::cmp` to depend on it for `impl Ord for String`. What
+that makes it safe for `std::cmp` to depend on it for `impl Ord for string`. What
 `std::string` must *not* reach is `Option` or `std::array`, which would close the
 cycle `string → option → cmp → string`; the buffer is a pure leaf below it, so
 the edge to it is free.
@@ -2598,7 +2602,7 @@ mistaken for an `int`: `1.0`, `0.3333333333333333`, `300.0`, `1e+18`, `1e-07`,
 `-0.0`, `inf`, `-inf`, `NaN`. Exponent form takes over below `1e-5` and at
 `1e17`; every form printed is also a literal the scanner accepts.
 
-### `std::char`, and what a `String` is made of
+### `std::char`, and what a `string` is made of
 
 A `char` is **one Unicode scalar value** — a code point that is not a surrogate
 half — written between single quotes:
@@ -2621,7 +2625,7 @@ it with no `Display` impl involved, and `match c { 'q' => …, _ => … }` works
 the way an `int` match does — a wildcard is required, since the domain is far
 too large to enumerate.
 
-**A `String` is bytes and a `char` is a character, and the language keeps the
+**A `string` is bytes and a `char` is a character, and the language keeps the
 two apart.** `s.len()` counts *bytes*, `s.slice(..)` cuts at *byte* positions,
 and `s.compare(..)` walks bytes; `s.chars()` is the only crossing:
 
@@ -2645,14 +2649,14 @@ byte offsets — it has to — and keeps them private for that reason. Going bac
 is `from_chars`, through a `StringBuf`, which `push_char` is what makes
 possible.
 
-**A `String` is guaranteed valid UTF-8** (milestone 101), so a walk over one
-cannot fail on its bytes. The guarantee is paid for at the two places a String
+**A `string` is guaranteed valid UTF-8** (milestone 101), so a walk over one
+cannot fail on its bytes. The guarantee is paid for at the two places a string
 can come from bytes nothing vetted — a source file, checked once when it is
 read, and a bytecode image's string table, checked once when it is loaded — and
-at `slice`, the only operation that can cut new bytes out of an old String.
+at `slice`, the only operation that can cut new bytes out of an old string.
 Both ends of the range are checked, and the check is O(1): in valid UTF-8 a
 character starts exactly where the byte is not a continuation byte. Everything
-else that builds a String is valid by induction — a `StringBuf` takes only
+else that builds a string is valid by induction — a `StringBuf` takes only
 Strings, `char`s and digits, and concatenation and interpolation join Strings
 that were already valid.
 
@@ -2671,8 +2675,8 @@ shipping a range test under that name would be right for English and quietly
 wrong elsewhere.
 
 `impl Ord for char` (in `std::cmp`, beside the trait) is code-point order, so
-`'Z'` sorts before `'a'` — the same order `impl Ord for String` gives, since
-UTF-8 byte order and code-point order agree. As with `String`, ordering is the
+`'Z'` sorts before `'a'` — the same order `impl Ord for string` gives, since
+UTF-8 byte order and code-point order agree. As with `string`, ordering is the
 trait and not the operator: `'a' < 'b'` is still "comparison requires numeric
 types".
 
@@ -2680,8 +2684,8 @@ types".
 
 `std::text` is searching, cutting, splitting, trimming and parsing, written
 entirely in ducktape on the primitives `std::string` and `std::char` already
-offer. Its operations are **methods on `String`** (milestone 41), a second
-`impl String` one module up from the leaf's — so importing the module is all it
+offer. Its operations are **methods on `string`** (milestone 41), a second
+`impl string` one module up from the leaf's — so importing the module is all it
 takes and no item is ever named:
 
 ```
@@ -2698,7 +2702,7 @@ use std::text;
 "-42".parse_int();            # Some(-42);  "12x".parse_int() is None
 ```
 
-Two inherent impls for one type coexist: `std::string`'s `impl String` and this
+Two inherent impls for one type coexist: `std::string`'s `impl string` and this
 one declare **disjoint method names**, which since milestone 68 is what
 coherence asks of them — the granularity is the name, not the impl head, so
 splitting a type's methods across blocks is ordinary and spending one name
@@ -2708,9 +2712,9 @@ call site.
 
 **It is a module of its own, not more of `std::string`, and the reason is a
 dependency cycle rather than taste.** `std::cmp` imports `std::string` for
-`compare` (the byte comparison `impl Ord for String` is written on); `std::option`
+`compare` (the byte comparison `impl Ord for string` is written on); `std::option`
 imports `std::cmp`; and every function in `std::text` either answers with an
-`Option` or builds a `[String]`. So putting them in `std::string` would make it
+`Option` or builds a `[string]`. So putting them in `std::string` would make it
 import `Option` or array `push`, closing the loop `string → option → cmp →
 string` — which the dependency graph rejects outright ("module cycle"). The
 module everything else builds on cannot reach back up to them (it reaches only
@@ -2732,7 +2736,7 @@ Within the module the two views of text stay apart, the milestone-26 way:
 
   Searching **compares rather than cuts** as of milestone 101, and the change was
   forced by the UTF-8 guarantee rather than chosen for speed: a search compares
-  at offsets it has no reason to believe in yet, and a String that guarantees its
+  at offsets it has no reason to believe in yet, and a string that guarantees its
   own encoding cannot be cut at one of those. `matches_at` is total where the cut
   is not — an offset past the end is `false`, and so is an offset inside a
   character, because a non-empty needle begins with a lead byte and a lead byte
@@ -2744,7 +2748,7 @@ Within the module the two views of text stay apart, the milestone-26 way:
   candidate window each position used to allocate: the search got about a fifth
   faster on ASCII where those windows repeat, and more where they do not.
 
-  A `StrPos` carries **the String it names** as well as the offset, and `slice`
+  A `StrPos` carries **the string it names** as well as the offset, and `slice`
   and `matches_at` check it — `a.slice(b.start(), b.end())` is a runtime error
   rather than a cut of `a` at lengths that mean something only in `b`. Interning
   makes the check a pointer compare, and makes accepting an *equal* string
@@ -2773,7 +2777,7 @@ could name a byte outside the string. Arithmetic like that stays *inside*
 `StrPos`'s fields are private to the module that declares it, so the module
 that mints positions has to be the one that cuts at them. The raw byte-indexed
 natives are private free functions there, since an impl method has no
-visibility control and a `String` method taking an `int` would be callable
+visibility control and a `string` method taking an `int` would be callable
 wherever the impl is. The empty pattern is read consistently
 everywhere: `s.starts_with("")` and `s.find("")` both succeed at the start, and
 `s.split("")` returns `s` whole in a one-element array (there is no position at
@@ -2787,7 +2791,7 @@ overflow: a value past what an `int` holds wraps.
 ### `std::sort`
 
 Ordering an array, and using one that is ordered. Methods on `[T]` (a second
-inherent impl, the way `std::text`'s are on `String`), so `use std::sort;` is
+inherent impl, the way `std::text`'s are on `string`), so `use std::sort;` is
 all it takes:
 
 ```
@@ -2871,7 +2875,7 @@ impl Hash for Point {
 }
 ```
 
-`Hash` ships for `int`, `String`, `bool`, `char`, `[T: Hash]` and
+`Hash` ships for `int`, `string`, `bool`, `char`, `[T: Hash]` and
 `(A: Hash, B: Hash)`. `Hasher` offers `new`, `write_int`, `write_string`,
 `write_bool`, `write_char` and `finish`; `hash_of(v)` is the whole of a hash in
 one call, and is what a caller that is not itself an impl wants.
@@ -2895,7 +2899,7 @@ one call, and is what a caller that is not itself an impl wants.
 - **The contract is one-sided and nearly unbreakable**: values that are `==`
   must write the same bytes. Since `==` is structural and cannot be overridden,
   any impl reading only the value's own contents satisfies it by construction.
-- **A `String`'s hash is a field read** — the heap hashed the bytes when it
+- **A `string`'s hash is a field read** — the heap hashed the bytes when it
   interned them — so the type whose hash would otherwise be a walk is the
   cheapest one here.
 - **`impl Hash for [T]` writes the length first.** Without it, `[[1], [2]]` and
@@ -2917,7 +2921,7 @@ is a facade over the two, so either spelling reaches them.
 use std::collections::{HashMap, HashSet};          # through the facade
 use std::collections::hashmap::HashMap;            # or the module directly
 
-var m: HashMap<String, int> = HashMap::new();
+var m: HashMap<string, int> = HashMap::new();
 m.insert("one", 1);            # None — nothing was displaced
 m.insert("one", 11);           # Some(1) — the value it replaced
 m.get("one");                  # Some(11)
@@ -3088,10 +3092,10 @@ See the gaps table below for what suppression still cannot do.
 | recovering from a panic (`catch`, unwinding) | a panic reports at the call site and stops; there is no `catch` |
 | `Display` for a tuple of arity other than 2 | arity is part of a tuple's type and nothing is generic over it, so each needs its own impl; only `(A, B)` ships |
 | writing your own `Display` for a container | rejected as a conflict with the std impl, which naming the trait makes visible |
-| Unicode case mapping, folding, or normalisation | `std::char`'s classifications and `to_upper`/`to_lower` are ASCII-only; `String` comparison is raw bytes |
-| indexing a `String` by character (`s[i]`) | there is none: `s.chars()` walks, because a byte offset is not a character position. `s.chars().collect()` is the array, and `s.chars().skip(i).next()` is the one character |
+| Unicode case mapping, folding, or normalisation | `std::char`'s classifications and `to_upper`/`to_lower` are ASCII-only; `string` comparison is raw bytes |
+| indexing a `string` by character (`s[i]`) | there is none: `s.chars()` walks, because a byte offset is not a character position. `s.chars().collect()` is the array, and `s.chars().skip(i).next()` is the one character |
 | a cut whose ends are known to be ordered | a `StrPos` is opaque and knows its own string (milestone 102), so cutting inside a character or into the wrong string is unrepresentable — but `slice` takes two independent positions rather than a range, so `s.slice(s.end(), s.start())` is still a runtime error |
-| reading a `String`'s bytes | there is none, and deliberately: `s.len()` counts them and `matches_at` compares them, but nothing hands one over. A `byte` would be the first sized integer in a language that has no others, so the shape it waits for is a packed `Bytes` object |
+| reading a `string`'s bytes | there is none, and deliberately: `s.len()` counts them and `matches_at` compares them, but nothing hands one over. A `byte` would be the first sized integer in a language that has no others, so the shape it waits for is a packed `Bytes` object |
 | a *dynamic* width or precision in a format spec (`{v:>{n}}`) | the width and precision in a `{v:>8}` / `{f:.3}` spec are literals; a runtime value there has no spelling. The spec itself is sugar for `std::string::pad_*` / `std::fmt::float` (milestone 35) |
 | a downcast to a type that does not implement the trait, or binds a different associated type | rejected, rather than compiled as an always-`None` test: the identity is the vtable, and such a type has no table to recognise |
 | a trait's type arguments at a *bare* method call | the expected type breaks the tie between two impls of one generic trait, and pins an impl parameter the receiver cannot reach (`impl<T, U: From<T>> Into<U> for T`); with no expected type the first impl wins — or, where the parameter was only pinnable that way, no impl applies at all. The trait-qualified spelling (`into::<Fahrenheit>::into(c)`) settles it explicitly without an expected type |
@@ -3136,8 +3140,8 @@ See the gaps table below for what suppression still cannot do.
 | unused-warning order within a function | a binding is reported when its scope closes, so an inner block's warnings precede an outer one's regardless of line. Sorting the bag is blocked by notes, which attach to the diagnostic before them by position |
 | an unused *item* (a private `fun` or `struct` nothing calls) | not reported; only bindings and imports are. Codegen already skips it — a definition nothing reaches is never compiled |
 | a directory that is a module on its own | a directory is a path prefix; the module is the `.dt` file beside it, and `pub mod` in that file is what puts anything under the directory on a path at all. So a module added under a group and not declared is unreachable rather than half-reachable — but the short spellings a facade offers (`use std::collections::HashMap;`) are still hand-written `pub use` lines that nothing checks stay in step |
-| declaring a *module* whose name is a builtin (`mod char;`) | legal, and `std::char` is why — a module whose content is `impl char` is reached through the type anyway. What has no route is an item the type does not own (a free function, a struct): the builtin answers the first segment, so the item is reachable by its full path and by no other spelling. The "no associated item" error carries a note saying so |
-| overlapping method names across impls of one type | rejected since milestone 68: one type spends an inherent name once, whether the two definitions sit in two impl blocks or in one. A name the impl's *trait* declares is exempt — a bound or a trait-qualified path names which body was meant, so two traits may both declare `next` for one type. Where several impls legitimately declare a name (a generic trait like `into<int>` / `into<String>`), a bare path still picks the first registered impl. Milestone 70 extends the same rule to an enum's variants, which spend from the same pool: an inherent associated function under a variant's name is refused, since `Enum::name` reads the variant |
+| declaring a *module* whose name is a builtin (`mod char;`) | legal, and `std::char` is why — a module whose content is `impl char` is reached through the type anyway. What has no route is an item the type does not own (a free function, a struct): the builtin answers the first segment, so `use std::string; string::concat(..)` fails. The way back is to import the item by name (`use std::string::concat;`) or to rebind the module (`use std::string as strings;`) — there is no `std::string::concat(..)` spelling, since a qualifier must be a bound single segment. The "no associated item" error carries a note saying so |
+| overlapping method names across impls of one type | rejected since milestone 68: one type spends an inherent name once, whether the two definitions sit in two impl blocks or in one. A name the impl's *trait* declares is exempt — a bound or a trait-qualified path names which body was meant, so two traits may both declare `next` for one type. Where several impls legitimately declare a name (a generic trait like `into<int>` / `into<string>`), a bare path still picks the first registered impl. Milestone 70 extends the same rule to an enum's variants, which spend from the same pool: an inherent associated function under a variant's name is refused, since `Enum::name` reads the variant |
 | capturing a `for` loop variable in a closure | runs, but the closure sees the loop variable's *final* value (one shared cell), not a per-iteration copy — `runtime.md` "Closures & upvalues". A `while var` binding does *not* share this: it is pushed and closed inside the loop, so each turn's closure keeps that turn's value |
 | infinitely deep generic instantiation | `fun grow<T>(v: T) { grow([v]) }` type-checks but names a new instantiation at every level; codegen stops at 32 and reports it (`runtime.md` "Monomorphisation") |
 | more than 65536 functions, counting one per instantiation | each instantiation takes a global slot, so a heavily generic program can outgrow the two-byte operand space (`runtime.md` "Bytecode") |

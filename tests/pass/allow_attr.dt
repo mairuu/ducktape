@@ -43,11 +43,11 @@ impl P {
 # attribute, so this is the only place to write one for a default body.
 @allow("unused_variable")
 trait Named {
-    fun name(self) -> String;
-    fun label(self) -> String { var spare = 1; return self.name(); }
+    fun name(self) -> string;
+    fun label(self) -> string { var spare = 1; return self.name(); }
 }
 
-impl Named for P { fun name(self) -> String { return "p"; } }
+impl Named for P { fun name(self) -> string { return "p"; } }
 
 # two lints over one declaration: an attribute takes exactly one key, so it is
 # two lines rather than a list.

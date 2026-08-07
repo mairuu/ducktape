@@ -32,14 +32,14 @@ trait Pack<T> {
 }
 
 struct Box1 { v: int }
-struct Box2 { v: String }
+struct Box2 { v: string }
 
 impl Pack<int> for Box1 {
     fun one(self) -> int { return self.v; }
 }
 
-impl Pack<String> for Box2 {
-    fun one(self) -> String { return self.v; }
+impl Pack<string> for Box2 {
+    fun one(self) -> string { return self.v; }
 }
 
 fun main() {

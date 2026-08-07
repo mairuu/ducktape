@@ -51,7 +51,7 @@ bool sv_equal_cstr(StringView sv, const char *cstr);
 // ============================================================================
 // UTF-8
 //
-// A `String` is bytes and a `char` is a Unicode scalar value, so these two
+// A `string` is bytes and a `char` is a Unicode scalar value, so these two
 // functions are the only bridge between the two views. Both are strict: an
 // overlong encoding, a surrogate and anything past U+10FFFF are rejected
 // rather than round-tripped, so a `char` that exists is always a scalar value
@@ -71,7 +71,7 @@ int utf8_encode(uint32_t cp, char *out);
 // or 0 if the sequence is malformed or truncated.
 int utf8_decode(const char *p, int len, uint32_t *out);
 
-// is `p[0..len)` a well-formed sequence of scalar values? Every String the
+// is `p[0..len)` a well-formed sequence of scalar values? Every string the
 // runtime builds is required to satisfy this, so the two untrusted intakes —
 // a source file and an image's string table — are checked with it at the door.
 bool utf8_validate(const char *p, int len);

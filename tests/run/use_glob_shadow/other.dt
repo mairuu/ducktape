@@ -1,5 +1,5 @@
 pub struct Tag;
-impl Tag { fun name() -> String { return "other"; } }
+impl Tag { fun name() -> string { return "other"; } }
 
 pub struct Badge;
-impl Badge { fun name() -> String { return "other"; } }
+impl Badge { fun name() -> string { return "other"; } }

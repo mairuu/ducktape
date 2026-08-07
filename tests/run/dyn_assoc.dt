@@ -23,7 +23,7 @@ trait Iterator {
     type Item;
 
     fun next(self) -> Self.Item;
-    fun label(self) -> String;
+    fun label(self) -> string;
 
     # a default body whose return type is the projection: one instantiation
     # per receiver type, and its signature differs between two trait objects
@@ -35,19 +35,19 @@ trait Iterator {
 }
 
 struct Counter { n: int }
-struct Words { w: String }
+struct Words { w: string }
 
 impl Iterator for Counter {
     type Item = int;
     fun next(self) -> int { self.n + 1 }
-    fun label(self) -> String { "counter" }
+    fun label(self) -> string { "counter" }
 }
 
 impl Iterator for Words {
-    type Item = String;
-    fun next(self) -> String { "{self.w}!" }
-    fun label(self) -> String { "words" }
-    fun twice(self) -> String { "{self.w}!!" }
+    type Item = string;
+    fun next(self) -> string { "{self.w}!" }
+    fun label(self) -> string { "words" }
+    fun twice(self) -> string { "{self.w}!!" }
 }
 
 # a heterogeneous collection that also agrees on what it yields
@@ -86,7 +86,7 @@ fun main() {
 
     # the same trait, a different binding: a different type, a different
     # instantiation of the default body, and a different return type
-    var w: dyn Iterator<Item = String> = Words { w: "hi" };
+    var w: dyn Iterator<Item = string> = Words { w: "hi" };
     print(w.next());
     print(w.twice());
 

@@ -21,7 +21,7 @@ impl Ord for P {
 }
 
 impl Display for P {
-    fun to_string(self) -> String { "({self.x}, {self.y})" }
+    fun to_string(self) -> string { "({self.x}, {self.y})" }
 }
 
 fun main() {
@@ -35,6 +35,6 @@ fun main() {
     var o = Option::Some(5);     # Option in scope, its methods too
     print(o.map(|n| n * 2).unwrap_or(0));
 
-    var r: Result<int, String> = Result::Err("nope");
+    var r: Result<int, string> = Result::Err("nope");
     print(r.is_ok());
 }

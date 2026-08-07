@@ -1,4 +1,4 @@
-# A `char` is a Unicode scalar value, and a `String` is bytes. The two are
+# A `char` is a Unicode scalar value, and a `string` is bytes. The two are
 # different things, so the crossing between them is a conversion (`chars` /
 # `from_chars`) and never an index — which is what this file is mostly about.
 #> x
@@ -50,7 +50,7 @@ fun id<T>(v: T) -> T {
     return v;
 }
 
-fun shout(s: String) -> String {
+fun shout(s: string) -> string {
     var b = StringBuf::new();
     for c in s.chars() {
         b.push_char(c.to_upper());
@@ -58,7 +58,7 @@ fun shout(s: String) -> String {
     return b.build();
 }
 
-fun quiet(s: String) -> String {
+fun quiet(s: string) -> string {
     var b = StringBuf::new();
     for c in s.chars() {
         b.push_char(c.to_lower());

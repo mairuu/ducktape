@@ -33,7 +33,7 @@
 use std::io::print;
 use std::sort;
 
-struct Rec { key: int, tag: String }
+struct Rec { key: int, tag: string }
 
 fun main() {
     # enough elements for three merge passes, so the odd-parity copy-back runs
@@ -56,7 +56,7 @@ fun main() {
     print(zs);
     print(copy);
 
-    # any `Ord` orders its own arrays: byte order for String, code points for
+    # any `Ord` orders its own arrays: byte order for string, code points for
     # char, so 'Apple' sorts before 'fig' and 'Z' before 'a'
     var names = ["pear", "Apple", "fig", "apple"];
     names.sort();

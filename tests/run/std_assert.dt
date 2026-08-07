@@ -19,12 +19,12 @@ struct Point {
 }
 
 impl Display for Point {
-    fun to_string(self) -> String {
+    fun to_string(self) -> string {
         return "({self.x}, {self.y})";
     }
 }
 
-fun noisy() -> String {
+fun noisy() -> string {
     print("built once");
     return "never used";
 }

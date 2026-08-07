@@ -1,4 +1,4 @@
-#! expect: type mismatch: expected 'int' but got 'String'
+#! expect: type mismatch: expected 'int' but got 'string'
 # The soundness regression: an `if` whose condition is a generic `==` used to
 # have its whole body go unchecked, because the condition silently poisoned and
 # `resolve_expr`'s EXPR_IF bails on a poison condition. The body error below was

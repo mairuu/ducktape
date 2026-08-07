@@ -4,7 +4,7 @@ enum Result<T, E> {
     Err(E),
 }
 
-fun get() -> Result<int, String> {
+fun get() -> Result<int, string> {
     Result::Ok(1)
 }
 

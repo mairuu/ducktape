@@ -60,6 +60,6 @@ fun main() {
     print(pair(h.slot, Empty));
 
     # the turbofish still works, and still wins over the hint
-    var t = Opt::<String>::None;
-    var _s: Opt<String> = t;
+    var t = Opt::<string>::None;
+    var _s: Opt<string> = t;
 }

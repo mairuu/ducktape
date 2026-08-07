@@ -15,8 +15,8 @@ impl into<int> for S {
     fun into(self) -> int { self.n }
 }
 
-impl into<String> for S {
-    fun into(self) -> String { "s" }
+impl into<string> for S {
+    fun into(self) -> string { "s" }
 }
 
 fun first<T>(xs: [dyn into<T>]) -> T {

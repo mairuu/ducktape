@@ -9,7 +9,7 @@ use std::io::print;
 use std::fmt::Display;
 
 impl Display for [int] {
-    fun to_string(self) -> String {
+    fun to_string(self) -> string {
         return "mine";
     }
 }

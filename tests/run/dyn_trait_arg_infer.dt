@@ -13,7 +13,7 @@ struct Nums;
 
 impl Src<int> for Five { fun get(self) -> int { return 5; } }
 impl Twice<int> for Five { fun again(self) -> int { return 10; } }
-impl Src<String> for Word { fun get(self) -> String { return "w"; } }
+impl Src<string> for Word { fun get(self) -> string { return "w"; } }
 impl Bag for Nums { type Item = int; fun one(self) -> int { return 7; } }
 
 fun pull<T>(s: dyn Src<T>) -> T { return s.get(); }
@@ -25,7 +25,7 @@ fun relay<U>(s: dyn Src<U>) -> U { return pull(s); }
 
 fun main() {
     var s: dyn Src<int> = Five;
-    var w: dyn Src<String> = Word;
+    var w: dyn Src<string> = Word;
     var t: dyn Twice<int> = Five;
 
     print(pull(s));

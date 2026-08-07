@@ -1,1 +1,1 @@
-pub fun corner_name() -> String { return "corner"; }
+pub fun corner_name() -> string { return "corner"; }

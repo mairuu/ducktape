@@ -42,7 +42,7 @@ impl Shape {
         };
     }
 
-    fun described(self) -> String {
+    fun described(self) -> string {
         var a = self.area();
         return "area={a}";
     }

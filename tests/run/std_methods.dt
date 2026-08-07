@@ -3,7 +3,7 @@
 # using it, so `string::len(s)` is `s.len()`, `array::push(xs, v)` is
 # `xs.push(v)`, and the constructors are associated functions — `StringBuf::new()`,
 # `char::from_code(n)`. A method resolves on its receiver, so the four `len`s
-# (String, [T], StringBuf, and the counted array of chars) coexist unqualified.
+# (string, [T], StringBuf, and the counted array of chars) coexist unqualified.
 #> 5
 #> ell
 #> hellohello
@@ -26,7 +26,7 @@ use std::cmp::{max, min};
 use std::text;
 
 fun main() {
-    # String: @native methods, and a ducktape one (repeat) on top of them
+    # string: @native methods, and a ducktape one (repeat) on top of them
     var s = "hello";
     print(s.len());
     print(s.drop_chars(1).take_chars(3));

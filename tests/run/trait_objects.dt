@@ -21,10 +21,10 @@ use std::io::print;
 
 trait Shape {
     fun area(self) -> int;
-    fun name(self) -> String;
+    fun name(self) -> string;
 
     # a default body, reached through the vtable like any other method
-    fun describe(self) -> String {
+    fun describe(self) -> string {
         return "{self.name()} has area {self.area()}";
     }
 }
@@ -37,14 +37,14 @@ struct Slot { it: dyn Shape, tag: int }
 
 impl Shape for Sq {
     fun area(self) -> int { self.s * self.s }
-    fun name(self) -> String { "square" }
+    fun name(self) -> string { "square" }
 }
 
 impl Shape for Rect {
     fun area(self) -> int { self.w * self.h }
-    fun name(self) -> String { "rect" }
+    fun name(self) -> string { "rect" }
     # overrides the default: the vtable slot points here instead
-    fun describe(self) -> String { "a {self.w}x{self.h} rect" }
+    fun describe(self) -> string { "a {self.w}x{self.h} rect" }
 }
 
 # a heterogeneous collection — the thing static dispatch cannot express

@@ -10,15 +10,15 @@
 # body, leaving the derivation with no source for it. The narrower case where
 # the block supplies *some* of the super is tests/fail/supertrait_partial.dt.
 trait Named {
-    fun label(self) -> String;
+    fun label(self) -> string;
 }
 
 trait Greeter: Named {
-    fun greet(self) -> String;
+    fun greet(self) -> string;
 }
 
 struct Cat;
 
 impl Greeter for Cat {
-    fun greet(self) -> String { return "meow"; }
+    fun greet(self) -> string { return "meow"; }
 }

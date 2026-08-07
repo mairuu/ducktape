@@ -2,10 +2,10 @@
 # An arm is checked against the expectation rather than against the other arm,
 # so a branch that implements nothing is named on its own terms — where the
 # arms unifying with each other would have reported 'Sq' vs 'Blob'.
-trait Shape { fun name(self) -> String; }
+trait Shape { fun name(self) -> string; }
 struct Sq;
 struct Blob;
-impl Shape for Sq { fun name(self) -> String { return "sq"; } }
+impl Shape for Sq { fun name(self) -> string { return "sq"; } }
 
 fun main() {
     var c = true;

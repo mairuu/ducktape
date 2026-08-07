@@ -10,13 +10,13 @@ use std::fmt::Display;
 # ── the block supplies the super's method ────────────────────────────────────
 
 trait Greet {
-    fun name(self) -> String;
-    fun hi(self) -> String { return "hi {self.name()}"; }
+    fun name(self) -> string;
+    fun hi(self) -> string { return "hi {self.name()}"; }
 }
 
 trait Loud: Greet {
-    fun shout(self) -> String;
-    fun loud_hi(self) -> String { return "{self.hi()}!"; }
+    fun shout(self) -> string;
+    fun loud_hi(self) -> string { return "{self.hi()}!"; }
 }
 
 struct P;
@@ -24,15 +24,15 @@ struct P;
 # no `impl Greet for P` anywhere: this block is where `name` lives, and the
 # `impl Greet for P` it implies is derived from it.
 impl Loud for P {
-    fun name(self) -> String { return "p"; }
-    fun shout(self) -> String { return "HI"; }
+    fun name(self) -> string { return "p"; }
+    fun shout(self) -> string { return "HI"; }
 }
 
 # the derived impl has to be a real one, not a relaxed check: a bound and a
 # `dyn` both search the impl index and neither can see a method the block
 # happens to contain.
-fun greet_bound<T: Greet>(x: T) -> String { return x.name(); }
-fun greet_dyn(x: dyn Greet) -> String { return x.name(); }
+fun greet_bound<T: Greet>(x: T) -> string { return x.name(); }
+fun greet_dyn(x: dyn Greet) -> string { return x.name(); }
 
 # ── the derivation is transitive, because it walks the closure ───────────────
 
@@ -60,18 +60,18 @@ struct W<T> { v: T }
 impl<T: Ord + Display> Loud for W<T> {
     # the body is monomorphised per `T` through the *derived* impl, so the two
     # instantiations below must not collapse onto one another.
-    fun name(self) -> String { return "w{self.v}"; }
-    fun shout(self) -> String { return "W!"; }
+    fun name(self) -> string { return "w{self.v}"; }
+    fun shout(self) -> string { return "W!"; }
 }
 
 # ── nothing to write: the super's defaults supply it on their own ────────────
 
 trait Tagged {
-    fun tag(self) -> String { return "generic"; }
+    fun tag(self) -> string { return "generic"; }
 }
 
 trait Special: Tagged {
-    fun kind(self) -> String;
+    fun kind(self) -> string;
 }
 
 struct S1;
@@ -79,17 +79,17 @@ struct S2;
 
 # `impl Tagged for S1 {}` used to be required and could only ever be empty.
 impl Special for S1 {
-    fun kind(self) -> String { return "plain"; }
+    fun kind(self) -> string { return "plain"; }
 }
 
 # the block may still override a defaulted super method — then the derived
 # impl carries it, and the default is the one that goes unused.
 impl Special for S2 {
-    fun kind(self) -> String { return "custom"; }
-    fun tag(self) -> String { return "S2"; }
+    fun kind(self) -> string { return "custom"; }
+    fun tag(self) -> string { return "S2"; }
 }
 
-fun tag_of<T: Tagged>(x: T) -> String { return x.tag(); }
+fun tag_of<T: Tagged>(x: T) -> string { return x.tag(); }
 
 # ── a marker super requires nothing, so it is always derivable ───────────────
 

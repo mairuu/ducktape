@@ -534,7 +534,7 @@ impl<I: Iterator> Iterator for Take<I> {
 # source's element type *is* the first's, which is what lets `self.second.next()`
 # be returned where `Option<I.Item>` is wanted. It is also checked where the
 # impl is selected, so a `Chain<Counter, Words>` finds no `Iterator` impl rather
-# than quietly compiling a `String` as an `int`.
+# than quietly compiling a `string` as an `int`.
 pub struct Chain<I: Iterator, J: Iterator> {
     first: I,
     second: J,
@@ -815,19 +815,19 @@ impl<T> [T] {
 # the back. Answering with the first int past the end is what folds `..` and
 # `..=` into one bound.
 #
-# Free functions, and deliberately not methods on `Range`: an impl method has
-# no visibility control, so a `Range::stop()` would be public API on every
+# Free functions, and deliberately not methods on `range`: an impl method has
+# no visibility control, so a `range::stop()` would be public API on every
 # range in every program, and the exclusive-bound normalisation these two do is
 # this module's business. `iter` below is the only thing a range gains.
 @intrinsic("range_start")
-fun range_start(r: Range) -> int;
+fun range_start(r: range) -> int;
 
 @intrinsic("range_stop")
-fun range_stop(r: Range) -> int;
+fun range_stop(r: range) -> int;
 
 # A walk over the ints of a range. `(0..n).iter()` builds one.
 #
-# Unlike `ArrayIter` this holds no `Range` at all — a range is two numbers and
+# Unlike `ArrayIter` this holds no `range` at all — a range is two numbers and
 # a flag, and `range_stop` folds the flag away by answering with the first int
 # *past* the end. `0..3` and `0..=2` are the same three elements, so an
 # iterator that had to remember which spelling it came from would be carrying a
@@ -862,7 +862,7 @@ impl DoubleEnded for RangeIter {
     }
 }
 
-impl Range {
+impl range {
     # Walk this range's ints as an `Iterator`. A range is a value, so unlike an
     # array there is nothing underneath for anyone else to change: the sequence
     # is fixed the moment the range is written.
@@ -872,7 +872,7 @@ impl Range {
 }
 
 # The third source, and the one whose sequence is not already a sequence of
-# *values*: a String is bytes, and its characters have to be decoded out of
+# *values*: a string is bytes, and its characters have to be decoded out of
 # them. Before milestone 61 that decoding was a native returning the whole
 # `[char]` at once, which made the array the primitive and the walk a thing you
 # did to it afterwards. It is the other way round — `s.chars().collect()` is
@@ -884,10 +884,10 @@ impl Range {
 # byte offset is not a character position. Keeping them here is what lets
 # `CharIter` be the only thing that ever holds one.
 @native("string_char_at")
-fun char_at(s: String, at: int) -> char;
+fun char_at(s: string, at: int) -> char;
 
 @native("string_prev_boundary")
-fun prev_boundary(s: String, at: int) -> int;
+fun prev_boundary(s: string, at: int) -> int;
 
 # How many bytes `c` occupies in UTF-8. Stepping *forward* needs no native at
 # all, because a scalar value determines its own encoding: this is the same
@@ -911,12 +911,12 @@ fun utf8_width(c: char) -> int {
     return 4;
 }
 
-# A walk over a String's characters, in order. `s.chars()` builds one.
+# A walk over a string's characters, in order. `s.chars()` builds one.
 #
 # **It snapshots its end, where `ArrayIter` refuses to** — and the difference
 # is the two objects', not a preference. An array is the one heap object a
 # program can grow, so its iterator re-reads `len()` every turn and compares
-# its cursors against the array *as it is now*; a String is interned and
+# its cursors against the array *as it is now*; a string is interned and
 # immutable, so there is nothing underneath a byte offset that could change
 # and nothing to re-read. Milestone 60 had to answer "what does an iterator
 # hold when the language has no borrow"; here the question dissolves, and it is
@@ -933,7 +933,7 @@ fun utf8_width(c: char) -> int {
 # reaches it at all. That is the ordinary consequence of being lazy rather than
 # a weakening: nothing is claimed about bytes nobody looked at.
 pub struct CharIter {
-    s: String,
+    s: string,
     front: int, # byte offset where the next character begins
     back: int,  # byte offset one past the last character not yet yielded
 }
@@ -965,7 +965,7 @@ impl DoubleEnded for CharIter {
     }
 }
 
-impl String {
+impl string {
     # Walk this string's characters as an `Iterator`. The array of them is
     # `s.chars().collect()`, which is the one call that has to change from
     # before milestone 61 — and the change is the point: `s.chars().count()`,

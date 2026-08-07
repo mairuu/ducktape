@@ -937,7 +937,7 @@ int type_name_sprintf(const Type *t, char *buf, size_t buf_size) {
   case TY_CHAR:
     return snprintf(buf, buf_size, "char");
   case TY_STRING:
-    return snprintf(buf, buf_size, "String");
+    return snprintf(buf, buf_size, "string");
   case TY_STRBUF:
     return snprintf(buf, buf_size, "StringBuf");
   case TY_UNIT:
@@ -971,7 +971,7 @@ int type_name_sprintf(const Type *t, char *buf, size_t buf_size) {
   case TY_ARRAY:
     return snprintf(buf, buf_size, "Array<...>");
   case TY_RANGE:
-    return snprintf(buf, buf_size, "Range");
+    return snprintf(buf, buf_size, "range");
   case TY_ASSOC: {
     // the base is a type parameter (`T.Item`) or a trait's abstract `Self` —
     // print it recursively rather than assuming a generic.
@@ -1015,7 +1015,7 @@ int type_sprintf(const Type *t, char *buf, size_t buf_size) {
   case TY_CHAR:
     return snprintf(buf, buf_size, "char");
   case TY_STRING:
-    return snprintf(buf, buf_size, "String");
+    return snprintf(buf, buf_size, "string");
   case TY_STRBUF:
     return snprintf(buf, buf_size, "StringBuf");
   case TY_UNIT:
@@ -1104,7 +1104,7 @@ int type_sprintf(const Type *t, char *buf, size_t buf_size) {
         sp_bump(0, buf_size,
                 snprintf(buf, buf_size, SV_FMT, SV_ARG(t->as.trait.def->name)));
     // the type arguments are part of the identity, so a mismatch has to show
-    // them: `Into<int>` and `Into<String>` are two bounds.
+    // them: `Into<int>` and `Into<string>` are two bounds.
     for (int i = 0; i < t->as.trait.type_arg_count; i++) {
       n = sp_bump(n, buf_size,
                   snprintf(buf + n, buf_size - n, "%s", i == 0 ? "<" : ", "));
@@ -1124,7 +1124,7 @@ int type_sprintf(const Type *t, char *buf, size_t buf_size) {
                     snprintf(buf, buf_size, "dyn " SV_FMT, SV_ARG(def->name)));
     // the type arguments and the bindings are both part of the type, so a
     // mismatch diagnostic has to show them: `dyn Iterator<Item = int>` and
-    // `dyn Iterator<Item = String>` are two different expectations and would
+    // `dyn Iterator<Item = string>` are two different expectations and would
     // otherwise print the same. One bracket list, arguments before bindings —
     // the same shape the source writes.
     int written = 0;
@@ -1158,7 +1158,7 @@ int type_sprintf(const Type *t, char *buf, size_t buf_size) {
     return sp_bump(n, buf_size, snprintf(buf + n, buf_size - n, "]"));
   }
   case TY_RANGE:
-    return snprintf(buf, buf_size, "Range");
+    return snprintf(buf, buf_size, "range");
   case TY_ASSOC: {
     // the base is a type parameter (`T.Item`) or the abstract `Self` of a
     // trait declaration — print it recursively rather than assuming a generic.
@@ -1249,7 +1249,7 @@ void dump_type(const Type *t) {
     fprintf(stdout, "char");
     break;
   case TY_STRING:
-    fprintf(stdout, "String");
+    fprintf(stdout, "string");
     break;
   case TY_STRBUF:
     fprintf(stdout, "StringBuf");
@@ -1279,7 +1279,7 @@ void dump_type(const Type *t) {
     fprintf(stdout, ">");
     break;
   case TY_RANGE:
-    fprintf(stdout, "Range");
+    fprintf(stdout, "range");
     break;
   case TY_TUPLE:
     fprintf(stdout, "(");
@@ -1496,7 +1496,7 @@ void dump_expr(const Expr *e, int indent) {
     fprintf(stdout, "char: U+%04X\n", e->as.char_val);
     break;
   case EXPR_STRING:
-    fprintf(stdout, "String: \"" SV_FMT "\"\n", STR_ARG(e->as.string.value));
+    fprintf(stdout, "string: \"" SV_FMT "\"\n", STR_ARG(e->as.string.value));
     break;
   case EXPR_UNIT:
     fprintf(stdout, "Unit: ()\n");
@@ -1648,13 +1648,13 @@ void dump_expr(const Expr *e, int indent) {
     break;
   }
   case EXPR_RANGE:
-    fprintf(stdout, "Range %s\n",
+    fprintf(stdout, "range %s\n",
             e->as.range.inclusive ? "(inclusive)" : "(exclusive)");
     dump_expr(e->as.range.start, indent + 1);
     dump_expr(e->as.range.end, indent + 1);
     break;
   case EXPR_INTERPOLATED: {
-    fprintf(stdout, "Interpolated String\n");
+    fprintf(stdout, "Interpolated string\n");
     for (int i = 0; i < e->as.interpolated.seg_count; i++) {
       if (e->as.interpolated.segs[i].kind == ISEG_EXPR) {
         ind(indent + 1);
@@ -1662,7 +1662,7 @@ void dump_expr(const Expr *e, int indent) {
         dump_expr(e->as.interpolated.segs[i].expr, indent + 2);
       } else {
         ind(indent + 1);
-        fprintf(stdout, "String Segment: \"" SV_FMT "\"\n",
+        fprintf(stdout, "Text Segment: \"" SV_FMT "\"\n",
                 STR_ARG(e->as.interpolated.segs[i].text));
       }
     }

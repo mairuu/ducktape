@@ -1,4 +1,4 @@
-#! expect: cannot become a 'dyn Iterator<Item = String>'
+#! expect: cannot become a 'dyn Iterator<Item = string>'
 # The upcast carries the bindings across, so a target that states a different
 # one is not something this trait object can become. Read off the source's own
 # table rather than the impl index: a `dyn` already says what its associated
@@ -26,5 +26,5 @@ impl DoubleEnded for Span {
 
 fun main() {
     var d: dyn DoubleEnded<Item = int> = Span { lo: 0, hi: 4 };
-    var i: dyn Iterator<Item = String> = d;
+    var i: dyn Iterator<Item = string> = d;
 }

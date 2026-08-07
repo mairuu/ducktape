@@ -6,7 +6,7 @@ trait Shape {
     type Unit;
 
     fun area(self) -> Self.Unit;
-    fun name(self) -> String;
+    fun name(self) -> string;
 
     # default bodies are checked against the abstract Self: `self.area()`
     # dispatches through the trait's own signatures.
@@ -14,7 +14,7 @@ trait Shape {
         return self.area();
     }
 
-    fun describe(self) -> String {
+    fun describe(self) -> string {
         var n = self.name();
         return "shape {n}";
     }
@@ -31,7 +31,7 @@ impl Shape for Circle {
         self.r * self.r * 3
     }
 
-    fun name(self) -> String {
+    fun name(self) -> string {
         "circle"
     }
 }
@@ -47,13 +47,13 @@ impl<T> Shape for Boxed<T> {
         self.v
     }
 
-    fun name(self) -> String {
+    fun name(self) -> string {
         "boxed"
     }
 }
 
 # the callee is the bound's signature, not any impl's method
-fun label<T: Shape>(s: T) -> String {
+fun label<T: Shape>(s: T) -> string {
     s.name()
 }
 
@@ -64,12 +64,12 @@ fun measure<T: Shape>(s: T) -> T.Unit {
 
 fun main() {
     var c = Circle { r: 2 };
-    var _l: String = label(c);
+    var _l: string = label(c);
     var _a: int = measure(c);
 
     # `doubled` and `describe` are inherited: neither impl overrides them.
     var _d: int = c.doubled();
-    var _t: String = c.describe();
+    var _t: string = c.describe();
 
     # through a generic impl, `Self.Unit` is the impl's own type param
     var b = Boxed { v: 7 };

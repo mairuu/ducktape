@@ -4,7 +4,7 @@
 #   for w < 10      ->  while w < 10
 #   inline trait bounds (T: Drawable) are enforced at instantiation
 use std::io::print;
-use std::string;               # the module, bound as a qualifier
+use std::string as strings;    # aliased: the type `string` owns the bare name
 use std::fmt::Display;
 use std::convert::From;
 use std::iter::DoubleEnded;   # `Iterator` is preluded; a supertrait of it is not
@@ -38,7 +38,7 @@ trait Drawable {
 }
 
 impl<T> Drawable for Point<T> {
-    type Color = String;
+    type Color = string;
 
     fun draw(self) -> Self.Color {
         "Blue"
@@ -54,13 +54,13 @@ impl Point<int> {
 # a type deciding how it renders: `"{p}"` on anything but a primitive is
 # checked against `Display` and compiled as the call `p.to_string()`.
 impl Display for Point<int> {
-    fun to_string(self) -> String {
+    fun to_string(self) -> string {
         return "({self.x}, {self.y})";
     }
 }
 
 # `Drawable` mentions `Self.Color`, which a trait object can keep by naming it:
-# `dyn Drawable<Color = String>` below. `Weigh` mentions no associated type at
+# `dyn Drawable<Color = string>` below. `Weigh` mentions no associated type at
 # all, so it needs no bindings — the two spellings are the same rule, since the
 # binding list is one entry per associated type the trait declares.
 trait Weigh {
@@ -169,8 +169,8 @@ impl Pack<int> for Brick {
 
 # `Brick` implements the trait twice, at two different arguments: the
 # reference is what tells them apart, so coherence lets both stand.
-impl Pack<String> for Brick {
-    fun pack(self, _item: String) -> int { self.kg }
+impl Pack<string> for Brick {
+    fun pack(self, _item: string) -> int { self.kg }
 }
 
 pub fun packed<P: Pack<int>>(packer: P) -> int {
@@ -224,7 +224,7 @@ pub fun ticks() -> int {
 pub fun packs() -> int {
     var brick = Brick { kg: 10 };
     var by_int = Pack::<int>::pack(brick, 5);      # the int impl: 10 + 5
-    var by_str = Pack::<String>::pack(brick, "x"); # the String impl: 10
+    var by_str = Pack::<string>::pack(brick, "x"); # the string impl: 10
     return by_int + by_str;
 }
 
@@ -237,13 +237,13 @@ pub fun render<T: Drawable>(item: T) -> T.Color {
 # the same method reached dynamically instead. The receiver's type is gone, so
 # `Self.Color` has nowhere to come from — unless the trait object says, which
 # is what makes a trait with an associated type object-safe at all.
-pub fun render_dyn(item: dyn Drawable<Color = String>) -> String {
+pub fun render_dyn(item: dyn Drawable<Color = string>) -> string {
     return item.draw();
 }
 
-pub fun process_data<T>(_data: T) -> Result<int, String> {
+pub fun process_data<T>(_data: T) -> Result<int, string> {
     var p = Point::new(10, 20);
-    var _shown: String = render(p);
+    var _shown: string = render(p);
     # `is_visible` has a default body the impl omits — inherited from the trait
     var _visible: bool = p.is_visible();
     var _packed_kg: int = packed(Brick { kg: 5 });
@@ -350,7 +350,7 @@ pub fun process_data<T>(_data: T) -> Result<int, String> {
         (_val_a, _val_b) => "bound",
     };
 
-    var seed: Result<int, String> = Result::Ok(5);
+    var seed: Result<int, string> = Result::Ok(5);
     var _enum_match = match seed {
         Result::Ok(v) => v,
         Result::Err(_) => 0,
@@ -374,7 +374,7 @@ pub fun process_data<T>(_data: T) -> Result<int, String> {
     var Result::Ok(unwrapped) = seed else { return Result::Err("no seed"); };
     var _after_else = unwrapped + 1;
 
-    var _helper = || -> Result<int, String> {
+    var _helper = || -> Result<int, string> {
         var val = process_data(10)?;
         return Result::Ok(val);
     };
@@ -458,8 +458,8 @@ fun main() {
     var s = "showcase".take_chars(4);
     # a module-qualified path names a still-free item without importing it:
     # `join` and `concat` stay free functions because their receiver is a
-    # `[String]`, not a String, so they keep the qualified spelling
-    var _sl = string::concat([s, "!"]);
+    # `[string]`, not a string, so they keep the qualified spelling
+    var _sl = strings::concat([s, "!"]);
     # a Display impl reached by interpolation, beside a primitive segment
     var _shown = "{Point::new(1, 2)} #{n}";
     # an associated function through a bound, and the conversion the blanket
@@ -532,7 +532,7 @@ fun main() {
     # `Countdown` this file had to write, because an array and a range reach
     # `for` by a desugaring rather than by the trait. `iter()` is the seed that
     # puts all of the above within reach of the two sequence types a program
-    # already has — and `Range` is a nameable type now, the way `String` is
+    # already has — and `range` is a nameable type now, the way `string` is
     var numbers = [1, 2, 3, 4];
     var _doubled = numbers.iter().map(|k| k * 2).collect();
     var _counted = (0..10).iter().filter(|k| k % 3 == 0).count();
@@ -542,6 +542,6 @@ fun main() {
 }
 
 # a range as a parameter rather than only a loop header
-fun span_len(r: Range) -> int {
+fun span_len(r: range) -> int {
     return r.iter().count();
 }

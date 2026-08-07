@@ -2,7 +2,7 @@
 # whether the vtable is a good enough identity: two instantiations of one
 # generic struct.
 #
-# Structs are not monomorphised — `Box<int>` and `Box<String>` share a single
+# Structs are not monomorphised — `Box<int>` and `Box<string>` share a single
 # `StructDef` — so the runtime value carries nothing that tells them apart. The
 # vtable does: it is keyed by the *interned* self type, and those are two
 # distinct types, so they are two tables. Erasure never happens, because the
@@ -81,14 +81,14 @@ impl Iterator for Boxes {
 
 fun main() {
     var ints: dyn Tag = Box::<int> { v: 7 };
-    var strs: dyn Tag = Box::<String> { v: "seven" };
+    var strs: dyn Tag = Box::<string> { v: "seven" };
 
     # one StructDef, two self types, two tables — so two answers
     print((ints as? Box<int>).unwrap().v);
 #> 7
-    print((ints as? Box<String>).is_some());
+    print((ints as? Box<string>).is_some());
 #> false
-    print((strs as? Box<String>).unwrap().v);
+    print((strs as? Box<string>).unwrap().v);
 #> seven
     print((strs as? Box<int>).is_some());
 #> false

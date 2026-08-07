@@ -8,7 +8,7 @@ trait Shape {
     fun area(self) -> int;
 }
 trait Named {
-    fun name(self) -> String;
+    fun name(self) -> string;
 }
 
 struct Sq { side: int }
@@ -16,7 +16,7 @@ impl Shape for Sq {
     fun area(self) -> int { self.side * self.side }
 }
 impl Named for Sq {
-    fun name(self) -> String { "sq" }
+    fun name(self) -> string { "sq" }
 }
 
 fun main() {

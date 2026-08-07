@@ -1,5 +1,5 @@
 #! expect: string position is not a position in this string
-# Milestone 102's own error, and the reason a `StrPos` carries its String. Both
+# Milestone 102's own error, and the reason a `StrPos` carries its string. Both
 # of these positions are real and both land on boundaries — just not in `a`. In
 # bounds and on a boundary there too, so nothing further down would have caught
 # it: without the check this cut answers "hello" and says nothing.

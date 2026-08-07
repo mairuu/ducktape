@@ -10,10 +10,10 @@
 # which is why `rev` needs a `use`.
 use std::io::print;
 
-# `Range` is a nameable type now — a builtin in the sense `String` and
+# `range` is a nameable type now — a builtin in the sense `string` and
 # `StringBuf` are: the compiler knows the type, every operation on one lives in
 # std. That is what lets a range be a parameter rather than only a loop header.
-fun evens_in(r: Range) -> [int] {
+fun evens_in(r: range) -> [int] {
     return r.iter().filter(|v| v % 2 == 0).collect();
 }
 

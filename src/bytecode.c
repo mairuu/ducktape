@@ -707,7 +707,7 @@ bool bc_load(const char *path, Allocator *al, Executable *exe, Heap *heap,
       break;
     }
     // validated rather than trusted, for BC_C_CHAR's reason read one level up:
-    // a String is valid UTF-8 everywhere else in the runtime, so an image may
+    // a string is valid UTF-8 everywhere else in the runtime, so an image may
     // not be the one place it is not. This table is the whole intake — every
     // string constant is interned from it — and a name that is not text is
     // just as much a malformed image as a string constant that is not.

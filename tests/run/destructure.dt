@@ -14,7 +14,7 @@ use std::io::print;
 
 struct Point { x: int, y: int }
 struct Pair(int, int)
-struct Wrap { inner: Point, tag: String }
+struct Wrap { inner: Point, tag: string }
 
 fun make_point() -> Point {
   return Point { x: 3, y: 4 };
@@ -64,6 +64,6 @@ fun main() {
   print(scale(1));
 
   # an annotation applies to the whole initializer
-  var (ta, tb): (int, String) = (15, "s");
+  var (ta, tb): (int, string) = (15, "s");
   print("{ta}{tb}");
 }

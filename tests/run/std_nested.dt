@@ -17,7 +17,7 @@ fun main() {
     s.insert(7);
     print(s.to_array()[0]);
 
-    var counts: HashMap<String, int> = HashMap::new();
+    var counts: HashMap<string, int> = HashMap::new();
     counts.insert("a", 1);
     counts.insert("b", 2);
     print(counts.len());

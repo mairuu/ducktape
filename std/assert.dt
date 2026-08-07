@@ -11,7 +11,7 @@
 # transitive, and so folding it in would hand every program that only wanted
 # `panic("...")` the whole of `std::fmt`'s impls — and with them coherence's
 # refusal to let it write its own `impl Display for int`. That is the same
-# argument `std::cmp` makes about where `impl Ord for String` belongs: with
+# argument `std::cmp` makes about where `impl Ord for string` belongs: with
 # transitive visibility an import is measured in impls, not in code, so the
 # dependency points at the impl-poor module. `assert` imports `panic`; `panic`
 # must never import `assert`.
@@ -37,7 +37,7 @@
 # any pair of values structurally, so a `T` with no impls whatsoever can be
 # checked for equality. The entire `T: Display` bound below is bought by the
 # failure *message* — the runtime can render any value, but only to stdout,
-# and `panic` takes a `String` that nothing structural produces. So the bound
+# and `panic` takes a `string` that nothing structural produces. So the bound
 # is on the reporting, not on the comparison, and `assert_eq` is a consumer
 # of equality that specifically does *not* motivate an `Eq` trait: it wants a
 # way to print, which it has.
@@ -59,7 +59,7 @@ pub fun assert(condition: bool) {
 }
 
 # `assert` with a message of your own, the way `expect` is `unwrap` with one.
-pub fun assert_with(condition: bool, message: String) {
+pub fun assert_with(condition: bool, message: string) {
     if not condition {
         panic(message);
     }
@@ -67,7 +67,7 @@ pub fun assert_with(condition: bool, message: String) {
 
 # `assert_with` for a message that costs something to build: the closure runs
 # only on the failing path.
-pub fun assert_else(condition: bool, message: fun() -> String) {
+pub fun assert_else(condition: bool, message: fun() -> string) {
     if not condition {
         panic(message());
     }

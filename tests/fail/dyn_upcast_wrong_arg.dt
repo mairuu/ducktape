@@ -1,6 +1,6 @@
-#! expect: expected 'dyn Src<String>' but got 'dyn Twice<int>'
+#! expect: expected 'dyn Src<string>' but got 'dyn Twice<int>'
 # The right supertrait at the wrong argument: `Twice<int>`'s super is
-# `Src<int>`, so `dyn Src<String>` is not something it can become.
+# `Src<int>`, so `dyn Src<string>` is not something it can become.
 trait Src<T> { fun get(self) -> T; }
 trait Twice<T>: Src<T> { fun again(self) -> T; }
 
@@ -10,5 +10,5 @@ impl Twice<int> for Five { fun again(self) -> int { return 10; } }
 
 fun main() {
     var t: dyn Twice<int> = Five;
-    var s: dyn Src<String> = t;
+    var s: dyn Src<string> = t;
 }

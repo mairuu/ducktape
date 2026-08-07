@@ -42,7 +42,7 @@ typedef enum {
   TY_FLOAT,
 
   TY_BOOL,
-  TY_CHAR, // a Unicode scalar value; a String is bytes, so the two are
+  TY_CHAR, // a Unicode scalar value; a string is bytes, so the two are
            // bridged by a conversion and never by an index
   TY_STRING,
   TY_STRBUF,   // StringBuf — a growable text buffer; see include/object.h
@@ -93,7 +93,7 @@ typedef struct {
 // every signature it declares, so a reference is what supplies the
 // substitution that turns those signatures into concrete terms — at an impl
 // head (`impl Into<int> for S`), at a bound (`T: Into<int>`), and inside a
-// `dyn`. Interned on the arguments too, so `Into<int>` and `Into<String>` are
+// `dyn`. Interned on the arguments too, so `Into<int>` and `Into<string>` are
 // two types and pointer equality still decides identity.
 typedef struct {
   TraitDef *def;
@@ -114,7 +114,7 @@ typedef struct {
 // (`dyn Iterator<Item = int>`) — the same table an impl carries, one entry per
 // `trait->assoc_types` and in that order, so the array is total and its
 // ordering canonical. That is what lets interning keep deciding identity by
-// pointer: `dyn Iterator<Item = int>` and `dyn Iterator<Item = String>` are
+// pointer: `dyn Iterator<Item = int>` and `dyn Iterator<Item = string>` are
 // two types. Nothing at *runtime* reads it — an associated type is erased
 // exactly like a type argument — it exists so a caller can know what
 // `Self.Item` is once `Self` is gone, which is what makes such a method
@@ -781,7 +781,7 @@ typedef struct {
   Span span;
 } WherePred;
 
-// The whole where clause: where T: Clone, U: Into<String>
+// The whole where clause: where T: Clone, U: Into<string>
 // NULL pointer on any decl means no where clause was written.
 typedef struct {
   WherePred *preds;
@@ -839,7 +839,7 @@ typedef enum {
   EXPR_VARIANT,     // Some(x), None
   EXPR_CLOSURE,     // fun(x: int): int { x + 1 }
 
-  // ── String interpolation segment (pass 3 QoL) ─────────
+  // ── string interpolation segment (pass 3 QoL) ─────────
   EXPR_INTERPOLATED, // "hello {name}" broken into segments
 
   EXPR_POISON, // sentinel
@@ -1181,7 +1181,7 @@ struct Expr {
   // unknown, and codegen is the consumer either way.
   //
   // The *trait reference* (a TY_TRAIT, with its type arguments), not the trait
-  // definition: `Into<int>` and `Into<String>` are two vtables over one type.
+  // definition: `Into<int>` and `Into<string>` are two vtables over one type.
   Type *coerce_dyn;
 
   union {

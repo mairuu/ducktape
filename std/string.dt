@@ -1,22 +1,24 @@
-# std::string — operations on `String`, and the buffers one is built with.
+# std::string — operations on `string`, and the buffers one is built with.
 #
-# A `String` is an interned, immutable heap object, so building one allocates:
+# A `string` is an interned, immutable heap object, so building one allocates:
 # `strbuf_push` is where this module exercises the native calling convention's
 # one real rule, that arguments stay on the VM stack across the call and so
 # remain rooted through any collection the native triggers.
 #
-# **Cutting a String is not here** as of milestone 102. `slice` needs a
+# **Cutting a string is not here** as of milestone 102. `slice` needs a
 # `StrPos` to cut at, a `StrPos` is opaque, and the module that owns the
 # private field is the only one that can mint one — so `slice` and
 # `matches_at` moved to `std::text` along with the searching that produces the
 # positions. What is left here is what needs no position at all.
 #
-# The operations *on* a String are **methods** (milestone 40): `s.len()`,
+# The operations *on* a string are **methods** (milestone 40): `s.len()`,
 # `s.compare(other)`, `s.repeat(n)` — and `s.chars()`,
-# which is a method on String like the rest but lives in `std::iter`, for the
+# which is a method on string like the rest but lives in `std::iter`, for the
 # reason spelled out where it used to be. The
-# collection→String *builders* below (`join`, `concat`, `from_chars`) stay free
-# functions, because their receiver is an array, not a String; and the three
+# collection→string *builders* below (`join`, `concat`, `from_chars`) stay free
+# functions, because their receiver is an array, not a string — which since
+# milestone 103 means they need a named import or an alias (`use std::string as
+# strings;`), the bare `string::` qualifier now reaching the type; and the three
 # `pad_*` functions stay free because they are lang items the `{v:>8}` format
 # spec desugars into (see `check_interpol_seg`), so their meaning cannot depend
 # on what a program imported.
@@ -25,7 +27,7 @@
 # through — and `std::string::buf` imports nothing, shipping only methods on its own
 # `StringBuf`, so importing any of `std::string` still hands a program no impls
 # for a type it did not itself name. That is the property `std::cmp` leans on by
-# building `impl Ord for String` on `compare` here, and it is what `std::array`
+# building `impl Ord for string` on `compare` here, and it is what `std::array`
 # stopped being able to promise once `pop` started answering with an `Option`.
 
 pub mod buf;
@@ -34,14 +36,14 @@ pub mod buf;
 # `use` is what brings the impls its builders run through.
 use std::string::buf;
 
-impl String {
+impl string {
     @native("string_len")
     fun len(self) -> int;
 
     # Byte order: <0 if `self` sorts before `other`, 0 if equal, >0 if after.
-    # This is what `impl Ord for String` is written on, and it has to be a native
-    # for the same reason `push` does — it is a thing a String cannot express
-    # about itself. The only handle ducktape has on a String's contents is a
+    # This is what `impl Ord for string` is written on, and it has to be a native
+    # for the same reason `push` does — it is a thing a string cannot express
+    # about itself. The only handle ducktape has on a string's contents is a
     # cut, and comparing two one-byte cuts needs string ordering, which is what
     # was being defined.
     #
@@ -49,7 +51,7 @@ impl String {
     # limit of the gift it made to `==`: two equal strings are one pointer, but
     # pointer order is allocation order.
     @native("string_cmp")
-    fun compare(self, other: String) -> int;
+    fun compare(self, other: string) -> int;
 
     # `s.chars()` — the crossing between the two views of text the language has,
     # bytes here and scalar values in `std::char` — is **not** in this module: it
@@ -63,10 +65,10 @@ impl String {
     # two the default — `CharIter` holds byte offsets and keeps them private for
     # exactly that reason.
 
-    # `n` copies of `self`. Nothing here allocates a String per copy — the bytes
+    # `n` copies of `self`. Nothing here allocates a string per copy — the bytes
     # go straight into the buffer — which is the difference a buffer makes that
     # an array of parts could not.
-    fun repeat(self, n: int) -> String {
+    fun repeat(self, n: int) -> string {
         var b = StringBuf::new();
         var i = 0;
         while i < n {
@@ -80,12 +82,12 @@ impl String {
 # ── building a string ────────────────────────────────────────────────────────
 #
 # The buffer these build through lives in `std::strbuf`; here they are only the
-# String-shaped conveniences on top of it. They stay free functions because the
-# thing they operate on is a `[String]` / `[char]`, not a `String`.
+# string-shaped conveniences on top of it. They stay free functions because the
+# thing they operate on is a `[string]` / `[char]`, not a `string`.
 
 # `sep` between each pair of parts. The buffer is what makes this one pass:
 # the same loop written with `+` would intern every prefix along the way.
-pub fun join(parts: [String], sep: String) -> String {
+pub fun join(parts: [string], sep: string) -> string {
     var b = StringBuf::new();
     var first = true;
     for p in parts {
@@ -98,15 +100,15 @@ pub fun join(parts: [String], sep: String) -> String {
     return b.build();
 }
 
-pub fun concat(parts: [String]) -> String {
+pub fun concat(parts: [string]) -> string {
     return join(parts, "");
 }
 
 # `chars` the other way round. Ordinary ducktape rather than a fifth native,
 # because `push_char` already put the one operation a buffer could not express
-# within reach: a String is built out of chars exactly the way it is built out
+# within reach: a string is built out of chars exactly the way it is built out
 # of anything else.
-pub fun from_chars(cs: [char]) -> String {
+pub fun from_chars(cs: [char]) -> string {
     var b = StringBuf::new();
     for c in cs {
         b.push_char(c);
@@ -145,11 +147,11 @@ pub fun from_chars(cs: [char]) -> String {
 # built a whole array to take its length. A runtime error if `s` is not valid
 # UTF-8, which is why padding still refuses a string `slice` cut in half.
 @native("string_char_count")
-fun char_width(s: String) -> int;
+fun char_width(s: string) -> int;
 
 # `s` at the left of a `width`-wide field, `fill` on the right (left-aligned).
 @lang("pad_end")
-pub fun pad_end(s: String, width: int, fill: char) -> String {
+pub fun pad_end(s: string, width: int, fill: char) -> string {
     var cur = char_width(s);
     if cur >= width {
         return s;
@@ -164,7 +166,7 @@ pub fun pad_end(s: String, width: int, fill: char) -> String {
 
 # `fill` on the left, `s` at the right of a `width`-wide field (right-aligned).
 @lang("pad_start")
-pub fun pad_start(s: String, width: int, fill: char) -> String {
+pub fun pad_start(s: string, width: int, fill: char) -> string {
     var cur = char_width(s);
     if cur >= width {
         return s;
@@ -181,7 +183,7 @@ pub fun pad_start(s: String, width: int, fill: char) -> String {
 # the right, so `pad_center("x", 4, '-')` is `-x--`: the text sits left of centre
 # when it cannot sit on it, which is the convention a reader expects for a label.
 @lang("pad_center")
-pub fun pad_center(s: String, width: int, fill: char) -> String {
+pub fun pad_center(s: string, width: int, fill: char) -> string {
     var cur = char_width(s);
     if cur >= width {
         return s;

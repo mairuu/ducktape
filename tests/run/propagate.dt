@@ -9,14 +9,14 @@ enum Result<T, E> {
     Err(E),
 }
 
-fun half(n: int) -> Result<int, String> {
+fun half(n: int) -> Result<int, string> {
     if n % 2 == 0 {
         return Result::Ok(n / 2);
     }
     return Result::Err("odd: {n}");
 }
 
-fun quarter(n: int) -> Result<int, String> {
+fun quarter(n: int) -> Result<int, string> {
     var h = half(n)?;
     var q = half(h)?;
     return Result::Ok(q);

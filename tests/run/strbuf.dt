@@ -1,5 +1,5 @@
-# A `StringBuf` is the object a `String` cannot be: uninterned, so it can be
-# appended to in place. interning is what makes a String immutable — two equal
+# A `StringBuf` is the object a `string` cannot be: uninterned, so it can be
+# appended to in place. interning is what makes a string immutable — two equal
 # strings are one pointer — so the two are different kinds, and `build` is the
 # one-way door between them. Both spell `len`; a method resolves on its
 # receiver, so `b.len()` and `s.len()` coexist with no qualifier needed.
@@ -62,13 +62,13 @@ fun main() {
     print(b.len());
 
     # 100 pushes from a floor of 16 doubles the buffer four times, so every
-    # byte survives being copied. Nothing here allocates a String per copy,
+    # byte survives being copied. Nothing here allocates a string per copy,
     # which is the difference a buffer makes.
     var line = "ab".repeat(100);
     print(line.len());
     print(line.take_chars(4));
 
-    # equality is the other place the kinds differ: a String compares by
+    # equality is the other place the kinds differ: a string compares by
     # pointer because it is interned, a buffer has to compare its bytes
     var x = StringBuf::new();
     x.push("ab");
@@ -81,7 +81,7 @@ fun main() {
 
     var sep = ", ";
     print(join(["a", "b", "c"], sep));
-    var none: [String] = [];
+    var none: [string] = [];
     print("[{join(none, sep)}]");
     print(concat(["a", "b"]));
     print("=".repeat(5));
@@ -102,7 +102,7 @@ fun main() {
     print(out.build().len());
 
     # `push_int` puts an int's decimal digits straight in — no throwaway "{n}"
-    # String interned to carry them, the same saving `push_char` makes for a char
+    # string interned to carry them, the same saving `push_char` makes for a char
     var nums = StringBuf::new();
     nums.push_int(42);
     nums.push("/");

@@ -3,7 +3,7 @@
 # (tc_bind_native), so an unknown name is reported here with a real span rather
 # than surfacing later as a mysterious missing method.
 
-impl String {
+impl string {
     @native("no_such_native") fun len(self) -> int;
 }
 

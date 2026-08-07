@@ -38,14 +38,14 @@ use std::result::Result;
 struct Point { x: int, y: int }
 
 impl Display for Point {
-  fun to_string(self) -> String {
+  fun to_string(self) -> string {
     return "({self.x}, {self.y})";
   }
 }
 
 # Rendering a container from behind a bound: the impl is selected at the
 # instantiation, exactly as for any other `T: Display`.
-fun describe<T: Display>(label: String, value: T) {
+fun describe<T: Display>(label: string, value: T) {
   print("{label} = {value}");
 }
 
@@ -57,7 +57,7 @@ fun main() {
   var empty: [int] = [];
   print("{empty}");
 
-  # a String element renders bare — `Display` is "render for a reader", and
+  # a string element renders bare — `Display` is "render for a reader", and
   # quoting is a debugging affordance `print` keeps for itself
   var words = ["a", "b"];
   print("{words}");
@@ -85,10 +85,10 @@ fun main() {
   var none: Option<int> = Option::None;
   print("{none}");
 
-  var ok: Result<int, String> = Result::Ok(7);
+  var ok: Result<int, string> = Result::Ok(7);
   print("{ok}");
 
-  var err: Result<int, String> = Result::Err("nope");
+  var err: Result<int, string> = Result::Err("nope");
   print("{err}");
 
   # through a bound, at a container of a container of a user type

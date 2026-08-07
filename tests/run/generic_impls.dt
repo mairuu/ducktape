@@ -14,7 +14,7 @@
 use std::io::print;
 
 trait Show {
-  fun show(self) -> String;
+  fun show(self) -> string;
 }
 
 struct Point {
@@ -23,31 +23,31 @@ struct Point {
 }
 
 impl Show for int {
-  fun show(self) -> String {
+  fun show(self) -> string {
     return "int({self})";
   }
 }
 
 impl Show for bool {
-  fun show(self) -> String {
+  fun show(self) -> string {
     return "bool({self})";
   }
 }
 
 impl Show for Point {
-  fun show(self) -> String {
+  fun show(self) -> string {
     return "Point({self.x}, {self.y})";
   }
 }
 
-fun describe<T: Show>(v: T) -> String {
+fun describe<T: Show>(v: T) -> string {
   return v.show();
 }
 
 # a bounded generic handing its own type parameter to another bounded generic:
 # which copy of `describe` this calls is only known once `describe_twice`
 # itself is instantiated
-fun describe_twice<T: Show>(v: T) -> String {
+fun describe_twice<T: Show>(v: T) -> string {
   return "{describe(v)} / {describe(v)}";
 }
 
@@ -73,7 +73,7 @@ impl<T> Box<T> {
 # a method with no type params of its own, whose body still depends on the
 # impl's `T` — through a call the type argument selects
 impl<T: Show> Box<T> {
-  fun render(self) -> String {
+  fun render(self) -> string {
     return describe(self.value);
   }
 }

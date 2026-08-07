@@ -23,7 +23,7 @@ use std::io::print;
 use std::result::Result;
 use std::option::Option;
 
-fun divide(a: int, b: int) -> Result<int, String> {
+fun divide(a: int, b: int) -> Result<int, string> {
     if b == 0 {
         return Result::Err("division by zero");
     }
@@ -32,7 +32,7 @@ fun divide(a: int, b: int) -> Result<int, String> {
 
 # `?` recognises Result structurally — it is not special-cased to this module,
 # it just happens to be the shape std::result declares.
-fun ratio_of_sum(a: int, b: int, d: int) -> Result<int, String> {
+fun ratio_of_sum(a: int, b: int, d: int) -> Result<int, string> {
     var q = divide(a + b, d)?;
     return Result::Ok(q + 1);
 }

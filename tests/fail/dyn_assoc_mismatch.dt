@@ -1,4 +1,4 @@
-#! expect: it implements 'Iterator' with 'Item' = 'String'
+#! expect: it implements 'Iterator' with 'Item' = 'string'
 # Implementing the trait is no longer the whole question at a coercion: the
 # trait object states what the associated type *is*, so an impl that binds a
 # different one satisfies the trait and still cannot be this type. Reported
@@ -12,11 +12,11 @@ trait Iterator {
     fun next(self) -> Self.Item;
 }
 
-struct Words { w: String }
+struct Words { w: string }
 
 impl Iterator for Words {
-    type Item = String;
-    fun next(self) -> String { "{self.w}!" }
+    type Item = string;
+    fun next(self) -> string { "{self.w}!" }
 }
 
 fun main() {

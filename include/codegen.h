@@ -53,7 +53,7 @@ typedef struct {
 // otherwise identical trait objects would carry different tables, and the
 // slot space would grow with coercion *sites* rather than with (trait, type)
 // pairs. The key is the trait *reference*: `dyn Into<int>` and
-// `dyn Into<String>` over one self type are two tables, since each names a
+// `dyn Into<string>` over one self type are two tables, since each names a
 // different impl.
 typedef struct {
   Type *trait;     // TY_TRAIT, interned — the trait and its type arguments
@@ -64,7 +64,7 @@ typedef struct {
 // one (source trait, target trait) spelling an upcast site named, deduped;
 // its position in `Mono.upcasts` is the `pair` id the opcode carries and the
 // tables are keyed by. Both are trait *references*, restated in the same terms
-// — `dyn Pair<int>` upcasts to `dyn Into<int>`, never to `dyn Into<String>`.
+// — `dyn Pair<int>` upcasts to `dyn Into<int>`, never to `dyn Into<string>`.
 typedef struct {
   Type *from;
   Type *to;

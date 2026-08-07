@@ -134,13 +134,13 @@ typedef struct {
 // a growable text buffer: `len` written bytes inside a buffer of `cap`.
 //
 // It is a separate kind from ObjString rather than a mutable flavour of one
-// because *interning* is what makes a String immutable. An ObjString is filed
+// because *interning* is what makes a string immutable. An ObjString is filed
 // in the heap's table under the hash of its bytes, and two equal strings are
 // one pointer — appending in place would leave the object under a hash no
 // lookup recomputes, and re-interning after each append is exactly the cost
 // `+` already pays. So a buffer is the object that is deliberately *not* in
 // the table, and `std::string::build` is the one-way door: the bytes are
-// copied into an interned String and stop being editable.
+// copied into an interned string and stop being editable.
 //
 // The bytes are raw payload, so unlike an ObjArray there is nothing here for
 // the collector to trace.

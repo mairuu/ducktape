@@ -2,7 +2,7 @@
 # A binding a *supertrait* declared is checked like any other. It was not until
 # milestone 78: the dyn's binding table is numbered over the supertrait closure
 # and the check indexed the sub's own (empty) list, so this was accepted and
-# then called String methods on an int.
+# then called string methods on an int.
 use std::iter::{Iterator, DoubleEnded};
 use std::option::Option;
 
@@ -25,5 +25,5 @@ impl DoubleEnded for Span {
 }
 
 fun main() {
-    var d: dyn DoubleEnded<Item = String> = Span { lo: 0, hi: 4 };
+    var d: dyn DoubleEnded<Item = string> = Span { lo: 0, hi: 4 };
 }

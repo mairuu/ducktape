@@ -12,4 +12,4 @@
 # and the language has none — so it does the honest thing and ends.
 
 @native("panic_abort")
-pub fun panic(message: String) -> !;
+pub fun panic(message: string) -> !;

@@ -23,7 +23,7 @@ impl Rect {
 
   # the interpolation's text segments are constants of this method's chunk;
   # the GC only reaches them through the linked globals table.
-  fun label(self) -> String {
+  fun label(self) -> string {
     return "rect {self.w}x{self.h}";
   }
 

@@ -34,14 +34,14 @@ impl Iterator for Counter {
 
 # an element that implements `Ord` through an impl rather than as a primitive,
 # so the bound is exercised on something the compiler does not know about
-struct Word { text: String, rank: int }
+struct Word { text: string, rank: int }
 
 impl Ord for Word {
     fun cmp(self, other: Word) -> int { return self.rank.cmp(other.rank); }
 }
 
 impl Display for Word {
-    fun to_string(self) -> String { return self.text; }
+    fun to_string(self) -> string { return self.text; }
 }
 
 struct Words { i: int }
@@ -120,7 +120,7 @@ fun best<I: Iterator>(it: I) -> Option<I.Item> where I.Item: Ord {
 trait Pick {
     fun current(self) -> Option<Self.Item2>;
 
-    fun describe_largest<T>(self, other: T) -> String
+    fun describe_largest<T>(self, other: T) -> string
         where Self.Item2: Ord + Display, T: Display
     {
         match self.current() {

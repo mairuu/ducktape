@@ -39,12 +39,12 @@ impl Neg for V2 {
 }
 
 impl Display for V2 {
-    fun to_string(self) -> String { return "({self.x}, {self.y})"; }
+    fun to_string(self) -> string { return "({self.x}, {self.y})"; }
 }
 
 # A bound is what lets a generic body use an operator at all, and it
 # instantiates at a struct and at a primitive alike — the impls `std::ops` ships
-# for `int`/`float`/`String` are what make the second work.
+# for `int`/`float`/`string` are what make the second work.
 fun twice<T: Add<Output = T>>(v: T) -> T { return v + v; }
 
 fun negate<T: Neg<Output = T>>(v: T) -> T { return -v; }

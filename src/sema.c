@@ -3476,7 +3476,7 @@ static void resolve_enum_decl(ResolveCtx *rctx, Decl *decl) {
 }
 
 // One type, one inherent method name. Two impl blocks for a type are ordinary
-// — std splits `String`'s methods across three modules — but two bodies under
+// — std splits `string`'s methods across three modules — but two bodies under
 // one name are not: selection is first-registered-wins, so the loser is not
 // shadowed, it is unreachable, with nothing a call site can write to name it.
 // The fix is therefore a diagnostic here rather than a resolution rule, since
@@ -5210,7 +5210,7 @@ static bool dyn_assoc_bindings_agree(CheckCtx *ctx, Type *dyn_ty, Type *actual,
     // and the trait that declared it both come from the flat accessor. Reading
     // `trait->assoc_types[i]` instead was milestone 78's found bug: on a sub
     // whose associated types are all inherited it indexed an empty array, the
-    // lookup missed, and `dyn DoubleEnded<Item = String>` accepted a `Span`.
+    // lookup missed, and `dyn DoubleEnded<Item = string>` accepted a `Span`.
     TraitDef *owner = NULL;
     StringView name = trait_flat_assoc_name(trait, i, &owner);
     if (owner == NULL) {
@@ -5286,14 +5286,14 @@ static bool check_upcast_dyn(CheckCtx *ctx, Expr *e, Type *actual,
   TraitDef *have = have_ref->as.trait.def, *want = want_ref->as.trait.def;
   if (have == want) {
     // one trait, so this is identity or an ordinary type mismatch between two
-    // references of it (`dyn Into<int>` against `dyn Into<String>`). Neither is
+    // references of it (`dyn Into<int>` against `dyn Into<string>`). Neither is
     // an upcast, and the caller says it better than a supertrait walk could.
     return false;
   }
 
   // The target must be one of the source's supertraits *restated in the
   // source's type arguments*: a `dyn Pair<int>` is a `dyn Into<int>` and not a
-  // `dyn Into<String>`, and the closure entry is what knows which.
+  // `dyn Into<string>`, and the closure entry is what knows which.
   Subst s = trait_ref_subst(have_ref, ctx->al);
   Type *super_ref = NULL;
   for (int i = 0; i < have->flat_count; i++) {
@@ -5445,7 +5445,7 @@ static bool check_coerce_dyn(CheckCtx *ctx, Expr *e, Type *actual,
   }
 
   // the trait *reference*, not the definition: `dyn Into<int>` and
-  // `dyn Into<String>` are two vtables over one self type, and only the
+  // `dyn Into<string>` are two vtables over one self type, and only the
   // reference tells codegen which impl built this one. Recorded unsolved if
   // the argument is still an unknown at this point — cg pushes the
   // instantiation's substitution through it, the same as for `bound_trait`.
@@ -6438,7 +6438,7 @@ static Type *column_type(CheckCtx *ctx, const PatMatrix *m) {
 }
 
 // the constructors that between them cover every value of `ty`, or false if the
-// domain is unenumerable (int, String, ...) or unknown.
+// domain is unenumerable (int, string, ...) or unknown.
 static bool type_signature(Type *ty, Ctor *sig, int *count) {
   if (ty == NULL) {
     return false;
@@ -7784,7 +7784,7 @@ static Type **hint_type_args(Type *hint, Type *self_type, int *out_count) {
 // Interpolation
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// A `"{v}"` segment has to turn `v` into a String. The primitives render
+// A `"{v}"` segment has to turn `v` into a string. The primitives render
 // themselves: the VM's `stringify` has always known how, and keeping that path
 // is what lets a program interpolate an `int` without importing anything.
 //
@@ -7794,7 +7794,7 @@ static Type **hint_type_args(Type *hint, Type *self_type, int *out_count) {
 // ordinary machinery does the rest. Dispatch through a trait bound, through a
 // `dyn`, an inherited default body, and monomorphising the instance all arrive
 // already working; codegen, `OP_INTERP`, the VM and the image format need no
-// change at all, because the segment now simply evaluates to a String, which
+// change at all, because the segment now simply evaluates to a string, which
 // `stringify` passes straight through.
 //
 // Note that `print` is *not* held to this: it renders any value structurally,
@@ -7822,7 +7822,7 @@ static bool display_satisfied(CheckCtx *ctx, Type *type) {
   return impl_index_implements(ctx->impls, type, display->self_type, ctx->al);
 }
 
-// Render one segment to a String in place, with no format spec: the primitive
+// Render one segment to a string in place, with no format spec: the primitive
 // path (left for the VM to stringify) or the `Display` rewrite to
 // `v.to_string()`. A `{v:...}` spec renders through this too, for its no-
 // precision case, so one rule decides how a value prints either way.
@@ -7917,7 +7917,7 @@ static Expr *mk_char_lit(CheckCtx *ctx, uint32_t cp, Span span) {
   return e;
 }
 
-// `"{recv}"` — recv rendered to a String through the ordinary segment path. The
+// `"{recv}"` — recv rendered to a string through the ordinary segment path. The
 // format desugaring uses it as the render step before padding, so a padded
 // primitive stringifies via the VM and a padded `Display` type via
 // `.to_string()`, exactly as a bare `{recv}` would.
@@ -7961,12 +7961,12 @@ static Expr *mk_fun_call(CheckCtx *ctx, FunDef *fun, Expr **args, int argc,
 }
 
 // Milestone 35: a `{v:>8}` / `{f:.3}` / `{f:>8.3}` spec is pure sugar. The
-// value is rendered to a String — through `std::fmt::float` when a precision is
+// value is rendered to a string — through `std::fmt::float` when a precision is
 // asked for, through the ordinary segment path otherwise — and then, if a width
 // was given, padded by the matching `std::string::pad_*`. Both are lang items
 // (see TypeChecker.fmt_pad_start), captured for the same reason `Display` is:
 // the user never typed these names, so their meaning cannot depend on imports.
-// The result is a String-typed expression the outer `OP_INTERP` passes straight
+// The result is a string-typed expression the outer `OP_INTERP` passes straight
 // through, so codegen, the VM and the image format need no change.
 static void check_interpol_seg(CheckCtx *ctx, InterpolSeg *seg) {
   if (!seg->spec.present) {
@@ -7977,7 +7977,7 @@ static void check_interpol_seg(CheckCtx *ctx, InterpolSeg *seg) {
   FormatSpec *spec = &seg->spec;
   Expr *recv = seg->expr;
   Span span = recv->span;
-  Expr *rendered; // evaluates to a String
+  Expr *rendered; // evaluates to a string
 
   if (spec->has_precision) {
     // a precision renders a float through `std::fmt::float`: the bare path has
@@ -8007,7 +8007,7 @@ static void check_interpol_seg(CheckCtx *ctx, InterpolSeg *seg) {
     args[1] = mk_int_lit(ctx, spec->precision, span);
     rendered = mk_fun_call(ctx, ctx->tc->fmt_float, args, 2, span);
   } else {
-    // render through the ordinary segment path, then pad the String it yields.
+    // render through the ordinary segment path, then pad the string it yields.
     rendered = mk_render_interp(ctx, recv, span);
     if (type_is_poison(resolve_expr(ctx, rendered, NULL))) {
       return;
@@ -8548,7 +8548,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       // So these are the only binary operators whose operand type is known
       // *before* the operands are — and that makes them the only ones that can
       // **drive** inference rather than merely check it. `+` has to look first,
-      // because it could be int, float, String or a call to `Add`, which is why
+      // because it could be int, float, string or a call to `Add`, which is why
       // `|x| x + 1` cannot solve `x` and `|x| x | 1` can. Unifying rather than
       // testing is what buys that, and it is the same thing a range does to its
       // two bounds.
@@ -10362,11 +10362,11 @@ static bool trait_check_object_safe(TypeResolver *r, TraitDef *trait,
 // The types the compiler knows by name rather than by declaration. NULL for
 // anything else, which sends the name to the type scope.
 //
-// `StringBuf`, `char` and `Range` are builtins in exactly the sense the others
+// `StringBuf`, `char` and `range` are builtins in exactly the sense the others
 // are: the compiler knows the *type*, while every operation on one lives in
 // std. That is not a lang item in the sense `Display` is — no std *item* is
-// named here. `Range` had existed as a type since ranges did; naming it is what
-// gives an `impl Range` a self type to write, which is how `std::iter` hangs
+// named here. `range` had existed as a type since ranges did; naming it is what
+// gives an `impl range` a self type to write, which is how `std::iter` hangs
 // `iter()` off one — and what lets a range be a parameter rather than only a
 // loop header.
 //
@@ -10389,13 +10389,13 @@ static Type *type_named_builtin(TypeChecker *tc, StringView name) {
   if (sv_equal_cstr(name, "char")) {
     return tc->t_char;
   }
-  if (sv_equal_cstr(name, "String")) {
+  if (sv_equal_cstr(name, "string")) {
     return tc->t_string;
   }
   if (sv_equal_cstr(name, "StringBuf")) {
     return tc->t_strbuf;
   }
-  if (sv_equal_cstr(name, "Range")) {
+  if (sv_equal_cstr(name, "range")) {
     return tc->t_range;
   }
   return NULL;
@@ -10968,7 +10968,7 @@ static bool impl_bounds_satisfied(ImplDef *impl, Type **args, int n,
     // used to ignore entirely. For an equality binding that is not a missed
     // diagnostic but a wrong answer: `impl<I: Iterator, J: Iterator<Item =
     // I.Item>> Iterator for Chain<I, J>` binds `Item` to `I.Item`, so applying
-    // it to a `Chain<Counter, Words>` would compile `self.b.next()`'s `String`
+    // it to a `Chain<Counter, Words>` would compile `self.b.next()`'s `string`
     // as the `int` the impl promised. An impl whose premises do not hold does
     // not apply — the milestone-20 reading, one predicate kind over.
     for (int a = 0; ok && a < param->as.generic.assoc_bound_count; a++) {
@@ -11013,7 +11013,7 @@ static bool impl_bounds_satisfied(ImplDef *impl, Type **args, int n,
 // a trait may take type parameters, an impl applies to a *pair* — a self type
 // and a trait reference — and both halves may pin the impl's own parameters:
 // `impl<T> Into<T> for Wrap<T>` is selected by its receiver, while
-// `impl<T: Display> Into<String> for T` is selected by both.
+// `impl<T: Display> Into<string> for T` is selected by both.
 // The head match alone: does `impl`'s self type (and, when asked, its trait
 // reference) match, binding whatever impl parameters they mention? Split out
 // from `impl_applies` because a parameter the head does not mention is not
@@ -11413,7 +11413,7 @@ static int assoc_candidate_count(ImplIndex *idx, Type *self_type,
 // arguments tell apart.
 //
 // Two candidates whose parameters are identical are settled by something else
-// and must be left to it — `Into<Fahrenheit>` and `Into<String>` both take
+// and must be left to it — `Into<Fahrenheit>` and `Into<string>` both take
 // `(Celsius)` and are chosen by the return-type hint, and a supertrait-derived
 // impl (milestone 74) shares the written one's `MethodDef` outright. Running
 // selection on those would report an ambiguity where the older path has an
@@ -11660,7 +11660,7 @@ static MethodDef *impl_index_assoc_select(ImplIndex *idx, Type *self_type,
 // impl heads `impl [<..>] trait for T` matching both — exact for a non-generic
 // impl, structural (binding the impl's params) for a generic one. The trait's
 // own type arguments are part of the question: `S: Into<int>` is not answered
-// by an `impl Into<String> for S`.
+// by an `impl Into<string> for S`.
 bool impl_index_implements(ImplIndex *idx, Type *type, Type *trait_ref,
                            Allocator *al) {
   if (type_is_poison(type)) {
@@ -12355,20 +12355,20 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
                  "no associated item named '" SV_FMT "' found for type '%s'",
                  SV_ARG(segment), ty_buf);
 
-      // A module may legitimately share a builtin's name — `std::char` does,
-      // and its whole content is `impl char`, so `char::to_upper` finds what it
-      // meant through the *type*. A module holding anything else (a free
-      // function, a struct) is reachable only by its full path, because the
-      // builtin answers the first segment first. That is not worth refusing the
-      // declaration over, but it is worth saying out loud here.
+      // A module may legitimately share a builtin's name — `std::char` and
+      // `std::string` both do, and what lives in an `impl` of that type is
+      // still found through the *type*. A free function is what has no route
+      // through it, since the builtin answers the first segment first; the way
+      // back to one is to import it by name or to rebind the module under an
+      // alias. Not worth refusing the declaration over, but worth saying here.
       StringView head = path->segments[0].name;
       if (type_named_builtin(ctx->tyres->tc, head) != NULL &&
           (qual_module_bound(ctx->tyres->module, head) ||
            mod_find_own_decl(ctx->tyres->module, head) != NULL)) {
         diag_note(ctx->diags, path->span,
                   "a module named '" SV_FMT "' is in scope, but a builtin type "
-                  "name is resolved before it — reach the module's own items "
-                  "through their full path",
+                  "name is resolved before it — import the item by name, or "
+                  "bind the module under an alias (`use a::b as c;`)",
                   SV_ARG(head));
       }
       return false;

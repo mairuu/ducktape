@@ -307,10 +307,10 @@ static Value n_hash_mix(NativeCtx *ctx, Value *args, int argc) {
   return val_int((int64_t)h);
 }
 
-// A String's hash is a *field read*: the heap hashed these bytes already when
+// A string's hash is a *field read*: the heap hashed these bytes already when
 // it interned them, and kept the result to find the string's bucket with. So
 // the one type whose hash would otherwise be a walk over its bytes is the one
-// type that costs nothing — and `impl Hash for String` is the cheapest impl in
+// type that costs nothing — and `impl Hash for string` is the cheapest impl in
 // std rather than the dearest.
 //
 // It is a `uint32_t` widened into an int, so it is always non-negative here;
@@ -380,7 +380,7 @@ static Value n_string_cmp(NativeCtx *ctx, Value *args, int argc) {
   return val_int(order < 0 ? -1 : 1);
 }
 
-// The crossing between the two views of text: a String is bytes, a char is a
+// The crossing between the two views of text: a string is bytes, a char is a
 // scalar value, and these are where one becomes the other. The crossing is a
 // *walk* rather than an index — `std::iter`'s `CharIter` is the only
 // caller of the two below, and it is what keeps the byte offsets they speak in
@@ -390,7 +390,7 @@ static Value n_string_cmp(NativeCtx *ctx, Value *args, int argc) {
 // Neither allocates, so neither has anything to say about the calling
 // convention: a char is a value and an offset is an int.
 
-// The character beginning at byte offset `at`. Since milestone 101 a String is
+// The character beginning at byte offset `at`. Since milestone 101 a string is
 // valid UTF-8 by construction, so the decode cannot fail on the *bytes*: the
 // one way this errors past the bounds check is an `at` in the middle of a
 // sequence, which is a question about the offset, not about the string.
@@ -452,8 +452,8 @@ static Value n_string_prev_boundary(NativeCtx *ctx, Value *args, int argc) {
 // the pads used to build to count it.
 //
 // This is the only native that decodes the *whole* string, so it is also the
-// cheapest detector the String invariant has: the guard below is unreachable
-// from any program, and a firing means the runtime built a String it should
+// cheapest detector the string invariant has: the guard below is unreachable
+// from any program, and a firing means the runtime built a string it should
 // not have. It stays because dropping it would turn that bug into a hang.
 static Value n_string_char_count(NativeCtx *ctx, Value *args, int argc) {
   (void)argc;
@@ -472,11 +472,11 @@ static Value n_string_char_count(NativeCtx *ctx, Value *args, int argc) {
   return val_int(count);
 }
 
-// Does `needle` sit at byte offset `at`? The compare a String has no other way
+// Does `needle` sit at byte offset `at`? The compare a string has no other way
 // to ask for: `std::text` used to cut a candidate window out and compare
-// *that*, which allocated an interned String per position and — since milestone
+// *that*, which allocated an interned string per position and — since milestone
 // 101 — would now fail outright, because a window cut at an arbitrary byte
-// offset is exactly the slice a valid String refuses to make.
+// offset is exactly the slice a valid string refuses to make.
 //
 // It is total where that cut is not, and the encoding is what makes it so: a
 // non-empty needle is valid UTF-8, so its first byte is never a continuation
@@ -502,10 +502,10 @@ static Value n_string_matches_at(NativeCtx *ctx, Value *args, int argc) {
 // calling convention: `heap_intern` can collect, and it is `args` still
 // sitting on the VM stack that keeps the source string alive across it.
 //
-// The boundary check is what makes every String valid UTF-8 (milestone 101):
+// The boundary check is what makes every string valid UTF-8 (milestone 101):
 // this is the only operation that can produce bytes no intake vetted, so the
 // invariant costs two O(1) tests here and nothing anywhere else. What used to
-// be a malformed String travelling until something decoded it is now an error
+// be a malformed string travelling until something decoded it is now an error
 // at the cut that made it.
 static Value n_string_slice(NativeCtx *ctx, Value *args, int argc) {
   (void)argc;
@@ -525,10 +525,10 @@ static Value n_string_slice(NativeCtx *ctx, Value *args, int argc) {
   return val_obj(&out->obj);
 }
 
-// A `StringBuf` is the object a String cannot be: uninterned, so it may be
+// A `StringBuf` is the object a string cannot be: uninterned, so it may be
 // appended to in place. These natives are the whole of what it cannot express
 // about itself — existing, growing, emptying, its length, and becoming a
-// String — and `join`/`concat`/`repeat` are ordinary ducktape on top of them.
+// string — and `join`/`concat`/`repeat` are ordinary ducktape on top of them.
 
 static Value n_strbuf_new(NativeCtx *ctx, Value *args, int argc) {
   (void)args;
@@ -537,7 +537,7 @@ static Value n_strbuf_new(NativeCtx *ctx, Value *args, int argc) {
   return val_obj(&buf->obj);
 }
 
-// Append the bytes of a String. The buffer is `args[0]`, still on the VM stack,
+// Append the bytes of a string. The buffer is `args[0]`, still on the VM stack,
 // which is what keeps it rooted across the collection `reserve` may trigger —
 // and the source string is `args[1]` for the same reason. `len` rises only
 // once the bytes are really there, mirroring `array_push`; here that is about
@@ -556,11 +556,11 @@ static Value n_strbuf_push(NativeCtx *ctx, Value *args, int argc) {
   return val_unit();
 }
 
-// Append one char's UTF-8 bytes. This is the append a `[String]` of parts
+// Append one char's UTF-8 bytes. This is the append a `[string]` of parts
 // could never have offered — the reason a buffer was worth a new object kind
-// at all — since it puts bytes in without interning a String to hold them.
+// at all — since it puts bytes in without interning a string to hold them.
 // It is also what lets `from_chars` be ordinary ducktape rather than a fifth
-// native: a String is built out of chars the same way it is built out of
+// native: a string is built out of chars the same way it is built out of
 // anything else.
 static Value n_strbuf_push_char(NativeCtx *ctx, Value *args, int argc) {
   (void)argc;
@@ -593,7 +593,7 @@ static Value n_strbuf_clear(NativeCtx *ctx, Value *args, int argc) {
 }
 
 // Append an int's decimal digits. Without it a number has to be interned first
-// (`push(b, "{n}")` builds a throwaway String), which is exactly the
+// (`push(b, "{n}")` builds a throwaway string), which is exactly the
 // re-interning a buffer exists to avoid; here the digits go straight in, like
 // `push_char`. `snprintf` cannot overrun `buf` — an int64_t is at most 20
 // digits and a sign — so the length it returns is the real byte count, no clamp

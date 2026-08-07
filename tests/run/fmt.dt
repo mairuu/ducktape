@@ -24,7 +24,7 @@ use std::fmt::{Display, to_string, float};
 struct Point { x: int, y: int }
 
 impl Display for Point {
-    fun to_string(self) -> String {
+    fun to_string(self) -> string {
         return "({self.x}, {self.y})";
     }
 }
@@ -34,7 +34,7 @@ impl Display for Point {
 struct Line { from: Point, to: Point }
 
 impl Display for Line {
-    fun to_string(self) -> String {
+    fun to_string(self) -> string {
         return "{self.from} -> {self.to}";
     }
 }
@@ -42,7 +42,7 @@ impl Display for Line {
 enum Colour { Red, Green }
 
 impl Display for Colour {
-    fun to_string(self) -> String {
+    fun to_string(self) -> string {
         match self {
             Colour::Red => { return "red"; },
             Colour::Green => { return "green"; },
@@ -52,7 +52,7 @@ impl Display for Colour {
 
 # dispatch through a bound: the receiver is abstract here, so which body runs
 # is decided per instantiation.
-fun label<T: Display>(tag: String, v: T) -> String {
+fun label<T: Display>(tag: string, v: T) -> string {
     return "{tag}={v}";
 }
 

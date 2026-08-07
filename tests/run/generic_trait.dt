@@ -29,8 +29,8 @@ impl into<Fahrenheit> for Celsius {
     fun into(self) -> Fahrenheit { Fahrenheit { deg: self.deg * 9 / 5 + 32 } }
 }
 
-impl into<String> for Celsius {
-    fun into(self) -> String { "{self.deg}C" }
+impl into<string> for Celsius {
+    fun into(self) -> string { "{self.deg}C" }
 }
 
 # a generic impl of a generic trait: the impl's own parameter is what the
@@ -54,7 +54,7 @@ impl into<int> for Count {
 
 # through a trait object: the vtable is keyed on the reference, so two `dyn`s
 # over one self type are two tables.
-fun label(v: dyn into<String>) -> String {
+fun label(v: dyn into<string>) -> string {
     return v.into();
 }
 
@@ -67,12 +67,12 @@ trait Pipe<T> {
 
 struct Repeat { times: int }
 
-impl Pipe<String> for Repeat {
+impl Pipe<string> for Repeat {
     type Out = int;
-    fun pipe(self, _v: String) -> int { self.times }
+    fun pipe(self, _v: string) -> int { self.times }
 }
 
-fun run(p: dyn Pipe<String, Out = int>) -> int {
+fun run(p: dyn Pipe<string, Out = int>) -> int {
     return p.pipe("x");
 }
 

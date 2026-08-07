@@ -68,13 +68,13 @@ trait Show {
 struct Count(int)
 
 impl Show for Count {
-    type Label = String;
+    type Label = string;
 
     fun show(self) -> int {
         return self.0;
     }
 
-    fun label(self) -> String {
+    fun label(self) -> string {
         return "count";
     }
 }

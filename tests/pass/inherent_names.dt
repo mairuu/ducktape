@@ -7,7 +7,7 @@ struct P {
   x: int,
 }
 
-# Splitting a type's methods across blocks: ordinary, and how std ships String.
+# Splitting a type's methods across blocks: ordinary, and how std ships string.
 impl P {
   fun width(self) -> int {
     return self.x;
@@ -71,7 +71,7 @@ impl W<int> {
   }
 }
 
-impl W<String> {
+impl W<string> {
   fun tag(self) -> int {
     return 2;
   }

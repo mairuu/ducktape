@@ -1,9 +1,9 @@
-# std::string::buf — a growable text buffer, the object a `String` is built from.
+# std::string::buf — a growable text buffer, the object a `string` is built from.
 #
-# `a + b` allocates a whole new String and interns it, so growing one a piece at
+# `a + b` allocates a whole new string and interns it, so growing one a piece at
 # a time re-interns the entire accumulation at every step. A `StringBuf` is the
-# way out, and it is a distinct *type* rather than a mutable `String` because
-# interning is precisely what makes a String immutable: two equal strings are
+# way out, and it is a distinct *type* rather than a mutable `string` because
+# interning is precisely what makes a string immutable: two equal strings are
 # one pointer, so an object filed under the hash of its bytes cannot have its
 # bytes change underneath it. So a buffer is the object deliberately kept out of
 # that table, `build` is the one-way door back in, and the natives below are the
@@ -27,17 +27,17 @@ impl StringBuf {
     # it sees the append — which is why this takes the receiver by value and
     # needs no way to spell "by reference".
     @native("strbuf_push")
-    fun push(self, s: String);
+    fun push(self, s: string);
 
     # Append one character's UTF-8 bytes. This is the append that an array of
     # parts could never have offered, and so the one that shows why a buffer was
-    # worth a new object kind: the bytes go straight in, with no String interned
+    # worth a new object kind: the bytes go straight in, with no string interned
     # along the way to carry them.
     @native("strbuf_push_char")
     fun push_char(self, c: char);
 
-    # Append an int's decimal digits, without first interning a String to carry
-    # them. `b.push("{n}")` would build a throwaway String for the digits — the
+    # Append an int's decimal digits, without first interning a string to carry
+    # them. `b.push("{n}")` would build a throwaway string for the digits — the
     # re-interning a buffer exists to avoid — so this is `push_char`'s sibling
     # for numbers: the bytes go straight in.
     @native("strbuf_push_int")
@@ -54,11 +54,11 @@ impl StringBuf {
     @native("strbuf_clear")
     fun clear(self);
 
-    # intern the bytes written so far into a `String`. Non-destructive: the
+    # intern the bytes written so far into a `string`. Non-destructive: the
     # buffer is unchanged and may be appended to again, so `build` inside a loop
     # is a snapshot rather than a handover.
     @native("strbuf_build")
-    fun build(self) -> String;
+    fun build(self) -> string;
 
     fun is_empty(self) -> bool {
         return self.len() == 0;

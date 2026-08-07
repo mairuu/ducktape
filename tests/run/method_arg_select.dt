@@ -10,7 +10,7 @@
 # The selector is milestone 30's, unchanged. What is new is the *guard*: it runs
 # only when the candidate impls disagree about the arguments they take. Two
 # candidates whose parameters are identical are settled by something else and
-# must be left to it — `into<Fahrenheit>` and `into<String>` both take
+# must be left to it — `into<Fahrenheit>` and `into<string>` both take
 # `(Celsius)` and are chosen by the return-type hint, and a supertrait-derived
 # impl (milestone 74) shares the written one's method outright. Asking the
 # arguments about those would report an ambiguity where an answer exists.
@@ -53,12 +53,12 @@ struct Wrap<T> { v: T }
 
 trait Put<T> { fun put(self, x: T) -> int; }
 
-impl Put<int> for Wrap<String> {
+impl Put<int> for Wrap<string> {
     fun put(self, x: int) -> int { return x; }
 }
 
-impl Put<String> for Wrap<String> {
-    fun put(self, x: String) -> int { return x.len(); }
+impl Put<string> for Wrap<string> {
+    fun put(self, x: string) -> int { return x.len(); }
 }
 
 # the return-type hint still decides where the arguments cannot: these two take
@@ -72,8 +72,8 @@ impl into2<Fahrenheit> for Celsius {
     fun into2(self) -> Fahrenheit { return Fahrenheit { deg: self.deg * 2 }; }
 }
 
-impl into2<String> for Celsius {
-    fun into2(self) -> String { return "{self.deg}C"; }
+impl into2<string> for Celsius {
+    fun into2(self) -> string { return "{self.deg}C"; }
 }
 
 fun main() {
@@ -83,7 +83,7 @@ fun main() {
     print(v.scale(true).x);                  # Scale<bool> -> 3
 
     var w = Wrap { v: "ping" };
-    print(w.put("ping"));                    # Put<String> -> 4
+    print(w.put("ping"));                    # Put<string> -> 4
     print(w.put(7));                         # Put<int>    -> 7
 
     var f: Fahrenheit = Celsius { deg: 10 }.into2();

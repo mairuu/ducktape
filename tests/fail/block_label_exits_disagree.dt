@@ -1,4 +1,4 @@
-#! expect: type mismatch: expected 'int' but got 'String'
+#! expect: type mismatch: expected 'int' but got 'string'
 # The tail is an exit like any break, so it joins with them — which is exactly
 # what a `while` has not got and why only a `loop` and a block take a value.
 fun main() {

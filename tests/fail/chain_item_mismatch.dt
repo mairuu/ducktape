@@ -1,7 +1,7 @@
 #! expect: does not satisfy 'J.Item = int'
 # An equality binding is discharged where the parameter is bound, and this is
 # what makes the rewrite behind it honest: inside `chain`, `J.Item` *was*
-# `Self.Item`, so a `J` whose elements are Strings would have had its `String`s
+# `Self.Item`, so a `J` whose elements are Strings would have had its `string`s
 # compiled as the `int`s the signature promised. `Words` is that `J`.
 #
 # The note on the second diagnostic is the same fact reached from the other
@@ -26,8 +26,8 @@ impl Iterator for Counter {
 struct Words { i: int }
 
 impl Iterator for Words {
-    type Item = String;
-    fun next(self) -> Option<String> {
+    type Item = string;
+    fun next(self) -> Option<string> {
         self.i += 1;
         if self.i > 2 { return Option::None; }
         return Option::Some("w");

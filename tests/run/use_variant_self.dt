@@ -11,7 +11,7 @@ enum Event {
   Payload(int),
 }
 
-fun name(e: Event) -> String {
+fun name(e: Event) -> string {
   match e {
     A => { return "a"; },
     B => { return "b"; },

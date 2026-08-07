@@ -1,0 +1,8 @@
+#! expect: bind the module under an alias
+# Milestone 103 made `std::string` the first std module whose free items the
+# bare qualifier cannot reach: the builtin `string` answers the first segment.
+use std::string;
+
+fun main() {
+    var _s = string::concat(["a", "b"]);
+}

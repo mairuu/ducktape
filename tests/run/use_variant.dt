@@ -34,7 +34,7 @@ pub fun main() {
   print(Option::Some(9).unwrap());
 #> 9
 
-  var r: Result<int, String> = Yes(2);
+  var r: Result<int, string> = Yes(2);
   print(r.unwrap());
 #> 2
 }

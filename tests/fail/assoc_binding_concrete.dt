@@ -10,8 +10,8 @@ use std::io::print;
 struct Words { i: int }
 
 impl Iterator for Words {
-    type Item = String;
-    fun next(self) -> Option<String> {
+    type Item = string;
+    fun next(self) -> Option<string> {
         self.i += 1;
         if self.i > 2 { return Option::None; }
         return Option::Some("w");

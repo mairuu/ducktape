@@ -12,6 +12,6 @@
 use std::option::Option;
 use std::fmt::Display;
 
-fun show<T>(v: T) -> String {
+fun show<T>(v: T) -> string {
     return "{v}";
 }

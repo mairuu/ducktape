@@ -1,18 +1,18 @@
-# std::text — searching, splitting, trimming and parsing, as methods on String.
+# std::text — searching, splitting, trimming and parsing, as methods on string.
 # Since milestone 102 it also owns cutting, because it owns the positions.
 
 use std::io::print;
 use std::option::Option;
 use std::text::StrPos;   # names the type, and brings the module's impls with it
 
-fun show_int_opt(label: String, o: Option<int>) {
+fun show_int_opt(label: string, o: Option<int>) {
     print("{label}: {o}");
 }
 
 # `find` answers a position, not a number, so a test that wants to print one
 # has to say which question it is asking: `byte_offset` reads a position, and
 # nothing turns the answer back into one.
-fun show_pos_opt(label: String, o: Option<StrPos>) {
+fun show_pos_opt(label: string, o: Option<StrPos>) {
     var at = o.map(|p| p.byte_offset());
     print("{label}: {at}");
 }

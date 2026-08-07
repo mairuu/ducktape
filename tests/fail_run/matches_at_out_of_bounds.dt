@@ -9,7 +9,7 @@
 use std::io::print;
 
 @native("string_matches_at")
-fun raw_matches_at(s: String, at: int, needle: String) -> bool;
+fun raw_matches_at(s: string, at: int, needle: string) -> bool;
 
 fun main() {
     print(raw_matches_at("hi", 3, ""));

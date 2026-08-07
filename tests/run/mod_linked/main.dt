@@ -16,7 +16,7 @@ use shapes::rect::{Rect, Kind};
 use scale::grow;
 use scale::doubler as twice;
 
-fun describe(k: Kind) -> String {
+fun describe(k: Kind) -> string {
   return match k {
     Kind::Square => "square",
     Kind::Oblong => "oblong",

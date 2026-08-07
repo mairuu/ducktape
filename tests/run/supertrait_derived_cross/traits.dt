@@ -1,12 +1,12 @@
 # The traits live here; the impl that derives one lives next door.
 pub trait Greet {
-    fun name(self) -> String;
+    fun name(self) -> string;
 }
 
 pub trait Loud: Greet {
-    fun shout(self) -> String;
+    fun shout(self) -> string;
 }
 
 # a bound in *this* module, so what it selects from is what `impl` module's
 # derived impl reached through the import graph.
-pub fun greet<T: Greet>(x: T) -> String { return x.name(); }
+pub fun greet<T: Greet>(x: T) -> string { return x.name(); }

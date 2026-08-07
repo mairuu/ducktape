@@ -3,7 +3,7 @@
 # than about a missing method named 'mul', which is what gating the rewrite on
 # the trait buys — and what stops an unrelated inherent `mul` from silently
 # becoming what `*` means.
-struct Tag { name: String }
+struct Tag { name: string }
 
 impl Add for Tag {
     fun add(self, other: Tag) -> Tag {

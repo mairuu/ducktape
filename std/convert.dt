@@ -29,7 +29,7 @@
 # conversion trait is the easiest module in the library to overfill. Both are
 # lossless and neither is expressible as a method today.
 #
-# There is deliberately no `From<T> for String`. Rendering a value is
+# There is deliberately no `From<T> for string`. Rendering a value is
 # `std::fmt::Display`'s question and `to_string` already answers it; a
 # conversion trait answering it too would give the language two spellings for
 # one thing, which is the split milestone 18 drew between `print` and
