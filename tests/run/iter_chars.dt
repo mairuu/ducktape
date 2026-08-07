@@ -27,6 +27,7 @@
 #> 2
 use std::io::print;
 use std::string::from_chars;
+use std::text;
 
 fun main() {
     # every UTF-8 width in one string: 1, 2, 3 and 4 bytes. Walking it forwards
@@ -72,10 +73,11 @@ fun main() {
     print(t.chars().enumerate().skip(7).take(2).collect());
     print(t.chars().rev().take_while(|c| c.is_alpha()).count());
 
-    # a slice is still a byte range, and one that lands on boundaries is the
-    # only kind there is now (milestone 101), so a walk over one is a walk like
-    # any other. What used to stand here was half a character and a walk that
-    # answered only by stopping short of it.
-    var head = s.slice(0, 3);
-    print(head.chars().count());
+    # a slice is a byte range whose ends a program cannot make up (milestone
+    # 102), so a walk over one is a walk like any other. What used to stand here
+    # was half a character and a walk that answered only by stopping short of it.
+    if var Option::Some(at) = s.find("☃") {
+        var head = s.slice(s.start(), at);
+        print(head.chars().count());
+    }
 }

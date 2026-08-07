@@ -1,0 +1,12 @@
+#! expect: string position is not a position in this string
+# `matches_at` checks its position for the same reason `slice` checks its two,
+# and needs its own test because it is a different call: here the foreign
+# position is also past the end of the receiver, so without the check it would
+# reach the native and be reported as an offset problem rather than as the
+# mix-up it is.
+use std::io::print;
+use std::text;
+
+fun main() {
+    print("hi".matches_at("hello".end(), ""));
+}

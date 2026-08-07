@@ -1,17 +1,18 @@
 # std::string — operations on `String`, and the buffers one is built with.
 #
-# A `String` is an interned, immutable heap object, so `slice` allocates: it
-# is the module that exercises the native calling convention's one real rule,
-# that arguments stay on the VM stack across the call and so remain rooted
-# through any collection the native triggers.
+# A `String` is an interned, immutable heap object, so building one allocates:
+# `strbuf_push` is where this module exercises the native calling convention's
+# one real rule, that arguments stay on the VM stack across the call and so
+# remain rooted through any collection the native triggers.
 #
-# `slice` is also the one native here that can *fail*. A native reports a
-# runtime error by setting `ctx->error`, which the VM turns into an error at
-# the call site — the closest thing the language has to a panic until there is
-# a real one (roadmap: `std::result`).
+# **Cutting a String is not here** as of milestone 102. `slice` needs a
+# `StrPos` to cut at, a `StrPos` is opaque, and the module that owns the
+# private field is the only one that can mint one — so `slice` and
+# `matches_at` moved to `std::text` along with the searching that produces the
+# positions. What is left here is what needs no position at all.
 #
 # The operations *on* a String are **methods** (milestone 40): `s.len()`,
-# `s.slice(from, to)`, `s.compare(other)`, `s.repeat(n)` — and `s.chars()`,
+# `s.compare(other)`, `s.repeat(n)` — and `s.chars()`,
 # which is a method on String like the rest but lives in `std::iter`, for the
 # reason spelled out where it used to be. The
 # collection→String *builders* below (`join`, `concat`, `from_chars`) stay free
@@ -37,27 +38,12 @@ impl String {
     @native("string_len")
     fun len(self) -> int;
 
-    # `self[from..to)`, indexed in bytes. A runtime error if the range is not
-    # within the string, or if either end falls inside a character: a String is
-    # valid UTF-8 and `slice` is the only operation that could produce one that
-    # is not, so it is where the guarantee is paid for (milestone 101).
-    @native("string_slice")
-    fun slice(self, from: int, to: int) -> String;
-
-    # Does `needle` begin at byte offset `at`? The compare that does not cut,
-    # and the reason `std::text` can search a String it is forbidden to slice
-    # arbitrarily: a needle at a mid-character offset answers `false` where the
-    # equivalent `slice` would be an error, and no candidate window is interned
-    # to ask the question.
-    @native("string_matches_at")
-    fun matches_at(self, at: int, needle: String) -> bool;
-
     # Byte order: <0 if `self` sorts before `other`, 0 if equal, >0 if after.
     # This is what `impl Ord for String` is written on, and it has to be a native
     # for the same reason `push` does — it is a thing a String cannot express
-    # about itself. The only handle ducktape has on a String's contents is
-    # `slice`, and comparing two one-byte slices needs string ordering, which is
-    # what was being defined.
+    # about itself. The only handle ducktape has on a String's contents is a
+    # cut, and comparing two one-byte cuts needs string ordering, which is what
+    # was being defined.
     #
     # interning contributes nothing here beyond the equal case, which is the
     # limit of the gift it made to `==`: two equal strings are one pointer, but

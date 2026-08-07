@@ -1,0 +1,13 @@
+#! expect: string position is not a position in this string
+# Milestone 102's own error, and the reason a `StrPos` carries its String. Both
+# of these positions are real and both land on boundaries — just not in `a`. In
+# bounds and on a boundary there too, so nothing further down would have caught
+# it: without the check this cut answers "hello" and says nothing.
+use std::io::print;
+use std::text;
+
+fun main() {
+    var a = "hello";
+    var b = "world";
+    print(a.slice(b.start(), b.end()));
+}

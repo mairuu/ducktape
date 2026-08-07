@@ -1,11 +1,20 @@
 # std::text — searching, splitting, trimming and parsing, as methods on String.
+# Since milestone 102 it also owns cutting, because it owns the positions.
 
 use std::io::print;
 use std::option::Option;
-use std::text;
+use std::text::StrPos;   # names the type, and brings the module's impls with it
 
 fun show_int_opt(label: String, o: Option<int>) {
     print("{label}: {o}");
+}
+
+# `find` answers a position, not a number, so a test that wants to print one
+# has to say which question it is asking: `byte_offset` reads a position, and
+# nothing turns the answer back into one.
+fun show_pos_opt(label: String, o: Option<StrPos>) {
+    var at = o.map(|p| p.byte_offset());
+    print("{label}: {at}");
 }
 
 fun main() {
@@ -29,14 +38,14 @@ fun main() {
     print("{f}");
 #> false
 
-    # find: first hit as a byte offset, miss, and the empty needle.
-    show_int_opt("f-l", "hello".find("l"));
+    # find: first hit as a position, miss, and the empty needle.
+    show_pos_opt("f-l", "hello".find("l"));
 #> f-l: Some(2)
-    show_int_opt("f-ell", "hello".find("ell"));
+    show_pos_opt("f-ell", "hello".find("ell"));
 #> f-ell: Some(1)
-    show_int_opt("f-z", "hello".find("z"));
+    show_pos_opt("f-z", "hello".find("z"));
 #> f-z: None
-    show_int_opt("f-empty", "hello".find(""));
+    show_pos_opt("f-empty", "hello".find(""));
 #> f-empty: Some(0)
 
     var has = "hello world".contains("o w");
@@ -94,4 +103,33 @@ fun main() {
     # parse_int composes with trim: parse after trimming leading space.
     show_int_opt("pt", "  99 ".trim().parse_int());
 #> pt: Some(99)
+
+    # positions: the two ends a string always has, and one from a search. The
+    # only cuts a program can write are between positions it was handed.
+    var kv = "key=value";
+    if var Option::Some(eq) = kv.find("=") {
+        var head = kv.slice(kv.start(), eq);
+        var rest = kv.slice(eq, kv.end());
+        print("[{head}][{rest}]");
+    }
+#> [key][=value]
+
+    # split_once is the step *past* a match, which is the one piece of offset
+    # arithmetic a program cannot do on a position of its own.
+    if var Option::Some((k, v)) = kv.split_once("=") {
+        print("{k} -> {v}");
+    }
+#> key -> value
+    var none = "nosep".split_once("=").is_some();
+    print("{none}");
+#> false
+
+    # counting is the other verb: characters off an end, and never a position.
+    print("showcase".take_chars(4));
+#> show
+    print("showcase".drop_chars(4));
+#> case
+    var over = "hi".drop_chars(9);
+    print("[{over}]");
+#> []
 }

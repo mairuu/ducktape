@@ -638,7 +638,40 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   no-op is the finding: `utf8_is_boundary`'s `at == len` arm cannot be made to
   matter from ducktape, because an `ObjString` is NUL-terminated and a NUL is
   not a continuation byte — it is there so the helper does not depend on that.
-  Remainder: a position is still a bare `int`, which is item 3 below.
+  Remainder: a position is still a bare `int`, which is milestone 102.
+
+- **102. The opaque `StrPos`** (`SHA`) — a position comes from an end of a
+  string or from a match, never from an `int`, and carries the String it names.
+  `slice` and `matches_at` moved to `std::text` with it; `split_once`,
+  `take_chars` and `drop_chars` are what the opacity made necessary.
+  Design: `language.md` "`std::text`" + "Characters and text" + the gaps table,
+  `runtime.md` "A `String` is valid UTF-8".
+  **THE FINDING: the roadmap's design question dissolved instead of being
+  answered.** It asked how `std::text`'s offset arithmetic (`n - sl`, `i + sl`)
+  should be spelled once a position is opaque, warning that a `StrPos` with
+  arithmetic is an `int` wearing a hat. But a private field is opaque *to other
+  modules*, and only the module owning it can mint one — so the module that
+  mints positions must also be the one that cuts and searches, and inside that
+  wall the arithmetic never changed spelling at all. Which is exactly the
+  discipline `CharIter` has kept over its own offsets since milestone 61, and
+  the reason `std::array`'s `pop_last` is a free function: an impl method has no
+  visibility control, so the raw natives had to be private free functions too.
+  A second finding decided the shape: **opacity alone leaves a silent wrong
+  answer** — `a.slice(b.start(), b.end())` is in bounds, on boundaries, and
+  answers nonsense — so a `StrPos` carries its String, checked by pointer
+  equality because interning makes equal Strings one object (which also makes
+  accepting an equal string *correct*, not merely permissive). Measured, best of
+  5-7 at `-O2`: the position path costs +57% over milestone 101's `Option<int>`
+  and the identity field is +10.7% of that, while `split` — which mints no
+  position — came out **8% faster**, having lost a method dispatch. Two of
+  `slice`'s three runtime errors are now unreachable from safe source and are
+  tested through a program that binds the raw `@native` itself. Sabotage 9/9
+  bit, and the ninth is a property rather than a test: leaving the old
+  int-taking `slice` in `std::string` is refused by milestone 68's coherence
+  rule ("conflicting definitions of method 'slice' for type 'String'"), so the
+  language made this a *move* rather than an addition.
+  Remainder: `slice` takes two independent positions rather than a range, so a
+  reversed pair is still a runtime error; and there is no reverse search.
 
 ## Next (in recommended order)
 
@@ -800,47 +833,26 @@ as here.)
    to address — and milestone 63 showed the other way out of it, since
    `std::hash` simply declines to implement `Hash for float` at all.
 
-3. **A `String` position that is opaque: `StrPos`.** Designed, unbuilt — the
-   *other* half of the string redesign, whose first half is milestone 101. A
-   String is now guaranteed valid UTF-8, and `slice` refuses a cut inside a
-   character; what is left is that a program can still *write* such a cut,
-   because a position is a bare `int` byte offset. The redesign makes it
-   **opaque**: a `StrPos` comes from a search or a walk, never from an `int`, so
-   a non-boundary cut stops being a runtime error and becomes unrepresentable.
-   That is what `CharIter` already does with its private byte offsets, promoted
-   from one struct's discipline to the language's rule. Counting stays a
-   separate verb from positioning (`s.take_chars(3)`, O(n), never mixed with a
-   `StrPos`), which is the one thing worth stealing from a character-indexed
-   design.
-
-   Milestone 101 supplied the prerequisite — `matches_at`, the byte-level
-   compare that lets a search stop cutting — and validated both untrusted
-   intakes, so what remains here is the *type*, and the API surface it changes:
-   `find` answering a `StrPos`, `slice` taking two, and the arithmetic
-   `std::text` does on offsets today (`n - sl`, `i + sl`) losing its spelling.
-   That last is the real design question, since a `StrPos` that supports
-   arithmetic is an `int` wearing a hat. Rejected alternatives, unchanged:
-   Go-style shared views (O(1) slicing, but interning dies and with it
-   pointer-equal `==` and cheap hashing), and Python-style character indexing
-   (best ergonomics, most C — two or three storage widths).
-
-   **The naming half: `String` should be `string`.** Milestone 99 kept
-   `String`, `StringBuf` and `Range` capitalised on the grounds that each "has
-   an impl block and a method API" — but `std/char.dt` is entirely `impl char`,
-   so that never separated them from the lowercase four, and milestone 101
-   settled it the rest of the way: a type whose UTF-8 is compiler-enforced and
-   whose `slice` refuses cuts the program did not sanction is the least
-   plausible thing in that list for a program to have written itself. The rule
+3. **The naming half of the string redesign: `String` should be `string`.**
+   The positional half is milestone 102; this is what it left. Milestone 99 kept
+   `String`, `StringBuf` and `Range` capitalised on the grounds that each "has an
+   impl block and a method API" — but `std/char.dt` is entirely `impl char`, so
+   that never separated them from the lowercase four, and milestones 101 and 102
+   settled it the rest of the way: a type whose UTF-8 is compiler-enforced, whose
+   cuts are made at positions the compiler hands out, and which a program could
+   not have written itself, is the least plausible member of that list. The rule
    that covers every case without an exception is **lowercase = an immutable
    value with no identity; PascalCase = has identity, or is declared** — so
    `String` → `string` and `Range` → `range` move, `StringBuf` stays and stops
    being an exception (it is mutable, so its identity is observable), and a
-   future `Bytes` stays for the same reason. Costs a rename of the same shape as
-   99's, plus the `type_named_builtin` entries. The one argument against is that
-   a Rust reader's `String` stops transferring for free, which is worth little
-   here: ducktape has no `str`/`String` split to inherit, and `char`/`string`
-   reads as the pair it is. Ride it with the `StrPos` work, since that is the
-   milestone that makes the case.
+   future `Bytes` stays for the same reason. `StrPos` stays too: it is declared,
+   in `std::text`, like any other struct.
+
+   Costs a rename of the same shape as 99's — 490 occurrences across 138 `.dt`
+   files at the time of measuring — plus the `type_named_builtin` entries. The
+   one argument against is that a Rust reader's `String` stops transferring for
+   free, which is worth little here: ducktape has no `str`/`String` split to
+   inherit, and `char`/`string` reads as the pair it is.
 
    **THE FINDING, on `byte`: it is not a scalar-shaped problem.** A new scalar
    buys type-safety and not one byte of memory — a `Value` is as wide as its
@@ -859,6 +871,7 @@ as here.)
    work must only avoid foreclosing it, which `to_utf8`/`from_utf8` do. If a
    `byte` scalar is ever wanted anyway, it belongs to an unsigned-integer
    milestone that closes the `>>>` wart, not to this one.
+
 
 Not on the roadmap: the **REPL** is a side feature, not a milestone — it lives
 on the `feature/repl` branch (`--repl`, incremental compilation over one module

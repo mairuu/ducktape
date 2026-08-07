@@ -1,9 +1,16 @@
 #! expect: string slice does not cut at a character boundary
-# The cut that used to make a malformed String and let it travel. `é` is two
-# bytes, so `to` here is inside it; the error arrives at the cut rather than at
-# whatever eventually decoded the result (milestone 101).
+# The cut that used to make a malformed String and let it travel (milestone
+# 101). `é` is two bytes, so a cut at 1 is inside it.
+#
+# Since milestone 102 no safe source reaches this: a `StrPos` cannot be built
+# from an `int`, and every position a string mints is one of its own boundaries.
+# So the guard is tested the only way left — by binding the raw native, which is
+# the escape hatch `@native` has always been rather than a hole in the type.
 use std::io::print;
 
+@native("string_slice")
+fun raw_slice(s: String, from: int, to: int) -> String;
+
 fun main() {
-    print("é".slice(0, 1));
+    print(raw_slice("é", 0, 1));
 }

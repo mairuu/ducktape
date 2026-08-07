@@ -30,6 +30,23 @@
 # `starts_with` needs neither a position nor a classification, so it is the bare
 # `matches_at`.
 #
+# As of milestone 102 that byte offset is `StrPos`, and it is **opaque**: a
+# program receives one from a search or from an end of the string, and has no
+# way to build one out of an `int`. That is why `slice` and `matches_at` are
+# here rather than in `std::string` — a position's field is private to the
+# module that declares it, so the module that mints positions must also be the
+# one that cuts at them. The two natives below are the raw byte-indexed forms,
+# private free functions for the reason `std::array`'s `pop_last` is one: an
+# impl method has no visibility control, so a `String` method taking an `int`
+# would be callable everywhere the impl is, and the opacity would be a
+# suggestion.
+#
+# The arithmetic the search does on offsets (`n - sl`, `i + sl`) did not have to
+# be given a spelling in the type, because it never crosses the wall: inside
+# this module a `StrPos` is an ordinary struct with an `int` in it. That is the
+# same discipline `CharIter` has kept over its own byte offsets since milestone
+# 61, promoted from one struct's private business to a module's.
+#
 # Searching is `matches_at` rather than `slice`+`==` as of milestone 101, and
 # the change was forced rather than chosen: a search compares *speculatively*,
 # at offsets it has no reason to believe in yet, and a String that guarantees
@@ -53,8 +70,118 @@
 
 use std::option::Option;
 use std::iter;
+use std::panic::panic;
+
+# A position in a `String`, in bytes, that a program cannot make up. Every one
+# of these is a character boundary in the string it names, because the only
+# things that mint one are the two ends of a string and a search that lands on a
+# match — and a match is a boundary by UTF-8's self-synchronisation (see `find`).
+#
+# It carries that string rather than just the offset, and interning is what
+# makes that cheap to check: two equal Strings are one object, so `from.s ==
+# self` is a pointer compare, and a position taken from an equal string is
+# not merely accepted but *correct* — equal strings have the same bytes, so
+# they have the same boundaries. Without it a position is only opaque, not
+# meaningful: `a.slice(b.start(), b.end())` would be in bounds, on boundaries,
+# and answer nonsense.
+#
+# Reading a position is safe; only *minting* one is not. So `byte_offset` is
+# public and neither field is: an `int` that came out of a position cannot be
+# turned back into one.
+pub struct StrPos {
+    s: String,
+    off: int,
+}
+
+impl StrPos {
+    fun byte_offset(self) -> int {
+        return self.off;
+    }
+}
+
+# The byte-indexed natives, private so that nothing outside this file can reach
+# a `String` operation that takes a bare offset.
+@native("string_slice")
+fun slice_bytes(s: String, from: int, to: int) -> String;
+
+@native("string_matches_at")
+fun matches_at_bytes(s: String, at: int, needle: String) -> bool;
 
 impl String {
+    # ── the two positions every string has ───────────────────────────────────
+    #
+    # Where a program's positions come from when it is not searching. Both ends
+    # of a string are boundaries whatever the bytes are, which is what makes
+    # them safe to hand out.
+
+    fun start(self) -> StrPos {
+        return StrPos { s: self, off: 0 };
+    }
+
+    fun end(self) -> StrPos {
+        return StrPos { s: self, off: self.len() };
+    }
+
+    # `self[from..to)`. Both positions must be `self`'s own; a position that
+    # names another string is in bounds and on a boundary *there*, so nothing
+    # downstream would catch it and the cut would quietly answer nonsense.
+    #
+    # Past that check the native's own two — in bounds, and on a boundary — are
+    # unreachable from safe source, because every position `self` mints
+    # satisfies both. What survives is the *order*: `s.slice(s.end(),
+    # s.start())` is two of `self`'s own positions in the wrong sequence.
+    fun slice(self, from: StrPos, to: StrPos) -> String {
+        if from.s != self or to.s != self {
+            panic("string position is not a position in this string");
+        }
+        return slice_bytes(self, from.off, to.off);
+    }
+
+    # Does `needle` sit at `at`? Total in its needle — running off the end is
+    # `false`, not an error — and `at` is checked for the same reason `slice`
+    # checks its ends.
+    fun matches_at(self, at: StrPos, needle: String) -> bool {
+        if at.s != self {
+            panic("string position is not a position in this string");
+        }
+        return matches_at_bytes(self, at.off, needle);
+    }
+
+    # ── counting, which is not positioning ───────────────────────────────────
+    #
+    # "How many characters" and "where in the bytes" are different questions,
+    # and these answer the first without ever touching the second. That
+    # separation is what keeps a position opaque at no cost to a program that
+    # only wants a fixed number of characters off an end: it walks, in O(n),
+    # and mints no `StrPos` at all.
+
+    # The first `n` characters of `self`, or all of them if it is shorter.
+    fun take_chars(self, n: int) -> String {
+        var b = StringBuf::new();
+        var i = 0;
+        for c in self.chars() {
+            if i >= n {
+                break;
+            }
+            b.push_char(c);
+            i = i + 1;
+        }
+        return b.build();
+    }
+
+    # `self` without its first `n` characters, or empty if it is shorter.
+    fun drop_chars(self, n: int) -> String {
+        var b = StringBuf::new();
+        var i = 0;
+        for c in self.chars() {
+            if i >= n {
+                b.push_char(c);
+            }
+            i = i + 1;
+        }
+        return b.build();
+    }
+
     # ── searching, by byte position ──────────────────────────────────────────
 
     # Does `self` begin with `prefix`? `matches_at` answers a prefix longer than
@@ -62,7 +189,7 @@ impl String {
     # length test the cutting version needed is gone, and the empty prefix
     # matches everywhere including at 0.
     fun starts_with(self, prefix: String) -> bool {
-        return self.matches_at(0, prefix);
+        return matches_at_bytes(self, 0, prefix);
     }
 
     # The one place a *position* is computed rather than scanned to, and the one
@@ -74,27 +201,27 @@ impl String {
         if sl > n {
             return false;
         }
-        return self.matches_at(n - sl, suffix);
+        return matches_at_bytes(self, n - sl, suffix);
     }
 
-    # The byte offset of the first occurrence of `needle` in `self`, or `None`.
-    # The empty needle is found at 0, matching `starts_with`'s reading of it.
+    # Where the first occurrence of `needle` begins in `self`, or `None`. The
+    # empty needle is found at the start, matching `starts_with`'s reading of it.
     #
     # The scan visits every byte offset, including ones inside a character, and
     # does not have to skip them: a non-empty needle starts with a lead byte, so
-    # those offsets answer `false` of their own accord. Which is also why an
-    # offset this returns is always a character boundary, and so always safe to
-    # `slice` at.
-    fun find(self, needle: String) -> Option<int> {
+    # those offsets answer `false` of their own accord. Which is also why a
+    # position this mints is always a character boundary, and so always safe to
+    # `slice` at — the induction the opaque type rests on.
+    fun find(self, needle: String) -> Option<StrPos> {
         var nl = needle.len();
         if nl == 0 {
-            return Option::Some(0);
+            return Option::Some(StrPos { s: self, off: 0 });
         }
         var n = self.len();
         var i = 0;
         while i + nl <= n {
-            if self.matches_at(i, needle) {
-                return Option::Some(i);
+            if matches_at_bytes(self, i, needle) {
+                return Option::Some(StrPos { s: self, off: i });
             }
             i = i + 1;
         }
@@ -116,11 +243,11 @@ impl String {
     # end.
     #
     # This is the one function that both searches and cuts, so it is where the
-    # two halves meet: every `slice` below is at a match position or at an end,
-    # and a match position is a character boundary (see `find`), so a separator
-    # can never split a character in half. The empty separator is turned away
-    # before the loop for its own reason, but it is also the only needle that
-    # could have matched inside one.
+    # two halves meet: every cut below is at a match offset or at an end, and a
+    # match offset is a character boundary (see `find`), so a separator can never
+    # split a character in half. The empty separator is turned away before the
+    # loop for its own reason, but it is also the only needle that could have
+    # matched inside one.
     fun split(self, sep: String) -> [String] {
         var parts: [String] = [];
         var sl = sep.len();
@@ -132,16 +259,39 @@ impl String {
         var start = 0;
         var i = 0;
         while i + sl <= n {
-            if self.matches_at(i, sep) {
-                parts.push(self.slice(start, i));
+            if matches_at_bytes(self, i, sep) {
+                parts.push(slice_bytes(self, start, i));
                 i = i + sl;
                 start = i;
             } else {
                 i = i + 1;
             }
         }
-        parts.push(self.slice(start, n));
+        parts.push(slice_bytes(self, start, n));
         return parts;
+    }
+
+    # `self` cut once at the first `sep`, the separator itself in neither half,
+    # or `None` if there is no separator to cut at.
+    #
+    # This is the operation an opaque position makes necessary. A program that
+    # finds a separator can slice up to it and from it, but the piece *after* it
+    # begins one needle's length further on — and that is arithmetic, which is
+    # exactly what a `StrPos` does not offer. So the step past a match stays
+    # inside the module, where the offsets are still ints, and comes out as this.
+    fun split_once(self, sep: String) -> Option<(String, String)> {
+        var sl = sep.len();
+        var n = self.len();
+        var i = 0;
+        while i + sl <= n {
+            if matches_at_bytes(self, i, sep) {
+                var head = slice_bytes(self, 0, i);
+                var tail = slice_bytes(self, i + sl, n);
+                return Option::Some((head, tail));
+            }
+            i = i + 1;
+        }
+        return Option::None;
     }
 
     # ── trimming and parsing, by character ───────────────────────────────────

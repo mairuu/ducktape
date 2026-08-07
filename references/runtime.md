@@ -1327,6 +1327,16 @@ malformed-bytes guard even so — it is the only native that decodes a whole
 string, so it is the invariant's cheapest detector, and dropping the guard would
 turn a runtime bug into a hang rather than an error.
 
+These natives are **no longer reachable with an arbitrary offset from safe
+source.** Milestone 102 made a position an opaque `StrPos` in `std::text`, so
+`string_slice` and `string_matches_at` are bound there as private free
+functions and every offset they receive came from an end of the same string or
+from a match in it. Their bounds and boundary checks join
+`string_char_count`'s: kept as detectors of a runtime that built a position it
+should not have, tested through a program that binds the raw `@native` itself.
+The one check still reachable the ordinary way is `string_slice`'s `to < from`,
+which two valid positions can still be in the wrong order about.
+
 **A generic native is never monomorphised.** The runtime is uniform in type
 arguments, so one C body serves every `T` — `cg_call_target` returns the
 `FunDef` itself rather than keying an instance, and `exe_slot_fun` gives it a

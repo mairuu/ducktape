@@ -1,0 +1,9 @@
+#! expect: argument 1: expected 'StrPos' but got 'int'
+# The milestone in one line: a cut takes positions, and an `int` is not one.
+# What used to be a runtime error at a bad offset is now a type error at the
+# call that would have supplied it.
+use std::text;
+
+fun main() {
+    var _s: String = "hello".slice(0, 4);
+}

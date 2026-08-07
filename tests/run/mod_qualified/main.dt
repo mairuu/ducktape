@@ -10,6 +10,7 @@
 mod geo;
 
 use std::io;
+use std::text;
 use geo;
 use geo as g; # a module may also be bound under an alias
 
@@ -22,7 +23,7 @@ fun quadrant_code(q: geo::Quadrant) -> int {
 
 # a qualified free function (`io::print`), a qualified type `geo::Quadrant` in a
 # signature, a qualified associated call and free function, the alias `g`, and
-# the primitives' `len`/`slice` as methods.
+# the primitives' `len`/`drop_chars` as methods.
 #> 11
 #> 4
 #> 8
@@ -42,5 +43,5 @@ fun main() {
   io::print(quadrant_code(geo::classify(p)));
   io::print(quadrant_code(g::classify(geo::Point::new(0, 0))));
 
-  io::print(s.slice(6, 11));
+  io::print(s.drop_chars(6));
 }

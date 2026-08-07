@@ -1,0 +1,9 @@
+#! expect: field 's' of struct 'StrPos' is private in module 'std::text'
+# The other half of the same rule: a position cannot be built out of a number
+# and a string either. `StrPos` is `pub` so it can be named in a signature, but
+# both of its fields belong to the module that mints positions.
+use std::text::StrPos;
+
+fun main() {
+    var _p = StrPos { s: "hello", off: 3 };
+}

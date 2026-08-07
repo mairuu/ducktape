@@ -19,36 +19,42 @@ fun main() {
     print(s.len());
 #> 10
 
-    # the compare itself: at a boundary, inside a character, and past the end.
-    # Only the offset is checked, so the last two are answers rather than errors.
-    print(s.matches_at(3, "☃"));
+    # the compare, at the only positions a program can name: the two ends, and
+    # one a search handed back. The mid-character offsets this used to check —
+    # 2 inside é, 8 inside 😀 — cannot be written at all since milestone 102.
+    # The native still answers `false` at one; `find` below is where that is
+    # now observed from outside, because its scan still visits them.
+    print(s.matches_at(s.start(), "a"));
 #> true
-    print(s.matches_at(2, "☃"));
+    print(s.matches_at(s.start(), "☃"));
 #> false
-    print(s.matches_at(8, "😀"));
-#> false
-    print(s.matches_at(10, ""));
+    print(s.matches_at(s.end(), ""));
 #> true
 
-    # find lands on boundaries, and the offset it hands back is one `slice`
-    # accepts — the two halves of the milestone meeting.
-    if var Option::Some(i) = s.find("☃") {
-        print(i);
-        print(s.slice(0, i));
-        print(s.slice(i, s.len()));
+    # find lands on boundaries, and the position it hands back is one `slice`
+    # accepts — the two halves of the redesign meeting.
+    if var Option::Some(at) = s.find("☃") {
+        print(at.byte_offset());
+        print(s.slice(s.start(), at));
+        print(s.slice(at, s.end()));
+        print(s.matches_at(at, "☃"));
     }
 #> 3
 #> aé
 #> ☃😀
+#> true
 
     # a needle whose first byte cannot be mistaken for one inside a character:
     # 日 and 本 both begin 0xE6, and the scan still reports 本 at 3 rather than
-    # at any of the two offsets inside 日.
+    # at either offset inside 日 — which is the mid-character `false` the test
+    # above can no longer ask for directly.
+    #
+    # A position prints structurally, string and offset both: opacity is about
+    # minting one, never about reading one. The string it names is the half that
+    # makes the offset mean something.
     var jp = "日本語";
     print(jp.find("本"));
-#> Some(3)
-    print(jp.matches_at(1, "本"));
-#> false
+#> Some(StrPos { s: 日本語, off: 3 })
     print(jp.starts_with("日"));
 #> true
     print(jp.starts_with("本"));

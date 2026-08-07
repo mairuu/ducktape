@@ -1,8 +1,12 @@
 #! expect: string slice does not cut at a character boundary
 # The other end. Both offsets are checked, and `len` is a boundary like any
-# other — so this range is in bounds and still refused.
+# other — so this range is in bounds and still refused. Reached through the raw
+# native for the reason its sibling explains.
 use std::io::print;
 
+@native("string_slice")
+fun raw_slice(s: String, from: int, to: int) -> String;
+
 fun main() {
-    print("é".slice(1, 2));
+    print(raw_slice("é", 1, 2));
 }

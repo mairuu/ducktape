@@ -23,12 +23,13 @@
 #> Z
 use std::io::print;
 use std::cmp::{max, min};
+use std::text;
 
 fun main() {
     # String: @native methods, and a ducktape one (repeat) on top of them
     var s = "hello";
     print(s.len());
-    print(s.slice(1, 4));
+    print(s.drop_chars(1).take_chars(3));
     print(s.repeat(2));
     print("abc".compare("abd"));
     print(s.chars().count());

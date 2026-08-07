@@ -1,10 +1,16 @@
 #! expect: string offset is out of bounds
 # `matches_at` is total in its *needle* — running off the end is `false` — but
 # not in its offset: an offset outside the string is a question about a place
-# that does not exist, and answering `false` would hide it. `len` itself is
-# inside, so this has to reach past it.
+# that does not exist, and answering `false` would hide it.
+#
+# A `StrPos` cannot reach one since milestone 102 (a position from another
+# string is refused before this native sees it), so the guard is tested through
+# the raw native, like `slice`'s two.
 use std::io::print;
 
+@native("string_matches_at")
+fun raw_matches_at(s: String, at: int, needle: String) -> bool;
+
 fun main() {
-    print("hi".matches_at(3, ""));
+    print(raw_matches_at("hi", 3, ""));
 }

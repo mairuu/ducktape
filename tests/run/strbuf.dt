@@ -32,6 +32,7 @@
 
 use std::io::print;
 use std::string::{join, concat};
+use std::text;
 
 fun main() {
     var b = StringBuf::new();
@@ -65,7 +66,7 @@ fun main() {
     # which is the difference a buffer makes.
     var line = "ab".repeat(100);
     print(line.len());
-    print(line.slice(0, 4));
+    print(line.take_chars(4));
 
     # equality is the other place the kinds differ: a String compares by
     # pointer because it is interned, a buffer has to compare its bytes

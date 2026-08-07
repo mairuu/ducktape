@@ -8,6 +8,7 @@ use std::string;               # the module, bound as a qualifier
 use std::fmt::Display;
 use std::convert::From;
 use std::iter::DoubleEnded;   # `Iterator` is preluded; a supertrait of it is not
+use std::text;                # cutting and counting text, since milestone 102
 
 enum Result<T, E> {
     Ok(T),
@@ -454,7 +455,7 @@ fun main() {
     # native methods (milestone 40): an @intrinsic method lowered to an opcode,
     # an @native method called into C — the receiver at the self position
     var n = [1, 2, 3].len();
-    var s = "showcase".slice(0, 4);
+    var s = "showcase".take_chars(4);
     # a module-qualified path names a still-free item without importing it:
     # `join` and `concat` stay free functions because their receiver is a
     # `[String]`, not a String, so they keep the qualified spelling
