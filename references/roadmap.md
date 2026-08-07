@@ -692,8 +692,9 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   says that instead; `tests/fail/builtin_name_module_std.dt` pins it.
   Remainder: the shadowing itself still stands, now with a std module behind it.
 
-- **104. The compound bitwise assignments** (`4eb7dbc`) — `&= |= ^= <<= >>= >>>=`, milestone
-  83's remainder and the last of its family. `&= |= ^=` fuse in the scanner;
+- **104. The compound bitwise assignments** (`4eb7dbc`) — `&= |= ^= <<= >>=
+  >>>=`, milestone 83's remainder and the last of its family. `&=` `|=` `^=`
+  fuse in the scanner;
   the three shifts are *runs* the way `>>` is (`>>=` scans as `>` `>=`), so
   they belong to `parse_assign` while opening with a token `parse_shift` and
   `parse_comparison` both want — hence `at_shift_assign`, a predicate those two
