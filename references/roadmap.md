@@ -612,7 +612,7 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   Remainder: a module qualifier is still not re-exportable, so a facade can
   offer every type below it and not the module they came from.
 
-- **101. A `String` is valid UTF-8** (`SHA`) — the guarantee, paid for at the
+- **101. A `String` is valid UTF-8** (`98257b6`) — the guarantee, paid for at the
   two untrusted intakes and at `slice`, plus `matches_at`, the byte compare a
   search needs once cutting is no longer free.
   Design: `language.md` "Characters and text" + the gaps table, `runtime.md`
