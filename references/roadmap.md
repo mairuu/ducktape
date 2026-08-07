@@ -781,7 +781,7 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   thing sabotaged has something to observe. Remainder: `truncate` and `clear`
   still never release capacity, and there is no `insert`/`remove` at an index —
   both bulk moves of the same shape, neither yet wanted.
-  - **First consumer, straight after** (`SHA2`): `std::collections::hashmap`'s
+  - **First consumer, straight after** (`072465b`): `std::collections::hashmap`'s
     `empty_slots` was the family's exact shape, and is now one `array::fill`.
     `HashMap::with_capacity(20000)` is **5.1x faster** (34 → 6.5ns per slot);
     building a map by insertion gains 11%, the rest being probe cost. It is also
