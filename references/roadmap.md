@@ -673,7 +673,7 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   Remainder: `slice` takes two independent positions rather than a range, so a
   reversed pair is still a runtime error; and there is no reverse search.
 
-- **103. `String` → `string`, `Range` → `range`** (`TBD`) — the naming half the
+- **103. `String` → `string`, `Range` → `range`** (`b0f622d`) — the naming half the
   positional work left. The case rule now has no exceptions: lowercase is an
   immutable value with no identity, PascalCase has identity or was declared, so
   `StringBuf` keeps its capital because which buffer you hold is observable.
