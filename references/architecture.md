@@ -10,7 +10,12 @@ Tokens carry a `StringView` lexeme borrowed from the source buffer plus
 line/col. string interpolation is lexed with a brace-depth stack
 (`interp_braces`): `"a {x} b"` becomes `TOKEN_INTERPOLATION` segments, and a
 `}` at the recorded depth resumes string scanning. Logic operators are the
-keywords `and`/`or`/`not`; `|` is `TOKEN_PIPE` (closure delimiter only).
+keywords `and`/`or`/`not`, so `|` is only a closure delimiter and bitwise or.
+
+`&= |= ^=` fuse here, unlike `<< >> >>>` and their compound forms: no construct
+in the grammar puts a `=` directly after one of those three characters, whereas
+an angle bracket closes a generic. A closure's `|` comes closest, and a closure
+body cannot begin with `=`.
 
 A character literal is `TOKEN_CHAR`, and it is the one token whose *content*
 the scanner validates rather than merely delimits. Finding the end needs escape
@@ -35,11 +40,22 @@ without wrapping it in a second pair.
 ## Parser (`src/parser.c`)
 
 Recursive descent with a precedence ladder:
-`parse_expr → assign → range → or → and → equality → comparison → addition →
-multiply → unary → postfix → primary`. Postfix handles calls, method calls,
-field/tuple access, indexing, `as`, `?`.
+`parse_expr → assign → range → or → and → equality → comparison → bitor →
+bitxor → bitand → shift → addition → multiply → unary → postfix → primary`.
+Postfix handles calls, method calls, field/tuple access, indexing, `as`, `?`.
 
 Notables:
+- **`<<= >>= >>>=` are the one construct the ladder is read against rather than
+  down.** They are runs of angle brackets like the shifts (`>>=` scans as `>`
+  `>=`, since the scanner fuses the `=` onto the angle it follows), so the run
+  opens with a token that `parse_shift` and `parse_comparison` both want — but
+  it belongs to `parse_assign`, the *lowest* level, which does not run until
+  those two have returned. So `at_shift_assign` is a predicate the levels in
+  between consult in order to **decline**: one guard in `parse_binary_left` for
+  the leading `<`/`>` of a comparison, one at the top of `parse_shift`'s loop
+  (without which `a >>>= b` fuses its first two angles into a signed shift and
+  strands the `>=`). Unlike `>>>` against `>>` there is no longest-match rule to
+  get right, because the `=`-carrying token pins the run's length.
 - `parse_block` — statements vs. tail expression. `is_pure_stmt` routes
   `var/return/break/continue/if/for/match/while/loop` and a leading label
   through `parse_stmt`, but a parsed `if`/`match`/`loop` statement immediately
@@ -1114,6 +1130,32 @@ Three details are the design:
 Since `other: Rhs` takes `Self` by default (and, for `Neg`, `-> Self`) these are
 still object-safety violations, so none of the six can be a `dyn`; they are
 bounds, the position `Ord` is in.
+
+#### The bitwise half of the same sentence (milestone 104)
+
+`&= |= ^= <<= >>= >>>=` complete the set, and needed no new rule: the operator
+is factored out as `resolve_bitwise_op` exactly as the arithmetic one is, and
+both call sites read it. It is the shorter function of the two, because the
+bitwise family reaches **no trait at all** — two `infer_unify`s against `int`
+and the answer is `int`.
+
+That shortness is also where the interesting difference lives. The arithmetic
+operator has to *look* at its operands before it knows what it is (int, float,
+string, or a call to `Add`), so it can only check; the bitwise one knows its
+operand type in advance, so it **unifies**, and unifying solves. The
+consequence is that milestone 83's stated cost is bought back for exactly this
+family: `|n| { mask |= n; }` type-checks unannotated, while `|n| { total += n;
+}` still does not — for the same reason `|x| x | 1` solves `x` and `|x| x + 1`
+does not.
+
+The map from `+=` to `+` moved out to `token_compound_binary_op` in `ast.c`,
+because codegen reads it too. Before this it did not: `cg_compound_end` had its
+own switch from `TOKEN_PLUSEQ` to `OP_ADD`, parallel to `compile_binary`'s from
+`TOKEN_PLUS` to `OP_ADD`. Two maps of one sentence is two chances to disagree
+about it, and the sabotage that proved it was mapping `>>=` to `USHR` in the
+checker — the suite stayed green, because the checker's copy only decides
+*which family* the operator is in and codegen was deriving the opcode
+independently. Both now go through one `binary_opcode`.
 
 ### Lang items
 

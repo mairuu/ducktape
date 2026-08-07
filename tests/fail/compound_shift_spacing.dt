@@ -1,0 +1,12 @@
+#! expect: expected expression
+# A compound shift is a *run* of adjacent angle brackets, the same way `>>` is,
+# so the adjacency rule reaches it and whitespace inside the run breaks it.
+# `a > >= 1` is the spelling that pins the check: both halves of `>>=` are
+# present and in order, and only the gap between them says it is not one.
+use std::io::print;
+
+fun main() {
+    var a = 8;
+    a > >= 1;
+    print("{a}");
+}

@@ -87,9 +87,12 @@ typedef enum {
   TOKEN_GTEQ,
   TOKEN_QUESTION, // ?
   TOKEN_PIPE,     // |  (closure parameter delimiter, and bitwise or)
+  TOKEN_PIPEEQ,   // |=
   TOKEN_AT,       // @  (attribute introducer)
   TOKEN_CARET,    // ^  (bitwise xor; centre alignment in a format spec)
+  TOKEN_CARETEQ,  // ^=
   TOKEN_AMP,      // &  (bitwise and)
+  TOKEN_AMPEQ,    // &=
   TOKEN_TILDE,    // ~  (bitwise not)
 
   // The shifts are **synthesised by the parser and never produced by the
@@ -101,6 +104,13 @@ typedef enum {
   TOKEN_SHL,  // <<
   TOKEN_SHR,  // >>   arithmetic: the sign bit is propagated
   TOKEN_USHR, // >>>  logical: zeros are shifted in
+
+  // ...and their compound assignments, synthesised by the same run, which the
+  // scanner has already fused the `=` onto the tail of: `>>=` arrives as
+  // `>` `>=`, so a run is n-1 angles followed by one `=`-carrying angle.
+  TOKEN_SHLEQ,  // <<=
+  TOKEN_SHREQ,  // >>=
+  TOKEN_USHREQ, // >>>=
 
   // control
   TOKEN_EOF,

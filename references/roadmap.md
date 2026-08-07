@@ -192,8 +192,7 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   `total = total + n` always did. Codegen already evaluated the place once and
   still does; a trait operator parks its call on `ExprAssign.op_call` and
   pushes the callee under the place's value, which is the only new stack shape.
-  Remainder: the compound *bitwise* operators still have no spelling, and that
-  is now a scanning question rather than a design one.
+  Remainder: the compound *bitwise* operators, closed by milestone 104.
 
 - **84. A binding whose failure leaves** (`7e92800`) — `var Shape::Rect(w, h) = s else {
   panic("not a rect"); };`, Rust's `let else`: the pattern is refutable and the
@@ -693,6 +692,30 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   says that instead; `tests/fail/builtin_name_module_std.dt` pins it.
   Remainder: the shadowing itself still stands, now with a std module behind it.
 
+- **104. The compound bitwise assignments** — `&= |= ^= <<= >>= >>>=`, milestone
+  83's remainder and the last of its family. `&= |= ^=` fuse in the scanner;
+  the three shifts are *runs* the way `>>` is (`>>=` scans as `>` `>=`), so
+  they belong to `parse_assign` while opening with a token `parse_shift` and
+  `parse_comparison` both want — hence `at_shift_assign`, a predicate those two
+  levels consult in order to decline. Design: `language.md` "Operators" +
+  "std::ops", `architecture.md` "Parser" + "the bitwise half of the same
+  sentence", `runtime.md` "Compound assignment", `grammar.ebnf` `assignOp`.
+  **THE FINDING: the milestone's own thesis had a counter-example inside the
+  compiler.** Milestone 83 factored `resolve_arith_op` so that `a + b` and
+  `a += b` could not disagree — but `cg_compound_end` still owned a *second*
+  map from `+=` to `OP_ADD`, parallel to `compile_binary`'s from `+` to
+  `OP_ADD`, and mapping `>>=` to `USHR` in the checker left the suite green
+  because the checker's copy only decides which *family* an operator is in.
+  Both now read one `binary_opcode` after one `token_compound_binary_op`.
+  **SECOND FINDING: milestone 83's stated cost comes back for this family
+  alone.** A bitwise operator's operand type is known before its operands are,
+  so it unifies where the arithmetic one can only check — and unifying solves:
+  `|n| { mask |= n; }` type-checks unannotated while `|n| { total += n; }`
+  still cannot. Sabotage 8/8, but **two were no-ops first**: the opcode one
+  above, and an adjacency test whose fail case I had written as `a >> = 1`,
+  which is refused by a different mechanism (`a > >= 1` is the real one).
+  No new opcode, no image change. Remainder: none.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -912,13 +935,6 @@ via `Module.decl_base`) and is not part of the main line.
 - sema's `MAX_BOUNDS` (16) is the last fixed cap of the family milestone 73
   cleared out of the parser. It bounds a real array and has its own diagnostic,
   so it is a limit rather than a hazard
-- no compound **bitwise** assignment (`&=`, `<<=`). What it would mean is no
-  longer open — milestone 83 settled `a op= b` as `a = a op b` and added `%=` on
-  that basis — so what is missing is the spelling, and the scanning is the part
-  that stopped it: `>>=` sits against `a > > b` versus `a >> b`, the one place
-  in the grammar where whitespace already changes a parse (milestone 65). The
-  checker side is a second branch beside `resolve_arith_op` (bitwise unifies at
-  `int` rather than asking a trait), and codegen already has the opcodes
 - no unsigned integer type, so `>>>` stands in for one and a bit pattern with
   the top bit set prints negative
 - a *written* impl always wins, which is what keeps milestone 74's supertrait

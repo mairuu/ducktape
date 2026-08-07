@@ -1,0 +1,13 @@
+#! expect: expected 'int' but got 'V2'
+# Where `v += w` reaches `impl Add for V2`, `v |= w` reaches nothing: the
+# bitwise family has no `std::ops` trait behind it, so a user type is refused
+# by the same unification `v | w` is refused by — one function, two spellings.
+use std::io::print;
+
+struct V2 { x: int }
+
+fun main() {
+    var v = V2 { x: 1 };
+    v |= V2 { x: 2 };
+    print("{v.x}");
+}

@@ -218,7 +218,12 @@ labelled       = LABEL ":" ( whileExpr | loopExpr | forExpr | block ) ;
 (* ── expressions (lowest to highest precedence) ───────────────────────── *)
 
 expr           = assign ;
-assign         = range ( ( "=" | "+=" | "-=" | "*=" | "/=" | "%=" ) assign )? ;
+assign         = range ( assignOp assign )? ;
+assignOp       = "=" | "+=" | "-=" | "*=" | "/=" | "%="
+               | "&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" ;
+                 (* `a op= b` is `a = a op b`, so every operator that means
+                    something for two operands of the place's type has one.
+                    The last three are **not tokens** either — see `shift`. *)
 range          = or ( ( ".." | "..=" ) or )? ;         (* int-only ranges *)
 or             = and ( "or" and )* ;
 and            = equality ( "and" equality )* ;
@@ -237,7 +242,13 @@ shift          = addition ( ( "<<" | ">>" | ">>>" ) addition )* ;
                     consumes one at a time, so the scanner emits single angle
                     brackets and this rule fuses adjacent ones, requiring that
                     no whitespace separate them — `a > > b` is two comparisons.
-                    ">>>" is tried before ">>". *)
+                    ">>>" is tried before ">>".
+
+                    "<<=", ">>=" and ">>>=" in `assignOp` are the same runs
+                    with the "=" fused onto the last angle by the scanner, so
+                    ">>=" arrives as ">" ">=". They belong to `assign`, the
+                    *lowest* level, so this rule and `comparison` both have to
+                    decline the run's leading angle rather than claim it. *)
 addition       = multiply ( ( "+" | "-" ) multiply )* ;
 multiply       = unary ( ( "*" | "/" | "%" ) unary )* ;
 unary          = ( "not" | "-" | "~" ) unary | postfix ;

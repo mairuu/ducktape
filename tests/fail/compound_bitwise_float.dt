@@ -1,0 +1,11 @@
+#! expect: expected 'int' but got 'float'
+# The bitwise family is int-only whichever way it is spelled: `f &= 1` is
+# `f = f & 1`, and `f & 1` has never been legal. Unlike the arithmetic family
+# there is no trait behind it to widen to, so this is the whole answer.
+use std::io::print;
+
+fun main() {
+    var f = 1.5;
+    f &= 1;
+    print("{f}");
+}

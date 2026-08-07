@@ -495,11 +495,15 @@ why every `OP_DUP` depth in the three targets shifts by one exactly when a
 callee was pushed.
 
 Nothing else is new: the callee is the ordinary `cg_emit_target`, the call is
-an ordinary `OP_CALL 2`, and the built-in form emits the same `OP_ADD`/`OP_SUB`/
-`OP_MUL`/`OP_DIV`/`OP_MOD` it always did. What changed in milestone 83 is that
-the checker now *decides* which of the two it is — those opcodes read their
-operands as numbers with no tag test, and a compound assignment used to reach
-them without asking.
+an ordinary `OP_CALL 2`, and the built-in form emits the opcode the *binary*
+operator emits. It does that literally, through
+`binary_opcode(token_compound_binary_op(op))` — one map, so `a op= b` and
+`a op b` cannot compile to different instructions. What changed in milestone 83
+is that the checker now *decides* which of the two forms it is: those opcodes
+read their operands as numbers with no tag test, and a compound assignment used
+to reach them without asking. Milestone 104 added the bitwise six (`&= |= ^=
+<<= >>= >>>=`), which are always the opcode form — there is no bitwise trait —
+and no new opcode, so the image format is untouched by both.
 
 A `dyn` receiver, an `@intrinsic` body, or a method whose `self` is not the
 first parameter would need a different stack shape, so each reports rather than

@@ -97,7 +97,7 @@ var x = 1;                    # inferred; no `let`, no `mut` — all vars mutabl
 var y: [int] = [1, 2, 3];     # annotated
 var (a, b) = (1, 2.5);        # destructuring — the binding is a pattern
 var Point { x: px, y } = p;   # ... any irrefutable one, nested freely
-x = 2;  x += 1;               # assignment / compound assignment (+= -= *= /= %=)
+x = 2;  x += 1;  x >>= 2;     # assignment / compound assignment (all 11)
 p.x = 3;  p.x += 1;           # ... to a field, tuple element, or array slot too
 xs[i] = v;  t.0 *= 2;         # a struct is a shared reference, so this mutates
 return expr;  return;         # bare return means ()
@@ -173,6 +173,12 @@ under the field's name, so ignoring one field takes the long form
     requires that no whitespace separate them. `a > > b` is therefore two
     comparisons and `a >> b` is a shift — the one place in the grammar where
     whitespace changes a parse.
+    - **`<<=`, `>>=` and `>>>=` are runs too**, and the same rule reaches them:
+      the scanner fuses `=` onto the angle it follows, so `>>=` arrives as
+      `>` `>=` and the run is *n-1* plain angles then one `=`-carrying one, all
+      adjacent. `a > >= b` is not a compound shift. Unlike `>>>` against `>>`
+      there is no longest-match rule to apply, because that last token pins the
+      run's length.
   - **Precedence is Rust's, not C's**: `>>`/`<<`, then `&`, then `^`, then `|`,
     all binding *tighter* than comparison. So `a & b == c` is `(a & b) == c`
     rather than C's `a & (b == c)`. Shifts bind looser than `+`, which is the
@@ -2151,8 +2157,15 @@ inferred from the left: `|n| { total += n; }` needs `|n: int|`, exactly as
 operand types (see "the right operand may differ" above).
 
 The place is evaluated **once** — `xs[next()] += 1` advances `next` a single
-time — on both the opcode and the call path. `%=` is included; the compound
-*bitwise* operators (`&=`, `<<=`) still have no spelling.
+time — on both the opcode and the call path.
+
+**All eleven operators that are a compound assignment have one**: `+= -= *= /=
+%=` and the bitwise `&= |= ^= <<= >>= >>>=`. The bitwise six reach no trait at
+all, so a user type is refused by the same unification `a & b` is refused by —
+but they inherit the other half of the binary form as well, and it is the half
+`+=` cannot have: **their operand type is known before the operand is, so they
+drive inference.** `|n| { mask |= n; }` type-checks with `n` unannotated, where
+`|n| { total += n; }` needs `|n: int|`.
 
 ### `std::option`
 
@@ -3110,7 +3123,6 @@ See the gaps table below for what suppression still cannot do.
 | an associated *type* default (`type Output = Self;` in a trait) | not parsed. A trait's *type parameter* may carry a default (`Rhs = Self`), which is why the `std::ops` migration for `Rhs` was free and the one for `Output` was not: every impl states its `Output`, and every bound that wants to keep the result names it |
 | custom `==` (an `Eq` trait) | equality stays structural and import-less for every type; only ordering and arithmetic are traits. `std::collections::hashmap` was the consumer this was waiting on and did not need it: a hash map resolves collisions with the structural `==` on a `K` bounded only by `Hash` |
 | a bitwise operator on a non-`int` | refused, with no trait to appeal to: there is no `BitAnd` the way there is an `Add`, so `1.5 & 2` is a type error rather than a call. A `float`'s bits have no spelling at all — there is no reinterpreting cast |
-| compound bitwise assignment (`&=`, `\|=`, `<<=`) | not parsed; write `x = x & y`. What it would *mean* is settled — `a op= b` is `a = a op b`, which is how `%=` joined `+= -= *= /=` — so what is missing is the spelling, and the scanning is the awkward part: `>>=` sits next to the one place in the grammar where whitespace already changes a parse (`a > > b` versus `a >> b`) |
 | unsigned integers | there is one integer type, signed `int`. `>>>` is what stands in for an unsigned shift; a value with the top bit set prints as negative even when it is being used as a bit pattern |
 | checked or saturating integer arithmetic | `int` wraps silently, two's complement; `%` keeps the sign of its left operand, so `(0 - 17) % 5` is `-2` |
 | hashing a `float`, and so a `float` map key | no `impl Hash for float`: `NaN != NaN` makes such a key unfindable in a table that compares with `==`, and the only int a float reaches is a truncating `as`. Wrap one in a struct and say what equality means |

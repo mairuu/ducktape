@@ -266,6 +266,13 @@ pub fun process_data<T>(_data: T) -> Result<int, string> {
     count -= 1;
     count *= 2;
     count /= 1;
+    count %= 7;
+    count &= 255;
+    count |= 1;
+    count ^= 3;
+    count <<= 2;
+    count >>= 1;
+    count >>>= 1;
 
     var logic = true and false or not false;
     var _cmp = (5 >= 4) == (3 != 2) and (1 < 2) and (3 <= 3);

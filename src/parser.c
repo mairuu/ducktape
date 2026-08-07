@@ -615,6 +615,7 @@ static Expr *parse_multiply(Parser *p);
 static Expr *parse_unary(Parser *p);
 static Expr *parse_postfix(Parser *p);
 static Expr *parse_primary(Parser *p);
+static bool at_shift_assign(const Parser *p, TokenType *op, int *width);
 
 static Expr *parse_expr(Parser *p) { return parse_assign(p); }
 
@@ -624,23 +625,32 @@ static Expr *parse_assign(Parser *p) {
     return lhs;
   }
 
-  if (match_tok(p, TOKEN_EQ) || match_tok(p, TOKEN_PLUSEQ) ||
-      match_tok(p, TOKEN_MINUSEQ) || match_tok(p, TOKEN_STAREQ) ||
-      match_tok(p, TOKEN_SLASHEQ) || match_tok(p, TOKEN_PERCENTEQ)) {
-    Token *op = previous_tok(p);
-    Expr *rhs = parse_assign(p);
-    if (rhs->kind == EXPR_POISON) {
-      return rhs;
-    }
-
-    Expr *e = ast_expr(EXPR_ASSIGN, span_merge(lhs->span, rhs->span), p->al);
-    e->as.assign.target = lhs;
-    e->as.assign.value = rhs;
-    e->as.assign.op = op->type;
-    return e;
+  TokenType op;
+  int width;
+  if (at_shift_assign(p, &op, &width)) {
+    // a run rather than a token, so it is consumed by width; every level
+    // below has already declined it for exactly that reason.
+    p->current += width;
+  } else if (match_tok(p, TOKEN_EQ) || match_tok(p, TOKEN_PLUSEQ) ||
+             match_tok(p, TOKEN_MINUSEQ) || match_tok(p, TOKEN_STAREQ) ||
+             match_tok(p, TOKEN_SLASHEQ) || match_tok(p, TOKEN_PERCENTEQ) ||
+             match_tok(p, TOKEN_AMPEQ) || match_tok(p, TOKEN_PIPEEQ) ||
+             match_tok(p, TOKEN_CARETEQ)) {
+    op = previous_tok(p)->type;
+  } else {
+    return lhs;
   }
 
-  return lhs;
+  Expr *rhs = parse_assign(p);
+  if (rhs->kind == EXPR_POISON) {
+    return rhs;
+  }
+
+  Expr *e = ast_expr(EXPR_ASSIGN, span_merge(lhs->span, rhs->span), p->al);
+  e->as.assign.target = lhs;
+  e->as.assign.value = rhs;
+  e->as.assign.op = op;
+  return e;
 }
 
 static Expr *parse_range(Parser *p) {
@@ -672,6 +682,13 @@ static Expr *parse_binary_left(Parser *p, Expr *(*sub)(Parser *),
   while (true) {
     bool matched = false;
     for (int i = 0; ops[i]; i++) {
+      // The one token that can look like an operator here and not be one: the
+      // leading angle of a compound shift, since `a >>= b` opens with the same
+      // `>` that `a > b` does. `parse_comparison` is the level this bites.
+      if ((ops[i] == TOKEN_LT || ops[i] == TOKEN_GT) &&
+          at_shift_assign(p, NULL, NULL)) {
+        continue;
+      }
       if (!match_tok(p, ops[i])) {
         continue;
       }
@@ -766,6 +783,53 @@ static bool run_of(const Parser *p, TokenType type, int n) {
   return true;
 }
 
+// A run of `n` tokens whose first `n - 1` are `angle` and whose last is
+// `angle_eq`, each touching the next. That is the shape a compound shift has:
+// the scanner fuses `=` onto the angle it follows, so `>>=` arrives as
+// `>` `>=` and `>>>=` as `>` `>` `>=`.
+static bool run_then_eq(const Parser *p, TokenType angle, TokenType angle_eq,
+                        int n) {
+  if (!run_of(p, angle, n - 1)) {
+    return false;
+  }
+  int last = p->current + n - 1;
+  return last < p->count && p->tokens[last].type == angle_eq &&
+         tok_touches_next(p, last - 1);
+}
+
+// `<<=`, `>>=` and `>>>=`. Their operand type is fixed and their place is a
+// place, so nothing about them is ambiguous once the run is *seen* — the whole
+// difficulty is that the run starts with a token two lower levels also want,
+// and assignment is the lowest level of all, so it cannot simply match first.
+// Hence a predicate the levels in between consult in order to decline.
+static bool at_shift_assign(const Parser *p, TokenType *op, int *width) {
+  TokenType found;
+  int n;
+  // These three are mutually exclusive, so unlike `parse_shift` below there is
+  // no longest-match rule to get right: a run's last token is the `=`-carrying
+  // one, which pins its length. The fused `=` removes exactly the ambiguity
+  // `>>>` has with `>>`.
+  if (run_then_eq(p, TOKEN_GT, TOKEN_GTEQ, 3)) {
+    found = TOKEN_USHREQ;
+    n = 3;
+  } else if (run_then_eq(p, TOKEN_GT, TOKEN_GTEQ, 2)) {
+    found = TOKEN_SHREQ;
+    n = 2;
+  } else if (run_then_eq(p, TOKEN_LT, TOKEN_LTEQ, 2)) {
+    found = TOKEN_SHLEQ;
+    n = 2;
+  } else {
+    return false;
+  }
+  if (op != NULL) {
+    *op = found;
+  }
+  if (width != NULL) {
+    *width = n;
+  }
+  return true;
+}
+
 // `<<`, `>>` and `>>>` are runs of adjacent angle brackets rather than tokens
 // of their own. The scanner cannot fuse them: a nested generic closes with a
 // run of `>` (`Map<K, Vec<V>>`), and `parse_type` consumes those one at a time,
@@ -781,6 +845,11 @@ static Expr *parse_shift(Parser *p) {
   while (true) {
     TokenType op;
     int width;
+    // `a >>>= b` opens with two adjacent `>` and so would fuse as a signed
+    // shift here, leaving `>=` stranded. The compound run is the assignment's.
+    if (at_shift_assign(p, NULL, NULL)) {
+      break;
+    }
     // `>>>` before `>>`: the longer run has to win, or every unsigned shift
     // would parse as a signed one followed by a stray `>`.
     if (run_of(p, TOKEN_GT, 3)) {

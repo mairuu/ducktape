@@ -8362,24 +8362,30 @@ static Type *resolve_arith_op(CheckCtx *ctx, Expr *site, TokenType op,
                           r, out_call);
 }
 
-// The binary operator a compound assignment is spelled with: `+=` means `+`,
-// and that is the whole of the language rule — `a op= b` is `a = a op b`.
-// TOKEN_EQ (a plain assignment) has no operator and never reaches here.
-static TokenType compound_binary_op(TokenType op) {
-  switch (op) {
-  case TOKEN_PLUSEQ:
-    return TOKEN_PLUS;
-  case TOKEN_MINUSEQ:
-    return TOKEN_MINUS;
-  case TOKEN_STAREQ:
-    return TOKEN_STAR;
-  case TOKEN_SLASHEQ:
-    return TOKEN_SLASH;
-  case TOKEN_PERCENTEQ:
-    return TOKEN_PERCENT;
-  default:
-    return TOKEN_ERROR;
-  }
+static bool token_is_bitwise(TokenType op) {
+  return op == TOKEN_AMP || op == TOKEN_PIPE || op == TOKEN_CARET ||
+         op == TOKEN_SHL || op == TOKEN_SHR || op == TOKEN_USHR;
+}
+
+// The bitwise family's other half of the same deal: `a & b` and `a &= b` must
+// mean one thing, so they ask one function. **int only, and no trait behind
+// it** — a bit pattern is not an abstraction a type can supply its own meaning
+// for the way an order or a sum is, and `float` is excluded for the reason it
+// has no `impl Hash`: its bits are not what its value means, and there is no
+// reinterpreting cast to ask for them deliberately.
+//
+// So these are the only binary operators whose operand type is known *before*
+// the operands are, and that makes them the only ones that can **drive**
+// inference rather than merely check it. `+` has to look first, because it
+// could be int, float, string or a call to `Add`, which is why `|x| x + 1`
+// cannot solve `x` and `|x| x | 1` can. Unifying rather than testing is what
+// buys that, and it is the same thing a range does to its two bounds.
+static Type *resolve_bitwise_op(CheckCtx *ctx, Expr *lhs_e, Type *lhs,
+                                Expr *rhs_e, Type *rhs) {
+  bool ok =
+      infer_unify(&ctx->infer, ctx->tc->t_int, lhs, ctx->diags, lhs_e->span);
+  ok &= infer_unify(&ctx->infer, ctx->tc->t_int, rhs, ctx->diags, rhs_e->span);
+  return ok ? ctx->tc->t_int : ctx->tc->t_poison;
 }
 
 // Where does control leave the block instead of running off its end? `return`,
@@ -8526,37 +8532,15 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
                    op == TOKEN_GTEQ);
     bool is_eq = (op == TOKEN_EQEQ || op == TOKEN_BANGEQ);
     bool is_logic = (op == TOKEN_AND || op == TOKEN_OR);
-    bool is_bitwise =
-        (op == TOKEN_AMP || op == TOKEN_PIPE || op == TOKEN_CARET ||
-         op == TOKEN_SHL || op == TOKEN_SHR || op == TOKEN_USHR);
 
+    // Both of the first two are shared with `a op= b`, whose operator means
+    // exactly this one — and whose opcodes are exactly these opcodes.
     if (is_arith) {
-      // shared with `a op= b`, whose operator means exactly this one — and
-      // whose opcodes are exactly these opcodes. Replaces this node with the
-      // call when the answer is a trait's.
+      // Replaces this node with the call when the answer is a trait's.
       result = resolve_arith_op(ctx, expr, op, binary->left, lhs, binary->right,
                                 rhs, /*out_call=*/NULL);
-    } else if (is_bitwise) {
-      // **int only, and no trait behind it.** Every other operator that could
-      // mean something for a user type routes through `std::ops` when its
-      // operands are not numeric; these do not, and the reason is that a bit
-      // pattern is not an abstraction a type can supply its own meaning for the
-      // way an order or a sum is. `float` is excluded for the same reason it
-      // has no `impl Hash`: its bits are not what its value means, and the
-      // language has no reinterpreting cast to ask for them deliberately.
-      //
-      // So these are the only binary operators whose operand type is known
-      // *before* the operands are — and that makes them the only ones that can
-      // **drive** inference rather than merely check it. `+` has to look first,
-      // because it could be int, float, string or a call to `Add`, which is why
-      // `|x| x + 1` cannot solve `x` and `|x| x | 1` can. Unifying rather than
-      // testing is what buys that, and it is the same thing a range does to its
-      // two bounds.
-      bool ok = infer_unify(&ctx->infer, ctx->tc->t_int, lhs, ctx->diags,
-                            binary->left->span);
-      ok &= infer_unify(&ctx->infer, ctx->tc->t_int, rhs, ctx->diags,
-                        binary->right->span);
-      result = ok ? ctx->tc->t_int : ctx->tc->t_poison;
+    } else if (token_is_bitwise(op)) {
+      result = resolve_bitwise_op(ctx, binary->left, lhs, binary->right, rhs);
     } else if (is_cmp) {
       if (type_is_numeric(lhs) && type_is_numeric(rhs)) {
         result = ty_bool();
@@ -9045,15 +9029,19 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     // both only when the type is numeric: it let `c += 'y'` reach `OP_ADD`,
     // which reads a `char` as a double, while refusing `f += 1`, which
     // `f = f + 1` spells legally one line over.
-    TokenType binop = compound_binary_op(assign->op);
+    TokenType binop = token_compound_binary_op(assign->op);
     if (binop == TOKEN_ERROR) {
       diag_error(ctx->diags, expr->span, "unsupported compound assignment");
       result = ctx->tc->t_poison;
       break;
     }
 
-    Type *op_ty = resolve_arith_op(ctx, expr, binop, assign->target, lhs_ty,
-                                   assign->value, rhs_ty, &assign->op_call);
+    Type *op_ty =
+        token_is_bitwise(binop)
+            ? resolve_bitwise_op(ctx, assign->target, lhs_ty, assign->value,
+                                 rhs_ty)
+            : resolve_arith_op(ctx, expr, binop, assign->target, lhs_ty,
+                               assign->value, rhs_ty, &assign->op_call);
     if (type_is_poison(op_ty)) {
       result = ctx->tc->t_poison;
       break;

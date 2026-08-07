@@ -1172,6 +1172,35 @@ int type_sprintf(const Type *t, char *buf, size_t buf_size) {
   return 0;
 }
 
+TokenType token_compound_binary_op(TokenType op) {
+  switch (op) {
+  case TOKEN_PLUSEQ:
+    return TOKEN_PLUS;
+  case TOKEN_MINUSEQ:
+    return TOKEN_MINUS;
+  case TOKEN_STAREQ:
+    return TOKEN_STAR;
+  case TOKEN_SLASHEQ:
+    return TOKEN_SLASH;
+  case TOKEN_PERCENTEQ:
+    return TOKEN_PERCENT;
+  case TOKEN_AMPEQ:
+    return TOKEN_AMP;
+  case TOKEN_PIPEEQ:
+    return TOKEN_PIPE;
+  case TOKEN_CARETEQ:
+    return TOKEN_CARET;
+  case TOKEN_SHLEQ:
+    return TOKEN_SHL;
+  case TOKEN_SHREQ:
+    return TOKEN_SHR;
+  case TOKEN_USHREQ:
+    return TOKEN_USHR;
+  default:
+    return TOKEN_ERROR;
+  }
+}
+
 Expr *ast_expr(ExprKind kind, Span span, Allocator *al) {
   Expr *e = al_alloc_zero_for(al, Expr);
   e->kind = kind;

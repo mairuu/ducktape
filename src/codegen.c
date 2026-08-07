@@ -881,6 +881,69 @@ static void compile_block(Cg *cg, Expr *expr) {
   }
 }
 
+// The opcode a binary operator emits, for the operators that are one — `and`
+// and `or` short-circuit and so are control flow rather than an opcode. False
+// for anything else. A compound assignment reads this map too, through
+// `token_compound_binary_op`, which is what makes `a op= b` and `a op b`
+// unable to emit different instructions.
+static bool binary_opcode(TokenType op, OpCode *out) {
+  switch (op) {
+  case TOKEN_PLUS:
+    *out = OP_ADD;
+    return true;
+  case TOKEN_MINUS:
+    *out = OP_SUB;
+    return true;
+  case TOKEN_STAR:
+    *out = OP_MUL;
+    return true;
+  case TOKEN_SLASH:
+    *out = OP_DIV;
+    return true;
+  case TOKEN_PERCENT:
+    *out = OP_MOD;
+    return true;
+  case TOKEN_AMP:
+    *out = OP_BIT_AND;
+    return true;
+  case TOKEN_PIPE:
+    *out = OP_BIT_OR;
+    return true;
+  case TOKEN_CARET:
+    *out = OP_BIT_XOR;
+    return true;
+  case TOKEN_SHL:
+    *out = OP_SHL;
+    return true;
+  case TOKEN_SHR:
+    *out = OP_SHR;
+    return true;
+  case TOKEN_USHR:
+    *out = OP_USHR;
+    return true;
+  case TOKEN_EQEQ:
+    *out = OP_EQ;
+    return true;
+  case TOKEN_BANGEQ:
+    *out = OP_NEQ;
+    return true;
+  case TOKEN_LT:
+    *out = OP_LT;
+    return true;
+  case TOKEN_LTEQ:
+    *out = OP_LTEQ;
+    return true;
+  case TOKEN_GT:
+    *out = OP_GT;
+    return true;
+  case TOKEN_GTEQ:
+    *out = OP_GTEQ;
+    return true;
+  default:
+    return false;
+  }
+}
+
 static void compile_binary(Cg *cg, Expr *expr) {
   ExprBinary *binary = &expr->as.binary;
   TokenType op = binary->op;
@@ -912,61 +975,12 @@ static void compile_binary(Cg *cg, Expr *expr) {
   compile_expr(cg, binary->left);
   compile_expr(cg, binary->right);
 
-  switch (op) {
-  case TOKEN_PLUS:
-    emit(cg, OP_ADD);
-    break;
-  case TOKEN_MINUS:
-    emit(cg, OP_SUB);
-    break;
-  case TOKEN_STAR:
-    emit(cg, OP_MUL);
-    break;
-  case TOKEN_SLASH:
-    emit(cg, OP_DIV);
-    break;
-  case TOKEN_PERCENT:
-    emit(cg, OP_MOD);
-    break;
-  case TOKEN_AMP:
-    emit(cg, OP_BIT_AND);
-    break;
-  case TOKEN_PIPE:
-    emit(cg, OP_BIT_OR);
-    break;
-  case TOKEN_CARET:
-    emit(cg, OP_BIT_XOR);
-    break;
-  case TOKEN_SHL:
-    emit(cg, OP_SHL);
-    break;
-  case TOKEN_SHR:
-    emit(cg, OP_SHR);
-    break;
-  case TOKEN_USHR:
-    emit(cg, OP_USHR);
-    break;
-  case TOKEN_EQEQ:
-    emit(cg, OP_EQ);
-    break;
-  case TOKEN_BANGEQ:
-    emit(cg, OP_NEQ);
-    break;
-  case TOKEN_LT:
-    emit(cg, OP_LT);
-    break;
-  case TOKEN_LTEQ:
-    emit(cg, OP_LTEQ);
-    break;
-  case TOKEN_GT:
-    emit(cg, OP_GT);
-    break;
-  case TOKEN_GTEQ:
-    emit(cg, OP_GTEQ);
-    break;
-  default:
+  OpCode code;
+  if (!binary_opcode(op, &code)) {
     cg_error(cg, expr->span, "this operator");
+    return;
   }
+  emit(cg, code);
 }
 
 static bool cg_emit_target(Cg *cg, FunDef *fun, const Subst *primary,
@@ -1031,32 +1045,20 @@ static bool cg_compound_begin(Cg *cg, Expr *expr, CgCompound *out) {
   return cg_emit_target(cg, out->fun, &mc->inst, &out->impl_subst, expr->span);
 }
 
-// ...and the half that runs with [.., self, arg] on top: the operator itself.
+// ...and the half that runs with [.., self, arg] on top: the operator itself,
+// which is the *binary* one — `a op= b` is `a = a op b` down here too, so the
+// opcode comes from the same map `a op b` reads.
 static void cg_compound_end(Cg *cg, Expr *expr, const CgCompound *c) {
   if (c->fun != NULL) {
     emit2(cg, OP_CALL, 2);
     return;
   }
-  switch (expr->as.assign.op) {
-  case TOKEN_PLUSEQ:
-    emit(cg, OP_ADD);
-    break;
-  case TOKEN_MINUSEQ:
-    emit(cg, OP_SUB);
-    break;
-  case TOKEN_STAREQ:
-    emit(cg, OP_MUL);
-    break;
-  case TOKEN_SLASHEQ:
-    emit(cg, OP_DIV);
-    break;
-  case TOKEN_PERCENTEQ:
-    emit(cg, OP_MOD);
-    break;
-  default:
+  OpCode code;
+  if (!binary_opcode(token_compound_binary_op(expr->as.assign.op), &code)) {
     cg_error(cg, expr->span, "this compound assignment");
-    break;
+    return;
   }
+  emit(cg, code);
 }
 
 // assignment to `arr[i]` (`=` or a compound `+=`/etc). stack discipline:

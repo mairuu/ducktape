@@ -89,13 +89,19 @@ static const char *token_type_string[] = {
     [TOKEN_GTEQ] = "GTEQ",
     [TOKEN_QUESTION] = "QUESTION", // ?
     [TOKEN_PIPE] = "PIPE",         // |
+    [TOKEN_PIPEEQ] = "PIPEEQ",     // |=
     [TOKEN_AT] = "AT",             // @
     [TOKEN_CARET] = "CARET",       // ^
+    [TOKEN_CARETEQ] = "CARETEQ",   // ^=
     [TOKEN_AMP] = "AMP",           // &
+    [TOKEN_AMPEQ] = "AMPEQ",       // &=
     [TOKEN_TILDE] = "TILDE",       // ~
     [TOKEN_SHL] = "SHL",           // <<   (parser-synthesised)
     [TOKEN_SHR] = "SHR",           // >>   (parser-synthesised)
     [TOKEN_USHR] = "USHR",         // >>>  (parser-synthesised)
+    [TOKEN_SHLEQ] = "SHLEQ",       // <<=  (parser-synthesised)
+    [TOKEN_SHREQ] = "SHREQ",       // >>=  (parser-synthesised)
+    [TOKEN_USHREQ] = "USHREQ",     // >>>= (parser-synthesised)
 
     // control
     [TOKEN_EOF] = "EOF",
@@ -553,14 +559,18 @@ Token scanner_next_token(Scanner *s) {
     return make_token(s, TOKEN_SEMICOLON);
   case '?':
     return make_token(s, TOKEN_QUESTION);
+  // `&=`, `|=` and `^=` fuse here rather than in the parser, because unlike an
+  // angle bracket none of these three characters closes anything: no construct
+  // in the grammar puts a `=` directly after one. A closure's `|` comes
+  // closest, and a closure body cannot begin with `=`.
   case '|':
-    return make_token(s, TOKEN_PIPE);
+    return make_token(s, match_char(s, '=') ? TOKEN_PIPEEQ : TOKEN_PIPE);
   case '@':
     return make_token(s, TOKEN_AT);
   case '^':
-    return make_token(s, TOKEN_CARET);
+    return make_token(s, match_char(s, '=') ? TOKEN_CARETEQ : TOKEN_CARET);
   case '&':
-    return make_token(s, TOKEN_AMP);
+    return make_token(s, match_char(s, '=') ? TOKEN_AMPEQ : TOKEN_AMP);
   case '~':
     return make_token(s, TOKEN_TILDE);
   case '%':

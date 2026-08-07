@@ -1,0 +1,70 @@
+# `a op= b` is `a = a op b` (milestone 83) for the bitwise family too, so the
+# six spellings mean the six operators and nothing else. The `tick()` counter
+# pins that the place is still evaluated once; the unannotated closures pin the
+# half `+=` cannot do — a bitwise operand's type is known before the operand is.
+use std::io::print;
+
+struct Flags { bits: int }
+struct Counter { n: int }
+impl Counter {
+    fun tick(self) -> int { self.n += 1; return 0; }
+}
+
+fun main() {
+    var a = 12; a &= 10;  print("{a}");
+#> 8
+    var b = 12; b |= 3;   print("{b}");
+#> 15
+    var c = 12; c ^= 10;  print("{c}");
+#> 6
+    var d = 1;  d <<= 4;  print("{d}");
+#> 16
+    # `>>` propagates the sign and `>>>` does not, exactly as the binary
+    # operators do — the compound form is the same opcode.
+    var e = -64; e >>= 3;  print("{e}");
+#> -8
+    var f = -64; f >>>= 3; print("{f}");
+#> 2305843009213693944
+
+    # the three kinds of place
+    var g = Flags { bits: 6 };
+    g.bits |= 1;
+    print("{g.bits}");
+#> 7
+    var xs = [1, 2];
+    xs[1] <<= 3;
+    print("{xs[1]}");
+#> 16
+    var up = 1;
+    var shift = |n: int| { up <<= n; };
+    shift(2);
+    shift(3);
+    print("{up}");
+#> 32
+
+    # THE INVARIANT: the place is compiled once, so the index runs once.
+    var ns = [12, 20];
+    var c1 = Counter { n: 0 };
+    ns[c1.tick()] &= 10;
+    print("{ns[0]} {c1.n}");
+#> 8 1
+
+    # the expression's own value, and a chain that reads the place back
+    var got = (d |= 3);
+    print("{got} {d}");
+#> 19 19
+
+    # THE INFERENCE: `|n|` is unannotated and the operator solves it, because
+    # `|` means one thing whatever its operands are. `+=` cannot do this.
+    var mask = 0;
+    var set = |n| { mask |= n; };
+    set(1);
+    set(4);
+    print("{mask}");
+#> 5
+
+    # a shift still parses as a shift next to a comparison, and `>=`/`<=` are
+    # untouched: the compound run is the one the assignment claims.
+    print("{8 >> 1 >= 4} {1 << 2 <= 4} {-64 >>> 3 == f}");
+#> true true true
+}

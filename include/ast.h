@@ -1549,6 +1549,14 @@ Stmt *ast_stmt(StmtKind kind, Span span, Allocator *al);
 Decl *ast_decl(DeclKind kind, Span span, Allocator *al);
 TypeNode *ast_type_node(TypeNodeKind kind, Span span, Allocator *al);
 
+// The binary operator an `ExprAssign.op` is spelled with: `+=` means `+`, and
+// that is the whole of the language rule — `a op= b` is `a = a op b`. It lives
+// out here because the checker and codegen both read that sentence, and a
+// second copy of the map is a second chance for them to disagree about it.
+// TOKEN_ERROR for anything that is not a compound assignment, TOKEN_EQ (a
+// plain one, which has no operator) included.
+TokenType token_compound_binary_op(TokenType op);
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // DEBUG
 // ═══════════════════════════════════════════════════════════════════════════════
