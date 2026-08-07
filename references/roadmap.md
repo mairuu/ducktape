@@ -792,7 +792,7 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
     `with_capacity(self.live)` in the same pass — the walk cannot be shortened,
     but its answer's length is known before it starts.
 
-- **107. `unused_assignment`: a store is not a read.** (`SHA-107`) A binding
+- **107. `unused_assignment`: a store is not a read.** (`ae41c2f`) A binding
   something assigns to and nothing ever reads now warns under its own name.
   `language.md` "Statements and blocks" + "Warnings and `@allow`",
   `architecture.md` "What is never named".
