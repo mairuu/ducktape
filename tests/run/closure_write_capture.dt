@@ -1,0 +1,17 @@
+# `reset` names `n` only as the target of a plain `=`. That is the one lookup
+# the checker does not count as a read, and it still has to report the crossed
+# function boundary — otherwise the name is not captured and the store misses.
+use std::io::print;
+
+fun main() {
+    var n = 0;
+    var bump = || { n = n + 1; };
+    var reset = || { n = 0; };
+    (bump)();
+    (bump)();
+    print("{n}");
+#> 2
+    (reset)();
+    print("{n}");
+#> 0
+}

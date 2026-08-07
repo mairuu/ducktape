@@ -1,6 +1,6 @@
 # `@allow("<lint>")` silences one warning over the declaration it marks and
-# everything inside it. All four lints appear below and none of them is
-# reported: this file must compile with stderr empty.
+# everything inside it. Each lint a body can raise appears below and none of
+# them is reported: this file must compile with stderr empty.
 use std::io::print;
 @allow("unused_import")
 use std::cmp::clamp;
@@ -9,6 +9,13 @@ use std::cmp::clamp;
 fun bindings() -> int {
     var spare = 1;
     var also_spare = spare;
+    return 7;
+}
+
+@allow("unused_assignment")
+fun stores() -> int {
+    var stale = 1;
+    stale = 2;
     return 7;
 }
 
@@ -61,6 +68,6 @@ fun both() -> int {
 
 fun main() {
     var p = P { x: 1 };
-    print("{bindings()}{dead()}{always_matches()}{both()}");
+    print("{bindings()}{stores()}{dead()}{always_matches()}{both()}");
     print("{p.one()}{p.two()}{p.three()}{p.label()}");
 }

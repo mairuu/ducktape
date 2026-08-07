@@ -2151,17 +2151,17 @@ same reason.
 
 ### Scopes and name resolution
 
-`ValueScope` (variables/functions; `VarEntry.slot` and `.is_captured` exist
-for codegen, capture is flagged when `vscope_lookup` crosses a function
-boundary) and `TypeScope` (types; `TypeEntry` carries the def pointer).
+`ValueScope` (variables/functions) and `TypeScope` (types; `TypeEntry` carries
+the def pointer).
 Neither `*_define` detects duplicates and both lookups return the *first*
 match, so anything that can collide has to check first — see "Modules" and
 `tc_check_duplicate_decls`.
-`VarEntry.slot` is meaningless for a module-level binding, imported or not:
-the runtime slot lives on the `FunDef` (assigned program-wide by codegen)
-and travels with the copied `ve->as`, which is also what codegen reads back
-off `ExprPath.resolved_fun` — a name may be an alias for a function in
-another module.
+**A value scope holds no slots.** A binding's runtime position is a *stack*
+position, which only codegen knows (milestone 88), so `Cg.locals` numbers them
+and nothing sema records is read back. A function's slot lives on the `FunDef`,
+assigned program-wide by codegen, and travels with the copied `ve->as` — which is
+also what codegen reads off `ExprPath.resolved_fun`, since a name may be an alias
+for a function in another module.
 Path resolution (`resolve_path` / `cctx_resolve_path`) walks segments through
 type scope contexts (struct → associated fn, enum → variant, and a `use`d module
 → its export — see "Module-qualified paths"). In
@@ -2450,10 +2450,10 @@ a lint *level* can be tested at all, since no source can set one. `run_tests.sh`
 additionally lints every `std/**/*.dt` under the `tests/pass` rule, so a warning in
 std fails the suite instead of keeping the silence a *program* gets.
 
-### What is never named (`unused variable`, `unused import`)
+### What is never named (`unused variable`, `unused assignment`, `unused import`)
 
-Both warnings ask one question — *did anything ever name this binding?* — and
-they differ only in the namespace and in what a wrong answer would cost.
+All three warnings ask one question — *did anything ever read this binding?* —
+and they differ only in the namespace and in what a wrong answer would cost.
 
 **A binding.** `VarEntry` carries `span` and `used`; `vscope_lookup` sets `used`
 on every entry it returns, and `vscope_pop` reports the ones still false. The
@@ -2464,6 +2464,25 @@ an ordinary identifier here, so the rule covers the wildcard spelling for
 free); `self` is written by the signature rather than the body; and a
 `@native`/`@intrinsic` method skips the var scope altogether, since a parameter
 no source can name is not an unused one.
+
+**A store is not a read**, so `VarEntry` carries a second mark. `vscope_find` is
+one walk under two names: `vscope_lookup` sets `used`, `vscope_lookup_write` sets
+`written` and touches neither `used` nor `origin` — nothing can be assigned to
+through a `use` anyway, since a store into a module-scope binding is refused by
+codegen. Which one the resolver calls is decided by `CheckCtx.write_target`, set
+around exactly one `resolve_expr` call: `EXPR_ASSIGN`'s target when the operator
+is `=` and the target is a bare single-segment path. Everything else asks the
+read question, which is the rule rather than an omission — a compound `a op= b`
+*is* `a = a op b` and so consults the place, and a field or index store needs the
+object before it can write through it. Matching by pointer identity is what keeps
+the flag from leaking into the target's sub-expressions or the right-hand side.
+
+`vscope_pop` then chooses between two names for one condition: nothing read this
+binding, and `written` says whether the stores into it were the whole of its
+life. So the grain is the binding rather than the store — one report, at the
+declaration — where Rust's `unused_assignments` reports each dead store and needs
+liveness to do it. The cheap consequence is that a value read *anywhere* clears
+the binding, dead stores included, and that `counted += 1` alone is silent.
 
 **An import.** Each `UseAlias` carries a `used` flag; the four places an import
 can bind a name — the type scope, the value scope, the variant table, the

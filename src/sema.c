@@ -2069,12 +2069,9 @@ static void link_copy_entry(TypeChecker *tc, Module *dst, Module *src,
     te->origin = origin;
   }
 
-  VarEntry *src_ve = vscope_lookup(&src->vscope, name, NULL);
+  VarEntry *src_ve = vscope_lookup(&src->vscope, name);
   if (src_ve != NULL) {
     VarEntry *ve = NULL;
-    // VarEntry.slot is meaningless for a module-level binding (it numbers a
-    // binding in the importer, not a callable): the runtime slot lives on the
-    // FunDef, assigned program-wide by codegen, and travels with `ve->as`.
     vscope_define(&dst->vscope, alias, src_ve->type, tc->diags, span, &ve);
     ve->as = src_ve->as;
     ve->origin = origin;
@@ -5082,8 +5079,7 @@ static Type *resolve_callee(CheckCtx *ctx, Expr *expr, Subst *subst,
   // into `subst`.
   Path *callee_path = &callee->as.path_expr.path;
   if (callee_path->count == 1 && callee_path->segments[0].type_arg_count == 0) {
-    VarEntry *ve =
-        vscope_lookup(ctx->vscope, callee_path->segments[0].name, NULL);
+    VarEntry *ve = vscope_lookup(ctx->vscope, callee_path->segments[0].name);
     if (ve != NULL && (ve->type->kind != TY_FUNCTION || ve->as.fun == NULL ||
                        ve->as.fun->type_param_count == 0)) {
       return resolve_expr(ctx, callee, NULL);
@@ -6733,7 +6729,7 @@ static Type *resolve_match_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   for (int i = 0; i < expr->as.match.arm_count; i++) {
     MatchArm *arm = &expr->as.match.arms[i];
 
-    ctx->vscope = vscope_push(ctx->vscope, false, false, ctx->al);
+    ctx->vscope = vscope_push(ctx->vscope, ctx->al);
 
     had_error |= !check_pattern(ctx, arm->pattern, subject_ty);
 
@@ -7741,7 +7737,7 @@ static Type *resolve_closure_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   ctx->return_type = ret_ty;
   ctx->loops = NULL; // break/continue can't escape the closure body
 
-  ctx->vscope = vscope_push(ctx->vscope, true, false, ctx->al);
+  ctx->vscope = vscope_push(ctx->vscope, ctx->al);
   for (int i = 0; i < closure->param_count; i++) {
     vscope_define(ctx->vscope, closure->params[i].name, param_types.ptr[i],
                   ctx->diags, closure->params[i].span, NULL);
@@ -8470,7 +8466,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   case EXPR_BLOCK: {
     ExprBlock *block = &expr->as.block;
     bool labelled = block->label.name.len > 0;
-    ctx->vscope = vscope_push(ctx->vscope, false, false, ctx->al);
+    ctx->vscope = vscope_push(ctx->vscope, ctx->al);
 
     // a labelled block is a break target, so it collects a join exactly as a
     // `loop` does — and the hint reaches its breaks for the same reason, one
@@ -8648,8 +8644,9 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
         expr->as.path_expr.path.segments[expr->as.path_expr.path.count - 1]
             .name;
 
-    bool crossed_fn = false;
-    VarEntry *ve = vscope_lookup(ctx->vscope, name, &crossed_fn);
+    VarEntry *ve = expr == ctx->write_target
+                       ? vscope_lookup_write(ctx->vscope, name)
+                       : vscope_lookup(ctx->vscope, name);
     if (!ve) {
       // a bare unit struct names a value as well as a type: `struct Unit;`
       // then `var u = Unit;`. Consulted only after the value scope, so a
@@ -8697,10 +8694,6 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       break;
     }
 
-    if (crossed_fn) {
-      ve->is_captured = true; // referenced from inside a nested closure
-    }
-
     Type *ty = ve->type;
 
     if (ty->kind == TY_FUNCTION) {
@@ -8746,7 +8739,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     break;
   }
   case EXPR_SELF: {
-    VarEntry *ve = vscope_lookup(ctx->vscope, sv_from_cstr("self"), NULL);
+    VarEntry *ve = vscope_lookup(ctx->vscope, sv_from_cstr("self"));
     if (!ve) {
       diag_error(ctx->diags, expr->span, "'self' is not available here");
       result = ctx->tc->t_poison;
@@ -9021,7 +9014,16 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   }
   case EXPR_ASSIGN: {
     ExprAssign *assign = &expr->as.assign;
+    // The one place a name is reached without being read: a plain `=` into a
+    // bare local discards what was there. Every other target does read it — a
+    // compound op consults the old value by definition, and `p.f = v` /
+    // `xs[i] = v` need the object in hand before they can store into it.
+    if (assign->op == TOKEN_EQ && assign->target->kind == EXPR_PATH &&
+        assign->target->as.path_expr.path.count == 1) {
+      ctx->write_target = assign->target;
+    }
     Type *lhs_ty = resolve_expr(ctx, assign->target, NULL);
+    ctx->write_target = NULL;
     Type *rhs_ty = resolve_expr(ctx, assign->value, lhs_ty);
 
     if (type_is_poison(lhs_ty) || type_is_poison(rhs_ty)) {
@@ -9127,7 +9129,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
 
     // the binding's names belong to the loop's own scope, like a `for`'s
     // variable: they are rebound from the freshly evaluated subject each turn.
-    ctx->vscope = vscope_push(ctx->vscope, false, true, ctx->al);
+    ctx->vscope = vscope_push(ctx->vscope, ctx->al);
     bool bound = wh->binding == NULL ||
                  check_cond_binding(ctx, wh->binding, cond_ty, "a 'while var'",
                                     "the loop never exits", "'loop'");
@@ -9188,7 +9190,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       }
     }
 
-    ctx->vscope = vscope_push(ctx->vscope, false, true, ctx->al);
+    ctx->vscope = vscope_push(ctx->vscope, ctx->al);
     vscope_define(ctx->vscope, for_->var_name, item_ty, ctx->diags,
                   for_->var_span, NULL);
     check_label_shadow(ctx, for_->label);
@@ -9231,7 +9233,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     // is the branch where the pattern did *not* match, so nothing is bound.
     bool bound = true;
     if (if_->binding != NULL) {
-      ctx->vscope = vscope_push(ctx->vscope, false, false, ctx->al);
+      ctx->vscope = vscope_push(ctx->vscope, ctx->al);
       bound = check_cond_binding(ctx, if_->binding, cond_ty, "an 'if var'",
                                  "the test always succeeds", "a plain 'var'");
     }
@@ -9553,7 +9555,7 @@ static void tc_check_fun(TypeChecker *tc, Decl *decl) {
   }
 
   // begin var scope
-  cctx.vscope = vscope_push(cctx.vscope, true, false, cctx.al);
+  cctx.vscope = vscope_push(cctx.vscope, cctx.al);
   for (int i = 0; i < fun_def->param_count; i++) {
     vscope_define(cctx.vscope, fun_def->params[i].name,
                   fun_def->params[i].param_type, cctx.diags,
@@ -9870,7 +9872,7 @@ static void tc_check_impl(TypeChecker *tc, Decl *decl) {
       }
 
       // begin method var scope
-      cctx.vscope = vscope_push(cctx.vscope, true, false, cctx.al);
+      cctx.vscope = vscope_push(cctx.vscope, cctx.al);
       for (int j = 0; j < fun_def->param_count; j++) {
         ParamDef *param_def = &fun_def->params[j];
         StringView param_name =
@@ -9956,7 +9958,7 @@ static void tc_check_trait(TypeChecker *tc, Decl *decl) {
     }
 
     // begin method var scope
-    cctx.vscope = vscope_push(cctx.vscope, true, false, cctx.al);
+    cctx.vscope = vscope_push(cctx.vscope, cctx.al);
     for (int j = 0; j < fun->param_count; j++) {
       vscope_define(cctx.vscope, fun->params[j].name, fun->params[j].param_type,
                     cctx.diags, item->params[j].span, NULL);
@@ -10020,20 +10022,14 @@ void vscope_init(ValueScope *scope, ValueScope *parent, Allocator *al) {
   scope->cap = 0;
 
   scope->parent = parent;
-  scope->is_fn_boundary = false;
-  scope->is_loop = false;
-  scope->next_slot = parent ? parent->next_slot : 0;
 
   scope->al = al;
 }
 
-// push a new scope. next_slot is inherited from parent unless is_fn_boundary.
-ValueScope *vscope_push(ValueScope *parent, bool is_fn_boundary, bool is_loop,
-                        Allocator *al) {
+// push a new scope.
+ValueScope *vscope_push(ValueScope *parent, Allocator *al) {
   ValueScope *scope = al_alloc_zero_for(al, ValueScope);
   vscope_init(scope, parent, al);
-  scope->is_fn_boundary = is_fn_boundary;
-  scope->is_loop = is_loop;
   return scope;
 }
 
@@ -10056,38 +10052,53 @@ ValueScope *vscope_pop(ValueScope *scope, DiagBag *diags) {
         sv_equal(ve->name, sv_from_cstr("self"))) {
       continue;
     }
-    diag_warning(diags, LINT_UNUSED_VARIABLE, ve->span,
-                 "unused variable '" SV_FMT "'", SV_ARG(ve->name));
+    // A binding nothing reads is reported once, and which of the two it is
+    // depends on whether anything stored into it: "unused" is the wrong word
+    // for a name a body keeps assigning to, and deleting the declaration is the
+    // wrong fix while those stores stand.
+    if (ve->written) {
+      diag_warning(diags, LINT_UNUSED_ASSIGNMENT, ve->span,
+                   "value assigned to '" SV_FMT "' is never read",
+                   SV_ARG(ve->name));
+    } else {
+      diag_warning(diags, LINT_UNUSED_VARIABLE, ve->span,
+                   "unused variable '" SV_FMT "'", SV_ARG(ve->name));
+    }
     diag_note(diags, (Span){0}, "prefix it with '_' if that is deliberate");
   }
   return scope->parent;
 }
 
-// walk the parent chain. sets *out_crossed_fn if a fn boundary was crossed.
-// returns null if not found.
-VarEntry *vscope_lookup(ValueScope *scope, StringView name,
-                        bool *out_crossed_fn) {
-  bool crossed = false;
+// one walk, two marks. A read is also a use of whatever *bound* the name, which
+// is how an import learns it was wanted; a store is not, so it leaves `origin`
+// alone — nothing can be assigned to through a `use` anyway.
+static VarEntry *vscope_find(ValueScope *scope, StringView name,
+                             bool is_write) {
   for (ValueScope *s = scope; s; s = s->parent) {
     for (int i = 0; i < s->count; i++) {
       if (sv_equal(s->entries[i].name, name)) {
-        if (out_crossed_fn) {
-          *out_crossed_fn = crossed;
-        }
-        s->entries[i].used = true;
-        if (s->entries[i].origin != NULL) {
-          *s->entries[i].origin = true;
+        if (is_write) {
+          s->entries[i].written = true;
+        } else {
+          s->entries[i].used = true;
+          if (s->entries[i].origin != NULL) {
+            *s->entries[i].origin = true;
+          }
         }
         return &s->entries[i];
       }
     }
-    // we exhausted this scope without a hit; if it was a fn boundary,
-    // anything found beyond here is an upvalue
-    if (s->is_fn_boundary) {
-      crossed = true;
-    }
   }
   return NULL;
+}
+
+// walk the parent chain, marking the entry read. returns null if not found.
+VarEntry *vscope_lookup(ValueScope *scope, StringView name) {
+  return vscope_find(scope, name, false);
+}
+
+VarEntry *vscope_lookup_write(ValueScope *scope, StringView name) {
+  return vscope_find(scope, name, true);
 }
 
 // the same walk without the marking: "is this name taken", which is the
@@ -10103,8 +10114,8 @@ VarEntry *vscope_peek(ValueScope *scope, StringView name) {
   return NULL;
 }
 
-int vscope_define(ValueScope *scope, StringView name, Type *type,
-                  DiagBag *diags, Span span, VarEntry **ref) {
+void vscope_define(ValueScope *scope, StringView name, Type *type,
+                   DiagBag *diags, Span span, VarEntry **ref) {
   // todo: check for duplicates or shadowing and emit diags
   (void)diags;
 
@@ -10117,18 +10128,14 @@ int vscope_define(ValueScope *scope, StringView name, Type *type,
     scope->cap = new_cap;
   }
 
-  int slot = scope->next_slot++;
   scope->entries[scope->count++] = (VarEntry){
       .name = name,
       .type = type,
-      .slot = slot,
-      .is_captured = false,
       .span = span,
   };
   if (ref) {
     *ref = &scope->entries[scope->count - 1];
   }
-  return slot;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

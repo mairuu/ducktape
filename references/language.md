@@ -129,6 +129,29 @@ body is in C and names nothing here. A struct pattern's **shorthand** binds
 under the field's name, so ignoring one field takes the long form
 (`Point { x: _, y }`) rather than a rename.
 
+**Storing into a binding is not naming it.** A plain `=` into a bare name
+discards what was there, so it is the one mention that does not count as a read
+and a binding whose whole life is stores warns too — under its own name, because
+"unused" is the wrong word for it and deleting the declaration is the wrong fix
+while the stores stand:
+
+```
+var stale = 1;  stale = 2;    # warning: value assigned to 'stale' is never read
+var live = 1;   live = 2;   print("{live}");   # ... silent: something reads it
+var _dropped = f();  _dropped = g();           # ... silent: the `_` again
+```
+
+Every other way of reaching a name **is** a read, including the ones that write
+through it: a compound assignment consults the old value by definition
+(`counted += 1`), and `p.x = 9` or `xs[0] = 9` must have the object in hand
+before storing into it. So the last line above is how a reference is released —
+with no `drop` in the language, overwriting the binding is the only way, and the
+`_` prefix is what says the store was the point.
+
+The grain is the **binding**, not the store: one report per binding, at its
+declaration, and a binding that is read *anywhere* is silent however many dead
+stores it also holds.
+
 ## Expressions
 
 - Number literals: `12`, `2.5`, and an exponent form that is a `float` with or
@@ -3064,12 +3087,13 @@ HashSet::with_capacity(n); s.capacity(); s.reserve(n);   # forwarded, all three
 ## Warnings and `@allow`
 
 A warning is advice, so by default it never fails the build: the compiler exits
-0 and the program runs. There are six, and each has a **name**, which is what
+0 and the program runs. There are seven, and each has a **name**, which is what
 the report prints, what silences it, and what a `-W` flag takes:
 
 | Lint | What it says |
 |---|---|
 | `unused_variable` | a binding nothing ever names (above, "Statements and blocks") |
+| `unused_assignment` | a binding something stores into and nothing reads (above, "Statements and blocks") |
 | `unused_import` | a `use` binding a name nothing writes, whose impls arrive anyway ("Modules") |
 | `unused_label` | a loop's or block's label no `break`/`continue` names ("Expressions") |
 | `unreachable_code` | a statement below one that leaves the block ("`std::panic`") |

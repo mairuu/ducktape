@@ -23,6 +23,7 @@ typedef enum {
 // they write — one table, no second list to drift.
 typedef enum {
   LINT_UNUSED_VARIABLE,
+  LINT_UNUSED_ASSIGNMENT,
   LINT_UNUSED_IMPORT,
   LINT_UNUSED_LABEL,
   LINT_UNREACHABLE_CODE,

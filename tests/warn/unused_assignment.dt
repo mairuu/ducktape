@@ -1,0 +1,8 @@
+#! expect: warning[unused_assignment]: value assigned to 'stale' is never read
+# A binding nothing reads but something stores into. `tests/pass/assign_reads.dt`
+# is the other half — the shapes that are reads and must stay silent — and it has
+# to be a pass test, because a warn test cannot notice an *extra* warning.
+fun main() {
+    var stale = 1;
+    stale = 2;
+}

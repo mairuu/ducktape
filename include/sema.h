@@ -368,10 +368,13 @@ void tc_report_unused_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg);
 typedef struct {
   StringView name;
   Type *type;
-  int slot;         // local slot or global slot (< 0)
-  bool is_captured; // set when a nested closure captures this binding
-  Span span;        // where the binding was written, for the unused warning
-  bool used;        // set by every lookup that returns this entry
+  Span span; // where the binding was written, for the unused warning
+  bool used; // set by every *read* of this entry
+  // set by a plain `=` into this name and by nothing else. A store is not a
+  // read, so the two marks answer different questions: `used` decides whether
+  // the binding is wanted at all, and this decides whether the stores into an
+  // unwanted one were the whole of its life.
+  bool written;
   // the `used` flag of the import that bound this name, or NULL for anything
   // written here. A module-scope entry is the only one that ever has one.
   bool *origin;
@@ -386,35 +389,33 @@ struct ValueScope {
   int cap;
 
   ValueScope *parent;
-  bool is_fn_boundary; // true for the outermost scope of a fun/closure
-  bool is_loop;        // true if directly inside a for/while body
-  int next_slot;       // next slot to assign (advanced by vscope_define)
   Allocator *al;
 };
 
 void vscope_init(ValueScope *scope, ValueScope *parent, Allocator *al);
 
-// push a new scope. next_slot is inherited from parent unless is_fn_boundary.
-ValueScope *vscope_push(ValueScope *parent, bool is_fn_boundary, bool is_loop,
-                        Allocator *al);
+// push a new scope, continuing the parent's slot numbering.
+ValueScope *vscope_push(ValueScope *parent, Allocator *al);
 
 // pop this scope, returning its parent. does not free (arena-allocated).
 // A scope closing is the moment its bindings are complete — nothing can name
 // one afterwards — so this is where an unused binding is reported.
 ValueScope *vscope_pop(ValueScope *scope, DiagBag *diags);
 
-// walk the parent chain.  sets *out_crossed_fn if a fn boundary was crossed.
-// returns null if not found.
-VarEntry *vscope_lookup(ValueScope *scope, StringView name,
-                        bool *out_crossed_fn);
+// walk the parent chain, marking the entry read. returns null if not found.
+VarEntry *vscope_lookup(ValueScope *scope, StringView name);
+
+// the same walk, marking the entry *written* rather than read: a plain `=`
+// discards what was there, so it is a store and not a read of it.
+VarEntry *vscope_lookup_write(ValueScope *scope, StringView name);
 
 // the same walk without the marking; see tscope_peek.
 VarEntry *vscope_peek(ValueScope *scope, StringView name);
 
-// define a new binding; assigns the next slot.  returns the assigned slot.
-// emits a diagnostic and returns -1 if the name already exists in this scope.
-int vscope_define(ValueScope *scope, StringView name, Type *type,
-                  DiagBag *diags, Span span, VarEntry **ref /*nullable*/);
+// define a new binding. Detects nothing: a duplicate name is appended and wins
+// every later lookup, so a caller that can collide checks first.
+void vscope_define(ValueScope *scope, StringView name, Type *type,
+                   DiagBag *diags, Span span, VarEntry **ref /*nullable*/);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TypeScope
@@ -580,6 +581,11 @@ struct CheckCtx {
 
   ValueScope *vscope;
   TypeScope *tscope;
+
+  // the one expression currently being resolved as a *store* rather than a
+  // read: the bare-name target of a plain `=`. Set immediately around that one
+  // `resolve_expr` call, so a sub-expression of the target never matches it.
+  Expr *write_target;
 
   TypeResolver tyres;
 

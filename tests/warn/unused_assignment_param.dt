@@ -1,0 +1,12 @@
+#! expect: warning[unused_assignment]: value assigned to 'seed' is never read
+# A parameter is a binding the caller initialised, so storing into one and never
+# reading it discards an argument. Its own file because a warn test matches a
+# single substring.
+use std::io::print;
+
+fun ignores(seed: int) -> int {
+    seed = 99;
+    return 0;
+}
+
+fun main() { print("{ignores(1)}"); }

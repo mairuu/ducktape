@@ -19,6 +19,7 @@ void diag_init(DiagBag *db, Allocator *al) {
 // the one list. Index by DiagLint; the order is the enum's.
 static const char *const lint_names[LINT_COUNT] = {
     [LINT_UNUSED_VARIABLE] = "unused_variable",
+    [LINT_UNUSED_ASSIGNMENT] = "unused_assignment",
     [LINT_UNUSED_IMPORT] = "unused_import",
     [LINT_UNUSED_LABEL] = "unused_label",
     [LINT_UNREACHABLE_CODE] = "unreachable_code",

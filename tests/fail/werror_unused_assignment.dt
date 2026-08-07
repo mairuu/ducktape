@@ -1,0 +1,11 @@
+#! expect: error[unused_assignment]: value assigned to 'stale' is never read
+#! flags: -Werror=unused_assignment
+# The new lint takes a level like any other — one enum entry and one name is the
+# whole of its registration.
+use std::io::print;
+
+fun main() {
+    var stale = 1;
+    stale = 2;
+    print("hi");
+}

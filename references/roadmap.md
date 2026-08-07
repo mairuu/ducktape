@@ -792,6 +792,35 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
     `with_capacity(self.live)` in the same pass — the walk cannot be shortened,
     but its answer's length is known before it starts.
 
+- **107. `unused_assignment`: a store is not a read.** (`SHA-107`) A binding
+  something assigns to and nothing ever reads now warns under its own name.
+  `language.md` "Statements and blocks" + "Warnings and `@allow`",
+  `architecture.md` "What is never named".
+  **THE FINDING: the lint's first act was to find one of its own kind inside the
+  compiler.** Splitting `VarEntry.used` into read and written made
+  `out_crossed_fn` the only reader of `.is_captured` — and `.is_captured` was
+  never read *at all*, because codegen computes its own on `Cg.locals`, which is
+  the one that drives `OP_CLOSE_UPVALUE`. Deleting it left `is_fn_boundary`
+  write-only; `is_loop` had been so all along; and `VarEntry.slot` /
+  `next_slot` / `vscope_define`'s return value were a fourth, whose doc comment
+  described a diagnostic it never emitted. **Five fields of bookkeeping nobody
+  read**, invisible to `-Wall -Wextra` because C's unused-but-set warning does not
+  look inside a struct. All five are gone: `vscope_push` takes a parent, a value
+  scope holds no slots, and milestone 88's rule — a local's position is a *stack*
+  position, so only codegen can number it — is now true of the code as well as of
+  the runtime. **SECOND FINDING: the rule is decided at one site and the
+  exemptions are the language's own.** `CheckCtx.write_target` marks exactly one
+  `resolve_expr` call, so a compound `a op= b` and a `p.f = v` are reads *by
+  construction* rather than by a list. And the one legitimate write-only binding
+  in the suite was already there — `tests/run/unit_variant_shared.dt` overwrites
+  a binding to drop the last reference to a GC singleton, which with no `drop` in
+  the language is the only way to release one; the `_` prefix says so.
+  Sabotage 8/8 attempted, 6 bit and 2 were no-ops, both honestly: a qualified
+  path target fails compilation before the bare-name lookup, and clearing
+  `write_target` is hygiene over a pointer nothing reads twice.
+  Remainder: the grain is the binding rather than the store (see the warts), so a
+  dead store into a binding that is read elsewhere is still invisible.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -1091,11 +1120,12 @@ via `Module.decl_base`) and is not part of the main line.
   spelling of its own. The cost is a pattern kind implemented in five places
   (sema ×3, codegen ×2, ast) that nothing constructs, and `var y = _;` being a
   legal read of a binding nobody meant to make
-- a **write-only** binding is not reported: `var n = 0; n = 5;` with no read
-  resolves the assignment target through the same lookup a read uses, so it
-  counts as named. Rust splits this out as its own lint (`unused_assignments`);
-  telling the two apart here means knowing the *context* of the lookup, which
-  only `EXPR_ASSIGN` with a plain `=` and a single-segment path target has
+- `unused_assignment`'s grain is the **binding**, not the store, so a dead store
+  into a binding that is read *somewhere* is invisible: `var x = 1; x = 2;` warns
+  but `var x = 1; x = 2; print("{x}");` does not, and neither does a lone
+  `counted += 1`, whose target the compound operator genuinely reads. Rust
+  reports each store and needs liveness over a control-flow graph to do it,
+  which is the cost this defers rather than avoids
 - the unused-binding warnings of one function come out in **scope-close** order
   rather than source order, so an inner block's precede an outer one's whatever
   their lines. Sorting the bag would need notes to stop attaching to the

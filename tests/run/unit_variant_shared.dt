@@ -86,8 +86,10 @@ fun main() {
     # (Without this the array above would keep every singleton alive by itself
     # and the root would never be load-bearing — the version of this test that
     # only held `many` passed with the roots deliberately removed.)
-    var dropped: Slot = Slot::Tomb;
-    dropped = Slot::Full(0);
+    # `_`-prefixed because the *store* is the point: nothing reads it, and with
+    # no `drop` in the language overwriting the binding is how a reference goes.
+    var _dropped: Slot = Slot::Tomb;
+    _dropped = Slot::Full(0);
 
     # allocate hard enough to force collections, then check the unit variants
     # held across them survived
