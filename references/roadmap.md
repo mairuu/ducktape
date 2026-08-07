@@ -640,7 +640,7 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   not a continuation byte — it is there so the helper does not depend on that.
   Remainder: a position is still a bare `int`, which is milestone 102.
 
-- **102. The opaque `StrPos`** (`SHA`) — a position comes from an end of a
+- **102. The opaque `StrPos`** (`2e23800`) — a position comes from an end of a
   string or from a match, never from an `int`, and carries the String it names.
   `slice` and `matches_at` moved to `std::text` with it; `split_once`,
   `take_chars` and `drop_chars` are what the opacity made necessary.
