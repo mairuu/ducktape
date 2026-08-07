@@ -718,7 +718,7 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   which is refused by a different mechanism (`a > >= 1` is the real one).
   No new opcode, no image change. Remainder: none.
 
-- **105. `unused_label`** (`SHA`) — milestone 96's remainder and the smallest of
+- **105. `unused_label`** (`016a10f`) — milestone 96's remainder and the smallest of
   the lint family: one enum entry, one name string, one `bool` on `CheckLoop`.
   Design: `language.md` "Expressions" (labels, and the block paragraph) + the
   lint table, `architecture.md` `check_loop_pop`. The name string is the whole
