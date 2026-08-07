@@ -62,11 +62,12 @@ case for it) — declare variables inside functions only.
 | `dyn Drawable`, `dyn Into<int>`, `dyn Iterator<Item = int>` | trait object — see "Trait objects" |
 | `Self`, `Self.Color`, `Point.Color` | self type, associated types |
 
-The case tells you where a type comes from. **Lowercase** is the language's
-own — `int`, `float`, `bool`, `char` — and **PascalCase** is a type someone
-declared or a parameter standing for one, which is why `String`, `StringBuf`
-and `Range` keep theirs: each has an impl block and a method API, so the
-capital is telling the truth about it.
+The case tells you where a type comes from, but the implication runs one way.
+**Lowercase** is always the language's own — `int`, `float`, `bool`, `char`.
+**PascalCase** is usually a type someone declared or a parameter standing for
+one, with three exceptions: `String`, `StringBuf` and `Range` are builtins too,
+resolved before any scope exactly as the lowercase four are. Whether those three
+should keep the capital is open (roadmap item 3).
 
 The two types you cannot hold a value of are **punctuation**: `()` and `!` are
 parsed as types of their own rather than resolved as names, so neither can be

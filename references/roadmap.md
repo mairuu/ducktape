@@ -824,6 +824,24 @@ as here.)
    pointer-equal `==` and cheap hashing), and Python-style character indexing
    (best ergonomics, most C — two or three storage widths).
 
+   **The naming half: `String` should be `string`.** Milestone 99 kept
+   `String`, `StringBuf` and `Range` capitalised on the grounds that each "has
+   an impl block and a method API" — but `std/char.dt` is entirely `impl char`,
+   so that never separated them from the lowercase four, and milestone 101
+   settled it the rest of the way: a type whose UTF-8 is compiler-enforced and
+   whose `slice` refuses cuts the program did not sanction is the least
+   plausible thing in that list for a program to have written itself. The rule
+   that covers every case without an exception is **lowercase = an immutable
+   value with no identity; PascalCase = has identity, or is declared** — so
+   `String` → `string` and `Range` → `range` move, `StringBuf` stays and stops
+   being an exception (it is mutable, so its identity is observable), and a
+   future `Bytes` stays for the same reason. Costs a rename of the same shape as
+   99's, plus the `type_named_builtin` entries. The one argument against is that
+   a Rust reader's `String` stops transferring for free, which is worth little
+   here: ducktape has no `str`/`String` split to inherit, and `char`/`string`
+   reads as the pair it is. Ride it with the `StrPos` work, since that is the
+   milestone that makes the case.
+
    **THE FINDING, on `byte`: it is not a scalar-shaped problem.** A new scalar
    buys type-safety and not one byte of memory — a `Value` is as wide as its
    widest arm however narrow the scalar is, and `ObjArray` stores `Value`s, so
@@ -848,6 +866,13 @@ via `Module.decl_base`) and is not part of the main line.
 
 ## Known warts to clean up opportunistically
 
+- the **embedded std bypasses the UTF-8 intake check**. `mod_parse` takes
+  `std_module_source()` when `is_std && !from_disk`, so a library module's bytes
+  never pass `read_file` — the same file is validated under `--std-module`
+  (which sets `from_disk`) and trusted on every normal compile. Not reachable
+  today: std is ASCII and `make test` lints every module through the disk path,
+  so the suite would catch it. But milestone 101's invariant rests on two
+  checked intakes plus one trusted one, which is not what it claims
 - **one mistake, two diagnostics**, in two places, and the same cause in both:
   a bare-path lookup introduces an inference variable nothing goes on to solve.
   An associated function written where a *pattern* expects a variant reports
