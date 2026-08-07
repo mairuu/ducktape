@@ -743,7 +743,7 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   inside a closure reports twice (the `break` errors, and the label is then
   genuinely unread) — the m82 family, and only on a failing compile.
 
-- **106. `array::fill` and the bulk operations** (`SHA`) — the last ranked
+- **106. `array::fill` and the bulk operations** (`9ee97c9`) — the last ranked
   follow-up from milestone 63's cost model, plus the family it belongs to:
   `fill`, `with_capacity`, `reserve`, `extend`, `truncate`, and `clear`
   rewritten onto `truncate`. Design: `language.md` "Arrays" (the surface, the
