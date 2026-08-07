@@ -881,6 +881,18 @@ nothing infers one.)
    ranked performance follow-ups** (`array::fill` and the bulk family): what is
    left of *that* list is nothing, since the cost model declines a native map.
 
+   **One new follow-up, measured after milestone 108: a `Some(x)` allocates.**
+   An `Iterator`'s `next()` costs ~103ns per element, of which the call frame is
+   ~5 and minting-and-matching the `Option` is ~61 (`runtime.md` "The cost
+   model"). Milestone 67 interned the *unit* variants, so `None` is already
+   free; the open half is a `Some(x)` whose payload fits in one `Value`, which
+   could be a tagged `Value` instead of an `ObjEnum`. It is a representation
+   change rather than an optimiser, needs no new analysis, and pays at every
+   `pop`, `first`, `find`, `get`, `as?` and map lookup rather than only in
+   iteration. The alternative — inlining `next` so the allocation can be proved
+   dead — buys ~5ns of ~103 on its own and needs escape analysis behind it to
+   collect the rest.
+
    (**An iterator source** was the one piece the iterator work had left
    pointing at itself, and is now milestone 60: `xs.iter()` and
    `(0..n).iter()`. The design question it recorded — what an array iterator

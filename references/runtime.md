@@ -1493,6 +1493,33 @@ loop, and one `array::fill` makes `HashMap::with_capacity(20000)` 5.1x faster
 same rule read the other way — the probe, not the slot array, is where that
 workload's iterations are.
 
+**A callback is cheap; its *return type* is not.** The subtraction above says
+"minus the callbacks", and measuring where an `Iterator` actually spends itself
+splits that term in two. Over 3,000,000 elements, against `for x in xs` as the
+baseline:
+
+| | ns/elem | over the `for` |
+|---|---|---|
+| `for x in xs { sum += x; }` | 25.6 | — |
+| the same, through one function call | 30.2 | +4.6 |
+| the same, minting a `Some(x)` and matching it | 86.2 | +60.6 |
+| `it.next()`, the real thing | 103.1 | +77.5 |
+
+**The frame is 6% of an iterator's overhead and the `Option` is 78%.** Every
+`next()` allocates an `ObjEnum` the loop immediately destructures and drops, so
+the cost is the allocation plus the collection it eventually forces — where a
+comparator returning an `int` (`sort_by`) pays only the frame. Two consequences:
+inlining `next` would buy ~5ns of ~103, so a per-*byte* stream stays out of
+reach whatever the call costs; and the one change that would move this is an
+`Option<T>` that does not allocate for a `T` that fits in a `Value` — a
+representation, not an optimisation, and one that pays at every `pop`, `find`,
+`get` and map lookup rather than only here. Milestone 67 already did the other
+half: `None` is interned, so it costs nothing.
+
+This is also why a stream's `Item` must be a chunk or a line and never a byte
+(`language.md` "`std::bytes`"): at 8 KiB per item the whole 103ns amortises to
+0.01ns/byte, and the question stops being a question.
+
 **What this does not license.** A native's argument for existing is deleted
 iterations, not familiarity: a map in C would delete none (`std::collections`
 is already one interpreted probe per lookup either way, and `hash_mix` is
