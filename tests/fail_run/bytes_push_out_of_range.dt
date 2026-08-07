@@ -1,0 +1,10 @@
+#! expect: byte value is out of range
+# `int` is the only integer type there is, so a Bytes checks the range of every
+# octet entering it — the check a `byte` scalar would have made at compile time.
+use std::io::print;
+
+fun main() {
+    var b = Bytes::new();
+    b.push(256);
+    print(b.len());
+}

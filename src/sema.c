@@ -196,6 +196,7 @@ static Type *subst_apply_(const Subst *s, ImplIndex *impls, Type *t, bool total,
   case TY_CHAR:
   case TY_STRING:
   case TY_STRBUF:
+  case TY_BYTES:
   case TY_UNIT:
   case TY_UNKNOWN:
   case TY_POISON:
@@ -774,6 +775,7 @@ bool infer_unify(InferCtx *ctx, Type *a, Type *b, DiagBag *diags, Span span) {
   case TY_CHAR:
   case TY_STRING:
   case TY_STRBUF:
+  case TY_BYTES:
   case TY_UNIT:
     return true; // same kind, same singleton -> equal
 
@@ -945,6 +947,7 @@ Type *infer_apply(InferCtx *ctx, Type *ty, Allocator *al) {
   case TY_CHAR:
   case TY_STRING:
   case TY_STRBUF:
+  case TY_BYTES:
   case TY_UNIT:
   case TY_UNKNOWN:
   case TY_POISON:
@@ -1501,6 +1504,7 @@ void tc_init(TypeChecker *tc, DiagBag *diags, Allocator *al) {
   tc->t_char = ty_char();
   tc->t_string = ty_string();
   tc->t_strbuf = ty_strbuf();
+  tc->t_bytes = ty_bytes();
   tc->t_range = ty_range();
   tc->t_unit = ty_unit();
   tc->t_never = ty_never();
@@ -10407,6 +10411,9 @@ static Type *type_named_builtin(TypeChecker *tc, StringView name) {
   }
   if (sv_equal_cstr(name, "StringBuf")) {
     return tc->t_strbuf;
+  }
+  if (sv_equal_cstr(name, "Bytes")) {
+    return tc->t_bytes;
   }
   if (sv_equal_cstr(name, "range")) {
     return tc->t_range;

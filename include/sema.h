@@ -258,8 +258,8 @@ struct TypeChecker {
   // nothing here is ever chosen.
   ImplIndex all_impls;
 
-  Type *t_int, *t_float, *t_bool, *t_char, *t_string, *t_strbuf, *t_range,
-      *t_unit, *t_never, *t_poison;
+  Type *t_int, *t_float, *t_bool, *t_char, *t_string, *t_strbuf, *t_bytes,
+      *t_range, *t_unit, *t_never, *t_poison;
 
   // Lang items: std names the *compiler* resolves for a construct that never
   // spells them — `"{v}"`, `a < b`, a `{v:>8}` spec. Each is captured when its

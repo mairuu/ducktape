@@ -1,0 +1,10 @@
+#! expect: byte index is out of bounds
+# An index is a claim about a buffer the caller can measure, so it is a runtime
+# error rather than a `None` — the same call `[T]` makes.
+use std::io::print;
+
+fun main() {
+    var b = Bytes::new();
+    b.push(1);
+    print(b.get(1));
+}

@@ -46,6 +46,7 @@ typedef enum {
            // bridged by a conversion and never by an index
   TY_STRING,
   TY_STRBUF,   // StringBuf — a growable text buffer; see include/object.h
+  TY_BYTES,    // Bytes     — a packed byte buffer; see include/object.h
   TY_UNIT,     // ()   — functions that return nothing, empty blocks
   TY_NEVER,    // !    — diverging code (return/break); coerces to any type
   TY_FUNCTION, // fun(A, B): R
@@ -221,6 +222,7 @@ Type *ty_bool(void);
 Type *ty_char(void);
 Type *ty_string(void);
 Type *ty_strbuf(void);
+Type *ty_bytes(void);
 Type *ty_unit(void);
 Type *ty_never(void);
 Type *ty_range(void);

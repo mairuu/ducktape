@@ -1,0 +1,15 @@
+#! expect: bytes are not valid UTF-8
+# The exit door refuses on its own account rather than trusting `is_utf8` to
+# have been asked. No safe source reaches this — `string::from_utf8` answers
+# `None` — so it is tested by binding the raw native, as milestone 102's
+# unreachable slice guards are.
+use std::io::print;
+
+@native("bytes_to_string")
+fun raw_to_string(b: Bytes) -> string;
+
+fun main() {
+    var b = Bytes::new();
+    b.push(255);
+    print(raw_to_string(b));
+}

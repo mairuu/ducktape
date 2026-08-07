@@ -1251,7 +1251,8 @@ The table is a process global, because pointer identity means two `Type *`
 compare equal only if one table produced them. Its entries — and the array —
 are compiler-arena memory, so `type_intern_reset` runs in `compiler_destroy`
 before that arena goes; nothing may hold a `Type *` across it. Singletons: int, float, bool,
-`char` (`TY_CHAR`), string, `StringBuf` (`TY_STRBUF`), `()` (unit), `!`
+`char` (`TY_CHAR`), string, `StringBuf` (`TY_STRBUF`), `Bytes` (`TY_BYTES`),
+`()` (unit), `!`
 (`TY_NEVER` — produced by blocks ending in `return`, unifies with anything),
 `range` (`TY_RANGE`, int-only), and `TY_POISON`.
 
@@ -1278,7 +1279,12 @@ a character *is*.
 nothing else about it: it is inert in every switch it appears in (a singleton
 to `subst_apply`, `infer_unify` and `infer_apply`) and is deliberately *absent*
 from `interp_render_bare`'s primitive list, so `"{b}"` goes down the `Display`
-path and reports that a buffer has no impl. That is the same arrangement
+path and reports that a buffer has no impl. `Bytes` (`TY_BYTES`, milestone 108)
+is the same arrangement again, and adding it was the measure of how cheap that
+shape is: one `type_named_builtin` entry, one constructor, and the three inert
+switches. Because `type_named_builtin` is the single answer to "is this a
+builtin name", refusing `struct Bytes` and `trait Bytes` and a type parameter
+called `Bytes` all followed from the one entry without being written. That is the same arrangement
 `string` already has — a builtin *type* whose operations live in std — so it is
 not another lang item in the sense `Display` is (see "Interpolation and
 `Display`"): the compiler knows the type, never a std item.

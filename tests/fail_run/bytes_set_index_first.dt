@@ -1,0 +1,11 @@
+#! expect: byte index is out of bounds
+# Both arguments are wrong; the index is the one reported. `set` is a write to a
+# place, so which place is the first question — the value it would take only
+# matters once there is somewhere to put it.
+use std::io::print;
+
+fun main() {
+    var b = Bytes::new();
+    b.set(5, 999);
+    print(b.len());
+}

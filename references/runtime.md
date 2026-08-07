@@ -180,6 +180,16 @@ in the intern table, so its bytes cannot change (see below); a buffer is out of
 it, so they can. Nothing else about the two differs, and `StringBuf`'s `build`
 method is the door — one `heap_intern` of the bytes written so far.
 
+An `ObjBytes` has the **same three fields** and shares the growth (`buf_reserve`
+takes the triple rather than either object), so what separates the two kinds is
+not their representation but which door is checked. A `StringBuf` charges at
+entry — only chars, strings and digits go in — so `build` validates nothing. A
+`Bytes` accepts any octet, so the check moves to the exit: `bytes_to_string`
+runs `utf8_validate` and refuses, which is what keeps a `string` valid UTF-8
+even when the raw native is bound directly. The element a program sees is an
+`int` in 0..255, stored as one byte, and both edges of that range are checked in
+C because there is no `byte` type to have checked them earlier.
+
 string identity is pointer identity — `heap_intern` looks up an
 open-addressing table (FNV-1a hash, linear probing, tombstone deletes)
 before allocating, so `==` on strings is a pointer compare. Codegen interns
@@ -337,7 +347,19 @@ constant — there is no literal syntax for one, and only a native can make one 
 so the image format has nothing to carry and `src/bytecode.c` is untouched.
 `==` is the only place the kinds visibly diverge inside the VM: an `OBJ_STRING`
 compares by pointer *because* it is interned, an `OBJ_STRBUF` has to compare
-its bytes.
+its bytes. `OBJ_BYTES` arrived on exactly these terms and cost the image
+nothing for the same reason.
+
+`io_read_file` is the one native that reads the world. It appends to the caller's
+buffer and returns the failure as a string, empty when there was none — a native
+cannot mint a `Result`, so the value and the error leave by different doors, and
+the mutable buffer is what makes an out-parameter possible at all. It reads in
+8 KiB chunks rather than sizing by `ftell`: a length is a property of a regular
+file, and a pipe or a `/proc` entry answers zero for one while still having
+every byte to give. `out` stays rooted across the `heap_bytes_reserve` inside
+that loop because it is `args[1]`, still on the VM stack — the whole of what the
+calling convention promises. A path holding a NUL is refused before `fopen`
+sees it, since a ducktape string carries its own length and `fopen` does not.
 
 ## Codegen shapes (`src/codegen.c`)
 

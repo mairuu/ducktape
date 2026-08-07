@@ -1,0 +1,58 @@
+# std::io::read_file — the first thing a ducktape program can read.
+# Pins that a read answers raw bytes (a file is not guaranteed to be text) and
+# that a missing file is an `Err` value rather than a runtime error.
+# The fixture path is relative to the repo root, which is where the suite runs.
+use std::io::print;
+use std::io::read_file;
+
+fun main() {
+    var r = read_file("tests/data/greeting.txt");
+    print(r.is_ok());
+#> true
+
+    var b = r.unwrap();
+    # 15 characters, 17 bytes: `é` is two of them, plus the trailing newline
+    print(b.len());
+#> 17
+    print(b.get(0));
+#> 104
+
+    var text = string::from_utf8(b).unwrap();
+    print(text.len());
+#> 17
+    # the blank line below is the fixture's own trailing newline, kept by the
+    # read and printed before `print`'s
+    print(text);
+#> héllo, ducktape
+#>
+
+    # reading twice appends, because the buffer is the caller's
+    var again = read_file("tests/data/greeting.txt");
+    print(again.unwrap().len());
+#> 17
+
+    # a missing file is a value, not a crash — and `out` is left untouched
+    var missing = read_file("tests/data/no_such_file.txt");
+    print(missing.is_err());
+#> true
+    print(missing.unwrap_or(Bytes::new()).len());
+#> 0
+
+    # a directory opens and then refuses to be read: the failure arrives from
+    # `fread` rather than from `fopen`, which is the other of the two branches.
+    # Only `is_err` is pinned — the message past it is libc's wording, not ours
+    var dir = read_file("tests/data");
+    print(dir.is_err());
+#> true
+
+    # a ducktape string is not a C string: it carries its own length, so it may
+    # hold a NUL that `fopen` would stop at. Refused, because otherwise this
+    # would quietly read the file the prefix names.
+    var sb = StringBuf::new();
+    sb.push("tests/data/greeting.txt");
+    sb.push_char('\u{0}');
+    sb.push("ignored");
+    var embedded = read_file(sb.build());
+    print(embedded.err().unwrap());
+#> cannot read a path containing a NUL byte
+}

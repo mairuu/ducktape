@@ -1,0 +1,10 @@
+#! expect: expected 'string' but got 'Bytes'
+# A Bytes is not text and does not become text by being handed somewhere text
+# is wanted: the decode is `string::from_utf8`, and it can answer `None`.
+use std::io::print;
+
+fun main() {
+    var b = "hi".to_utf8();
+    var s: string = b;
+    print(s);
+}

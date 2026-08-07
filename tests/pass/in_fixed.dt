@@ -9,6 +9,7 @@ use std::fmt::Display;
 use std::convert::From;
 use std::iter::DoubleEnded;   # `Iterator` is preluded; a supertrait of it is not
 use std::text;                # cutting and counting text, since milestone 102
+use std::io::read_file;      # milestone 108, and it brings `Bytes` with it
 
 enum Result<T, E> {
     Ok(T),
@@ -546,6 +547,13 @@ fun main() {
     var _last_two = numbers.iter().rev().take(2).collect();
     var _descending = (1..=4).iter().rev().collect();
     var _spanned = span_len(2..7);
+    # `Bytes` (milestone 108): the packed buffer a file is read into, and the
+    # one type whose exit is checked rather than its entry — a string encodes
+    # unconditionally, bytes decode only when they are a valid encoding
+    var octets = "hi".to_utf8();
+    octets.push(33);
+    var _decoded = string::from_utf8(octets);
+    var _read = read_file("tests/data/greeting.txt").is_ok();
 }
 
 # a range as a parameter rather than only a loop header

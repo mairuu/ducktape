@@ -1,0 +1,10 @@
+#! expect: byte value is out of range
+# The same range check on the other writing door; `set` checks the index first.
+use std::io::print;
+
+fun main() {
+    var b = Bytes::new();
+    b.push(0);
+    b.set(0, -1);
+    print(b.len());
+}

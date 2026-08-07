@@ -96,6 +96,19 @@ void value_print(Value v, FILE *out) {
               buf->bytes != NULL ? buf->bytes : "");
       break;
     }
+    case OBJ_BYTES: {
+      // the octets, decimal, because that is what the program sees: `b.get(i)`
+      // answers an int, and rendering them as text would be a claim about the
+      // encoding that a Bytes is precisely the type that does not make.
+      ObjBytes *b = val_as_bytes(v);
+      fprintf(out, "Bytes[");
+      for (int i = 0; i < b->len; i++) {
+        fprintf(out, "%s%u", i > 0 ? ", " : "",
+                (unsigned)(unsigned char)b->bytes[i]);
+      }
+      fputc(']', out);
+      break;
+    }
     case OBJ_ARRAY: {
       ObjArray *arr = val_as_array(v);
       fputc('[', out);
@@ -211,6 +224,11 @@ bool value_equal(Value a, Value b) {
       ObjStrBuf *x = val_as_strbuf(a), *y = val_as_strbuf(b);
       // an empty buffer has no allocation at all, so the length test comes
       // first: memcmp is not defined on a NULL pointer even for zero bytes.
+      return x->len == y->len &&
+             (x->len == 0 || memcmp(x->bytes, y->bytes, (size_t)x->len) == 0);
+    }
+    case OBJ_BYTES: {
+      ObjBytes *x = val_as_bytes(a), *y = val_as_bytes(b);
       return x->len == y->len &&
              (x->len == 0 || memcmp(x->bytes, y->bytes, (size_t)x->len) == 0);
     }

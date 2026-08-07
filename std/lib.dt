@@ -6,6 +6,7 @@
 
 pub mod array;
 pub mod assert;
+pub mod bytes;
 pub mod char;
 pub mod cmp;
 pub mod collections;

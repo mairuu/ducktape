@@ -118,8 +118,9 @@ phase aborts mid-file. Error recovery uses a poison type/expr convention (see
   `language.md` for the precise rules and the not-yet-implemented list.
 - **Executes (`--run`):** nearly all of it — arithmetic, control flow,
   recursion, first-class function values and closures with upvalues, native
-  functions (`std::io::print`, `std::array`, `std::string`, `std::char`),
-  GC-backed strings (and the `StringBuf` that builds one) and growable arrays,
+  functions (`std::io`, `std::array`, `std::string`, `std::char`),
+  GC-backed strings (and the `StringBuf` that builds one), packed `Bytes` and
+  the file read that fills one, growable arrays,
   structs/enums/tuples with full match compilation, methods and `?`,
   multi-module programs, and generic code via
   monomorphisation (including dispatch through a trait bound — by a receiver

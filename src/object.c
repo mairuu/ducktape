@@ -44,6 +44,8 @@ static size_t obj_size(Obj *o) {
     return sizeof(ObjString) + (size_t)((ObjString *)o)->len + 1;
   case OBJ_STRBUF:
     return sizeof(ObjStrBuf);
+  case OBJ_BYTES:
+    return sizeof(ObjBytes);
   case OBJ_ARRAY:
     return sizeof(ObjArray);
   case OBJ_TUPLE:
@@ -69,6 +71,13 @@ static void free_obj(Heap *h, Obj *o) {
     ObjStrBuf *buf = (ObjStrBuf *)o;
     if (buf->bytes != NULL) {
       heap_dealloc(h, buf->bytes, (size_t)buf->cap); // `cap`, like an array's
+    }
+    break;
+  }
+  case OBJ_BYTES: {
+    ObjBytes *b = (ObjBytes *)o;
+    if (b->bytes != NULL) {
+      heap_dealloc(h, b->bytes, (size_t)b->cap);
     }
     break;
   }
@@ -233,33 +242,53 @@ ObjStrBuf *heap_strbuf(Heap *h) {
   return buf;
 }
 
+ObjBytes *heap_bytes(Heap *h) {
+  ObjBytes *b = (ObjBytes *)new_obj(h, OBJ_BYTES, sizeof(ObjBytes));
+  b->len = 0;
+  b->cap = 0;
+  b->bytes = NULL;
+  return b;
+}
+
 #define STRBUF_MIN_CAP 16
 
-void heap_strbuf_reserve(Heap *h, ObjStrBuf *buf, int needed) {
-  if (needed <= buf->cap) {
+// The growth both byte buffers share, taken on the three fields rather than on
+// either object: a StringBuf and a Bytes differ in what may enter them, never
+// in how the room is made.
+static void buf_reserve(Heap *h, char **bytes, int *cap, int len, int needed) {
+  if (needed <= *cap) {
     return;
   }
-  int cap = buf->cap < STRBUF_MIN_CAP ? STRBUF_MIN_CAP : buf->cap;
-  while (cap < needed) {
-    cap *= 2;
+  int new_cap = *cap < STRBUF_MIN_CAP ? STRBUF_MIN_CAP : *cap;
+  while (new_cap < needed) {
+    new_cap *= 2;
   }
 
-  // The new buffer is allocated before anything about `buf` changes, exactly
-  // as for an array — but for a weaker reason, and the difference is worth
-  // seeing. An array's tail is *traced*, so a `count` raised past a written
-  // slot hands the collector a Value that was never stored. Bytes are payload:
-  // the collector never reads them, so all the ordering here protects is what
-  // `build` will copy. `buf` still has to be rooted across this call, since the
-  // collection it may trigger would otherwise sweep the buffer being grown.
-  char *bytes = heap_alloc(h, (size_t)cap);
-  if (buf->len > 0) {
-    memcpy(bytes, buf->bytes, (size_t)buf->len);
+  // The new buffer is allocated before anything about the old one changes,
+  // exactly as for an array — but for a weaker reason, and the difference is
+  // worth seeing. An array's tail is *traced*, so a `count` raised past a
+  // written slot hands the collector a Value that was never stored. Bytes are
+  // payload: the collector never reads them, so all the ordering here protects
+  // is what a reader would copy. The owning object still has to be rooted
+  // across this call, since the collection it may trigger would otherwise sweep
+  // the buffer being grown.
+  char *grown = heap_alloc(h, (size_t)new_cap);
+  if (len > 0) {
+    memcpy(grown, *bytes, (size_t)len);
   }
-  if (buf->bytes != NULL) {
-    heap_dealloc(h, buf->bytes, (size_t)buf->cap);
+  if (*bytes != NULL) {
+    heap_dealloc(h, *bytes, (size_t)*cap);
   }
-  buf->bytes = bytes;
-  buf->cap = cap;
+  *bytes = grown;
+  *cap = new_cap;
+}
+
+void heap_strbuf_reserve(Heap *h, ObjStrBuf *buf, int needed) {
+  buf_reserve(h, &buf->bytes, &buf->cap, buf->len, needed);
+}
+
+void heap_bytes_reserve(Heap *h, ObjBytes *b, int needed) {
+  buf_reserve(h, &b->bytes, &b->cap, b->len, needed);
 }
 
 ObjArray *heap_array(Heap *h, int count) {
@@ -417,6 +446,7 @@ static void mark_obj(Obj *o) {
   switch (o->kind) {
   case OBJ_STRING:
   case OBJ_STRBUF:
+  case OBJ_BYTES:
     break; // pure payload: no Value inside either one to trace
   case OBJ_ARRAY: {
     ObjArray *arr = (ObjArray *)o;

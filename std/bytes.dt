@@ -1,0 +1,89 @@
+# std::bytes — a packed byte buffer, and the door between one and a `string`.
+#
+# A `Bytes` holds one octet per element where a `[int]` would hold a whole
+# `Value`, and that is the only reason it exists: a `Value` is as wide as its
+# widest arm, so a hypothetical `byte` scalar would have bought type-safety and
+# not one byte of memory. Packing is what a byte type is wanted for, and only an
+# object delivers it.
+#
+# It is a sibling of `StringBuf` rather than a flavour of it, and the difference
+# is the invariant rather than the bytes. A `StringBuf` charges at the door —
+# only chars, strings and digits go in — so `build` never has to check anything.
+# A `Bytes` lets any octet in, so it charges at the *exit*: `string::from_utf8`
+# is the one way back to text, and it can fail.
+#
+# Both directions of that door live here rather than in `std::string`, for the
+# reason milestone 102 found: the module that mints a thing must be the one that
+# cuts with it. `std::string` does not have to know a `Bytes` exists.
+
+use std::option::Option;
+
+impl Bytes {
+    @native("bytes_new")
+    fun new() -> Bytes;
+
+    # The octets written so far. Like a `[T]`, a `Bytes` is a reference to one
+    # growable object, so every name bound to it sees the append.
+    @native("bytes_len")
+    fun len(self) -> int;
+
+    # The octet at `i`, as an int in 0..255. Out of bounds is a runtime error,
+    # not a `None`: an index is a claim about a buffer the caller can measure,
+    # which is the same call `[T]` makes.
+    @native("bytes_get")
+    fun get(self, i: int) -> int;
+
+    # There is no `b[i]` spelling for either of these. A string has no index
+    # either, and for the same reason — what an index would answer is a byte,
+    # which is only sometimes the unit the program means.
+    @native("bytes_set")
+    fun set(self, i: int, value: int);
+
+    # Append one octet. A value outside 0..255 is a runtime error: `int` is the
+    # only integer type there is, so this is where the range gets checked.
+    @native("bytes_push")
+    fun push(self, value: int);
+
+    # Forget the octets, keeping the capacity. Like `StringBuf::clear`, the
+    # bytes are not released — the next `push` reuses the room.
+    @native("bytes_clear")
+    fun clear(self);
+
+    # Whether the octets are a valid UTF-8 encoding, which is exactly the
+    # question `string::from_utf8` asks before answering.
+    @native("bytes_is_utf8")
+    fun is_utf8(self) -> bool;
+
+    fun is_empty(self) -> bool {
+        return self.len() == 0;
+    }
+}
+
+# The raw exit. Private, and paired with `is_utf8` above: a native cannot mint
+# an `Option` — it has no handle on the `VariantDef` a variant instance needs —
+# so the two halves of a checked conversion are a predicate and an unchecked
+# door, joined in ducktape by `from_utf8` below. It refuses invalid bytes on its
+# own account rather than trusting its caller, so milestone 101's invariant
+# survives even this file being wrong.
+@native("bytes_to_string")
+fun to_string_unchecked(b: Bytes) -> string;
+
+impl string {
+    # Decode UTF-8, or `None` if the octets are not a valid encoding. This is
+    # the checked half of the boundary and the reason `Bytes` is a separate
+    # type at all: a `string` is guaranteed valid UTF-8, so the guarantee has to
+    # be bought somewhere, and here is where.
+    fun from_utf8(b: Bytes) -> Option<string> {
+        if b.is_utf8() {
+            return Option::Some(to_string_unchecked(b));
+        }
+        return Option::None;
+    }
+
+    # The other direction, which needs no check at all — and that asymmetry is
+    # the whole relationship between the two types. Every string already is
+    # valid UTF-8, so its encoding is always a legal `Bytes`; the reverse is
+    # only sometimes a legal string.
+    @native("string_to_utf8")
+    fun to_utf8(self) -> Bytes;
+}

@@ -34,6 +34,10 @@ BIN=${1:-build/ducktape}
 # resolved against the caller's cwd, because the std lint runs from $ROOT.
 case $BIN in /*) ;; *) BIN=$(pwd)/$BIN ;; esac
 ROOT=$(dirname "$0")/..
+# every check below invokes the compiler from $ROOT, on a path relative to it.
+# A test may name a file — the fixture `tests/run/io_read_file.dt` reads, and
+# the path a diagnostic prints back — so the working directory is part of what
+# the suite pins rather than whatever the caller happened to be in.
 pass=0
 fail=0
 
@@ -45,7 +49,7 @@ test_flags() { sed -n 's/^#! flags: //p' "$1" | head -n1; }
 
 check_pass() {
     f=$1
-    err=$("$BIN" $(test_flags "$f") "$f" 2>&1 >/dev/null)
+    err=$(cd "$ROOT" && "$BIN" $(test_flags "$f") "${f#"$ROOT"/}" 2>&1 >/dev/null)
     code=$?
     if [ "$code" -eq 0 ] && [ -z "$err" ]; then
         pass=$((pass + 1))
@@ -58,7 +62,7 @@ check_pass() {
 
 check_warn() {
     f=$1
-    err=$("$BIN" $(test_flags "$f") "$f" 2>&1 >/dev/null)
+    err=$(cd "$ROOT" && "$BIN" $(test_flags "$f") "${f#"$ROOT"/}" 2>&1 >/dev/null)
     code=$?
     if [ "$code" -ne 0 ]; then
         fail=$((fail + 1))
@@ -85,7 +89,7 @@ check_warn() {
 check_fail() {          # $1 = file, $2... = extra flags for the compiler
     f=$1
     shift
-    err=$("$BIN" "$@" $(test_flags "$f") "$f" 2>&1 >/dev/null)
+    err=$(cd "$ROOT" && "$BIN" "$@" $(test_flags "$f") "${f#"$ROOT"/}" 2>&1 >/dev/null)
     code=$?
     if [ "$code" -eq 0 ]; then
         fail=$((fail + 1))
@@ -150,7 +154,7 @@ done
 check_run() {
     f=$1
     out_tmp=$(mktemp)
-    err=$("$BIN" --run "$f" 2>&1 >"$out_tmp")
+    err=$(cd "$ROOT" && "$BIN" --run "${f#"$ROOT"/}" 2>&1 >"$out_tmp")
     code=$?
     expected=$(sed -n 's/^#> \{0,1\}//p' "$f")
     actual=$(cat "$out_tmp")
@@ -182,7 +186,7 @@ check_image() {
     img=$(mktemp)
     out_tmp=$(mktemp)
 
-    err=$("$BIN" --emit-bc "$img" "$f" 2>&1 >/dev/null)
+    err=$(cd "$ROOT" && "$BIN" --emit-bc "$img" "${f#"$ROOT"/}" 2>&1 >/dev/null)
     code=$?
     if [ "$code" -ne 0 ] || [ -n "$err" ]; then
         fail=$((fail + 1))
@@ -192,7 +196,7 @@ check_image() {
         return
     fi
 
-    err=$("$BIN" --run "$img" 2>&1 >"$out_tmp")
+    err=$(cd "$ROOT" && "$BIN" --run "$img" 2>&1 >"$out_tmp")
     code=$?
     actual=$(cat "$out_tmp")
     rm -f "$img" "$out_tmp"

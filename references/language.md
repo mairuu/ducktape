@@ -52,6 +52,7 @@ case for it) — declare variables inside functions only.
 | `int` `float` `bool` `string` | primitives |
 | `char` | one Unicode scalar value — see "`std::char`" |
 | `StringBuf` | a growable text buffer — see "`std::string::buf`" |
+| `Bytes` | a packed byte buffer — see "`std::bytes`" |
 | `range` | what `a..b` / `a..=b` evaluate to — see "`std::iter`" |
 | `()` | unit |
 | `!` | code that does not come back — see "`std::panic`" |
@@ -65,9 +66,10 @@ case for it) — declare variables inside functions only.
 The case says what a type *is*, and the rule has no exceptions.
 **Lowercase** is an immutable value with no identity — `int`, `float`, `bool`,
 `char`, `string`, `range` — and all six are builtins, resolved before any scope.
-**PascalCase** has identity or was declared: `StringBuf` is builtin too, but it
-is mutable, so which buffer you hold is observable; everything else under the
-capital is a program's own type or a parameter standing for one.
+**PascalCase** has identity or was declared: `StringBuf` and `Bytes` are
+builtin too, but both are mutable, so which buffer you hold is observable;
+everything else under the capital is a program's own type or a parameter
+standing for one.
 
 The two types you cannot hold a value of are **punctuation**: `()` and `!` are
 parsed as types of their own rather than resolved as names, so neither can be
@@ -2483,6 +2485,8 @@ a deliberate exception, marked below.
 
 ```
 std::io      print<T>(value: T)                     # @native, free (see below)
+             read_file(path: string) -> Result<Bytes, string>   # free
+             (plus a private free `read_file_into`, the @native it wraps)
 
 std::array   fill<T>(n: int, value: T) -> [T]       # @native, free
              with_capacity<T>(n: int) -> [T]        # free
@@ -2529,6 +2533,18 @@ impl StringBuf  StringBuf::new() -> StringBuf        # @native (associated)
              self.clear()                           # @native
              self.build() -> string                 # @native
              self.is_empty() -> bool
+
+impl Bytes   Bytes::new() -> Bytes                  # @native (associated)
+             self.len() -> int                      # @native
+             self.get(i: int) -> int                # @native
+             self.set(i: int, value: int)           # @native
+             self.push(value: int)                  # @native
+             self.clear()                           # @native
+             self.is_utf8() -> bool                 # @native
+             self.is_empty() -> bool
+             (std::bytes also adds to `impl string`: `string::from_utf8(b) ->
+              Option<string>` and `s.to_utf8() -> Bytes`, plus a private free
+              `to_string_unchecked`, the @native the first of those wraps)
 
 impl char    self.code() -> int                     # @native
              char::from_code(n: int) -> char        # @native (associated)
@@ -2688,6 +2704,74 @@ as the same double, always carrying a `.` or an exponent so it is never
 mistaken for an `int`: `1.0`, `0.3333333333333333`, `300.0`, `1e+18`, `1e-07`,
 `-0.0`, `inf`, `-inf`, `NaN`. Exponent form takes over below `1e-5` and at
 `1e17`; every form printed is also a literal the scanner accepts.
+
+### `std::bytes`, and reading a file
+
+**A `Bytes` is a packed byte buffer**: one octet per element, where a `[int]`
+would hold a whole `Value` each. That gap is the only reason the type exists.
+A `Value` is as wide as its widest arm however narrow a scalar is, so a `byte`
+scalar would have bought type-safety and not one byte of memory — packing is
+what a byte type is wanted for, and only an object delivers it.
+
+```
+use std::bytes;
+
+var b = Bytes::new();
+b.push(104);        # 0..255; anything else is a runtime error
+b.push(105);
+b.get(0);           # 104 — an int, never a signed char
+b.set(0, 72);
+string::from_utf8(b);   # Some("Hi")
+"hi".to_utf8();         # a Bytes of 2
+```
+
+`Bytes` is a sibling of `StringBuf`, not a flavour of it, and **the difference
+is the invariant rather than the bytes**. A `StringBuf` charges at the door —
+only chars, strings and digits go in — so `build` never checks anything. A
+`Bytes` lets any octet in, so it charges at the *exit*. That exit is
+`string::from_utf8`, and it can fail:
+
+- **`string::from_utf8(b) -> Option<string>`** decodes, or answers `None` when
+  the octets are not a valid encoding.
+- **`s.to_utf8() -> Bytes`** encodes, and cannot fail.
+
+The asymmetry is the whole relationship between the two types. A `string` is
+guaranteed valid UTF-8, so its encoding is always a legal `Bytes`; the reverse
+is only sometimes a legal string, and that guarantee has to be bought
+somewhere. Both directions live in `std::bytes` rather than `std::string`,
+because the module that mints a thing is the one that has to cut with it.
+
+Like a `StringBuf`, a `Bytes` is a **reference**: a second name is the same
+object. `==` compares the octets — a `Bytes` is not interned, so it is a
+comparison rather than a pointer test. `print(b)` shows the octets in decimal,
+as `Bytes[104, 105]`, because an int is what `get` answers; rendering them as
+text would be a claim about the encoding that a `Bytes` is exactly the type
+that declines to make. There is **no `b[i]`** — a string has no index either,
+for the same reason.
+
+**`std::io::read_file(path) -> Result<Bytes, string>`** is the read side, and
+the first thing a ducktape program can read at all:
+
+```
+use std::io::read_file;
+
+var r = read_file("notes.txt");
+var text = string::from_utf8(r.unwrap()).unwrap();
+```
+
+It answers `Bytes` rather than `string` because a file is arbitrary octets: a
+read that promised text would have to fail on a file that is merely not text.
+Decoding is a separate, visible step. A missing file, a directory, or an
+unreadable one is an **`Err` carrying the system's message**, not a runtime
+error — a file that is not there is data, not a bug. A path containing a NUL
+byte is refused rather than truncated, because a ducktape string carries its
+own length while `fopen` stops at the first NUL, and the two would otherwise
+name different files.
+
+Importing `std::io` at all brings `Bytes`'s methods with it, since `std::io`
+imports `std::bytes` — so a program that writes `use std::io::print;` gets the
+`Bytes` surface whether or not it asked, and an explicit `use std::bytes;`
+beside it is reported as an unused import.
 
 ### `std::char`, and what a `string` is made of
 
@@ -3185,7 +3269,8 @@ See the gaps table below for what suppression still cannot do.
 | Unicode case mapping, folding, or normalisation | `std::char`'s classifications and `to_upper`/`to_lower` are ASCII-only; `string` comparison is raw bytes |
 | indexing a `string` by character (`s[i]`) | there is none: `s.chars()` walks, because a byte offset is not a character position. `s.chars().collect()` is the array, and `s.chars().skip(i).next()` is the one character |
 | a cut whose ends are known to be ordered | a `StrPos` is opaque and knows its own string (milestone 102), so cutting inside a character or into the wrong string is unrepresentable — but `slice` takes two independent positions rather than a range, so `s.slice(s.end(), s.start())` is still a runtime error |
-| reading a `string`'s bytes | there is none, and deliberately: `s.len()` counts them and `matches_at` compares them, but nothing hands one over. A `byte` would be the first sized integer in a language that has no others, so the shape it waits for is a packed `Bytes` object |
+| a `byte` scalar | there is none, and deliberately: it would be the first sized integer in a language that has no others, and a `Value` is as wide as its widest arm, so it would buy no memory. `s.to_utf8()` hands the bytes over as a packed `Bytes` instead (milestone 108) |
+| writing a file, or reading one a line at a time | `std::io` reads a whole file and prints; there is no write side, no stdin, and no seeking. `read_file` is one call that either appends the lot or fails |
 | a *dynamic* width or precision in a format spec (`{v:>{n}}`) | the width and precision in a `{v:>8}` / `{f:.3}` spec are literals; a runtime value there has no spelling. The spec itself is sugar for `std::string::pad_*` / `std::fmt::float` (milestone 35) |
 | a downcast to a type that does not implement the trait, or binds a different associated type | rejected, rather than compiled as an always-`None` test: the identity is the vtable, and such a type has no table to recognise |
 | a trait's type arguments at a *bare* method call | the expected type breaks the tie between two impls of one generic trait, and pins an impl parameter the receiver cannot reach (`impl<T, U: From<T>> Into<U> for T`); with no expected type the first impl wins — or, where the parameter was only pinnable that way, no impl applies at all. The trait-qualified spelling (`into::<Fahrenheit>::into(c)`) settles it explicitly without an expected type |

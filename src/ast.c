@@ -436,6 +436,11 @@ Type *ty_strbuf(void) {
   return &strbuf_type;
 }
 
+Type *ty_bytes(void) {
+  static Type bytes_type = {.kind = TY_BYTES};
+  return &bytes_type;
+}
+
 Type *ty_unit(void) {
   static Type unit_type = {.kind = TY_UNIT};
   return &unit_type;
@@ -940,6 +945,8 @@ int type_name_sprintf(const Type *t, char *buf, size_t buf_size) {
     return snprintf(buf, buf_size, "string");
   case TY_STRBUF:
     return snprintf(buf, buf_size, "StringBuf");
+  case TY_BYTES:
+    return snprintf(buf, buf_size, "Bytes");
   case TY_UNIT:
     return snprintf(buf, buf_size, "()");
   case TY_NEVER:
@@ -1018,6 +1025,8 @@ int type_sprintf(const Type *t, char *buf, size_t buf_size) {
     return snprintf(buf, buf_size, "string");
   case TY_STRBUF:
     return snprintf(buf, buf_size, "StringBuf");
+  case TY_BYTES:
+    return snprintf(buf, buf_size, "Bytes");
   case TY_UNIT:
     return snprintf(buf, buf_size, "()");
   case TY_NEVER:
@@ -1282,6 +1291,9 @@ void dump_type(const Type *t) {
     break;
   case TY_STRBUF:
     fprintf(stdout, "StringBuf");
+    break;
+  case TY_BYTES:
+    fprintf(stdout, "Bytes");
     break;
   case TY_UNIT:
     fprintf(stdout, "()");

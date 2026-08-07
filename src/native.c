@@ -2,6 +2,7 @@
 #include "chunk.h"
 #include "object.h"
 
+#include <errno.h>
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
@@ -32,6 +33,69 @@ static Value n_io_print(NativeCtx *ctx, Value *args, int argc) {
   value_print(args[0], stdout);
   fputc('\n', stdout);
   return val_unit();
+}
+
+// The read side, and the shape it takes is what milestone 102's rule leaves:
+// a native cannot mint a `Result`, so the two answers leave by different doors.
+// The bytes are *appended* to the caller's buffer — the one out-parameter a
+// mutable object makes possible — and the return is the failure, empty when
+// there was none. A successful read has no message, so the empty string is a
+// sentinel nothing else can produce.
+//
+// Read in chunks rather than sized by `ftell`: a length is a property of a
+// regular file, and a pipe or a /proc entry answers zero for it while still
+// having every byte to give.
+static Value n_io_read_file(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  ObjString *path = val_as_string(args[0]);
+  ObjBytes *out = val_as_bytes(args[1]);
+
+  char msg[512];
+  // `fopen` reads to the first NUL, so a path containing one names a different
+  // file than the string does. Refused rather than silently truncated.
+  if ((int)strlen(path->chars) != path->len) {
+    snprintf(msg, sizeof msg, "cannot read a path containing a NUL byte");
+    return val_obj(&heap_intern(ctx->heap, msg, (int)strlen(msg))->obj);
+  }
+
+  FILE *file = fopen(path->chars, "rb");
+  if (file == NULL) {
+    snprintf(msg, sizeof msg, "cannot read '%s': %s", path->chars,
+             strerror(errno));
+    return val_obj(&heap_intern(ctx->heap, msg, (int)strlen(msg))->obj);
+  }
+
+  // Restored on every failure path, so a partial read leaves the caller's
+  // buffer as it found it: `Err` promises nothing was appended.
+  int start = out->len;
+  char chunk[8192];
+  const char *failure = NULL;
+  for (;;) {
+    size_t got = fread(chunk, 1, sizeof chunk, file);
+    if (got == 0) {
+      if (ferror(file)) {
+        failure = strerror(errno);
+      }
+      break;
+    }
+    if ((int64_t)out->len + (int64_t)got > INT_MAX) {
+      failure = "file is too large";
+      break;
+    }
+    // may collect; `out` is `args[1]`, still on the VM stack and so still
+    // rooted, which is the whole of what the calling convention promises.
+    heap_bytes_reserve(ctx->heap, out, out->len + (int)got);
+    memcpy(out->bytes + out->len, chunk, got);
+    out->len += (int)got;
+  }
+  fclose(file);
+
+  if (failure != NULL) {
+    out->len = start;
+    snprintf(msg, sizeof msg, "cannot read '%s': %s", path->chars, failure);
+    return val_obj(&heap_intern(ctx->heap, msg, (int)strlen(msg))->obj);
+  }
+  return val_obj(&heap_intern(ctx->heap, "", 0)->obj);
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -712,6 +776,132 @@ static Value n_strbuf_build(NativeCtx *ctx, Value *args, int argc) {
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
+// std::bytes
+// ───────────────────────────────────────────────────────────────────────────────
+//
+// The same buffer as a StringBuf with the invariant taken off. What a program
+// names is an `int`, so both of a byte's edges have to be checked here: the
+// value is 0..255, and there is no `byte` type to have checked it earlier.
+
+static bool byte_ok(NativeCtx *ctx, int64_t v) {
+  if (v < 0 || v > 255) {
+    ctx->error = "byte value is out of range";
+    return false;
+  }
+  return true;
+}
+
+// An index arriving from a program is an int64_t against an int `len`, so the
+// comparison is done wide rather than narrowed into one — `(int)` of 2^32 is 0,
+// which would make an absurd index read element zero.
+static bool byte_index_ok(NativeCtx *ctx, ObjBytes *b, int64_t i) {
+  if (i < 0 || i >= b->len) {
+    ctx->error = "byte index is out of bounds";
+    return false;
+  }
+  return true;
+}
+
+static Value n_bytes_new(NativeCtx *ctx, Value *args, int argc) {
+  (void)args;
+  (void)argc;
+  return val_obj(&heap_bytes(ctx->heap)->obj);
+}
+
+static Value n_bytes_len(NativeCtx *ctx, Value *args, int argc) {
+  (void)ctx;
+  (void)argc;
+  return val_int(val_as_bytes(args[0])->len);
+}
+
+static Value n_bytes_get(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  ObjBytes *b = val_as_bytes(args[0]);
+  if (!byte_index_ok(ctx, b, args[1].as.i)) {
+    return val_unit();
+  }
+  return val_int((unsigned char)b->bytes[args[1].as.i]);
+}
+
+static Value n_bytes_set(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  ObjBytes *b = val_as_bytes(args[0]);
+  if (!byte_index_ok(ctx, b, args[1].as.i) || !byte_ok(ctx, args[2].as.i)) {
+    return val_unit();
+  }
+  b->bytes[args[1].as.i] = (char)(unsigned char)args[2].as.i;
+  return val_unit();
+}
+
+// `len` rises only once the byte is really there, the same ordering every other
+// buffer append keeps — and here, as for a StringBuf, it protects what a reader
+// would copy rather than what the collector would trace.
+static Value n_bytes_push(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  ObjBytes *b = val_as_bytes(args[0]);
+  if (!byte_ok(ctx, args[1].as.i)) {
+    return val_unit();
+  }
+  heap_bytes_reserve(ctx->heap, b, b->len + 1);
+  b->bytes[b->len++] = (char)(unsigned char)args[1].as.i;
+  return val_unit();
+}
+
+static Value n_bytes_clear(NativeCtx *ctx, Value *args, int argc) {
+  (void)ctx;
+  (void)argc;
+  val_as_bytes(args[0])->len = 0;
+  return val_unit();
+}
+
+// The exit door's question, asked separately from the exit itself: a native
+// cannot mint an `Option` (it has no handle on the VariantDef), so the choice
+// is made in ducktape and this is the predicate it chooses on.
+static Value n_bytes_is_utf8(NativeCtx *ctx, Value *args, int argc) {
+  (void)ctx;
+  (void)argc;
+  ObjBytes *b = val_as_bytes(args[0]);
+  return val_bool(b->len == 0 || utf8_validate(b->bytes, b->len));
+}
+
+// The third intake, and the first one a *program* controls. A string is
+// guaranteed valid UTF-8 (milestone 101), so this is where a Bytes stops being
+// arbitrary — the check is not a formality but the whole reason the two types
+// are different. `is_utf8` is the safe way in; this refuses rather than trusts,
+// so the invariant holds even when the raw native is bound directly.
+static Value n_bytes_to_string(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  ObjBytes *b = val_as_bytes(args[0]);
+  if (b->len > 0 && !utf8_validate(b->bytes, b->len)) {
+    ctx->error = "bytes are not valid UTF-8";
+    return val_unit();
+  }
+  ObjString *out =
+      heap_intern(ctx->heap, b->bytes != NULL ? b->bytes : "", b->len);
+  return val_obj(&out->obj);
+}
+
+// The other direction needs no check at all, which is the asymmetry stated as
+// code: every string is already valid UTF-8, so its encoding is always a legal
+// Bytes while the reverse is only sometimes a legal string.
+static Value n_string_to_utf8(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  ObjString *s = val_as_string(args[0]);
+  ObjBytes *b = heap_bytes(ctx->heap);
+  if (s->len > 0) {
+    // `b` is unreachable from any root, so it must not outlive an allocation it
+    // does not survive: `reserve` is the only one here, and it happens before
+    // anything is written rather than between two writes.
+    native_root(ctx, val_obj(&b->obj));
+    heap_bytes_reserve(ctx->heap, b, s->len);
+    native_unroot(ctx, 1);
+    memcpy(b->bytes, s->chars, (size_t)s->len);
+    b->len = s->len;
+  }
+  return val_obj(&b->obj);
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
 // Tables
 // ───────────────────────────────────────────────────────────────────────────────
 
@@ -727,12 +917,21 @@ static const NativeEntry natives[] = {
     {"array_push", n_array_push},
     {"array_reserve", n_array_reserve},
     {"array_truncate", n_array_truncate},
+    {"bytes_clear", n_bytes_clear},
+    {"bytes_get", n_bytes_get},
+    {"bytes_is_utf8", n_bytes_is_utf8},
+    {"bytes_len", n_bytes_len},
+    {"bytes_new", n_bytes_new},
+    {"bytes_push", n_bytes_push},
+    {"bytes_set", n_bytes_set},
+    {"bytes_to_string", n_bytes_to_string},
     {"char_code", n_char_code},
     {"char_from_code", n_char_from_code},
     {"fmt_float", n_fmt_float},
     {"hash_mix", n_hash_mix},
     {"hash_string", n_hash_string},
     {"io_print", n_io_print},
+    {"io_read_file", n_io_read_file},
     {"panic_abort", n_panic_abort},
     {"sort_by", n_sort_by},
     {"strbuf_build", n_strbuf_build},
@@ -749,6 +948,7 @@ static const NativeEntry natives[] = {
     {"string_matches_at", n_string_matches_at},
     {"string_prev_boundary", n_string_prev_boundary},
     {"string_slice", n_string_slice},
+    {"string_to_utf8", n_string_to_utf8},
 };
 
 // An intrinsic's opcode must take **no operand bytes** and must pop exactly
@@ -803,7 +1003,7 @@ static const char *join_names(char *buf, size_t cap, const char *const *names,
 }
 
 const char *native_names(void) {
-  static char buf[512];
+  static char buf[1024];
   const char *names[COUNT_OF(natives)];
   for (int i = 0; i < COUNT_OF(natives); i++) {
     names[i] = natives[i].name;

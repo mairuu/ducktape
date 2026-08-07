@@ -821,6 +821,32 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   Remainder: the grain is the binding rather than the store (see the warts), so a
   dead store into a binding that is read elsewhere is still invisible.
 
+- **108. `Bytes`, and the first thing a program can read.** (`SHA`)
+  `std::io::read_file` answers a packed `Bytes`; `string::from_utf8` is the
+  checked way back to text. `language.md` "`std::bytes`, and reading a file",
+  `runtime.md` "Heap objects" + "Natives", `architecture.md` "Types".
+  **THE FINDING: I/O could not be added without deciding the byte question,
+  because milestone 101 had already closed the easy answer.** A `string` is
+  guaranteed valid UTF-8, so a read that returned one would have to *fail* on a
+  file that is merely not text — which makes the return type the whole design.
+  `Bytes` is a sibling of `StringBuf` with the same three fields and the same
+  growth (`buf_reserve` now takes the triple, not either object): what separates
+  the kinds is which door is checked, entry for one and exit for the other.
+  **SECOND FINDING: a ducktape string is not a C string, and `read_file` is the
+  first native to hand one to an API that assumes it is.** A string carries its
+  own length, so `StringBuf` can build one holding a NUL — and `fopen` would
+  have opened the file the prefix names, succeeding on the wrong file. Refused,
+  and reachable from safe source, so it is a `tests/run` case rather than a
+  theoretical one. Adding the type cost three inert switches and one
+  `type_named_builtin` entry, and that entry alone is what refuses `struct
+  Bytes` and a type parameter called `Bytes` — milestone 89's one-table lesson
+  for the fourth time. No opcode, no image change: a `Bytes` has no literal
+  syntax, so a chunk constant can never be one. Sabotage 18/18 attempted, 17
+  bit; the one no-op restores the buffer after a *partial* read, which the suite
+  cannot construct (the `ferror` branch it sits on is reachable — a directory
+  opens and then refuses — and is tested). Remainder: no write side, no stdin,
+  no `b[i]`, and no `reserve`/`extend`/`slice` on a `Bytes`.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -983,30 +1009,22 @@ as here.)
    to address — and milestone 63 showed the other way out of it, since
    `std::hash` simply declines to implement `Hash for float` at all.
 
-3. **A packed `Bytes` object, with the milestone that first has something to
-   read.** The naming half of the string redesign is milestone 103; this is the
-   piece it left standing, and it was already decided there.
+3. **Growing `std::io` past one read.** Milestone 108 spent the item that stood
+   here — a packed `Bytes`, shipping with the milestone that first had something
+   to read — and what is left of the direction is breadth with one decision in
+   it. `read_file` is a single call that appends a whole file or fails; there is
+   no write side, no stdin, no seeking, and no line-at-a-time read. The decision
+   waiting is whether a *handle* is worth a type: everything above can be
+   written as more whole-file calls, and only streaming needs an object that
+   remembers a position. `Bytes` itself is missing the bulk operations `[T]`
+   grew in milestone 106 (`reserve`, `extend`, `truncate`, a slice) and has no
+   `b[i]`, all of which are ordinary registry entries.
 
-   **THE FINDING, on `byte`: it is not a scalar-shaped problem.** A new scalar
-   buys type-safety and not one byte of memory — a `Value` is as wide as its
-   widest arm however narrow the scalar is, and `ObjArray` stores `Value`s, so
-   `[byte]` costs what `[int]` costs. Packing is the whole reason to want a byte
-   type, and the scalar does not deliver it. Worse, 0..255 is the first member
-   of a family the language does not have: adding exactly one sized integer
-   while "no unsigned integer type" sits in the warts below is the worst of both
-   answers. So the byte story is a packed **`Bytes` object** whose elements are
-   range-checked `int`s — one object kind, the shape `ObjStrBuf` already is. It
-   keeps the capital under milestone 103's rule, for the same reason
-   `StringBuf` does: it is mutable, so which buffer you hold is observable. It
-   stays separate from `StringBuf`, and the difference between them is the
-   invariant itself: `StringBuf` charges at the door (only chars and strings go
-   in) so `build()` is free, `Bytes` lets anything in so its exit
-   (`string::from_utf8`) validates. Nothing consumes `Bytes` until there is I/O,
-   so it ships with the milestone that first has something to read — the string
-   work must only avoid foreclosing it, which `to_utf8`/`from_utf8` do. If a
-   `byte` scalar is ever wanted anyway, it belongs to an unsigned-integer
-   milestone that closes the `>>>` wart, not to this one.
-
+   (The **`byte` scalar** stays rejected, and milestone 108 is the evidence
+   rather than the argument: a `Value` is as wide as its widest arm, so `[byte]`
+   would have cost what `[int]` costs, and packing was the whole reason to want
+   one. If a `byte` is ever wanted anyway it belongs to an unsigned-integer
+   milestone that closes the `>>>` wart, not here.)
 
 Not on the roadmap: the **REPL** is a side feature, not a milestone — it lives
 on the `feature/repl` branch (`--repl`, incremental compilation over one module
@@ -1050,6 +1068,20 @@ via `Module.decl_base`) and is not part of the main line.
   so it is a limit rather than a hazard
 - no unsigned integer type, so `>>>` stands in for one and a bit pattern with
   the top bit set prints negative
+- **an import's impl set arrives transitively, so a deliberate `use` can read
+  as unused.** `std::io` imports `std::bytes`, so `use std::io::print;` hands a
+  program the whole `Bytes` surface — and `unused_import` then reports an
+  explicit `use std::bytes;` beside it, correctly under its own rule (removing
+  that line loses no impl that was selected) and unhelpfully as advice. The
+  prelude has always done this for `StringBuf` through `std::string`; milestone
+  108 is the first time a module a program imports *by choice* became a source
+  of it. What would fix it is a way to say an import is wanted for its impls,
+  which is the same missing spelling `language.md`'s table already records
+- **the failure path of `io_read_file` is only half testable.** A read that
+  fails partway restores the caller's buffer, and the suite cannot build one:
+  the reachable failures (a missing file, a directory) append nothing before
+  they fail, so the restore is a no-op wherever it can be observed. The
+  `ferror` branch itself is tested — a directory opens and then refuses
 - a *written* impl always wins, which is what keeps milestone 74's supertrait
   derivation from ever conflicting — so an item of a super that something else
   already implements may not also be written in the sub's block. The one-block

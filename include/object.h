@@ -105,6 +105,7 @@ typedef struct {
 typedef enum {
   OBJ_STRING,
   OBJ_STRBUF,
+  OBJ_BYTES,
   OBJ_ARRAY,
   OBJ_TUPLE,
   OBJ_STRUCT,
@@ -150,6 +151,26 @@ typedef struct {
   int cap;
   char *bytes;
 } ObjStrBuf;
+
+// a packed byte buffer: `len` written bytes inside a buffer of `cap`, each one
+// an `int` in 0..255 where the program stands.
+//
+// That gap between the two spellings is the whole reason this exists rather
+// than a `byte` scalar. A Value is as wide as its widest arm however narrow the
+// scalar is, so a `[byte]` would cost what a `[int]` costs; packing is what a
+// byte type is wanted for, and only an object delivers it.
+//
+// Same layout as ObjStrBuf, and the difference is the *invariant* rather than
+// the bytes: a StringBuf charges at the door (only chars, strings and digits go
+// in) so `build` is free, while a Bytes lets any octet in and charges at the
+// exit, where `string::from_utf8` validates. Payload either way, so neither is
+// traced.
+typedef struct {
+  Obj obj;
+  int len;
+  int cap;
+  char *bytes;
+} ObjBytes;
 
 // growable: `count` live values inside a buffer of `cap`. A literal is built
 // exact-fit (`OP_ARRAY` knows how many elements it just evaluated) and only
@@ -240,6 +261,7 @@ static inline ObjString *val_as_string(Value v) {
 static inline ObjStrBuf *val_as_strbuf(Value v) {
   return (ObjStrBuf *)v.as.obj;
 }
+static inline ObjBytes *val_as_bytes(Value v) { return (ObjBytes *)v.as.obj; }
 static inline ObjArray *val_as_array(Value v) { return (ObjArray *)v.as.obj; }
 static inline ObjTuple *val_as_tuple(Value v) { return (ObjTuple *)v.as.obj; }
 static inline ObjStruct *val_as_struct(Value v) {
@@ -291,6 +313,7 @@ void heap_destroy(Heap *h);
 ObjString *heap_intern(Heap *h, const char *chars, int len);
 ObjString *heap_concat(Heap *h, ObjString *a, ObjString *b);
 ObjStrBuf *heap_strbuf(Heap *h); // empty; no buffer until the first push
+ObjBytes *heap_bytes(Heap *h);   // likewise
 ObjArray *heap_array(Heap *h, int count); // items start as unit; cap == count
 ObjTuple *heap_tuple(Heap *h, int count); // items start as unit
 // these two are the exception: a def with no fields has no state, so every
@@ -312,11 +335,13 @@ ObjDyn *heap_dyn(Heap *h, Value inner, VTable *vtable);
 // sitting on the VM stack.
 void heap_array_reserve(Heap *h, ObjArray *arr, int needed);
 
-// the same for a text buffer, and it may collect for the same reason. The one
-// difference is what the ordering has to protect: an ObjArray's tail is walked
-// by the collector, so `count` may only rise once the slot holds a real Value.
-// Bytes are never traced, so here the rule is only about what `build` reads.
+// the same for the two byte buffers, and they may collect for the same reason.
+// The one difference is what the ordering has to protect: an ObjArray's tail is
+// walked by the collector, so `count` may only rise once the slot holds a real
+// Value. Bytes are never traced, so here the rule is only about what a reader
+// of the buffer would copy.
 void heap_strbuf_reserve(Heap *h, ObjStrBuf *buf, int needed);
+void heap_bytes_reserve(Heap *h, ObjBytes *b, int needed);
 
 void gc_mark_value(Value v);
 void heap_collect(Heap *h);
