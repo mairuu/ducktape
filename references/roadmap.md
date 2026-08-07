@@ -821,7 +821,7 @@ Milestones **through 54** are in `history/done-through-m54.md` and **55–75** i
   Remainder: the grain is the binding rather than the store (see the warts), so a
   dead store into a binding that is read elsewhere is still invisible.
 
-- **108. `Bytes`, and the first thing a program can read.** (`SHA`)
+- **108. `Bytes`, and the first thing a program can read.** (`88aba30`)
   `std::io::read_file` answers a packed `Bytes`; `string::from_utf8` is the
   checked way back to text. `language.md` "`std::bytes`, and reading a file",
   `runtime.md` "Heap objects" + "Natives", `architecture.md` "Types".
