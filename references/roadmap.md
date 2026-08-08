@@ -2,7 +2,7 @@
 
 ## Start here
 
-**Last landed:** milestone 113 — a small body is now compiled into its caller
+**Last landed:** milestone 113 (`e66181b`) — a small body is now compiled into its caller
 instead of called, because a queue entry already carries everything a body has
 to be compiled under. 688 tests, clean under debug, `--gc-stress` and
 `make sanitize`. Everything lands on `main`; there are no feature branches.
@@ -436,7 +436,7 @@ to keep this file small. Everything from 100 on is below.
   whole point is that nothing reaches them. Remainder: a method is still not an
   item, and cannot be until method visibility exists.
 
-- **113. A call is a body written somewhere else** (`SHA`) — a small definition
+- **113. A call is a body written somewhere else** (`e66181b`) — a small definition
   is now compiled into its caller rather than called, at a call by name, a
   method call, and the `next()` a `for` drives.
   Design: `runtime.md` "Inlining" and "The cost model" (a fourth table).
