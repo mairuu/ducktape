@@ -1,0 +1,22 @@
+#! expect: unused enum 'Colour'
+# an impl block belongs to its self type whether that is a struct or an enum,
+# so neither kind is resurrected by having methods.
+use std::io::print;
+
+enum Colour {
+    Red,
+    Blue,
+}
+
+impl Colour {
+    fun code(self) -> int {
+        return match self {
+            Colour::Red => 0,
+            Colour::Blue => 1,
+        };
+    }
+}
+
+fun main() {
+    print("hi");
+}

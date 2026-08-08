@@ -1,0 +1,12 @@
+#! expect: unused function 'helper'
+# A private item is one nothing outside the module can reach, so its whole
+# audience is this file — which is what makes the question answerable here.
+use std::io::print;
+
+fun helper() -> int {
+    return 1;
+}
+
+fun main() {
+    print("hi");
+}

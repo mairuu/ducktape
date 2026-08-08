@@ -2684,10 +2684,12 @@ static Decl *parse_fun_decl(Parser *p, bool is_pub, AttrNode attr) {
   bool had_error = false;
 
   StringView name_sv = {0};
+  Span name_span = {0};
   if (!consume_tok(p, TOKEN_IDENT, "expected function name")) {
     had_error = true;
   } else {
     name_sv = previous_tok(p)->lexeme;
+    name_span = token_span(previous_tok(p));
   }
 
   TypeParamNode *type_params = NULL;
@@ -2771,6 +2773,7 @@ static Decl *parse_fun_decl(Parser *p, bool is_pub, AttrNode attr) {
 
   Span full = span_merge(token_span(&fun_tok), previous_tok_span(p));
   Decl *decl = ast_decl(DECL_FUN, full, p->al);
+  decl->name_span = name_span;
   decl->is_pub = is_pub;
   decl->as.fun_decl = (DeclFun){
       .name = name_sv,
@@ -2913,10 +2916,12 @@ static Decl *parse_struct_decl(Parser *p, bool is_pub) {
   bool had_error = false;
 
   StringView name_sv = {0};
+  Span name_span = {0};
   if (!consume_tok(p, TOKEN_IDENT, "expected struct name")) {
     had_error = true;
   } else {
     name_sv = previous_tok(p)->lexeme;
+    name_span = token_span(previous_tok(p));
   }
 
   if (had_error) {
@@ -2963,6 +2968,7 @@ static Decl *parse_struct_decl(Parser *p, bool is_pub) {
   }
 
   Decl *decl = ast_decl(DECL_STRUCT, token_span(&struct_tok), p->al);
+  decl->name_span = name_span;
   decl->is_pub = is_pub;
   decl->as.struct_decl = (DeclStruct){
       .name = name_sv,
@@ -2983,10 +2989,12 @@ static Decl *parse_enum_decl(Parser *p, bool is_pub) {
   bool had_error = false;
 
   StringView name_sv = {0};
+  Span name_span = {0};
   if (!consume_tok(p, TOKEN_IDENT, "expected enum name")) {
     had_error = true;
   } else {
     name_sv = previous_tok(p)->lexeme;
+    name_span = token_span(previous_tok(p));
   }
 
   if (had_error) {
@@ -3066,6 +3074,7 @@ static Decl *parse_enum_decl(Parser *p, bool is_pub) {
   }
 
   Decl *decl = ast_decl(DECL_ENUM, token_span(&enum_tok), p->al);
+  decl->name_span = name_span;
   decl->is_pub = is_pub;
   DeclEnum *enum_decl = &decl->as.enum_decl;
   enum_decl->name = name_sv;
@@ -3206,10 +3215,12 @@ static Decl *parse_trait_decl(Parser *p, bool is_pub) {
   Token trait_tok = *previous_tok(p);
 
   StringView name_sv = {0};
+  Span name_span = {0};
   if (!consume_tok(p, TOKEN_IDENT, "expected trait name")) {
     return ast_decl(DECL_POISON, token_span(&trait_tok), p->al);
   } else {
     name_sv = previous_tok(p)->lexeme;
+    name_span = token_span(previous_tok(p));
   }
 
   TypeParamNode *type_params = NULL;
@@ -3373,6 +3384,7 @@ static Decl *parse_trait_decl(Parser *p, bool is_pub) {
   }
 
   Decl *decl = ast_decl(DECL_TRAIT, token_span(&trait_tok), p->al);
+  decl->name_span = name_span;
   decl->is_pub = is_pub;
   DeclTrait *trait_decl = &decl->as.trait_decl;
   trait_decl->name = name_sv;

@@ -13,6 +13,8 @@ use Event::A;
 
 pub enum Event { A, B }
 
+# nothing calls it: this file has no `main`, the resolution above is the test.
+@allow("unused_item")
 fun pick() -> int {
   var e = A;
   return match e {

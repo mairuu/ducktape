@@ -3,4 +3,5 @@ pub enum Color { Red, Green }
 pub fun mix(a: int, b: int) -> int { return a + b; }
 
 # private: a glob binds what the module exports, not what it holds.
+@allow("unused_item")
 fun secret() -> int { return 0; }

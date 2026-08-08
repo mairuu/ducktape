@@ -3,6 +3,7 @@
 # Two fixed-size buffers were lifted for milestone 72, both reached by ordinary
 # code rather than by anything contrived:
 #
+#! flags: -Wno-unused_item
 # - **an impl's items were capped at 16**, in a stack array.
 #   `std::collections`'s `HashMap` hit it by gaining a third capacity method,
 #   which is the whole story: 16 methods is not a lot for a container type. It

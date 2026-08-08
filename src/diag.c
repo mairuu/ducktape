@@ -21,6 +21,7 @@ static const char *const lint_names[LINT_COUNT] = {
     [LINT_UNUSED_VARIABLE] = "unused_variable",
     [LINT_UNUSED_ASSIGNMENT] = "unused_assignment",
     [LINT_UNUSED_IMPORT] = "unused_import",
+    [LINT_UNUSED_ITEM] = "unused_item",
     [LINT_UNUSED_LABEL] = "unused_label",
     [LINT_UNREACHABLE_CODE] = "unreachable_code",
     [LINT_IRREFUTABLE_PATTERN] = "irrefutable_pattern",

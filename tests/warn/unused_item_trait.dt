@@ -1,0 +1,10 @@
+#! expect: unused trait 'Noisy'
+use std::io::print;
+
+trait Noisy {
+    fun shout(self) -> int;
+}
+
+fun main() {
+    print("hi");
+}

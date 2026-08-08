@@ -59,6 +59,9 @@ static bool module_has_audience(const Compiler *c, const Module *m) {
 static void compiler_begin_module(Compiler *c, Module *m) {
   diag_clear(&c->diags);
   diag_set_warnings(&c->diags, module_has_audience(c, m));
+  // the module every item-use edge recorded below belongs to.
+  c->tc.cur_module = m;
+  c->tc.cur_item = NULL;
 }
 
 // parse one module and build the children it declares. Its own bag cycle, so a
@@ -339,6 +342,7 @@ static bool compiler_phase_check(Compiler *c) {
 
     tc_check_module(&c->tc, m);
     tc_report_unused_imports(&c->tc, m, &c->mod_reg);
+    tc_report_unused_items(&c->tc, m);
     if (diag_has_diags(&c->diags)) {
       diag_report(&c->diags, m->file_path.chars, m->source.chars, stderr);
     }

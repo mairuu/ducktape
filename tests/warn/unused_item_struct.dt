@@ -1,0 +1,19 @@
+#! expect: unused struct 'Ghost'
+# An impl block does not resurrect its self type: nothing can name an impl, so
+# it is exactly as alive as the type it extends, and the methods below are as
+# unreachable as `Ghost` is.
+use std::io::print;
+
+struct Ghost {
+    x: int,
+}
+
+impl Ghost {
+    fun width(self) -> int {
+        return self.x;
+    }
+}
+
+fun main() {
+    print("hi");
+}

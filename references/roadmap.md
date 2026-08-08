@@ -2,10 +2,10 @@
 
 ## Start here
 
-**Last landed:** milestone 110 (`71d2684`) — a one-field enum variant carries
-itself in the `Value`, so `Some(x)` no longer allocates. 677 tests, clean under
-debug, `--gc-stress` and `make sanitize`. Everything lands on `main`; there are
-no feature branches.
+**Last landed:** milestone 111 (`SHA`) — the `unused_item` lint, which reports a
+private item no live declaration names. 684 tests, clean under debug,
+`--gc-stress` and `make sanitize`. Everything lands on `main`; there are no
+feature branches.
 
 **Nothing is blocked, and nothing is owed.** Milestone 95 closed the last entry
 that was not a matter of appetite, and 103 the last one that was already
@@ -368,6 +368,39 @@ to keep this file small. Everything from 100 on is below.
   Remainder: a field too wide for a word still allocates — a `range` payload and a
   nested `Some`, the second of which is what bounds the nesting.
 
+- **111. An item nothing reaches** (`SHA`) — the `unused_item` lint: a private
+  `fun`, `struct`, `enum` or `trait` that no live declaration names.
+  Design: `language.md` "An item nothing reaches", `architecture.md` "An item
+  nothing reaches (`unused_item`)".
+  **THE FINDING: a private item's audience is its own module, which is what
+  makes the lint affordable.** Every other spelling of the question is a
+  whole-tree walk after every module is checked — but nothing outside a module
+  can name a private item, so the graph never leaves one, and the report lands
+  beside `tc_report_unused_imports` with no pass of its own. The same sentence is
+  why `pub` is a *root* rather than a question: it moves the audience out of
+  reach, so answering it is the remainder rather than the feature. **SECOND
+  FINDING: an item cannot be answered the way a binding is.** Milestones 92 and
+  107 mark an entry read and report the unmarked ones, and that grain says
+  nothing about a function called only by a dead one, or two that call each
+  other. So this records a graph — `(from, to)` declaration pairs, `from` being
+  whichever declaration the resolve and check loops are on — and walks it from
+  the roots to a fixpoint, which is the first analysis in the compiler that is
+  not a single pass. An `impl` block is not an item and gets no root: it is
+  exactly as alive as the type it extends, so a dead struct's methods die with
+  it, while an impl on a builtin is a root because this module cannot see who
+  reaches it. Its first act was to report **11 test files**, every one of them
+  right — declarations written to type-check, and two `secret`s written to be
+  private — which is milestone 105's finding a third time; `@allow` where one or
+  two items are inert, `#! flags: -Wno-unused_item` where the declarations *are*
+  the test. **std needed no change at all**, which is the evidence that the eight
+  resolution sites that mark are the whole of how a name reaches an item.
+  Sabotage 20/20 attempted, 19 bit; the one no-op is the **lang-item root**, subsumed because
+  every `@lang` item in std is also `pub` — and it is a *live* branch, not dead
+  code: dropping `pub` from `pad_center` makes it fire, which is how the no-op
+  was told apart from a test gap. Remainders: a `pub` item is never reported; a
+  method is not an item (it has no visibility of its own); and an item reached
+  only from a dead one is reported *with* it rather than after.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -596,10 +629,14 @@ The lint family's remainders. What is missing is mostly grain — which thing a 
   carries one. There is no statement or expression form, and none on a trait
   item — a default body is covered by its trait, one scope wider than it
   should be. Rust's `#[allow]` on a statement is the shape this is missing
-- an *item* nothing names — a private `fun`, `struct` or `trait` no call
-  reaches — is not reported, where a binding and an import now are (milestone
-  92). Codegen already skips it, so the cost is a reader's rather than a
-  program's
+- a **`pub` item is never reported** by `unused_item` (milestone 111), because
+  its audience is the rest of the tree rather than its own module — so the walk
+  that would answer it has to run after every module is checked, where the
+  private question is settled where the module is. Rust reports a `pub` item in
+  a binary crate for exactly the reason that is possible there: the crate is the
+  build unit and the walk already spans it. A **method** is not an item either,
+  and cannot be one until method visibility exists — a method is as visible as
+  its impl, so there is no private method to report
 - `PAT_WILDCARD` is **unreachable**, and milestone 92 depends on it being so.
   `scan_identifier` runs before the `switch` that would make a lone `_` a
   `TOKEN_UNDER`, so `_` is an ordinary identifier and every `_` in a pattern is

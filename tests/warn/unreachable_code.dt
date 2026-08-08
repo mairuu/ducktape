@@ -1,6 +1,8 @@
 #! expect: unreachable code: control never reaches here
 # Anything below the statement that leaves a block is dead. One warning per
 # block, anchored at the first dead statement — a nested block reports its own.
+# the dead code is what is under test, not who calls the function holding it.
+#! flags: -Wno-unused_item
 use std::io::print;
 use std::panic::panic;
 

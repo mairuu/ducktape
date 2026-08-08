@@ -29,12 +29,14 @@ fun an_option<T>(present: bool, v: T) -> Option<T> {
 # The other way to keep the promise: a `loop` nothing breaks out of has no exit,
 # so it needs no `panic` to end in. A `while true` would not do — its condition
 # is an expression the checker does not read, so the loop is always able to end.
+@allow("unused_item")
 fun serve() -> ! {
     loop { }
 }
 
 # A `break` names the innermost loop only, so none of these three is an exit
 # from the outer one and it still diverges.
+@allow("unused_item")
 fun serve_nested() -> ! {
     loop {
         loop { break; }

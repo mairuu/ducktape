@@ -312,6 +312,13 @@ struct TypeChecker {
   // both preluded. See `check_interpol_seg`.
   FunDef *fmt_pad_start, *fmt_pad_end, *fmt_pad_center, *fmt_float;
 
+  // the declaration currently being resolved or checked, and the module it
+  // belongs to: the *source* end of an item-use edge. Set by the two loops that
+  // walk a module's declarations, so every name resolved below one is
+  // attributed to it. NULL between declarations.
+  Decl *cur_item;
+  Module *cur_module;
+
   DiagBag *diags;
   Allocator *al;
 };
@@ -361,6 +368,18 @@ bool tc_check_module(TypeChecker *tc, Module *m);
 // `pub use` — the one an outsider could still reach — is exempt.
 void tc_report_unused_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg);
 
+// record that `tc->cur_item` named `item`, a top-level declaration of
+// `tc->cur_module`. Called wherever a name written in the source resolves to
+// one — never from the linker, whose lookups are a module asking what another
+// exports rather than anyone naming it.
+void tc_item_named(TypeChecker *tc, Decl *item);
+
+// warn about every item of m that nothing reachable names. Runs beside
+// tc_report_unused_imports and for the same reason: a private item's only
+// possible readers are its own module's declarations, and by the end of
+// tc_check_module every one of them has been resolved and checked.
+void tc_report_unused_items(TypeChecker *tc, Module *m);
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // ValueScope
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -378,6 +397,9 @@ typedef struct {
   // the `used` flag of the import that bound this name, or NULL for anything
   // written here. A module-scope entry is the only one that ever has one.
   bool *origin;
+  // the top-level declaration that defined this name, or NULL for a local, a
+  // parameter or an import. Naming the entry is naming that item.
+  Decl *item;
   union {
     FunDef *fun; // when type.kind == TY_FUN
   } as;          // payload for certain kinds of entries
@@ -425,6 +447,7 @@ typedef struct {
   StringView name;
   Type *type;
   bool *origin; // the import's `used` flag; NULL if the name was written here
+  Decl *item;   // the top-level declaration that defined it; see VarEntry.item
   union {
     FunDef *fun_def;       // when type.kind == TY_FUN
     StructDef *struct_def; // when type.kind == TY_STRUCT

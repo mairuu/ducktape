@@ -3,6 +3,8 @@
 #   fun f(): T      ->  fun f() -> T
 #   for w < 10      ->  while w < 10
 #   inline trait bounds (T: Drawable) are enforced at instantiation
+# most of what a showcase declares is never called: it is here to type-check.
+#! flags: -Wno-unused_item
 use std::io::print;
 use std::string as strings;    # aliased: the type `string` owns the bare name
 use std::fmt::Display;

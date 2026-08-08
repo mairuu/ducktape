@@ -1521,6 +1521,10 @@ struct Decl {
   // look up.
   unsigned allow_mask;
   Span span;
+  // just the name a `fun`/`struct`/`enum`/`trait` introduces — what a
+  // diagnostic *about the item* points at, where `span` covers the whole
+  // declaration. Zero for every other kind, none of which introduces one.
+  Span name_span;
   union {
     DeclUse use_decl;
     DeclMod mod_decl;

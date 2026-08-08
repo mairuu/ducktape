@@ -1,0 +1,86 @@
+# The silent half of `unused_item`: every way a declaration can be named. A
+# false positive costs a reader more than a missed item does, so this file is
+# the guard — it must compile with nothing on stderr at all.
+use std::io::print;
+
+fun called() -> int {
+    return 1;
+}
+
+struct Point {
+    x: int,
+}
+
+enum Colour {
+    Red,
+    Blue,
+}
+
+trait Noisy {
+    fun shout(self) -> int;
+}
+
+# an impl block is not an item: it is exactly as alive as the type it extends,
+# and naming `Noisy` here is what keeps the trait alive.
+impl Noisy for Point {
+    fun shout(self) -> int {
+        return self.x;
+    }
+}
+
+struct Wrapper {
+    p: Point,
+}
+
+enum Holder {
+    One(Colour),
+}
+
+fun bounded<T: Noisy>(v: T) -> int {
+    return v.shout();
+}
+
+fun boxed(d: dyn Noisy) -> int {
+    return d.shout();
+}
+
+# a trait no impl mentions, kept alive by a `dyn` in a root's signature and by
+# nothing else.
+trait Silent {
+    fun hush(self) -> int;
+}
+
+pub fun hushed(d: dyn Silent) -> int {
+    return d.hush();
+}
+
+# a self import names the enum, and the variants it binds bare carry no route
+# back to it once they are in scope.
+use Colour::*;
+
+# `pub` puts the audience outside this module, where nothing here can see it.
+pub fun exported() -> int {
+    return 0;
+}
+
+@allow("unused_item")
+fun silenced() -> int {
+    return 0;
+}
+
+fun main() {
+    var p = Point { x: called() };
+    var w = Wrapper { p: p };
+    var h = Holder::One(Red);
+    var c = match h {
+        Holder::One(col) => match col {
+            Red => 1,
+            Blue => 2,
+        },
+    };
+    print("{c}");
+    var b = bounded(w.p);
+    print("{b}");
+    var d = boxed(w.p);
+    print("{d}");
+}

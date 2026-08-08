@@ -2314,6 +2314,12 @@ static EnumDef *link_qualifier_enum(TypeChecker *tc, Module *m, Module *dep,
                SV_ARG(qualifier));
     return NULL;
   }
+  // `use My::*;` names `My`, and the variants it binds bare carry no route back
+  // to the enum once they are in scope — so this is the only place a self
+  // import can be counted as naming it.
+  if (dep == m) {
+    tc_item_named(tc, te->item);
+  }
   return te->as.enum_def;
 }
 
@@ -2800,6 +2806,159 @@ void tc_report_unused_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Unused items
+// ═══════════════════════════════════════════════════════════════════════════════
+
+void tc_item_named(TypeChecker *tc, Decl *item) {
+  Module *m = tc->cur_module;
+  if (item == NULL || m == NULL) {
+    return;
+  }
+  if (m->item_use_count == m->item_use_cap) {
+    int cap = m->item_use_cap ? m->item_use_cap * 2 : 16;
+    m->item_uses = al_realloc(tc->al, m->item_uses,
+                              sizeof(ItemUse) * (size_t)m->item_use_cap,
+                              sizeof(ItemUse) * (size_t)cap);
+    m->item_use_cap = cap;
+  }
+  m->item_uses[m->item_use_count++] =
+      (ItemUse){.from = tc->cur_item, .to = item};
+}
+
+// the four declarations that introduce a name a reader could delete. An `impl`
+// is not one — nothing names an impl block — and a `use` and a `mod` have
+// lints of their own.
+static bool decl_is_item(const Decl *decl) {
+  return decl->kind == DECL_FUN || decl->kind == DECL_STRUCT ||
+         decl->kind == DECL_ENUM || decl->kind == DECL_TRAIT;
+}
+
+static const char *item_noun(const Decl *decl) {
+  switch (decl->kind) {
+  case DECL_FUN:
+    return "function";
+  case DECL_STRUCT:
+    return "struct";
+  case DECL_ENUM:
+    return "enum";
+  default:
+    return "trait";
+  }
+}
+
+static StringView item_name(Decl *decl) {
+  StringView name = {0};
+  decl_item_name(decl, &name);
+  return name;
+}
+
+static int decl_index(Module *m, const Decl *decl) {
+  for (int i = 0; i < m->ast->decl_count; i++) {
+    if (m->ast->decls[i] == decl) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+// which declaration an `impl` block's uses belong to: the item its self type
+// names, when that is one of this module's. An impl cannot be named, so it is
+// exactly as alive as the type it extends — and an impl on a builtin or an
+// imported type is alive on its own account, since this module cannot see who
+// reaches it.
+static Decl *impl_owner(Module *m, Decl *decl) {
+  ImplDef *impl = decl->as.impl_decl.def;
+  Type *self = impl ? impl->self_type : NULL;
+  if (self == NULL || (self->kind != TY_STRUCT && self->kind != TY_ENUM)) {
+    return NULL;
+  }
+  for (int i = 0; i < m->ast->decl_count; i++) {
+    Decl *d = m->ast->decls[i];
+    if (self->kind == TY_STRUCT && d->kind == DECL_STRUCT &&
+        d->as.struct_decl.def == self->as.struc.def) {
+      return d;
+    }
+    if (self->kind == TY_ENUM && d->kind == DECL_ENUM &&
+        d->as.enum_decl.def == self->as.enm.def) {
+      return d;
+    }
+  }
+  return NULL;
+}
+
+// an item nothing outside this module can reach, and which the compiler does
+// not name on its own account. Everything else is a root of the walk below.
+static bool item_is_root(Module *m, Decl *decl) {
+  // a `pub` item's readers are the rest of the tree, or — in a library — a
+  // program that has not been written yet. Milestone 89's audience question,
+  // asked about a declaration rather than a whole module.
+  if (decl->is_pub) {
+    return true;
+  }
+  // a lang item is named by the *compiler*, which writes no source to find.
+  if (decl->lang_attr.kind != ATTR_NONE) {
+    return true;
+  }
+  // the entry point: codegen's root, so the program's.
+  return decl->kind == DECL_FUN && m->parent == NULL && !m->is_std &&
+         sv_equal_cstr(decl->as.fun_decl.name, "main");
+}
+
+void tc_report_unused_items(TypeChecker *tc, Module *m) {
+  int n = m->ast->decl_count;
+  if (n == 0) {
+    return;
+  }
+  bool *live = al_alloc_zero(tc->al, sizeof(bool) * (size_t)n);
+  // whose liveness governs declaration i: itself, its self type for an impl,
+  // or -1 for one that is live on its own account.
+  int *governs = al_alloc(tc->al, sizeof(int) * (size_t)n);
+
+  for (int i = 0; i < n; i++) {
+    Decl *decl = m->ast->decls[i];
+    governs[i] = i;
+    if (decl->kind == DECL_IMPL) {
+      Decl *owner = impl_owner(m, decl);
+      governs[i] = owner ? decl_index(m, owner) : -1;
+    } else if (!decl_is_item(decl) || item_is_root(m, decl)) {
+      governs[i] = -1;
+    }
+    live[i] = governs[i] < 0;
+  }
+
+  // reachability, not "was it named": a private function called only by a dead
+  // one is dead too, and two that call each other are both dead. Iterated to a
+  // fixpoint because an edge may precede its source becoming live.
+  for (bool changed = true; changed;) {
+    changed = false;
+    for (int u = 0; u < m->item_use_count; u++) {
+      ItemUse *use = &m->item_uses[u];
+      int from = use->from ? decl_index(m, use->from) : -1;
+      if (from >= 0 && governs[from] >= 0 && !live[governs[from]]) {
+        continue;
+      }
+      int to = decl_index(m, use->to);
+      if (to >= 0 && !live[to]) {
+        live[to] = true;
+        changed = true;
+      }
+    }
+  }
+
+  for (int i = 0; i < n; i++) {
+    Decl *decl = m->ast->decls[i];
+    if (live[i] || !decl_is_item(decl)) {
+      continue;
+    }
+    unsigned saved = diag_push_allowed(tc->diags, decl->allow_mask);
+    diag_warning(tc->diags, LINT_UNUSED_ITEM, decl->name_span,
+                 "unused %s '" SV_FMT "'", item_noun(decl),
+                 SV_ARG(item_name(decl)));
+    diag_pop_allowed(tc->diags, saved);
+  }
+}
+
 void tc_import_impls(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
   for (int i = 0; i < m->import_count; i++) {
     ModImport *imp = &m->imports[i];
@@ -3041,6 +3200,7 @@ static void resolve_bound_refs(ResolveCtx *rctx, const TraitBound *bound,
     }
     const PathSegment *seg = &ref->path.segments[ref->path.count - 1];
     TypeEntry *te = tscope_lookup(rctx->tyres.tscope, seg->name);
+    tc_item_named(rctx->tc, te ? te->item : NULL);
     if (te == NULL || te->type == NULL || te->type->kind != TY_TRAIT) {
       diag_error(rctx->diags, ref->span, "'" SV_FMT "' is not a trait",
                  SV_ARG(seg->name));
@@ -3357,11 +3517,13 @@ static void resolve_fun_decl(ResolveCtx *rctx, Decl *decl) {
                 rctx->tc->diags, decl->span, &ve);
   assert(ve && "failed to define function in value scope");
   ve->as.fun = fun_def;
+  ve->item = decl;
 
   TypeEntry *te = NULL;
   tscope_define(rctx->tyres.tscope, fun_def->name, fun_ty, rctx->diags,
                 decl->span, &te);
   te->as.fun_def = fun_def;
+  te->item = decl;
 }
 
 // Declare pass: resolve the struct's type parameters and bind its name to a
@@ -3388,6 +3550,7 @@ static void declare_struct_decl(ResolveCtx *rctx, Decl *decl) {
   tscope_define(rctx->tyres.tscope, struct_def->name, struct_ty, rctx->diags,
                 decl->span, &te);
   te->as.struct_def = struct_def;
+  te->item = decl;
 }
 
 static void resolve_struct_decl(ResolveCtx *rctx, Decl *decl) {
@@ -3437,6 +3600,7 @@ static void declare_enum_decl(ResolveCtx *rctx, Decl *decl) {
   tscope_define(rctx->tyres.tscope, enum_def->name, enum_ty, rctx->diags,
                 decl->span, &te);
   te->as.enum_def = enum_def;
+  te->item = decl;
 }
 
 static void resolve_enum_decl(ResolveCtx *rctx, Decl *decl) {
@@ -4240,6 +4404,7 @@ static void declare_trait_decl(ResolveCtx *rctx, Decl *decl) {
   tscope_define(rctx->tyres.tscope, trait_def->name, trait_ty, rctx->diags,
                 decl->span, &te);
   te->as.trait_def = trait_def;
+  te->item = decl;
 }
 
 // ── supertraits ──────────────────────────────────────────────────────────────
@@ -4554,6 +4719,7 @@ bool tc_resolve_module(TypeChecker *tc, Module *m) {
   // still order-sensitive, since it is resolved in the declare pass itself.
   for (int i = 0; i < m->ast->decl_count; i++) {
     Decl *decl = m->ast->decls[i];
+    tc->cur_item = decl;
     rctx.tyres.tscope = &m->tscope;
     switch (decl->kind) {
     case DECL_STRUCT:
@@ -4577,6 +4743,7 @@ bool tc_resolve_module(TypeChecker *tc, Module *m) {
   // its own until the first one is finished.
   for (int i = 0; i < m->ast->decl_count; i++) {
     Decl *decl = m->ast->decls[i];
+    tc->cur_item = decl;
     rctx.tyres.tscope = &m->tscope;
     if (decl->kind == DECL_TRAIT) {
       resolve_trait_supers(&rctx, decl);
@@ -4584,6 +4751,7 @@ bool tc_resolve_module(TypeChecker *tc, Module *m) {
   }
   for (int i = 0; i < m->ast->decl_count; i++) {
     Decl *decl = m->ast->decls[i];
+    tc->cur_item = decl;
     if (decl->kind != DECL_TRAIT) {
       continue;
     }
@@ -4608,6 +4776,7 @@ bool tc_resolve_module(TypeChecker *tc, Module *m) {
 
   for (int i = 0; i < m->ast->decl_count; i++) {
     Decl *decl = m->ast->decls[i];
+    tc->cur_item = decl;
     rctx.tyres.tscope = &m->tscope;
     resolve_decl(&rctx, decl);
   }
@@ -4619,11 +4788,13 @@ bool tc_resolve_module(TypeChecker *tc, Module *m) {
   // dependency's impls arrived in tc_import_impls, before any of this ran.
   for (int i = 0; i < m->ast->decl_count; i++) {
     Decl *decl = m->ast->decls[i];
+    tc->cur_item = decl;
     if (decl->kind == DECL_IMPL) {
       derive_impl_supers(&rctx, decl);
     }
   }
 
+  tc->cur_item = NULL;
   return true;
 }
 
@@ -5084,6 +5255,7 @@ static Type *resolve_callee(CheckCtx *ctx, Expr *expr, Subst *subst,
   Path *callee_path = &callee->as.path_expr.path;
   if (callee_path->count == 1 && callee_path->segments[0].type_arg_count == 0) {
     VarEntry *ve = vscope_lookup(ctx->vscope, callee_path->segments[0].name);
+    tc_item_named(ctx->tc, ve ? ve->item : NULL);
     if (ve != NULL && (ve->type->kind != TY_FUNCTION || ve->as.fun == NULL ||
                        ve->as.fun->type_param_count == 0)) {
       return resolve_expr(ctx, callee, NULL);
@@ -6095,6 +6267,7 @@ static bool check_pattern(CheckCtx *ctx, Pattern *pattern, Type *expected_ty) {
     // not a binding, so `match x { Marker => ... }` tests for `Marker`
     // instead of silently matching everything under that name.
     TypeEntry *te = tscope_lookup(ctx->tscope, pattern->as.bind.name);
+    tc_item_named(ctx->tc, te ? te->item : NULL);
     if (te && te->type->kind == TY_STRUCT &&
         te->as.struct_def->field_count == 0) {
       PathSegment *seg = al_alloc_zero(ctx->al, sizeof(PathSegment));
@@ -8651,12 +8824,14 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     VarEntry *ve = expr == ctx->write_target
                        ? vscope_lookup_write(ctx->vscope, name)
                        : vscope_lookup(ctx->vscope, name);
+    tc_item_named(ctx->tc, ve ? ve->item : NULL);
     if (!ve) {
       // a bare unit struct names a value as well as a type: `struct Unit;`
       // then `var u = Unit;`. Consulted only after the value scope, so a
       // binding of that name would still win — though the mirrored rewrite in
       // `check_pattern` means one can no longer be created.
       TypeEntry *te = tscope_lookup(ctx->tscope, name);
+      tc_item_named(ctx->tc, te ? te->item : NULL);
       if (te && te->type->kind == TY_STRUCT &&
           te->as.struct_def->field_count == 0) {
         // the struct-init path resolves the path itself, so type arguments
@@ -9987,6 +10162,7 @@ static void tc_check_trait(TypeChecker *tc, Decl *decl) {
 bool tc_check_module(TypeChecker *tc, Module *m) {
   for (int i = 0; i < m->ast->decl_count; i++) {
     Decl *decl = m->ast->decls[i];
+    tc->cur_item = decl;
     // one declaration is the widest thing an `@allow` can cover and this loop
     // is where one begins, so it is also where the set is restored: every
     // warning below comes from checking a body, and every body is under
@@ -10013,6 +10189,7 @@ bool tc_check_module(TypeChecker *tc, Module *m) {
     diag_pop_allowed(tc->diags, saved);
   }
 
+  tc->cur_item = NULL;
   return true;
 }
 
@@ -10469,6 +10646,7 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
       }
 
       TypeEntry *e = tscope_lookup(r->tscope, name);
+      tc_item_named(r->tc, e ? e->item : NULL);
       if (e) {
         // a bare trait name is the trait applied to its own parameters, which
         // is a *declaration's* meaning of it and not a usable reference: an
@@ -10524,6 +10702,7 @@ Type *tyres_resolve(TypeResolver *r, TypeNode *node) {
 
     StringView name = dyn->path.segments[0].name;
     TypeEntry *e = tscope_lookup(r->tscope, name);
+    tc_item_named(r->tc, e ? e->item : NULL);
     if (e == NULL || e->type == NULL || e->type->kind != TY_TRAIT) {
       diag_error(r->diags, node->span,
                  "'dyn' needs a trait, but '" SV_FMT "' is not one",
@@ -12207,6 +12386,7 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
       }
 
       TypeEntry *te = tscope_lookup(ctx->tscope, segment);
+      tc_item_named(ctx->tyres->tc, te ? te->item : NULL);
       if (!te) {
         // a variant imported bare (`use a::E::V;`) is the whole path: it names
         // no scope to descend into, and its type arguments belong to the enum,

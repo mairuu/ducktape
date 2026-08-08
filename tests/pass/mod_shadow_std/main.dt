@@ -6,6 +6,7 @@ mod Option;
 
 use Option::wrap;
 
+@allow("unused_item")
 fun get() -> int {
   var v = Some(wrap(1));
   return match v {

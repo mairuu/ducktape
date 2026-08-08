@@ -2513,3 +2513,42 @@ reachable through exactly one import pins it; through two, neither. The impls
 only vote when *no* alias of the declaration was named, because deleting one
 unnamed alias beside a named one leaves the line, and everything it makes
 visible, in place.
+
+### An item nothing reaches (`unused_item`)
+
+The three warnings above ask whether one entry was ever read. An *item* cannot
+be answered that way — a function called only by a dead one has been read, and
+two that call each other have read each other — so this one is a reachability
+walk over a graph the checker records as it goes.
+
+**The graph is a module's own.** `Module.item_uses` is a list of
+`(from, to)` `Decl` pairs: `to` is an item of this module, `from` is the
+declaration that named it (`TypeChecker.cur_item`, set by the two loops that
+walk a module's declarations — `tc_resolve_module` for signatures,
+`tc_check_module` for bodies). The target comes from `TypeEntry.item` /
+`VarEntry.item`, filled where a top-level declaration defines its name into the
+module's scopes, so a local, a parameter and an import all carry NULL there.
+
+`tc_item_named` is called at the resolution sites rather than inside
+`tscope_lookup`, for the reason `tscope_peek` exists: a lookup the *linker*
+makes is one module asking what another exports, not anyone naming it. The one
+edge with no declaration behind it is a self import — `use E::*;` names `E`, and
+the variants it binds bare carry no route back to the enum once they are in
+scope, so `link_qualifier_enum` records it with a NULL source, which the walk
+reads as a root.
+
+**Roots** are the declarations whose readers this module cannot see: a `pub`
+item, the program root's `main`, and a lang item (subsumed by `pub` in the std
+as it stands, since every `@lang` item is also exported). An `impl` block is not
+an item, so it does not get a root of its own: `impl_owner` maps it to its self
+type, and an impl on a builtin or an imported type — one this module cannot see
+the reach of — is a root instead.
+
+The walk is a fixpoint over the edge list, because an edge can be recorded
+before its source becomes live. It runs in `tc_report_unused_items`, beside
+`tc_report_unused_imports` and for the same reason: a private item's only
+possible readers are its own module's declarations, and by the end of
+`tc_check_module` every one of them has been both resolved and checked. That
+locality is the whole of why the lint needs no pass of its own — and it is also
+why `pub` is a root rather than a question: answering it would mean walking the
+tree after every module is checked.

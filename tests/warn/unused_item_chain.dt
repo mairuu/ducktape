@@ -1,0 +1,16 @@
+#! expect: unused function 'helper'
+# `helper` *is* called — by a function that is itself dead. Reachability, not
+# "was it named": the caller has to be alive for the call to count.
+use std::io::print;
+
+fun helper() -> int {
+    return 1;
+}
+
+fun dead() -> int {
+    return helper();
+}
+
+fun main() {
+    print("hi");
+}

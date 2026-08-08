@@ -5,6 +5,7 @@
 # the family. Every count below was a `too many ...` diagnostic before, so
 # every one of them aborted a program the grammar accepts.
 #
+#! flags: -Wno-unused_item
 # Not covered here, for want of a way to write it: a path's segments were
 # capped at 8, which needs nine levels of module nesting to reach.
 

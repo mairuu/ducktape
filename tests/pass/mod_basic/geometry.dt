@@ -11,6 +11,7 @@ pub fun origin() -> Point {
 
 # never imported: private items are invisible across the module boundary,
 # but must not stop the module from being used.
+@allow("unused_item")
 fun secret() -> int {
   return 42;
 }

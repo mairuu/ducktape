@@ -1,0 +1,19 @@
+#! expect: unused function 'ping'
+# Two functions that call each other name each other, so nothing here would be
+# reported by asking "was it named" — only a walk from the roots sees it.
+use std::io::print;
+
+fun ping(n: int) -> int {
+    return pong(n - 1);
+}
+
+fun pong(n: int) -> int {
+    if n <= 0 {
+        return 0;
+    }
+    return ping(n);
+}
+
+fun main() {
+    print("hi");
+}

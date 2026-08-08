@@ -12,9 +12,11 @@
 # method now and a method is never a path-value.
 use std::io::print;
 
+@allow("unused_item")
 @intrinsic("array_len")
 fun len<T>(xs: [T]) -> int;
 
+@allow("unused_item")
 fun sleeping() {
   var _f = len::<int>;
 }

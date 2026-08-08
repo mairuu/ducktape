@@ -1,6 +1,8 @@
 # Milestone 68: what inherent coherence must *not* reject. The rule is one
 # inherent name per type, and each block below is a way for a name to repeat
 # without two bodies ever competing for one receiver.
+# nothing here is called; the declarations *are* the test.
+#! flags: -Wno-unused_item
 use std::cmp::Ord;
 
 struct P {
