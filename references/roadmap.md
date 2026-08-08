@@ -2,10 +2,10 @@
 
 ## Start here
 
-**Last landed:** milestone 110 (`71d2684`) — a one-field enum variant carries itself
-in the `Value`, so `Some(x)` no longer allocates. 677 tests, clean under debug,
-`--gc-stress` and `make sanitize`. Everything lands on `main`; there are no
-feature branches.
+**Last landed:** milestone 110 (`71d2684`) — a one-field enum variant carries
+itself in the `Value`, so `Some(x)` no longer allocates. 677 tests, clean under
+debug, `--gc-stress` and `make sanitize`. Everything lands on `main`; there are
+no feature branches.
 
 **Nothing is blocked, and nothing is owed.** Milestone 95 closed the last entry
 that was not a matter of appetite, and 103 the last one that was already
