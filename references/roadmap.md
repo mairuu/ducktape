@@ -2,10 +2,10 @@
 
 ## Start here
 
-**Last landed:** milestone 113 (`e66181b`) — a small body is now compiled into its caller
-instead of called, because a queue entry already carries everything a body has
-to be compiled under. 688 tests, clean under debug, `--gc-stress` and
-`make sanitize`. Everything lands on `main`; there are no feature branches.
+**Last landed:** milestone 113 (`e66181b`) — a small body is now compiled into
+its caller instead of called, because a queue entry already carries everything
+a body has to be compiled under. 688 tests, clean under debug, `--gc-stress`
+and `make sanitize`. Everything lands on `main`; there are no feature branches.
 
 **Nothing is blocked, and nothing is owed.** Milestone 95 closed the last entry
 that was not a matter of appetite, and 103 the last one that was already
@@ -14,11 +14,11 @@ that was not a matter of appetite, and 103 the last one that was already
 **The four live directions**, in the order this file recommends them:
 
 1. **The iterator's allocation, and the compiler work behind it** — the only
-   direction left that is not breadth, and now down to its last step. 109 and 110
-   made `Some(x)` cost no allocation; 113 deleted the frame around `next()`. What
-   the frame turned out to be worth is the finding: **a call's cost is opcodes,
-   not the frame**, so inlining bought 8% and left three dispatches a *peephole*
-   could take. Step 3 is a CFG.
+   direction left that is not breadth, and now down to its last step. 109 and
+   110 made `Some(x)` cost no allocation; 113 deleted the frame around
+   `next()`. What the frame turned out to be worth is the finding: **a call's
+   cost is opcodes, not the frame**, so inlining bought 8% and left three
+   dispatches a *peephole* could take. Step 3 is a CFG.
 2. **std breadth on the natives** — every piece with a design question in it is
    spent, so what remains is typing.
 3. **`Eq`** — recorded as *declined*, by two consumers that were asked for it by
