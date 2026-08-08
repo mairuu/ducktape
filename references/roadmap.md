@@ -1,5 +1,34 @@
 # ducktape — roadmap
 
+## Start here
+
+**Last landed:** milestone 108 (`88aba30`) — `Bytes`, and the first thing a
+program can read. 673 tests, clean under debug, `--gc-stress` and
+`make sanitize`. Everything lands on `main`; there are no feature branches.
+
+**Nothing is blocked, and nothing is owed.** Milestone 95 closed the last entry
+that was not a matter of appetite, and 103 the last one that was already
+*designed*. Every item under "Next" is a choice.
+
+**The four live directions**, in the order this file recommends them:
+
+1. **The iterator's allocation, and the compiler work behind it** — the only
+   direction left that is not breadth. Measured: `Some(x)` is 78% of what an
+   iterator costs and a call frame is 6%. Three steps, each useful alone — a
+   non-allocating `Option`, then inlining, then a CFG.
+2. **std breadth on the natives** — every piece with a design question in it is
+   spent, so what remains is typing.
+3. **`Eq`** — recorded as *declined*, by two consumers that were asked for it by
+   name. Read the entry before reopening it.
+4. **`std::io` past one read** — one decision in it: whether a file *handle* is
+   worth a type, which is really the question of who closes it.
+
+**How to read the rest of this file.** `Done` is one entry per milestone, oldest
+first, each pointing at the commit that holds the full write-up — `git log` is
+the home for a milestone's story, not this file. `Known warts` is the checklist
+to pick from when nothing under `Next` appeals; entries there name the milestone
+that recorded them. Milestones through 75 live in `history/`.
+
 ## Done
 
 Milestones **through 54** are in `history/done-through-m54.md` and **55–75** in
@@ -859,16 +888,6 @@ by appetite rather than by necessity. Nothing here is load-bearing any more:
 the module system was the one item that replaced infrastructure known to be
 wrong, and it landed in milestones 94–95.
 
-(**A heterogeneous operator** was the largest open design question and is now
-milestone 75: `V2 * float`. What it needed from the language was two things
-neither of which was about operators — a trait type parameter with a default,
-and a bound that may name its own subject — plus milestone 30's argument-driven
-selection at the *receiver* spelling. Its remainder, an `Output` associated
-type, is milestone 76, which is also where the "an equality is compared, never
-unified" limit stopped being a blocker and became a *cost*: `Output` works, it
-just has to be written down at every bound that keeps the result, because
-nothing infers one.)
-
 1. **The allocation the iterator pays, and the compiler work behind it.**
    The one direction here that is not breadth. Measured 2026-08-08, `-O2`,
    best-of-7 over 3M elements, process startup subtracted:
@@ -960,97 +979,19 @@ nothing infers one.)
    dead — buys ~5ns of ~103 on its own and needs escape analysis behind it to
    collect the rest.
 
-   (**An iterator source** was the one piece the iterator work had left
-   pointing at itself, and is now milestone 60: `xs.iter()` and
-   `(0..n).iter()`. The design question it recorded — what an array iterator
-   holds, when the language has no borrow to hold — was answered "the array,
-   and nothing snapshotted", which is what `for x in xs` re-reading the length
-   each turn already said. **A `string`'s characters as a walk** is the next of
-   these, milestone 61, and it answered the same question the other way for the
-   same kind of reason: a string is immutable, so its iterator snapshots. What
-   is left of this item is ordinary breadth. **A sorted `[T]`** is milestone 62,
-   and it needed nothing from the language at all — one `.dt` file whose whole
-   content is decisions. **A map or set type** was the last piece with a design
-   question behind it, and it is now milestone 63: the fork was hash versus
-   ordered, and hash won on the strength of what it would settle — it was the
-   named consumer for the deferred `Eq`, and it answered that question in the
-   negative from the inside. What is left of this item is breadth with nothing
-   open in it: an ordered map over `lower_bound` is still unwritten and still
-   costs no design, and `std::hash` could grow impls for more arities the way
-   `std::cmp` and `std::fmt` want to.)
-
-(**The first iterator combinators** — `map`/`filter`/`collect` — are now
-milestone 47, along with driving a bounded generic or a `dyn Iterator` through
-`for`; milestone 48 moved them onto `Iterator` as methods (`it.map(f).collect()`)
-by partitioning object safety per method. They are ordinary `.dt` code (an
-adapter is a struct with an `impl Iterator`); the one compiler change in 47 was
-inference, so a closure typed by the source's `Item` projection can be checked.
-`fold`/`enumerate`/`zip`/`take` are milestone 49, the same adapter shape;
-`flat_map` waited on the projection-through-a-bound codegen wart, which
-milestone 50 closes and milestone 51 spends, adding it and `skip`. What is left
-is `chain`, and it waits on a *bound* rather than on machinery — see item 3.)
-
-(**Padding a rendered value to a width** was the last open piece here and is now
-milestone 34: `std::string` ships `pad_start`/`pad_end`/`pad_center`. The
-format-spec question it was gating is answered *the functions are the primitive*
-— a rendering choice is those functions, and the spec is sugar over them.)
-
-(**The `{v:>8}` format spec** — the sugar milestone 34 recorded as the one thing
-genuinely absent — is now milestone 35: a `:` spec desugars in the checker to
-the `pad_*` / `float` calls, so codegen and the runtime are untouched. Its one
-cost is that those four functions became lang items like `Display`, forced by
-the same argument: the user never types the names, so their meaning cannot be
-left to imports.)
-
-(**Text operations** was the second open piece here and is now milestone 32:
-`std::text` ships `find`, `split`, `trim`, `starts_with`/`ends_with`, `contains`
-and `parse_int`. The byte-vs-character fork it left open was answered both ways
-— a position is a byte offset, a classification crosses to `chars` — and the
-functions had to become their own module rather than more of `std::string`,
-which the dependency graph forced.)
-
-(**Selection by argument type** was item 2 here and is now milestone 30: a
-qualified `Meters::from(x)` reads its argument to pick the impl. The *receiver*
-spelling that milestone 30's note left unread is now milestone 31: a
-trait-qualified `into::<Fahrenheit>::into(c)` names the trait so the receiver
-settles the rest, without an expected type.)
-
-(**Ordering operators over `Ord`** was item 2 here and is now milestone 38:
-`a < b` on a non-numeric type desugars to `a.cmp(b) < 0`. The open question it
-recorded — how many `Ord` methods the operator names — was answered `cmp` only,
-the smaller entanglement, matching how `Display` names exactly `to_string`.)
-
-(**The associated-type-bound work is finished.** The trait half landed in
-milestone 52 (`where I.Item: Ord`), the placement half in 53 (the same clause on
-a trait method's signature, which made `it.max()` a combinator), the equality
-binding in 54 (`J: Iterator<Item = I.Item>`, which made `chain` one), and the
-*projection*-subject binding in 76 (`where Self.Item: Add<Output = Self.Item>`,
-which made `sum` one again once operators grew an `Output`). What the family
-still cannot do is *infer*: an equality is compared, never unified, so a binding
-will not solve a type argument from the other side.)
-
-(**`sum`/`product` are no longer blocked** — they were waiting on an `Add` trait
-rather than on any predicate, and that is milestone 55: the arithmetic operators
-desugar to `std::ops` the way `<` desugars to `Ord`, so `where Self.Item: Add`
-is writable and the reduce is an ordinary combinator.)
-
-(**`rev` was the last combinator with a design question**, and it is milestone
-58: reversing needs an iterator that can be driven from both ends, which needs a
-trait that requires `Iterator` — so the answer was **supertraits**, a language
-feature rather than another adapter struct. The breadth that was left after it —
-`any`, `all`, `find`, `position`, `count`, `for_each`, `take_while`,
-`skip_while` — is milestone 59, and it needed no compiler change at all. **The
-iterator direction is now closed**: what would extend it further is a *source*
-in std rather than another combinator, since every iterator a program can drive
-today is one it wrote itself.)
-
-(**`std::assert`** is milestone 57, and is the shape "breadth" takes when a
-piece needs no registry entry at all: five functions over `std::panic`, zero
-compiler change, and the only decisions are where they live and which messages
-cost something when the assertion holds. Its findings — that a callee cannot
-name its own argument without macros, and that `assert_eq`'s `Display` bound is
-bought by the *message* rather than the comparison — belong to item 3 as much
-as here.)
+   Every piece of this item that had a *design question* behind it is spent.
+   Settled here, each written up in its own commit and Done entry: an iterator
+   source (m60), a string's characters as a walk (m61), a sorted `[T]` (m62), a
+   map and set (m63), the first combinators and their move onto `Iterator`
+   (m47-48), `fold`/`enumerate`/`zip`/`take` (m49), `flat_map`/`skip` (m50-51),
+   the associated-type bounds behind `chain` and `sum` (m52-54, 76), `rev` and
+   the supertrait it needed (m58), the breadth after it (m59), `sum`/`product`
+   over an `Add` trait (m55), `std::assert` (m57), padding (m34) and the
+   `{v:>8}` spec over it (m35), text operations (m32), selection by argument
+   type (m30) and its receiver spelling (m31), ordering over `Ord` (m38), and
+   the heterogeneous operator that was once the largest open design question
+   here (m75). What is left under this item is breadth with nothing open in it:
+   an ordered map over `lower_bound`, more `Hash`/`Ord`/`Display` arities.
 
 3. **A custom equality trait (`Eq`) — the named consumer has now declined it.**
    Not on the main line, and deliberately deferred rather than planned —
