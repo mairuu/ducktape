@@ -889,24 +889,15 @@ the module system was the one item that replaced infrastructure known to be
 wrong, and it landed in milestones 94–95.
 
 1. **The allocation the iterator pays, and the compiler work behind it.**
-   The one direction here that is not breadth. Measured 2026-08-08, `-O2`,
-   best-of-7 over 3M elements, process startup subtracted:
-
-   | | ns/elem | vs plain `for` |
-   |---|---|---|
-   | `for x in xs` | 25.6 | — |
-   | `+` a call frame | 30.2 | **+4.6** |
-   | `+` `Some(x)` and matching it | 86.2 | **+60.6** |
-   | `+` call *and* `Some(x)` | 91.4 | +65.8 |
-   | `it.next()` (the real thing) | 103.1 | +77.5 |
+   The one direction here that is not breadth, and the only one with a
+   measurement under it: an iterator's `next()` costs 77.5ns/elem over the
+   desugared loop, of which the call frame is 4.6 and the `Some(x)` it mints and
+   destructures is 60.6 (`runtime.md` "The cost model" has the table).
 
    **THE FINDING, before any of it is built: `next()` is expensive and the call
-   is not why.** A frame is 4.6ns of the 77.5ns an iterator costs over the
-   desugared loop — 6%. The other 78% is allocating the `Some(x)` and tearing it
-   apart again, plus the collection that 3M dead enums provoke. So perfect
-   inlining would take `next()` from 103ns to ~98ns and change no decision:
-   milestone 108's chunk-granularity rule for streaming stands either way, since
-   at 8 KiB per item the per-item cost is 0.01 ns/byte.
+   is not why.** The frame is 6% and the `Option` is 78%, so perfect inlining
+   takes `next()` from 103ns to ~98 and changes no decision — milestone 108's
+   chunk-granularity rule for streaming stands either way.
 
    That reframes what is worth building, into three steps that are each useful
    alone and are listed in the order their payoff arrives:
@@ -967,17 +958,9 @@ wrong, and it landed in milestones 94–95.
    ranked performance follow-ups** (`array::fill` and the bulk family): what is
    left of *that* list is nothing, since the cost model declines a native map.
 
-   **One new follow-up, measured after milestone 108: a `Some(x)` allocates.**
-   An `Iterator`'s `next()` costs ~103ns per element, of which the call frame is
-   ~5 and minting-and-matching the `Option` is ~61 (`runtime.md` "The cost
-   model"). Milestone 67 interned the *unit* variants, so `None` is already
-   free; the open half is a `Some(x)` whose payload fits in one `Value`, which
-   could be a tagged `Value` instead of an `ObjEnum`. It is a representation
-   change rather than an optimiser, needs no new analysis, and pays at every
-   `pop`, `first`, `find`, `get`, `as?` and map lookup rather than only in
-   iteration. The alternative — inlining `next` so the allocation can be proved
-   dead — buys ~5ns of ~103 on its own and needs escape analysis behind it to
-   collect the rest.
+   The one follow-up measured after milestone 108 — that a `Some(x)` allocates —
+   moved out of this item and became item 1 above: it is a change to the *value
+   representation*, so it is not breadth on the natives at all.
 
    Every piece of this item that had a *design question* behind it is spent.
    Settled here, each written up in its own commit and Done entry: an iterator
