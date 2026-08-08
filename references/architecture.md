@@ -2521,34 +2521,59 @@ be answered that way — a function called only by a dead one has been read, and
 two that call each other have read each other — so this one is a reachability
 walk over a graph the checker records as it goes.
 
-**The graph is a module's own.** `Module.item_uses` is a list of
-`(from, to)` `Decl` pairs: `to` is an item of this module, `from` is the
-declaration that named it (`TypeChecker.cur_item`, set by the two loops that
-walk a module's declarations — `tc_resolve_module` for signatures,
-`tc_check_module` for bodies). The target comes from `TypeEntry.item` /
-`VarEntry.item`, filled where a top-level declaration defines its name into the
-module's scopes, so a local, a parameter and an import all carry NULL there.
+**The graph.** `TypeChecker.item_uses` is a flat list of `(from, to)` `Decl`
+pairs. `to` comes from `TypeEntry.item` / `VarEntry.item`, filled where a
+top-level declaration defines its name into its module's scopes — so a local, a
+parameter and a type parameter all carry NULL there. `from` is
+`TypeChecker.cur_item`, whichever declaration the two loops that walk a module's
+declarations are on (`tc_resolve_module` for signatures, `tc_check_module` for
+bodies), cleared between modules by `compiler_begin_module`. A NULL source is a
+root: a name read outside every declaration was read by the compiler.
+
+One list rather than one per module, because an item's readers are not confined
+to its module. A *private* item's are — nothing outside can name one — but a
+`pub` item is named from anywhere in the tree, so the edges have to meet
+somewhere, and `Decl.item_live` is where the answer lands.
 
 `tc_item_named` is called at the resolution sites rather than inside
 `tscope_lookup`, for the reason `tscope_peek` exists: a lookup the *linker*
-makes is one module asking what another exports, not anyone naming it. The one
-edge with no declaration behind it is a self import — `use E::*;` names `E`, and
-the variants it binds bare carry no route back to the enum once they are in
-scope, so `link_qualifier_enum` records it with a NULL source, which the walk
-reads as a root.
+makes is one module asking what another exports, not anyone naming it. Which
+means every way a name in one module reaches an item in another has to be
+listed, and the list turns out to be the one milestone 92 already drew for
+imports — the four places an import binds a name:
 
-**Roots** are the declarations whose readers this module cannot see: a `pub`
-item, the program root's `main`, and a lang item (subsumed by `pub` in the std
-as it stands, since every `@lang` item is also exported). An `impl` block is not
-an item, so it does not get a root of its own: `impl_owner` maps it to its self
-type, and an impl on a builtin or an imported type — one this module cannot see
-the reach of — is a root instead.
+- the type and value scopes: `link_copy_entry` copies `item` alongside `origin`,
+  so an imported name carries the *definition* rather than a copy of it. That
+  one line covers `use a::Foo;`, `use a::*;` and any `pub use` chain, since each
+  hop copies from the last;
+- the variant table: a bare variant reaches its enum through
+  `EnumDef.decl`, at the three places `mod_find_variant_import` is read;
+- the qualifier list: `a::Foo` is `module_export_lookup`, whose one caller marks
+  what it returns.
 
-The walk is a fixpoint over the edge list, because an edge can be recorded
-before its source becomes live. It runs in `tc_report_unused_items`, beside
-`tc_report_unused_imports` and for the same reason: a private item's only
-possible readers are its own module's declarations, and by the end of
-`tc_check_module` every one of them has been both resolved and checked. That
-locality is the whole of why the lint needs no pass of its own — and it is also
-why `pub` is a root rather than a question: answering it would mean walking the
-tree after every module is checked.
+**Roots** are the declarations whose readers this compile cannot enumerate:
+`main`, a lang item, a `pub` item of a *library* module, and any declaration
+carrying `@allow("unused_item")`. The last is a root and not merely a silence —
+an item the author has vouched for should not make them vouch again for
+everything it names — and making it one is what kills the `diag_push_allowed`
+the report site would otherwise need, since an allowed declaration never reaches
+the report at all.
+
+A program's `pub` is deliberately *not* a root, which is the whole of milestone
+112: a program's tree is its build unit and nothing outside can name even its
+root module, so `pub` there is an ordinary edge. A library's is the opposite,
+and that asymmetry is milestone 89's audience question asked about a declaration
+instead of a whole module.
+
+An `impl` block is not an item, so it does not get a root of its own:
+`impl_owner` reads the self type's `StructDef.decl` / `EnumDef.decl`, and the
+seeding turns that into an *edge* from the owner to the impl rather than a case
+in the walk — one rule instead of two. An impl on a builtin has no declaration
+behind its self type and so is seeded live.
+
+The walk itself, `tc_mark_live_items`, is a fixpoint over the edge list, because
+an edge is regularly recorded before its source becomes live — a signature
+resolves before the body that calls it, and running the list once instead fails
+46 tests. It runs once, from `compiler_phase_unused_items`, after every module
+has been checked: that is the first moment the graph is complete. The per-module
+loop after it only reports.

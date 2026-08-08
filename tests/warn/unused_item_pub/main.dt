@@ -1,0 +1,13 @@
+#! expect: unused function 'never_imported'
+# A `pub` item in a *program* is reportable: the tree is the whole build, and
+# nothing outside can name even its root module, so `pub` here is an ordinary
+# edge rather than an audience the compiler cannot see. In a library it is the
+# other way round, which is why std's `pub` items are roots.
+mod lib;
+
+use std::io::print;
+use lib::used;
+
+fun main() {
+    print(used());
+}

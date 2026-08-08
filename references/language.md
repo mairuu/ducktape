@@ -3179,7 +3179,7 @@ the report prints, what silences it, and what a `-W` flag takes:
 | `unused_variable` | a binding nothing ever names (above, "Statements and blocks") |
 | `unused_assignment` | a binding something stores into and nothing reads (above, "Statements and blocks") |
 | `unused_import` | a `use` binding a name nothing writes, whose impls arrive anyway ("Modules") |
-| `unused_item` | a private `fun`/`struct`/`enum`/`trait` nothing reachable names (below) |
+| `unused_item` | a `fun`/`struct`/`enum`/`trait` nothing reachable names (below) |
 | `unused_label` | a loop's or block's label no `break`/`continue` names ("Expressions") |
 | `unreachable_code` | a statement below one that leaves the block ("`std::panic`") |
 | `irrefutable_pattern` | an `if var`/`while var` header whose test has one answer ("`if var` and `while var`") |
@@ -3231,20 +3231,23 @@ declaration names. It is reachability rather than "was it named": a function
 called only by a dead one is dead too, and two that call each other are both
 reported.
 
-The walk starts at the declarations whose readers this module cannot see — a
-`pub` item, the program's `main`, and a lang item, which the compiler names on
-its own account. Everything else is private, and a private item's whole audience
-is its own module, which is why the question can be settled where the module is
-checked.
+The walk starts at the declarations whose readers the compile cannot enumerate.
+There are three. `main` is one, since it is the program's root. A lang item is
+another, since the compiler names it where no source does. The third is a `pub`
+item **of a library module** — `std`'s readers are programs that may not be
+written yet.
+
+A program's `pub` is *not* a root, and that is the point: a program's tree is
+the whole build, and nothing outside it can name even its root module, so `pub`
+there is an ordinary edge. Adding it does not silence the warning.
+`@allow("unused_item")` is what says "declared on purpose, called by nobody",
+and it is a root as well as a silence — an item you have vouched for does not
+make you vouch again for everything it names.
 
 An `impl` block is not an item — nothing can name one — so it is exactly as
 alive as the type it extends, and its methods die with that type. An impl on a
-builtin or on an imported type is alive on its own account, since this module
-cannot see who reaches it.
-
-Adding `pub` therefore silences the warning, and means it: it moves the audience
-out of the module. `@allow("unused_item")` is what says "declared on purpose,
-called by nobody" — the spelling a test of a declaration wants.
+builtin is alive on its own account, since no declaration stands behind such a
+type at all.
 
 ### Lint levels from the command line
 
@@ -3334,7 +3337,7 @@ See the gaps table below for what suppression still cannot do.
 | silencing a warning over less than a declaration | an attribute sits on a declaration, so an allow covers a whole function, impl or trait. There is no statement-level or expression-level form, and none on a trait item — a default body is covered by its trait |
 | saying that an import is wanted for its *impls* | there is no spelling. A `use` whose names go unwritten is kept silent only when the compiler can see that removing it would lose an impl that was selected — so a deliberate restatement of an import that arrives transitively anyway (`std/iter.dt` used to write `use std::string;` for exactly that reason) now reads as unused and has to go |
 | unused-warning order within a function | a binding is reported when its scope closes, so an inner block's warnings precede an outer one's regardless of line. Sorting the bag is blocked by notes, which attach to the diagnostic before them by position |
-| an unused **`pub`** item | not reported. `unused_item` (milestone 111) covers the private ones, whose whole audience is their own module; `pub` moves that audience out of reach, so answering it would mean walking the tree after every module is checked. A method is not an item either — it has no visibility of its own |
+| an unused **method** | not reported. `unused_item` (milestones 111-112) covers `fun`, `struct`, `enum` and `trait`, including `pub` ones in a program; a method is not an item and cannot be, since method visibility does not exist — a method is as visible as its impl |
 | a directory that is a module on its own | a directory is a path prefix; the module is the `.dt` file beside it, and `pub mod` in that file is what puts anything under the directory on a path at all. So a module added under a group and not declared is unreachable rather than half-reachable — but the short spellings a facade offers (`use std::collections::HashMap;`) are still hand-written `pub use` lines that nothing checks stay in step |
 | declaring a *module* whose name is a builtin (`mod char;`) | legal, and `std::char` is why — a module whose content is `impl char` is reached through the type anyway. What has no route is an item the type does not own (a free function, a struct): the builtin answers the first segment, so `use std::string; string::concat(..)` fails. The way back is to import the item by name (`use std::string::concat;`) or to rebind the module (`use std::string as strings;`) — there is no `std::string::concat(..)` spelling, since a qualifier must be a bound single segment. The "no associated item" error carries a note saying so |
 | overlapping method names across impls of one type | rejected since milestone 68: one type spends an inherent name once, whether the two definitions sit in two impl blocks or in one. A name the impl's *trait* declares is exempt — a bound or a trait-qualified path names which body was meant, so two traits may both declare `next` for one type. Where several impls legitimately declare a name (a generic trait like `into<int>` / `into<string>`), a bare path still picks the first registered impl. Milestone 70 extends the same rule to an enum's variants, which spend from the same pool: an inherent associated function under a variant's name is refused, since `Enum::name` reads the variant |

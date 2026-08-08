@@ -5,6 +5,8 @@ pub mod shape;
 # declared it without any `pub` on either side.
 use geo::internal::hidden;
 
+# the demonstration itself: nothing calls it, and that is the point.
+@allow("unused_item")
 pub fun near() -> int {
     return hidden();
 }

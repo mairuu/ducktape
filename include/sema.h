@@ -15,6 +15,14 @@ typedef struct TypeResolver TypeResolver;
 typedef struct ResolveCtx ResolveCtx;
 typedef struct CheckCtx CheckCtx;
 
+// one edge of the item-use graph: `from` named `to`. `from` is the declaration
+// being resolved when the name was read, NULL when nothing was — which is a
+// root, since a name read outside every declaration is read by the compiler.
+typedef struct {
+  Decl *from;
+  Decl *to;
+} ItemUse;
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Substitution  (`struct Subst` itself lives in ast.h — AST nodes store one)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -312,12 +320,17 @@ struct TypeChecker {
   // both preluded. See `check_interpol_seg`.
   FunDef *fmt_pad_start, *fmt_pad_end, *fmt_pad_center, *fmt_float;
 
-  // the declaration currently being resolved or checked, and the module it
-  // belongs to: the *source* end of an item-use edge. Set by the two loops that
-  // walk a module's declarations, so every name resolved below one is
-  // attributed to it. NULL between declarations.
+  // the declaration currently being resolved or checked: the *source* end of an
+  // item-use edge. Set by the two loops that walk a module's declarations, so
+  // every name resolved below one is attributed to it, and cleared between
+  // modules — a NULL source is read as a root.
   Decl *cur_item;
-  Module *cur_module;
+
+  // every edge of the item-use graph, from every module. One list rather than
+  // one per module, because an item's readers are not confined to its module
+  // once `pub` is a question rather than a root.
+  ItemUse *item_uses;
+  int item_use_count, item_use_cap;
 
   DiagBag *diags;
   Allocator *al;
@@ -374,10 +387,13 @@ void tc_report_unused_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg);
 // exports rather than anyone naming it.
 void tc_item_named(TypeChecker *tc, Decl *item);
 
-// warn about every item of m that nothing reachable names. Runs beside
-// tc_report_unused_imports and for the same reason: a private item's only
-// possible readers are its own module's declarations, and by the end of
-// tc_check_module every one of them has been resolved and checked.
+// walk the item-use graph from its roots, marking `Decl.item_live`. Runs once,
+// after every module has been checked: a `pub` item's readers are anywhere in
+// the tree, so this is the first moment the answer is final for all of them.
+void tc_mark_live_items(TypeChecker *tc, ModuleRegistry *reg);
+
+// warn about every item of m the walk did not reach. Requires
+// tc_mark_live_items.
 void tc_report_unused_items(TypeChecker *tc, Module *m);
 
 // ═══════════════════════════════════════════════════════════════════════════════

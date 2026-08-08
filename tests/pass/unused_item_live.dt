@@ -44,27 +44,34 @@ fun boxed(d: dyn Noisy) -> int {
     return d.shout();
 }
 
-# a trait no impl mentions, kept alive by a `dyn` in a root's signature and by
-# nothing else.
+# a trait no impl mentions, named by a `dyn` in a signature and by nothing
+# else.
 trait Silent {
     fun hush(self) -> int;
 }
 
-pub fun hushed(d: dyn Silent) -> int {
+fun hushed(d: dyn Silent) -> int {
     return d.hush();
 }
 
-# a self import names the enum, and the variants it binds bare carry no route
-# back to it once they are in scope.
-use Colour::*;
-
-# `pub` puts the audience outside this module, where nothing here can see it.
-pub fun exported() -> int {
-    return 0;
+impl Silent for Point {
+    fun hush(self) -> int {
+        return 0;
+    }
 }
 
+# a variant bound bare still names its enum: the import carries the definition,
+# not a copy of it.
+use Colour::*;
+
+# `@allow` is a root as well as a silence, so `only_reachable_from_silenced`
+# needs no allow of its own.
 @allow("unused_item")
 fun silenced() -> int {
+    return only_reachable_from_silenced();
+}
+
+fun only_reachable_from_silenced() -> int {
     return 0;
 }
 
@@ -83,4 +90,6 @@ fun main() {
     print("{b}");
     var d = boxed(w.p);
     print("{d}");
+    var s = hushed(w.p);
+    print("{s}");
 }

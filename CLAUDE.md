@@ -87,7 +87,7 @@ A file no `mod` declares is not a module at all, and now warns
   programs that type-check yet the VM rejects.
 - `tests/warn/*.dt` — must compile (exit 0) with *non-empty* stderr containing
   the `#! expect:` substring; the one bucket a warning fits.
-- A `#! flags: <args>` line anywhere in a pass/warn/fail file hands the
+- A `#! flags: <args>` line anywhere in a test file, in any bucket, hands the
   compiler extra arguments — how a `-W` lint level, which no source can set,
   gets tested.
 - A multi-file test is a *subdirectory* of any of those, entry point

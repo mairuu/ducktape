@@ -59,8 +59,8 @@ static bool module_has_audience(const Compiler *c, const Module *m) {
 static void compiler_begin_module(Compiler *c, Module *m) {
   diag_clear(&c->diags);
   diag_set_warnings(&c->diags, module_has_audience(c, m));
-  // the module every item-use edge recorded below belongs to.
-  c->tc.cur_module = m;
+  // no declaration is in hand yet, so a name resolved before the loops below
+  // reach one is nobody's — see TypeChecker.cur_item.
   c->tc.cur_item = NULL;
 }
 
@@ -342,13 +342,34 @@ static bool compiler_phase_check(Compiler *c) {
 
     tc_check_module(&c->tc, m);
     tc_report_unused_imports(&c->tc, m, &c->mod_reg);
-    tc_report_unused_items(&c->tc, m);
     if (diag_has_diags(&c->diags)) {
       diag_report(&c->diags, m->file_path.chars, m->source.chars, stderr);
     }
     had_errors |= diag_has_errors(&c->diags);
   }
 
+  return !had_errors;
+}
+
+// phase 4: report the items nothing reaches.
+//
+// Its own pass, after every module is checked, because an item's readers are
+// not confined to its module: a `pub` item is named from anywhere in the tree,
+// so this is the first moment the graph is complete. The walk runs once and the
+// loop only reports.
+static bool compiler_phase_unused_items(Compiler *c) {
+  bool had_errors = false;
+  tc_mark_live_items(&c->tc, &c->mod_reg);
+
+  for (int i = 0; i < c->mod_reg.module_count; i++) {
+    Module *m = modreg_topo(&c->mod_reg, i);
+    compiler_begin_module(c, m);
+    tc_report_unused_items(&c->tc, m);
+    if (diag_has_diags(&c->diags)) {
+      diag_report(&c->diags, m->file_path.chars, m->source.chars, stderr);
+    }
+    had_errors |= diag_has_errors(&c->diags);
+  }
   return !had_errors;
 }
 
@@ -376,6 +397,11 @@ bool compiler_run(Compiler *c, const char *path, const char *std_module) {
   }
 
   if (!compiler_phase_check(c)) {
+    fprintf(stderr, "compilation failed during type checking.\n");
+    return false;
+  }
+
+  if (!compiler_phase_unused_items(c)) {
     fprintf(stderr, "compilation failed during type checking.\n");
     return false;
   }

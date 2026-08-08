@@ -342,6 +342,7 @@ typedef struct {
 
 struct StructDef {
   Module *module;
+  Decl *decl; // the declaration that defines it, for the reverse walk
   bool is_pub;
 
   Type *self_type;
@@ -378,6 +379,7 @@ struct VariantDef {
 
 struct EnumDef {
   Module *module;
+  Decl *decl; // the declaration that defines it, for the reverse walk
   bool is_pub;
 
   Type *self_type;
@@ -1520,6 +1522,9 @@ struct Decl {
   // table the compiler already owns, so there is nothing for a later phase to
   // look up.
   unsigned allow_mask;
+  // reached from a root of the item-use walk (`unused_item`). A mark on the
+  // declaration rather than a side table, so an edge is one pointer read.
+  bool item_live;
   Span span;
   // just the name a `fun`/`struct`/`enum`/`trait` introduces — what a
   // diagnostic *about the item* points at, where `span` covers the whole

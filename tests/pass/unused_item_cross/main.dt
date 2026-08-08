@@ -1,0 +1,36 @@
+# The cross-module half of `unused_item`: a `pub` item's readers are anywhere
+# in the tree, so every way one is reached from another module has to carry the
+# declaration and not a copy of it. Nothing here may warn.
+mod lib;
+mod facade;
+
+use std::io::print;
+use lib;                    # a qualifier: `lib::Named` reaches the item
+use lib::imported;          # a named import
+use lib::Colour::Red;       # a variant bound bare
+use lib::Held::Only;        # the only route to `Held`
+use lib::Wrapped::W;        # and to `Wrapped`
+use lib::*;                 # a glob binds the rest
+use facade::Reexported;     # re-exported from one module further away
+
+fun main() {
+    print(imported());
+    print(lib::named());
+    var n: Named = Named { v: 1 };
+    print(n.v);
+    print(globbed());
+    var r: Reexported = Reexported { w: 2 };
+    print(r.w);
+    var h = Only;
+    var same = h == Only;
+    print("{same}");
+    var w = W(8);
+    print(match w {
+        W(n) => n,
+    });
+    var c = Red;
+    print(match c {
+        Red => 1,
+        lib::Colour::Blue => 2,
+    });
+}

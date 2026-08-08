@@ -41,7 +41,8 @@ ROOT=$(dirname "$0")/..
 pass=0
 fail=0
 
-# a test may name the compiler flags it needs, on any line: `#! flags: -Werror`.
+# a test in any bucket may name the compiler flags it needs, on any line:
+# `#! flags: -Werror`.
 # The lint levels are what this exists for — a level set from the command line
 # is the one policy the source cannot state, so it has to come from here.
 # Deliberately unquoted at the call sites, to split into separate arguments.
@@ -154,7 +155,7 @@ done
 check_run() {
     f=$1
     out_tmp=$(mktemp)
-    err=$(cd "$ROOT" && "$BIN" --run "${f#"$ROOT"/}" 2>&1 >"$out_tmp")
+    err=$(cd "$ROOT" && "$BIN" --run $(test_flags "$f") "${f#"$ROOT"/}" 2>&1 >"$out_tmp")
     code=$?
     expected=$(sed -n 's/^#> \{0,1\}//p' "$f")
     actual=$(cat "$out_tmp")
@@ -186,7 +187,7 @@ check_image() {
     img=$(mktemp)
     out_tmp=$(mktemp)
 
-    err=$(cd "$ROOT" && "$BIN" --emit-bc "$img" "${f#"$ROOT"/}" 2>&1 >/dev/null)
+    err=$(cd "$ROOT" && "$BIN" --emit-bc "$img" $(test_flags "$f") "${f#"$ROOT"/}" 2>&1 >/dev/null)
     code=$?
     if [ "$code" -ne 0 ] || [ -n "$err" ]; then
         fail=$((fail + 1))

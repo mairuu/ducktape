@@ -2,8 +2,8 @@
 
 ## Start here
 
-**Last landed:** milestone 111 (`5eb8247`) — the `unused_item` lint, which reports a
-private item no live declaration names. 684 tests, clean under debug,
+**Last landed:** milestone 112 (`SHA`) — `unused_item` now reports a `pub` item
+too, since a program's tree is its whole audience. 686 tests, clean under debug,
 `--gc-stress` and `make sanitize`. Everything lands on `main`; there are no
 feature branches.
 
@@ -394,12 +394,47 @@ to keep this file small. Everything from 100 on is below.
   two items are inert, `#! flags: -Wno-unused_item` where the declarations *are*
   the test. **std needed no change at all**, which is the evidence that the eight
   resolution sites that mark are the whole of how a name reaches an item.
-  Sabotage 20/20 attempted, 19 bit; the one no-op is the **lang-item root**, subsumed because
-  every `@lang` item in std is also `pub` — and it is a *live* branch, not dead
-  code: dropping `pub` from `pad_center` makes it fire, which is how the no-op
-  was told apart from a test gap. Remainders: a `pub` item is never reported; a
-  method is not an item (it has no visibility of its own); and an item reached
-  only from a dead one is reported *with* it rather than after.
+  Sabotage 20/20 attempted, 19 bit; the one no-op is the **lang-item root**,
+  subsumed because every `@lang` item in std is also `pub` — and it is a *live*
+  branch, not dead code: dropping `pub` from `pad_center` makes it fire, which
+  is how the no-op was told apart from a test gap. Remainders: a `pub` item is
+  never reported (**closed by 112**); a method is not an item (it has no
+  visibility of its own); and an item reached only from a dead one is reported
+  *with* it rather than after.
+
+- **112. A program's tree is its whole audience** (`SHA`) — `unused_item` now
+  reports a `pub` item as well, and the walk it needs became tree-wide.
+  Design: `language.md` "An item nothing reaches", `architecture.md` "An item
+  nothing reaches (`unused_item`)", `overview.md` "Pipeline" (a sixth phase).
+  **THE FINDING: the two halves of the audience question have opposite answers,
+  and what decides them is what the build unit is.** A *library*'s `pub` item is
+  read by a program that may not be written yet, so it stays a root; a
+  *program*'s is not, because its tree is the whole build and nothing outside
+  can name even its root module. So `pub` in a program is an ordinary edge, and
+  adding it no longer silences the lint — which was the hole milestone 111 left.
+  **SECOND FINDING: `@allow` had to become a root, not only a silence.** The
+  first program the new rule ran on reported two items the reader had already
+  vouched for one edge away — an allowed `pick` still left `b` and `Event` dead
+  — so the attribute now seeds the walk, which is what makes it compose. It also
+  *deleted* code: with an allowed declaration live, the `diag_push_allowed` at
+  the report site can never suppress anything, and a sabotage proved that before
+  the argument did. The graph moved from `Module.item_uses` to one list on the
+  checker and `Decl.item_live` replaced the index arrays, so an impl's ownership
+  became an ordinary **edge** (owner → impl) rather than a case in the walk:
+  `decl_index` and the `governs` array are gone. **Every cross-module route
+  turned out to be the list milestone 92 already drew** — the four places an
+  import binds a name. `link_copy_entry` copying `item` beside `origin` is one
+  line and covers `use a::Foo;`, a glob and any `pub use` chain; a bare variant
+  reaches its enum through a new `EnumDef.decl`; `a::Foo` is
+  `module_export_lookup`'s single caller. Sabotage 19 attempted, 16 bit, and
+  each of the three no-ops has an argument: the **pattern** mark on a bare
+  variant is redundant rather than dead (a value must be *constructed* to be
+  matched, and the constructor sites already mark), the `@allow` push is the one
+  above (deleted), and the default that keeps a non-item declaration live guards
+  a state nothing records an edge from. The suite gained `#! flags:` in the
+  **run bucket**, since `tests/run/unused_defs` is 259 `pub` functions whose
+  whole point is that nothing reaches them. Remainder: a method is still not an
+  item, and cannot be until method visibility exists.
 
 ## Next (in recommended order)
 
@@ -629,14 +664,10 @@ The lint family's remainders. What is missing is mostly grain — which thing a 
   carries one. There is no statement or expression form, and none on a trait
   item — a default body is covered by its trait, one scope wider than it
   should be. Rust's `#[allow]` on a statement is the shape this is missing
-- a **`pub` item is never reported** by `unused_item` (milestone 111), because
-  its audience is the rest of the tree rather than its own module — so the walk
-  that would answer it has to run after every module is checked, where the
-  private question is settled where the module is. Rust reports a `pub` item in
-  a binary crate for exactly the reason that is possible there: the crate is the
-  build unit and the walk already spans it. A **method** is not an item either,
-  and cannot be one until method visibility exists — a method is as visible as
-  its impl, so there is no private method to report
+- a **method is not an item**, so `unused_item` (milestones 111-112) cannot
+  report one, and cannot until method visibility exists: a method is as visible
+  as its impl, so the only thing that could be said about who reaches it is what
+  the impl's self type already answers
 - `PAT_WILDCARD` is **unreachable**, and milestone 92 depends on it being so.
   `scan_identifier` runs before the `switch` that would make a lone `_` a
   `TOKEN_UNDER`, so `_` is an ordinary identifier and every `_` in a pattern is

@@ -83,14 +83,6 @@ typedef struct {
   Decl *decl; // the `use` — its span, and whether it was a `pub use`
 } GlobImport;
 
-// one edge of a module's item-use graph: `from` named `to`. A *private* item
-// can only be named from its own module, so this graph never leaves one — which
-// is what makes `unused_item` answerable where the module is checked.
-typedef struct {
-  Decl *from; // the declaration being resolved; NULL for a use from no item
-  Decl *to;   // an item of this module that it named
-} ItemUse;
-
 // one `mod x;` declaration, resolved to the module it names.
 typedef struct {
   StringView name;
@@ -166,12 +158,6 @@ struct Module {
 
   ImplDef **impls;
   int impl_count, impl_cap;
-
-  // every name this module's own declarations gave one of its own items,
-  // recorded as resolution and checking reach them. Read once, by
-  // tc_report_unused_items.
-  ItemUse *item_uses;
-  int item_use_count, item_use_cap;
 
   // every impl this module may select from: its own, plus those of every
   // module reachable through `use`, transitively. An impl is not an item with

@@ -1,0 +1,7 @@
+pub fun used() -> int {
+    return 1;
+}
+
+pub fun never_imported() -> int {
+    return 2;
+}

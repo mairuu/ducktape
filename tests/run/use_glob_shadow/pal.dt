@@ -1,14 +1,19 @@
+# Tag, Swatch and Badge are bound by the glob and then lost — to a name
+# written by hand or declared in main — so being unnamed is what they test.
+@allow("unused_item")
 pub struct Tag;
 impl Tag { fun name() -> string { return "pal"; } }
 
 pub struct Mark;
 impl Mark { fun name() -> string { return "pal"; } }
 
+@allow("unused_item")
 pub struct Swatch;
 impl Swatch { fun name() -> string { return "pal"; } }
 
 pub struct Option;
 impl Option { fun name() -> string { return "shadowed"; } }
 
+@allow("unused_item")
 pub struct Badge;
 impl Badge { fun name() -> string { return "pal"; } }

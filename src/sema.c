@@ -1713,6 +1713,7 @@ static void tc_register_struct(TypeChecker *tc, Module *m, Decl *decl) {
   m->structs[m->struct_count++] = def;
   // set backpointers
   decl->as.struct_decl.def = def;
+  def->decl = decl;
   def->module = m;
 }
 
@@ -1738,6 +1739,7 @@ static void tc_register_enum(TypeChecker *tc, Module *m, Decl *decl) {
   m->enums[m->enum_count++] = def;
   // set backpointers
   decl->as.enum_decl.def = def;
+  def->decl = decl;
   def->module = m;
 
   // the variants are still stubs here, so the marker captures only the
@@ -2071,6 +2073,7 @@ static void link_copy_entry(TypeChecker *tc, Module *dst, Module *src,
     tscope_define(&dst->tscope, alias, src_te->type, tc->diags, span, &te);
     te->as = src_te->as;
     te->origin = origin;
+    te->item = src_te->item;
   }
 
   VarEntry *src_ve = vscope_lookup(&src->vscope, name);
@@ -2079,6 +2082,7 @@ static void link_copy_entry(TypeChecker *tc, Module *dst, Module *src,
     vscope_define(&dst->vscope, alias, src_ve->type, tc->diags, span, &ve);
     ve->as = src_ve->as;
     ve->origin = origin;
+    ve->item = src_ve->item;
   }
 }
 
@@ -2313,12 +2317,6 @@ static EnumDef *link_qualifier_enum(TypeChecker *tc, Module *m, Module *dep,
                "'" SV_FMT "' is not an enum, so it qualifies no variant",
                SV_ARG(qualifier));
     return NULL;
-  }
-  // `use My::*;` names `My`, and the variants it binds bare carry no route back
-  // to the enum once they are in scope — so this is the only place a self
-  // import can be counted as naming it.
-  if (dep == m) {
-    tc_item_named(tc, te->item);
   }
   return te->as.enum_def;
 }
@@ -2811,18 +2809,17 @@ void tc_report_unused_imports(TypeChecker *tc, Module *m, ModuleRegistry *reg) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 void tc_item_named(TypeChecker *tc, Decl *item) {
-  Module *m = tc->cur_module;
-  if (item == NULL || m == NULL) {
+  if (item == NULL) {
     return;
   }
-  if (m->item_use_count == m->item_use_cap) {
-    int cap = m->item_use_cap ? m->item_use_cap * 2 : 16;
-    m->item_uses = al_realloc(tc->al, m->item_uses,
-                              sizeof(ItemUse) * (size_t)m->item_use_cap,
-                              sizeof(ItemUse) * (size_t)cap);
-    m->item_use_cap = cap;
+  if (tc->item_use_count == tc->item_use_cap) {
+    int cap = tc->item_use_cap ? tc->item_use_cap * 2 : 64;
+    tc->item_uses = al_realloc(tc->al, tc->item_uses,
+                               sizeof(ItemUse) * (size_t)tc->item_use_cap,
+                               sizeof(ItemUse) * (size_t)cap);
+    tc->item_use_cap = cap;
   }
-  m->item_uses[m->item_use_count++] =
+  tc->item_uses[tc->item_use_count++] =
       (ItemUse){.from = tc->cur_item, .to = item};
 }
 
@@ -2853,47 +2850,33 @@ static StringView item_name(Decl *decl) {
   return name;
 }
 
-static int decl_index(Module *m, const Decl *decl) {
-  for (int i = 0; i < m->ast->decl_count; i++) {
-    if (m->ast->decls[i] == decl) {
-      return i;
-    }
-  }
-  return -1;
-}
-
-// which declaration an `impl` block's uses belong to: the item its self type
-// names, when that is one of this module's. An impl cannot be named, so it is
-// exactly as alive as the type it extends — and an impl on a builtin or an
-// imported type is alive on its own account, since this module cannot see who
-// reaches it.
-static Decl *impl_owner(Module *m, Decl *decl) {
+// which declaration an `impl` block's uses belong to: the one its self type
+// names. An impl cannot be named, so it is exactly as alive as the type it
+// extends — and an impl on a builtin is alive on its own account, since no
+// declaration stands behind such a type at all.
+static Decl *impl_owner(Decl *decl) {
   ImplDef *impl = decl->as.impl_decl.def;
   Type *self = impl ? impl->self_type : NULL;
-  if (self == NULL || (self->kind != TY_STRUCT && self->kind != TY_ENUM)) {
+  if (self == NULL) {
     return NULL;
   }
-  for (int i = 0; i < m->ast->decl_count; i++) {
-    Decl *d = m->ast->decls[i];
-    if (self->kind == TY_STRUCT && d->kind == DECL_STRUCT &&
-        d->as.struct_decl.def == self->as.struc.def) {
-      return d;
-    }
-    if (self->kind == TY_ENUM && d->kind == DECL_ENUM &&
-        d->as.enum_decl.def == self->as.enm.def) {
-      return d;
-    }
+  if (self->kind == TY_STRUCT) {
+    return self->as.struc.def->decl;
+  }
+  if (self->kind == TY_ENUM) {
+    return self->as.enm.def->decl;
   }
   return NULL;
 }
 
-// an item nothing outside this module can reach, and which the compiler does
-// not name on its own account. Everything else is a root of the walk below.
+// a declaration whose readers this compile cannot enumerate, so the walk has to
+// start there rather than ask.
 static bool item_is_root(Module *m, Decl *decl) {
-  // a `pub` item's readers are the rest of the tree, or — in a library — a
-  // program that has not been written yet. Milestone 89's audience question,
-  // asked about a declaration rather than a whole module.
-  if (decl->is_pub) {
+  // a library's `pub` item is read by a program that may not be written yet.
+  // A *program*'s is not: its tree is the whole build, and nothing outside can
+  // name even its root module, so `pub` there is an ordinary edge — which is
+  // what makes this question answerable at all.
+  if (decl->is_pub && m->is_std) {
     return true;
   }
   // a lang item is named by the *compiler*, which writes no source to find.
@@ -2905,57 +2888,67 @@ static bool item_is_root(Module *m, Decl *decl) {
          sv_equal_cstr(decl->as.fun_decl.name, "main");
 }
 
-void tc_report_unused_items(TypeChecker *tc, Module *m) {
-  int n = m->ast->decl_count;
-  if (n == 0) {
-    return;
-  }
-  bool *live = al_alloc_zero(tc->al, sizeof(bool) * (size_t)n);
-  // whose liveness governs declaration i: itself, its self type for an impl,
-  // or -1 for one that is live on its own account.
-  int *governs = al_alloc(tc->al, sizeof(int) * (size_t)n);
-
-  for (int i = 0; i < n; i++) {
-    Decl *decl = m->ast->decls[i];
-    governs[i] = i;
-    if (decl->kind == DECL_IMPL) {
-      Decl *owner = impl_owner(m, decl);
-      governs[i] = owner ? decl_index(m, owner) : -1;
-    } else if (!decl_is_item(decl) || item_is_root(m, decl)) {
-      governs[i] = -1;
-    }
-    live[i] = governs[i] < 0;
-  }
-
-  // reachability, not "was it named": a private function called only by a dead
-  // one is dead too, and two that call each other are both dead. Iterated to a
-  // fixpoint because an edge may precede its source becoming live.
-  for (bool changed = true; changed;) {
-    changed = false;
-    for (int u = 0; u < m->item_use_count; u++) {
-      ItemUse *use = &m->item_uses[u];
-      int from = use->from ? decl_index(m, use->from) : -1;
-      if (from >= 0 && governs[from] >= 0 && !live[governs[from]]) {
+void tc_mark_live_items(TypeChecker *tc, ModuleRegistry *reg) {
+  // An impl belongs to its self type, and that is an *edge* rather than a case
+  // of its own: seeding it here is what lets the walk below have one rule.
+  for (int i = 0; i < reg->module_count; i++) {
+    Module *m = reg->modules[i];
+    for (int j = 0; j < m->ast->decl_count; j++) {
+      Decl *decl = m->ast->decls[j];
+      // an `@allow` here is a *root*, not only a silence: it says the
+      // declaration is deliberate, and nothing deliberate should make a reader
+      // answer for what it names. Every other lint is a local fact, so this is
+      // the only one where silence alone would leak.
+      if ((decl->allow_mask & LINT_BIT(LINT_UNUSED_ITEM)) != 0) {
+        decl->item_live = true;
         continue;
       }
-      int to = decl_index(m, use->to);
-      if (to >= 0 && !live[to]) {
-        live[to] = true;
+      if (decl->kind == DECL_IMPL) {
+        Decl *owner = impl_owner(decl);
+        decl->item_live = owner == NULL;
+        if (owner != NULL) {
+          tc->cur_item = owner;
+          tc_item_named(tc, decl);
+          tc->cur_item = NULL;
+        }
+        continue;
+      }
+      decl->item_live = !decl_is_item(decl) || item_is_root(m, decl);
+    }
+  }
+  tc->cur_item = NULL;
+
+  // reachability, not "was it named": a function called only by a dead one is
+  // dead too, and two that call each other are both dead. Iterated to a
+  // fixpoint because an edge is regularly recorded before its source becomes
+  // live — a signature resolves before the body that calls it.
+  for (bool changed = true; changed;) {
+    changed = false;
+    for (int u = 0; u < tc->item_use_count; u++) {
+      ItemUse *use = &tc->item_uses[u];
+      if (use->from != NULL && !use->from->item_live) {
+        continue;
+      }
+      if (!use->to->item_live) {
+        use->to->item_live = true;
         changed = true;
       }
     }
   }
+}
 
-  for (int i = 0; i < n; i++) {
+void tc_report_unused_items(TypeChecker *tc, Module *m) {
+  for (int i = 0; i < m->ast->decl_count; i++) {
     Decl *decl = m->ast->decls[i];
-    if (live[i] || !decl_is_item(decl)) {
+    if (decl->item_live || !decl_is_item(decl)) {
       continue;
     }
-    unsigned saved = diag_push_allowed(tc->diags, decl->allow_mask);
+    // no `diag_push_allowed` here: an allowed declaration is a *root*, so it
+    // never reaches this loop. One policy rather than two saying the same
+    // thing.
     diag_warning(tc->diags, LINT_UNUSED_ITEM, decl->name_span,
                  "unused %s '" SV_FMT "'", item_noun(decl),
                  SV_ARG(item_name(decl)));
-    diag_pop_allowed(tc->diags, saved);
   }
 }
 
@@ -6293,6 +6286,7 @@ static bool check_pattern(CheckCtx *ctx, Pattern *pattern, Type *expected_ty) {
     VariantImport *vi =
         mod_find_variant_import(ctx->tyres.module, pattern->as.bind.name);
     if (vi != NULL) {
+      tc_item_named(ctx->tc, vi->enum_def->decl);
       PathSegment *seg = al_alloc_zero(ctx->al, sizeof(PathSegment));
       seg->name = pattern->as.bind.name;
       Pattern new = {
@@ -8855,6 +8849,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
       // resolve_path, so the binding has to be read here too.
       VariantImport *vi = mod_find_variant_import(ctx->tyres.module, name);
       if (vi != NULL) {
+        tc_item_named(ctx->tc, vi->enum_def->decl);
         if (vi->variant->field_count != 0) {
           diag_error(ctx->diags, expr->span,
                      "variant '" SV_FMT "' requires arguments",
@@ -12394,6 +12389,7 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
         VariantImport *vi =
             mod_find_variant_import(ctx->tyres->module, segment);
         if (vi != NULL) {
+          tc_item_named(ctx->tyres->tc, vi->enum_def->decl);
           if (!is_last) {
             diag_error(ctx->diags, path->span,
                        "cannot access member '" SV_FMT "' of enum variant",
@@ -12474,6 +12470,7 @@ bool resolve_path(PathResCtx *ctx, PathRes *out_res) {
     case PATHRES_CTX_MODULE: {
       Module *mod = res_ctx.scope.module_.mod;
       TypeEntry *te = module_export_lookup(ctx, mod, segment, path->span);
+      tc_item_named(ctx->tyres->tc, te ? te->item : NULL);
       if (!te) {
         return false; // module_export_lookup reported it
       }

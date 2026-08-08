@@ -1,0 +1,5 @@
+# a `pub use` hands the item on, so the reader two modules away still reaches
+# the declaration itself.
+mod inner;
+
+pub use facade::inner::Reexported;

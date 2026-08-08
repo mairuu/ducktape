@@ -1,0 +1,30 @@
+pub struct Named {
+    pub v: int,
+}
+
+pub enum Colour {
+    Red,
+    Blue,
+}
+
+pub fun named() -> int {
+    return 0;
+}
+
+pub fun imported() -> int {
+    return 1;
+}
+
+pub fun globbed() -> int {
+    return 2;
+}
+
+# reached from another module only through a variant bound bare: nothing here
+# names either enum again, and neither does the reader.
+pub enum Held {
+    Only,
+}
+
+pub enum Wrapped {
+    W(int),
+}

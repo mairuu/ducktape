@@ -89,21 +89,25 @@ Driver: `compiler_run` in `src/compiler.c`. Phases, in order:
    `tc_import_impls` unions each dependency's visible impls into it, then
    `tc_resolve_module` resolves signatures, types, impls
 5. **check** — `tc_check_module`: type-check function bodies with inference
+6. **unused items** — `tc_mark_live_items`: walk the item-use graph the two
+   previous phases recorded, and report what it does not reach. Its own phase
+   because an item's readers are anywhere in the tree, so this is the first
+   moment the graph is complete
 
 With `--run`, `compiler_execute` (`src/compiler.c`) additionally runs:
 
-6. **tags** — `exe_assign_tags` (`src/codegen.c`): fix every enum's variant
+7. **tags** — `exe_assign_tags` (`src/codegen.c`): fix every enum's variant
    tags. All that is left of a linking step, since a tag is the one part of a
    program's layout that is not demand-driven
-7. **codegen** — `src/codegen.c`: AST → bytecode `Chunk`, demand-driven from
+8. **codegen** — `src/codegen.c`: AST → bytecode `Chunk`, demand-driven from
    `main` outwards (`Mono`, drained until it reaches a fixpoint). A definition
    takes a slot and a chunk when something *reaches* it; one nothing reaches
    costs neither, generic or not. The program-wide slot tables (funs + methods,
    structs, enums, vtables) grow as that walk fills them
-8. **vm** — `src/vm.c`: stack VM executes the root module's `main()`
+9. **vm** — `src/vm.c`: stack VM executes the root module's `main()`
 
-`--emit-bc` stops after 7 and serializes the linked program instead
-(`src/bytecode.c`); `--run` on an image skips 1–7 entirely, decoding straight
+`--emit-bc` stops after 8 and serializes the linked program instead
+(`src/bytecode.c`); `--run` on an image skips 1–8 entirely, decoding straight
 into the same `Executable` the VM would have been handed.
 
 Diagnostics accumulate in a `DiagBag` (`src/diag.c`) shared by all phases; no
