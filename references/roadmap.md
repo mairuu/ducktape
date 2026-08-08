@@ -2,7 +2,7 @@
 
 ## Start here
 
-**Last landed:** milestone 111 (`SHA`) — the `unused_item` lint, which reports a
+**Last landed:** milestone 111 (`5eb8247`) — the `unused_item` lint, which reports a
 private item no live declaration names. 684 tests, clean under debug,
 `--gc-stress` and `make sanitize`. Everything lands on `main`; there are no
 feature branches.
@@ -368,7 +368,7 @@ to keep this file small. Everything from 100 on is below.
   Remainder: a field too wide for a word still allocates — a `range` payload and a
   nested `Some`, the second of which is what bounds the nesting.
 
-- **111. An item nothing reaches** (`SHA`) — the `unused_item` lint: a private
+- **111. An item nothing reaches** (`5eb8247`) — the `unused_item` lint: a private
   `fun`, `struct`, `enum` or `trait` that no live declaration names.
   Design: `language.md` "An item nothing reaches", `architecture.md` "An item
   nothing reaches (`unused_item`)".
