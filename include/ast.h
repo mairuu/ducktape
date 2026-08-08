@@ -576,6 +576,11 @@ struct FunDef {
   // reference costs, not what a declaration costs. A generic never takes one
   // at all: its instances do.
   int slot;
+
+  // What the inliner made of this body: AST nodes when it may be spliced into
+  // a caller, -1 when it may not, 0 before anything asked. Memoised here
+  // because the answer is a property of the body and every call site asks it.
+  int inline_cost;
 };
 
 // a function whose body is in C rather than in ducktape. `!` monomorphised

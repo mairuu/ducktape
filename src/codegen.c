@@ -14,6 +14,13 @@
 #define CG_MAX_BREAKS 32
 #define CG_MAX_UPVALUES 256
 
+// The two numbers that bound inlining. A body is spliced only if it is under
+// CG_INLINE_MAX_COST AST nodes, and a splice may sit inside at most
+// CG_INLINE_MAX_DEPTH others — so the code one call site can grow to is
+// bounded by the product, not by the program.
+#define CG_INLINE_MAX_COST 40
+#define CG_INLINE_MAX_DEPTH 2
+
 typedef struct {
   StringView name; // empty for hidden locals
   // The *frame* slot this local occupies, which is where the stack happened to
@@ -102,6 +109,20 @@ typedef struct Cg {
   bool ok;
 
   int self_slot; // -1 outside a method; the frame slot holding `self`
+
+  // ── an inlined body, while one is being compiled ───────────────────────────
+  //
+  // `inline_pad` is the landing pad its `return`s leave through, and it is an
+  // ordinary CgLoop because an inlined return *is* a break carrying a value out
+  // of a labelled block. `locals_base` is the first entry of `locals` the body
+  // may see: everything below belongs to the frame it was spliced into, whose
+  // names it must not resolve. `inlining` is the chain of origins currently
+  // being spliced, which is what stops a recursive call from expanding forever.
+  // All of it is saved and restored around a splice, so nesting works.
+  CgLoop *inline_pad;
+  int locals_base;
+  int inline_depth;
+  FunDef *inlining[CG_INLINE_MAX_DEPTH];
 } Cg;
 
 // The frame a `break`/`continue` leaves: the innermost *loop* unlabelled, the
@@ -331,6 +352,20 @@ static FunDef *mono_reach(Mono *mono, FunDef *fun) {
 
 bool mono_seed(Mono *mono, FunDef *entry) {
   return mono_reach(mono, entry) != NULL;
+}
+
+// The queue entry a reached definition came from. It is what the inliner
+// needs and a call site cannot carry: the origin owning the body AST, plus the
+// three things that body has to be compiled under — its instantiation, its
+// impl set, and its depth. The result is only valid until the next request,
+// since the queue moves when it grows.
+static const Instance *mono_instance_of(Mono *mono, FunDef *instance) {
+  for (int i = 0; i < mono->count; i++) {
+    if (mono->insts[i].instance == instance) {
+      return &mono->insts[i];
+    }
+  }
+  return NULL; // a native: reached and slotted, but with no body to queue
 }
 
 // push a type recorded by the checker through the instantiation this body is
@@ -568,10 +603,12 @@ static void cg_popped(Cg *cg, int n) {
 
 // ── locals ───────────────────────────────────────────────────────────────────
 
-// Name the value on top of the stack. Returns its *frame slot*, which is what
-// every OP_GET_LOCAL/OP_SET_LOCAL wants — never an index into `cg->locals`.
-static int cg_add_local(Cg *cg, StringView name, Span span) {
-  int slot = cg->depth - 1;
+// Name a value whose slot is known independently of where the stack is now —
+// the inliner's case, where every argument is pushed before any of them becomes
+// a parameter (a later argument may still name a caller local that a parameter
+// would shadow). Returns that *frame slot*, which is what every
+// OP_GET_LOCAL/OP_SET_LOCAL wants — never an index into `cg->locals`.
+static int cg_add_local_at(Cg *cg, StringView name, int slot, Span span) {
   // Two limits, and the slot is the one that binds: `cg->locals` has room for
   // CG_MAX_LOCALS entries, but what a one-byte operand can address is a
   // *position*, and positions count the temporaries stacked between locals as
@@ -586,6 +623,11 @@ static int cg_add_local(Cg *cg, StringView name, Span span) {
   return slot;
 }
 
+// Name the value on top of the stack.
+static int cg_add_local(Cg *cg, StringView name, Span span) {
+  return cg_add_local_at(cg, name, cg->depth - 1, span);
+}
+
 // The same, for a value a raw `emit` just pushed rather than one `compile_expr`
 // left behind — only the latter is accounted for automatically.
 static int cg_add_pushed_local(Cg *cg, StringView name, Span span) {
@@ -594,9 +636,12 @@ static int cg_add_pushed_local(Cg *cg, StringView name, Span span) {
 }
 
 // the *index* in `cg->locals`, since callers need both halves: the slot to
-// emit, and the entry to mark captured.
+// emit, and the entry to mark captured. The search stops at `locals_base`,
+// which is 0 outside an inlined body and the first parameter's entry inside
+// one: a spliced body was written elsewhere, so a name it does not declare
+// itself is a global, never whatever the host frame happens to call the same.
 static int cg_find_local(Cg *cg, StringView name) {
-  for (int i = cg->local_count - 1; i >= 0; i--) {
+  for (int i = cg->local_count - 1; i >= cg->locals_base; i--) {
     if (cg->locals[i].name.len > 0 && sv_equal(cg->locals[i].name, name)) {
       return i;
     }
@@ -629,7 +674,10 @@ static int cg_add_upvalue(Cg *cg, bool is_local, uint8_t index, Span span) {
 // walking out marks the owning local `is_captured` so its defining scope
 // closes the upvalue when the slot dies.
 static int cg_resolve_upvalue(Cg *cg, StringView name, Span span) {
-  if (cg->parent == NULL) {
+  // The other half of `cg_find_local`'s barrier: a name an inlined body does
+  // not declare cannot be a capture either, since the function it was written
+  // in is not the one whose frame is around it now.
+  if (cg->parent == NULL || cg->inline_pad != NULL) {
     return -1;
   }
   int local = cg_find_local(cg->parent, name);
@@ -711,6 +759,289 @@ static FieldInit *find_field_init(FieldInit *fields, int count, bool is_tuple,
   return NULL;
 }
 
+// ── inlining: which bodies may be spliced ────────────────────────────────────
+//
+// Compiling a call as the callee's own body in the caller's chunk costs one
+// thing at compile time — a second copy of the code — and the rule that keeps
+// that bounded is a size cap. So the question this walk answers is "how big is
+// this body", counted in AST nodes, with `-1` for the shapes it will not take
+// at all. The count is also what bounds the *frame*: every node can name at
+// most one local and leave at most one temporary live, so twice the count
+// bounds the slots a splice adds above the caller's.
+
+typedef struct {
+  int nodes;
+  int returns; // `return` and `?`, which leave through one shared landing pad
+  bool ok;
+} InlineScan;
+
+static void scan_expr(InlineScan *s, Expr *e);
+
+static void scan_pattern(InlineScan *s, Pattern *p) {
+  if (p == NULL) {
+    return;
+  }
+  s->nodes++;
+  switch (p->kind) {
+  case PAT_WILDCARD:
+  case PAT_BIND:
+    break;
+  case PAT_LITERAL:
+    scan_expr(s, p->as.literal_expr);
+    break;
+  case PAT_VARIANT:
+    for (int i = 0; i < p->as.variant.field_count; i++) {
+      s->nodes++; // a shorthand field has no sub-pattern and still binds
+      scan_pattern(s, p->as.variant.fields[i].sub_pattern);
+    }
+    break;
+  case PAT_STRUCT:
+    for (int i = 0; i < p->as.struc.field_count; i++) {
+      s->nodes++;
+      scan_pattern(s, p->as.struc.fields[i].sub_pattern);
+    }
+    break;
+  case PAT_TUPLE:
+    for (int i = 0; i < p->as.tuple.count; i++) {
+      scan_pattern(s, p->as.tuple.elems[i]);
+    }
+    break;
+  default:
+    s->ok = false;
+  }
+}
+
+static void scan_stmt(InlineScan *s, Stmt *st) {
+  if (st == NULL) {
+    return;
+  }
+  s->nodes++;
+  switch (st->kind) {
+  case STMT_EXPR:
+    scan_expr(s, st->as.expr_stmt.expr);
+    break;
+  case STMT_VAR:
+    scan_pattern(s, st->as.var_stmt.binding);
+    scan_expr(s, st->as.var_stmt.initializer);
+    scan_expr(s, st->as.var_stmt.else_block);
+    break;
+  case STMT_RETURN:
+    s->returns++;
+    scan_expr(s, st->as.return_stmt.value);
+    break;
+  case STMT_BREAK:
+    scan_expr(s, st->as.break_stmt.value);
+    break;
+  case STMT_CONTINUE:
+    break;
+  default:
+    s->ok = false;
+  }
+}
+
+static void scan_expr(InlineScan *s, Expr *e) {
+  if (e == NULL) {
+    return;
+  }
+  s->nodes++;
+  switch (e->kind) {
+  case EXPR_INT:
+  case EXPR_FLOAT:
+  case EXPR_BOOL:
+  case EXPR_STRING:
+  case EXPR_CHAR:
+  case EXPR_UNIT:
+  case EXPR_SELF:
+  case EXPR_PATH:
+    break;
+
+  case EXPR_INTERPOLATED:
+    for (int i = 0; i < e->as.interpolated.seg_count; i++) {
+      s->nodes++;
+      scan_expr(s, e->as.interpolated.segs[i].expr);
+    }
+    break;
+
+  case EXPR_BINARY:
+    scan_expr(s, e->as.binary.left);
+    scan_expr(s, e->as.binary.right);
+    break;
+  case EXPR_UNARY:
+    scan_expr(s, e->as.unary.operand);
+    break;
+  case EXPR_ASSIGN:
+    scan_expr(s, e->as.assign.target);
+    scan_expr(s, e->as.assign.value);
+    scan_expr(s, e->as.assign.op_call);
+    break;
+  case EXPR_RANGE:
+    scan_expr(s, e->as.range.start);
+    scan_expr(s, e->as.range.end);
+    break;
+
+  case EXPR_CALL:
+    scan_expr(s, e->as.call.callee);
+    for (int i = 0; i < e->as.call.arg_count; i++) {
+      scan_expr(s, e->as.call.args[i]);
+    }
+    break;
+  case EXPR_INDEX:
+    scan_expr(s, e->as.index.object);
+    scan_expr(s, e->as.index.index);
+    break;
+  case EXPR_FIELD:
+    scan_expr(s, e->as.field.object);
+    break;
+  case EXPR_METHOD_CALL:
+    scan_expr(s, e->as.method_call.object);
+    for (int i = 0; i < e->as.method_call.arg_count; i++) {
+      scan_expr(s, e->as.method_call.args[i]);
+    }
+    break;
+  case EXPR_CAST:
+    scan_expr(s, e->as.cast.operand);
+    break;
+  case EXPR_PROPAGATE:
+    s->returns++; // an `Err` leaves by the same door a `return` does
+    scan_expr(s, e->as.propagate.operand);
+    break;
+
+  case EXPR_BLOCK:
+    for (int i = 0; i < e->as.block.stmt_count; i++) {
+      scan_stmt(s, e->as.block.stmts[i]);
+    }
+    scan_expr(s, e->as.block.tail_expr);
+    break;
+  case EXPR_IF:
+    scan_expr(s, e->as.if_expr.condition);
+    scan_pattern(s, e->as.if_expr.binding);
+    scan_expr(s, e->as.if_expr.then_block);
+    scan_expr(s, e->as.if_expr.else_branch);
+    break;
+  case EXPR_WHILE:
+    scan_expr(s, e->as.while_expr.condition);
+    scan_pattern(s, e->as.while_expr.binding);
+    scan_expr(s, e->as.while_expr.body);
+    break;
+  case EXPR_LOOP:
+    scan_expr(s, e->as.loop_expr.body);
+    break;
+  case EXPR_FOR:
+    scan_expr(s, e->as.for_expr.iterable);
+    scan_expr(s, e->as.for_expr.next_call);
+    scan_expr(s, e->as.for_expr.body);
+    s->nodes += 2; // the hidden iterator and loop variable
+    break;
+  case EXPR_MATCH:
+    scan_expr(s, e->as.match.subject);
+    for (int i = 0; i < e->as.match.arm_count; i++) {
+      scan_pattern(s, e->as.match.arms[i].pattern);
+      scan_expr(s, e->as.match.arms[i].guard);
+      scan_expr(s, e->as.match.arms[i].body);
+    }
+    break;
+
+  case EXPR_TUPLE:
+    for (int i = 0; i < e->as.tuple.count; i++) {
+      scan_expr(s, e->as.tuple.elems[i]);
+    }
+    break;
+  case EXPR_ARRAY:
+    for (int i = 0; i < e->as.array.count; i++) {
+      scan_expr(s, e->as.array.elems[i]);
+    }
+    break;
+  case EXPR_STRUCT_INIT:
+    for (int i = 0; i < e->as.struct_init.field_count; i++) {
+      scan_expr(s, e->as.struct_init.fields[i].value);
+    }
+    break;
+  case EXPR_VARIANT:
+    for (int i = 0; i < e->as.variant.field_count; i++) {
+      scan_expr(s, e->as.variant.fields[i].value);
+    }
+    break;
+
+  case EXPR_CLOSURE:
+    // its body is duplicated with the rest, and `compile_closure` gives it a
+    // FunDef per splice the way it does per instantiation
+    for (int i = 0; i < e->as.closure.param_count; i++) {
+      s->nodes++;
+    }
+    scan_expr(s, e->as.closure.body);
+    break;
+
+  default:
+    s->ok = false;
+  }
+}
+
+// How big `fun`'s body is, or -1 for one that may not be spliced at all.
+// Memoised on the definition: the answer is a property of the body, and every
+// call site to it asks the same question.
+static int fun_inline_cost(FunDef *fun) {
+  if (fun->inline_cost != 0) {
+    return fun->inline_cost;
+  }
+  InlineScan s = {.ok = fun->body != NULL};
+  scan_expr(&s, fun->body);
+  bool ok = s.ok && s.nodes <= CG_INLINE_MAX_COST &&
+            s.returns < CG_MAX_BREAKS; // the landing pad is one jump list
+  fun->inline_cost = ok ? s.nodes : -1;
+  return fun->inline_cost;
+}
+
+// The body to compile in place of a call to `target`, or NULL to emit the
+// call. Everything weighed here is about staying invisible: a splice must fit
+// the frame it lands in and be small enough that a second copy is cheap. The
+// *depth* cap is what makes a recursive call terminate; the chain check below
+// only stops the copies that would then be pointless, since a self-call
+// expanded to the cap still ends in a call.
+static const Instance *cg_inline_choice(Cg *cg, FunDef *target) {
+  if (cg->inline_depth >= CG_INLINE_MAX_DEPTH) {
+    return NULL;
+  }
+  const Instance *inst = mono_instance_of(cg->mono, target);
+  if (inst == NULL) {
+    return NULL;
+  }
+  int cost = fun_inline_cost(inst->origin);
+  if (cost < 0) {
+    return NULL;
+  }
+  for (int i = 0; i < cg->inline_depth; i++) {
+    if (cg->inlining[i] == inst->origin) {
+      return NULL; // recursive, directly or through the chain above
+    }
+  }
+  // A frame slot is one byte, and `cg_add_local` turning a working program
+  // into "too many locals" would be the one way inlining could be seen.
+  if (cg->depth + inst->origin->param_count + 2 * cost > CG_MAX_LOCALS) {
+    return NULL;
+  }
+  return inst;
+}
+
+// Leave the function with its value on top of the stack. Inside a spliced body
+// there is no frame to drop: the value slides down over the parameters the
+// arguments became and jumps to the landing pad. That is milestone 98's
+// labelled block to the letter — same frame, same jump list, same slide — so an
+// inlined `return` needs no machinery of its own, only the target.
+static void cg_emit_return(Cg *cg) {
+  CgLoop *pad = cg->inline_pad;
+  if (pad == NULL) {
+    emit(cg, OP_RETURN);
+    return;
+  }
+  assert(pad->break_count < CG_MAX_BREAKS && "fun_inline_cost caps the exits");
+  int n = cg->depth - pad->break_depth - 1;
+  if (n > 0) {
+    cg_close_scope(cg, pad->break_base);
+    emit_slide(cg, n);
+  }
+  pad->break_jumps[pad->break_count++] = emit_jump(cg, OP_JUMP);
+}
+
 // ── expression / statement compilation ───────────────────────────────────────
 
 static void compile_expr(Cg *cg, Expr *expr);
@@ -769,8 +1100,9 @@ static void compile_stmt_inner(Cg *cg, Stmt *stmt) {
       compile_expr(cg, ret->value);
     } else {
       emit(cg, OP_UNIT);
+      cg_pushed(cg, 1);
     }
-    emit(cg, OP_RETURN);
+    cg_emit_return(cg);
     break;
   }
 
@@ -1419,6 +1751,8 @@ static void compile_for_array(Cg *cg, Expr *expr) {
 
 static bool cg_emit_target(Cg *cg, FunDef *fun, const Subst *primary,
                            const Subst *fallback, Span span);
+static void cg_inline_body(Cg *cg, const Instance *inst, int base_depth,
+                           Span span);
 
 // `for x in it` over a user iterator (neither array nor range): drive
 // `it.next()` — an `Option<Item>` each turn — binding `Some(x)` and ending on
@@ -1498,14 +1832,28 @@ static void compile_for_iter(Cg *cg, Expr *expr) {
     emit2(cg, OP_DYN_METHOD, (uint8_t)dyn_index); // [next, recv]
     emit2(cg, OP_CALL, 1);                        // [opt]
   } else {
-    if (!cg_emit_target(cg, next, &mc->inst, &impl_subst, expr->span)) {
+    FunDef *target =
+        cg_call_target(cg, next, &mc->inst, &impl_subst, expr->span);
+    if (target == NULL) {
       cg->loop = loop.parent;
       cg->local_count = saved_locals;
       emit(cg, OP_UNIT);
       return;
     }
-    emit2(cg, OP_GET_LOCAL, (uint8_t)iter_slot);    // [next, iter]
-    emit2(cg, OP_CALL, (uint8_t)next->param_count); // [opt]
+    const Instance *found = cg_inline_choice(cg, target);
+    if (found != NULL) {
+      // the whole point of inlining: the `Some` this mints and the tag test
+      // below it end up in one chunk, with no frame between them
+      Instance inst = *found;
+      emit2(cg, OP_GET_LOCAL, (uint8_t)iter_slot); // [iter]
+      cg_pushed(cg, 1);
+      cg_inline_body(cg, &inst, body_depth, expr->span); // [opt]
+    } else {
+      cg_pushed(cg, 1);
+      emit_slot(cg, OP_GET_GLOBAL, target->slot);
+      emit2(cg, OP_GET_LOCAL, (uint8_t)iter_slot);    // [next, iter]
+      emit2(cg, OP_CALL, (uint8_t)next->param_count); // [opt]
+    }
   }
 
   // Some -> bind and run the body; None -> exit
@@ -1569,6 +1917,80 @@ static bool cg_emit_target(Cg *cg, FunDef *fun, const Subst *primary,
   return true;
 }
 
+// Compile `inst`'s body where the call to it would have gone. The arguments
+// are already on the stack, at `base_depth` and up — and that is the whole of
+// the renumbering an inliner usually owes, because milestone 88 made a local's
+// slot *a stack position*: an argument pushed at the call site already sits
+// where the parameter goes, so naming it is the entire prologue and no
+// instruction moves.
+//
+// Everything the body may see is swapped for the definition's own — its
+// instantiation, its impl set, its locals, and no loop of the caller's for a
+// `break` to reach out to. The value it leaves replaces the arguments, which is
+// what an OP_CALL would have done.
+static void cg_inline_body(Cg *cg, const Instance *inst, int base_depth,
+                           Span span) {
+  FunDef *origin = inst->origin;
+  int saved_locals = cg->local_count;
+  int self_slot = -1;
+
+  for (int i = 0; i < origin->param_count; i++) {
+    bool is_self = origin->params[i].is_self;
+    StringView name = is_self ? sv_from_cstr("self") : origin->params[i].name;
+    int slot = cg_add_local_at(cg, name, base_depth + i, span);
+    if (is_self) {
+      self_slot = slot;
+    }
+  }
+
+  CgLoop pad = {.is_block = true,
+                .break_takes_value = true,
+                .break_base = saved_locals,
+                .break_depth = base_depth};
+
+  Module *saved_m = cg->m;
+  ImplIndex *saved_impls = cg->impls;
+  Subst saved_subst = cg->subst;
+  int saved_inst_depth = cg->inst_depth;
+  int saved_self_slot = cg->self_slot;
+  CgLoop *saved_loop = cg->loop;
+  CgLoop *saved_pad = cg->inline_pad;
+  int saved_base = cg->locals_base;
+
+  cg->m = origin->module;
+  cg->impls = inst->impls;
+  cg->subst = inst->subst;
+  cg->inst_depth = inst->depth;
+  cg->self_slot = self_slot;
+  cg->loop = NULL;
+  cg->inline_pad = &pad;
+  cg->locals_base = saved_locals;
+  cg->inlining[cg->inline_depth++] = origin;
+
+  compile_expr(cg, origin->body);
+
+  // Falling off the end is the last exit, and it lands where every `return`
+  // slid its value to — so the landing pad is the body's own exit, with
+  // nothing to emit at it.
+  cg_close_scope(cg, saved_locals);
+  emit_slide(cg, cg->depth - base_depth - 1);
+  for (int i = 0; i < pad.break_count; i++) {
+    patch_jump(cg, pad.break_jumps[i]);
+  }
+
+  cg->inline_depth--;
+  cg->m = saved_m;
+  cg->impls = saved_impls;
+  cg->subst = saved_subst;
+  cg->inst_depth = saved_inst_depth;
+  cg->self_slot = saved_self_slot;
+  cg->loop = saved_loop;
+  cg->inline_pad = saved_pad;
+  cg->locals_base = saved_base;
+  cg->local_count = saved_locals;
+  cg->depth = base_depth + 1;
+}
+
 static void compile_call(Cg *cg, Expr *expr) {
   ExprCall *call = &expr->as.call;
   Expr *callee = call->callee;
@@ -1584,6 +2006,38 @@ static void compile_call(Cg *cg, Expr *expr) {
       compile_expr(cg, call->args[i]);
     }
     emit(cg, (OpCode)direct->intrinsic_op);
+    return;
+  }
+
+  // A call to a definition *by name* is the one shape a body can be spliced
+  // into: the target is settled here rather than by whatever the callee
+  // expression evaluates to, and the arguments are its parameters in order.
+  if (direct != NULL && !fun_is_native(direct) &&
+      direct->param_count == call->arg_count) {
+    FunDef *target = cg_call_target(cg, direct, &callee->as.path_expr.inst,
+                                    NULL, callee->span);
+    if (target == NULL) {
+      emit(cg, OP_UNIT); // reported; the program will not be run
+      return;
+    }
+    const Instance *found = cg_inline_choice(cg, target);
+    if (found != NULL) {
+      // by value: compiling the body enqueues its own callees, and the queue
+      // moves when it grows
+      Instance inst = *found;
+      int base_depth = cg->depth;
+      for (int i = 0; i < call->arg_count; i++) {
+        compile_expr(cg, call->args[i]);
+      }
+      cg_inline_body(cg, &inst, base_depth, expr->span);
+      return;
+    }
+    cg_pushed(cg, 1);
+    emit_slot(cg, OP_GET_GLOBAL, target->slot);
+    for (int i = 0; i < call->arg_count; i++) {
+      compile_expr(cg, call->args[i]);
+    }
+    emit2(cg, OP_CALL, (uint8_t)call->arg_count);
     return;
   }
 
@@ -2024,9 +2478,20 @@ static void compile_method_call(Cg *cg, Expr *expr) {
     return;
   }
 
-  if (!cg_emit_target(cg, fun, &mc->inst, &impl_subst, expr->span)) {
+  FunDef *target = cg_call_target(cg, fun, &mc->inst, &impl_subst, expr->span);
+  if (target == NULL) {
+    emit(cg, OP_UNIT); // reported; the program will not be run
     return;
   }
+  const Instance *found = cg_inline_choice(cg, target);
+  int base_depth = cg->depth;
+  if (found == NULL) {
+    cg_pushed(cg, 1);
+    emit_slot(cg, OP_GET_GLOBAL, target->slot);
+  }
+  // the receiver is an argument like any other, at whatever position the
+  // signature put `self` in
+  Instance inst = found != NULL ? *found : (Instance){0};
   int k = 0;
   for (int i = 0; i < fun->param_count; i++) {
     if (fun->params[i].is_self) {
@@ -2034,6 +2499,10 @@ static void compile_method_call(Cg *cg, Expr *expr) {
     } else {
       compile_expr(cg, mc->args[k++]);
     }
+  }
+  if (found != NULL) {
+    cg_inline_body(cg, &inst, base_depth, expr->span);
+    return;
   }
   emit2(cg, OP_CALL, (uint8_t)fun->param_count);
 }
@@ -2057,8 +2526,8 @@ static void compile_propagate(Cg *cg, Expr *expr) {
   int end_jump = emit_jump(cg, OP_JUMP);
 
   patch_jump(cg, err_jump);
-  emit(cg, OP_POP);    // is_ok was false; [instance]
-  emit(cg, OP_RETURN); // propagate Err(e) to the caller unchanged
+  emit(cg, OP_POP);   // is_ok was false; [instance]
+  cg_emit_return(cg); // propagate Err(e) to the caller unchanged
 
   patch_jump(cg, end_jump);
 }
@@ -2929,18 +3398,19 @@ static void compile_closure(Cg *cg, Expr *expr) {
   FunDef *fun = closure->def;
   assert(fun != NULL && "closure not resolved before codegen");
 
-  // A closure inside a *generic* body is compiled once per instantiation, and
-  // each copy is a different program: `self.show()` in it resolves through
-  // `cg->subst` exactly as it does in the body around it. So it needs its own
-  // FunDef, for the same reason `mono_request` copies the enclosing one —
-  // `closure->def` is the AST node's, one for every instantiation, and writing
-  // a chunk into it lets the last instantiation compiled win for all of them.
-  // (The `VAL_FUN` constant the earlier chunks already hold names that shared
-  // def, so they would go on to build closures over someone else's body.)
+  // A closure inside a body that is compiled more than once needs its own
+  // FunDef per compilation, for the same reason `mono_request` copies the
+  // enclosing one — `closure->def` is the AST node's, one for all of them, and
+  // writing a chunk into it lets the last compilation win. (The `VAL_FUN`
+  // constant the earlier chunks already hold names that shared def, so they
+  // would go on to build closures over someone else's body.) Two things
+  // compile a body more than once: a *generic* one, once per instantiation and
+  // each a different program (`self.show()` in it resolves through
+  // `cg->subst`); and an *inlined* one, once per splice.
   //
-  // A non-generic body has an empty subst and is compiled once, so it keeps
-  // the AST's def and pays nothing.
-  if (cg->subst.count > 0) {
+  // A non-generic body spliced nowhere is compiled once, so it keeps the AST's
+  // def and pays nothing.
+  if (cg->subst.count > 0 || cg->inline_pad != NULL) {
     FunDef *instance = al_alloc_zero_for(cg->al, FunDef);
     *instance = *fun; // same body, params and name; its own chunk
     instance->chunk = NULL;

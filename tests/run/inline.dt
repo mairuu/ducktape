@@ -1,0 +1,160 @@
+# Inlining is invisible by construction, so what this pins is the ways it
+# could stop being: a spliced body's names, its exits, and the frame it lands
+# in. Every answer below is the one an ordinary call gives.
+use std::io::print;
+
+# A parameter must win over a caller local of the same name, and an argument
+# compiled after it must still see the caller's.
+fun sub(a: int, b: int) -> int {
+    return a - b;
+}
+
+# A name the body does not declare is a global, whatever the host frame calls
+# the same thing. `f` takes the function as a *value*, which is the reference
+# that goes through the name lookup — a direct call names its target on the
+# node instead.
+fun via_global() -> int {
+    var f = sub;
+    return f(9, 4);
+}
+
+# An early return, from inside a loop the body owns: the value has to outlive
+# the loop's own locals and the parameters both.
+fun first_even(xs: [int]) -> int {
+    for x in xs {
+        if x % 2 == 0 {
+            return x;
+        }
+    }
+    return -1;
+}
+
+# A `break` inside a spliced body names the body's loop, never the caller's.
+fun count_to(stop: int) -> int {
+    var n = 0;
+    while true {
+        if n >= stop {
+            break;
+        }
+        n += 1;
+    }
+    return n;
+}
+
+struct Counter {
+    n: int,
+}
+
+impl Counter {
+    # `self` is a parameter like any other, and the struct is a handle, so the
+    # mutation has to reach the caller's value.
+    fun bump(self, by: int) -> int {
+        self.n += by;
+        return self.n;
+    }
+}
+
+# `?` leaves by the same door a `return` does.
+fun half(n: int) -> Result<int, string> {
+    if n % 2 != 0 {
+        return Result::Err("odd");
+    }
+    return Result::Ok(n / 2);
+}
+
+fun quarter(n: int) -> Result<int, string> {
+    var h = half(n)?;
+    return half(h);
+}
+
+# A generic body is spliced under its own instantiation, so two type arguments
+# must reach two impls.
+fun show<T: Display>(v: T) -> string {
+    return "<{v}>";
+}
+
+# A closure inside a spliced body: it needs a definition of its own per splice,
+# the way one inside a generic body needs one per instantiation. `adder`
+# captures a parameter and lets it escape, so the two results must not share a
+# cell either.
+fun adder(n: int) -> fun(int) -> int {
+    return |v: int| v + n;
+}
+
+# Recursion still recurses: the splice stops where the chain would repeat.
+fun fact(n: int) -> int {
+    if n <= 1 {
+        return 1;
+    }
+    return n * fact(n - 1);
+}
+
+fun main() {
+    var a = 1;
+    var b = 2;
+    print("{sub(b, a)}");
+#> 1
+
+    var sub = 7; # a local named like the function
+    print("{via_global()} {sub}");
+#> 5 7
+
+    # the same, spliced into a closure — whose enclosing frame is not the
+    # body's either, so the name must not resolve to a capture
+    var g = || via_global();
+    print("{g()}");
+#> 5
+
+    print("{first_even([1, 3, 6, 8])} {first_even([1, 3])}");
+#> 6 -1
+
+    # the call sits inside a loop of the caller's, with a break of its own
+    var total = 0;
+    for i in 0..4 {
+        if i == 3 {
+            break;
+        }
+        total += count_to(i);
+    }
+    print("{total}");
+#> 3
+
+    var c = Counter { n: 10 };
+    print("{c.bump(5)} {c.bump(5)} {c.n}");
+#> 15 20 20
+
+    print("{quarter(8)} {quarter(6)} {quarter(5)}");
+#> Ok(2) Err(odd) Err(odd)
+
+    print("{show(3)} {show(true)}");
+#> <3> <true>
+
+    print("{fact(5)}");
+#> 120
+
+    var add10 = adder(10);
+    var add100 = adder(100);
+    print("{add10(1)} {add100(1)} {add10(2)}");
+#> 11 101 12
+
+    # a splice as an operand of another
+    print("{sub_of(via_global(), 1)}");
+#> 4
+
+    # the iterator loop, whose `next` is the splice this milestone is for
+    var xs = [4, 5, 6];
+    var sum = 0;
+    for x in xs.iter() {
+        sum += x;
+    }
+    var it = xs.iter();
+    while var Option::Some(v) = it.next() {
+        sum += v;
+    }
+    print("{sum}");
+#> 30
+}
+
+fun sub_of(x: int, y: int) -> int {
+    return sub(x, y);
+}

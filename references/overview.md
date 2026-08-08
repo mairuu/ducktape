@@ -103,7 +103,9 @@ With `--run`, `compiler_execute` (`src/compiler.c`) additionally runs:
    `main` outwards (`Mono`, drained until it reaches a fixpoint). A definition
    takes a slot and a chunk when something *reaches* it; one nothing reaches
    costs neither, generic or not. The program-wide slot tables (funs + methods,
-   structs, enums, vtables) grow as that walk fills them
+   structs, enums, vtables) grow as that walk fills them. A call to a small
+   definition is compiled as that definition's *body*, in the caller's chunk,
+   rather than as a call (`runtime.md` "Inlining")
 9. **vm** — `src/vm.c`: stack VM executes the root module's `main()`
 
 `--emit-bc` stops after 8 and serializes the linked program instead

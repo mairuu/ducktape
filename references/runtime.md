@@ -901,6 +901,58 @@ one array deeper than the last, so nothing converges. The slot space would
 stop it eventually — and now that both it and the intern table grow rather
 than abort, only eventually — so the limit lives where the divergence is.
 
+### Inlining
+
+A call whose target is settled at compile time can be compiled as the callee's
+*body*, in the caller's chunk, instead of as a call. Three sites decide it —
+`compile_call` (a call by name), `compile_method_call`, and `compile_for_iter`'s
+`next()` — and each asks the same two questions in the same order: what does
+this call resolve to (`cg_call_target`, unchanged), and is that worth splicing
+(`cg_inline_choice`).
+
+**The queue entry is the context.** A spliced body has to be compiled under the
+*definition's* instantiation, impl set and depth rather than the caller's, and
+those three are exactly what an `Instance` carries — they are what
+`compile_fun_body` takes. So inlining is a queued instance compiled into someone
+else's chunk instead of its own, and a generic callee needs nothing extra:
+`mono_request` has already keyed the copy by its type arguments.
+
+**There is no prologue.** A local's slot is a *stack position*, so the arguments
+a call site pushes already sit where the parameters go: naming them
+(`cg_add_local_at`) is the whole of the frame setup and not one instruction
+moves. They are named after *every* argument is compiled, never one at a time —
+a later argument may still mention a caller local that an earlier parameter
+would otherwise shadow.
+
+**A `return` is a `break`.** The landing pad is an ordinary `CgLoop` with
+`is_block` and `break_takes_value` — a labelled block — so an inlined `return`
+slides its value down over the parameters and jumps to the pad, which is the
+code `STMT_BREAK` already emits. `?` leaves the same way (`cg_emit_return` is
+the one door), and falling off the end lands where the slides do, so the pad
+has nothing to emit at it.
+
+**What a spliced body may see.** It was written inside another function, so
+`cg_find_local` stops at `Cg.locals_base` (the first parameter's entry) and
+`cg_resolve_upvalue` refuses outright: a free name in the body is a global,
+never whatever the frame around it happens to call the same. `cg->loop` is
+severed for the same reason, though nothing can observe that one — the checker
+has already refused a `break` whose loop is not inside the body.
+
+**What it will not take.** `cg_inline_choice` refuses a body over
+`CG_INLINE_MAX_COST` (40) AST nodes, a splice already `CG_INLINE_MAX_DEPTH` (2)
+deep, one already open on the current path, and one whose locals would not fit
+the caller's frame: every node can name at most one local and leave one
+temporary live, so twice the node count bounds the slots a splice adds, and a
+one-byte slot operand is what that has to stay under. A body containing a
+closure is refused outright, since the closure's `FunDef` would need a copy per
+splice the way an instantiation does. The *depth* cap is what makes recursion
+terminate; the recursion check only stops copies that would then be pointless.
+
+**What it costs.** The callee still gets its own chunk and its own global slot —
+`cg_call_target` reaches it before the decision is made — so a body inlined at
+every one of its call sites is compiled twice and the standalone copy is dead
+code in the image. Bytecode grew 1.7-2.8x over the programs measured.
+
 ### Trait objects
 
 Monomorphisation rests on the observation that *the runtime is uniform in
@@ -1660,6 +1712,34 @@ elsewhere.
 This is also why a stream's `Item` must be a chunk or a line and never a byte
 (`language.md` "`std::bytes`"): at 8 KiB per item the whole 103ns amortises to
 0.01ns/byte, and the question stops being a question.
+
+**And what deleting the frame is worth: about a tenth.** Milestone 113 compiles
+a small body into its caller instead of calling it (see "Inlining"). Both
+columns come from *one* binary, so the interpreter is literally the same machine
+code and the control cannot drift; best of 7 interleaved runs over 15,000,000
+elements:
+
+| | called | inlined |
+|---|---|---|
+| through one function call (the control) | +6.3 | **+3.5** |
+| minting a `Some(x)` and matching it | +37.4 | **+33.9** |
+| `it.next()`, the real thing | +45.6 | **+41.9** |
+| `it.map(f)`, a two-stage chain | +103.6 | **+93.3** |
+
+**A frame is cheap; what a call costs is opcodes.** The control row is the one
+to read. A call by name is `OP_GET_GLOBAL`, `OP_CALL`, then the callee's own
+`OP_GET_LOCAL` and `OP_RETURN`; inlining deletes the first two and leaves the
+parameter read plus the landing pad's `OP_SLIDE` and `OP_JUMP` — three
+dispatches where there were four and a frame. So the +4.6ns the table above
+attributes to "a call frame" is mostly *dispatch*, and inlining recovers a
+little under half of it. `it.next()` drops 8%, which leaves the `Option` at
+~81% of what remains.
+
+**What that leaves for a peephole.** Those three surviving dispatches are all
+removable in principle and none of them by inlining: `return x` where `x` is the
+last argument reads back a value already in place, the slide then removes the
+value it just copied, and the jump goes to the instruction after next. They are
+now the whole of what a call costs over writing the body out by hand.
 
 **What this does not license.** A native's argument for existing is deleted
 iterations, not familiarity: a map in C would delete none (`std::collections`

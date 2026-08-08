@@ -2,10 +2,10 @@
 
 ## Start here
 
-**Last landed:** milestone 112 (`69a007c`) — `unused_item` now reports a `pub` item
-too, since a program's tree is its whole audience. 686 tests, clean under debug,
-`--gc-stress` and `make sanitize`. Everything lands on `main`; there are no
-feature branches.
+**Last landed:** milestone 113 — a small body is now compiled into its caller
+instead of called, because a queue entry already carries everything a body has
+to be compiled under. 688 tests, clean under debug, `--gc-stress` and
+`make sanitize`. Everything lands on `main`; there are no feature branches.
 
 **Nothing is blocked, and nothing is owed.** Milestone 95 closed the last entry
 that was not a matter of appetite, and 103 the last one that was already
@@ -14,11 +14,11 @@ that was not a matter of appetite, and 103 the last one that was already
 **The four live directions**, in the order this file recommends them:
 
 1. **The iterator's allocation, and the compiler work behind it** — the only
-   direction left that is not breadth. Milestones 109 and 110 spent the first two
-   of its three steps: `Some(x)` was two allocations, then one, and now none.
-   `it.next()` is down from +77.5 to +51ns/elem over the desugared loop, and what
-   is left is no longer an allocation — the remaining two steps are inlining and
-   a CFG.
+   direction left that is not breadth, and now down to its last step. 109 and 110
+   made `Some(x)` cost no allocation; 113 deleted the frame around `next()`. What
+   the frame turned out to be worth is the finding: **a call's cost is opcodes,
+   not the frame**, so inlining bought 8% and left three dispatches a *peephole*
+   could take. Step 3 is a CFG.
 2. **std breadth on the natives** — every piece with a design question in it is
    spent, so what remains is typing.
 3. **`Eq`** — recorded as *declined*, by two consumers that were asked for it by
@@ -436,6 +436,49 @@ to keep this file small. Everything from 100 on is below.
   whole point is that nothing reaches them. Remainder: a method is still not an
   item, and cannot be until method visibility exists.
 
+- **113. A call is a body written somewhere else** (`SHA`) — a small definition
+  is now compiled into its caller rather than called, at a call by name, a
+  method call, and the `next()` a `for` drives.
+  Design: `runtime.md` "Inlining" and "The cost model" (a fourth table).
+  **THE FINDING: the context a spliced body needs is the queue entry, which
+  already existed.** It must be compiled under the *definition's* instantiation,
+  impl set and depth rather than the caller's — and those three are exactly what
+  an `Instance` carries, because they are what `compile_fun_body` takes. So
+  inlining is a queued instance compiled into someone else's chunk instead of
+  its own, and a *generic* callee needed nothing extra: `mono_request` had
+  already keyed the copy by its type arguments. Two more pieces cost nothing
+  because earlier milestones had paid for them. **Milestone 88's "a local's slot
+  is a stack position" means there is no prologue at all** — the arguments a call
+  site pushes already sit where the parameters go, so naming them is the whole of
+  it and not one instruction moves. **Milestone 98's landing pad means an inlined
+  `return` is a `break`**: same frame, same jump list, same slide, and `?` leaves
+  by the same door.
+  **SECOND FINDING, and it moves the ranking: a frame is cheap, and what a call
+  costs is opcodes.** Milestone 108 attributed +4.6ns to "a call frame"; deleting
+  the frame recovered under half of it, because a call by name is four dispatches
+  and a splice removes two while adding one. `it.next()` went +45.6 → +41.9
+  (8%), a two-stage chain +103.6 → +93.3. The three dispatches left — reading
+  back a parameter already in place, sliding it over itself, and a jump to the
+  instruction after next — are all a **peephole's**, which is what item 1's
+  shortcut now names, and none of them needs an IR.
+  Both columns come from one binary, so the interpreter is the same machine code
+  and the control cannot drift. Sabotage 17 attempted, **10 bit and 7 were
+  no-ops** — the highest proportion yet, and each has an argument, three of them
+  worth keeping: swapping the impl set does nothing because a caller always
+  imports the callee's module, so its set is a *superset* and import-time
+  coherence makes a superset select identically; severing `cg->loop` does nothing
+  because the checker has already refused a `break` whose loop is not inside the
+  body; and the depth cap, not the recursion check, is what makes a recursive
+  call terminate. **One no-op changed the design**: refusing a body that contains
+  a closure turned out to be unnecessary, so the refusal was lifted and the rule
+  `compile_closure` already stated was generalised instead — a body compiled more
+  than once needs a `FunDef` per compilation, and a splice is now the second
+  thing that compiles one more than once.
+  Remainders: the callee is reached and slotted *before* the decision to splice
+  it, so it still gets a chunk of its own that is dead when every call site
+  inlined (bytecode grew 1.7-2.8x); and a spliced frame is missing from a runtime
+  error's trace, which is the one place inlining is observable.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -466,7 +509,8 @@ wrong, and it landed in milestones 94–95.
    **THE FINDING, before any of it is built: `next()` is expensive and the call
    is not why.** The frame is 6% and the `Option` is 78%, so perfect inlining
    takes `next()` from 103ns to ~98 and changes no decision — milestone 108's
-   chunk-granularity rule for streaming stands either way.
+   chunk-granularity rule for streaming stands either way. Milestone 113 built it
+   and the measurement agreed: 3.7ns of 45.6.
 
    That reframes what is worth building, into three steps that are each useful
    alone and are listed in the order their payoff arrives:
@@ -477,16 +521,14 @@ wrong, and it landed in milestones 94–95.
       have had to be taught to the image format. `runtime.md` "A one-field variant
       needs no object". What is *not* done is a `T` too wide for a word — a
       `range` field, or a nested `Some` — which still allocates.
-   2. **Inlining.** Feasible on the AST *today*, and the pieces exist:
-      `mono_request` already does `*instance = *origin` and compiles the same
-      node tree under a caller-supplied context (`cg->subst`), so "compile a body
-      in someone else's context" is built — inlining swaps the context from the
-      caller's types to the caller's frame and emits into the caller's chunk.
-      Milestone 88 makes the slot renumbering tractable (a local's slot is a
-      *stack position*, computed incrementally), and milestone 98's landing pads
-      are what an inlined `return` becomes. Depth capping is `mono`'s
-      `inst_depth`. What it buys directly is 4.6ns; what it buys *structurally*
-      is putting a `Some(x)` and the match that consumes it in one function.
+   2. ~~**Inlining.**~~ **Done — milestone 113**, and every piece it was
+      predicted to need was already there: the context turned out to be the
+      `Instance` itself, milestone 88's stack-position slots meant no prologue at
+      all, and milestone 98's landing pad *is* an inlined `return`.
+      `runtime.md` "Inlining". It bought 8% on `it.next()` and, more usefully,
+      the number underneath: **a frame is cheap and a call's cost is opcodes**,
+      so what is left to take is three dispatches and they belong to the
+      peephole below, not to any further inlining.
    3. **A CFG, and only then escape analysis.** The AST cannot carry this: no
       control-flow graph, no def-use chains, and aggregates are handles so
       aliasing is real. **It already has two named consumers**, which is what
@@ -494,15 +536,17 @@ wrong, and it landed in milestones 94–95.
       analysis, and milestone 107's remainder (per-store liveness, recorded in
       the warts below as needing exactly this). Several milestones, not one.
 
-   **The shortcut worth knowing, and what milestone 110 did to it:** the pattern
-   is narrow — `while var Option::Some(x) = it.next()`. Once `next()` is inlined,
-   the variant is constructed and destructured in one expression tree with nothing
-   able to name it in between, so eliding it is a **peephole** (a match whose
-   scrutinee is a variant construction), not escape analysis. Reads the same way
-   milestone 107's `write_target` did: true by construction rather than by a
-   list. The general chain needs an IR; this specific win does not. But the prize
-   is much smaller now: it used to be an allocation and is now a `Value` write
-   plus a tag test, so this is a tidiness argument rather than a performance one.
+   **The peephole, which milestone 113 has now put within reach and enlarged.**
+   The original one was narrow — `while var Option::Some(x) = it.next()`, whose
+   variant is constructed and destructured in one expression tree once `next()`
+   is inlined, so eliding it is a peephole (a match whose scrutinee is a variant
+   construction) rather than escape analysis, true by construction the way
+   milestone 107's `write_target` was. Milestone 110 shrank that particular prize
+   to a `Value` write plus a tag test. But it also measured a second, larger one
+   at the *splice boundary*: a spliced call still emits a read of a parameter
+   already in place, a slide that removes the value it just copied, and a jump to
+   the instruction after next — three dispatches, and **all of what a call now
+   costs over writing the body out by hand**. None of them needs an IR either.
 
    **On throwing the standard library away.** It is ~20 modules written *in
    ducktape*, so nuking it is cheap and always will be — which is itself an
@@ -994,6 +1038,18 @@ The corner where the honest answer is a data table nobody has shipped.
   instructions can still crash the VM
 - an image carries no source, so a runtime error in one reports function names
   with no line information
+- **an inlined call is missing from a runtime error's trace** (milestone 113).
+  The trace is a walk over live frames and a spliced body has none, so the
+  function whose code raised the error is not named. Nothing else can see the
+  splice, which makes the trace the one place inlining is observable
+- **an inlined body is still compiled on its own** (milestone 113): the target
+  is reached, slotted and queued before the decision to splice it, so a
+  definition inlined at every one of its call sites is compiled twice and the
+  standalone copy is dead code in the image. Dropping it needs a pass after the
+  queue drains, and the slots are already baked into the emitted code
+- **a body containing a closure is never inlined** (milestone 113). The
+  closure's `FunDef` would need a copy per splice, the way a generic's does —
+  one shared def compiled at several sites lets the last one win
 
 ### Absent on purpose, or not yet wanted
 
