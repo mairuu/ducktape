@@ -38,6 +38,11 @@ static void heap_dealloc(Heap *h, void *ptr, size_t size) {
   al_free(&h->al, ptr, size);
 }
 
+// bytes for a fixed-arity aggregate holding `count` values inline.
+static size_t aggregate_size(size_t base, int count) {
+  return base + sizeof(Value) * (size_t)count;
+}
+
 static size_t obj_size(Obj *o) {
   switch (o->kind) {
   case OBJ_STRING:
@@ -48,12 +53,17 @@ static size_t obj_size(Obj *o) {
     return sizeof(ObjBytes);
   case OBJ_ARRAY:
     return sizeof(ObjArray);
+  // the fixed-arity three carry their values, so their size is their arity —
+  // read back from the same place the constructor read it, since that is the
+  // only record of how many bytes were asked for.
   case OBJ_TUPLE:
-    return sizeof(ObjTuple);
+    return aggregate_size(sizeof(ObjTuple), ((ObjTuple *)o)->count);
   case OBJ_STRUCT:
-    return sizeof(ObjStruct);
+    return aggregate_size(sizeof(ObjStruct),
+                          ((ObjStruct *)o)->def->field_count);
   case OBJ_ENUM:
-    return sizeof(ObjEnum);
+    return aggregate_size(sizeof(ObjEnum),
+                          ((ObjEnum *)o)->variant->field_count);
   case OBJ_CLOSURE:
     return sizeof(ObjClosure);
   case OBJ_UPVALUE:
@@ -90,28 +100,8 @@ static void free_obj(Heap *h, Obj *o) {
     }
     break;
   }
-  case OBJ_TUPLE: {
-    ObjTuple *tup = (ObjTuple *)o;
-    if (tup->items != NULL) {
-      heap_dealloc(h, tup->items, sizeof(Value) * (size_t)tup->count);
-    }
-    break;
-  }
-  case OBJ_STRUCT: {
-    ObjStruct *s = (ObjStruct *)o;
-    if (s->def->field_count > 0) {
-      heap_dealloc(h, s->fields, sizeof(Value) * (size_t)s->def->field_count);
-    }
-    break;
-  }
-  case OBJ_ENUM: {
-    ObjEnum *e = (ObjEnum *)o;
-    if (e->variant->field_count > 0) {
-      heap_dealloc(h, e->fields,
-                   sizeof(Value) * (size_t)e->variant->field_count);
-    }
-    break;
-  }
+  // OBJ_TUPLE, OBJ_STRUCT and OBJ_ENUM have nothing to free here: their values
+  // are inside the allocation `obj_size` accounts for below.
   case OBJ_CLOSURE: {
     ObjClosure *c = (ObjClosure *)o;
     if (c->upvalue_count > 0) {
@@ -338,30 +328,29 @@ void heap_array_reserve(Heap *h, ObjArray *arr, int needed) {
   arr->cap = cap;
 }
 
-ObjTuple *heap_tuple(Heap *h, int count) {
-  Value *items = NULL;
-  if (count > 0) {
-    items = heap_alloc(h, sizeof(Value) * (size_t)count);
-    for (int i = 0; i < count; i++) {
-      items[i] = val_unit();
-    }
+// The three constructors below hand back *unfilled* values, which is safe only
+// because each has one caller (OP_TUPLE/OP_STRUCT/OP_ENUM) that writes every
+// slot from the stack before doing anything that could allocate — so no
+// collection ever sees one raw. Under DEBUG the slots are poisoned with an
+// unmappable pointer instead, which turns a violation of that into a crash in
+// the collector rather than a garbage pointer traced in silence. `--gc-stress`
+// collects at every allocation, so the suite is what checks it.
+static void poison_values(Value *values, int count) {
+#ifndef NDEBUG
+  for (int i = 0; i < count; i++) {
+    values[i] = val_obj((Obj *)(uintptr_t)0xDEAD);
   }
-  ObjTuple *tup = (ObjTuple *)new_obj(h, OBJ_TUPLE, sizeof(ObjTuple));
-  tup->count = count;
-  tup->items = items;
-  return tup;
+#else
+  (void)values, (void)count;
+#endif
 }
 
-// `fields` for an aggregate of `count` values, or NULL when there are none.
-static Value *heap_fields(Heap *h, int count) {
-  if (count == 0) {
-    return NULL;
-  }
-  Value *fields = heap_alloc(h, sizeof(Value) * (size_t)count);
-  for (int i = 0; i < count; i++) {
-    fields[i] = val_unit();
-  }
-  return fields;
+ObjTuple *heap_tuple(Heap *h, int count) {
+  ObjTuple *tup = (ObjTuple *)new_obj(h, OBJ_TUPLE,
+                                      aggregate_size(sizeof(ObjTuple), count));
+  tup->count = count;
+  poison_values(tup->items, count);
+  return tup;
 }
 
 ObjStruct *heap_struct(Heap *h, StructDef *def) {
@@ -369,17 +358,16 @@ ObjStruct *heap_struct(Heap *h, StructDef *def) {
     if (def->singleton == NULL) {
       ObjStruct *s = (ObjStruct *)new_obj(h, OBJ_STRUCT, sizeof(ObjStruct));
       s->def = def;
-      s->fields = NULL;
       // filed only now: new_obj may have collected, and the root walk reading
       // a half-built singleton would be worse than reading none.
       def->singleton = &s->obj;
     }
     return (ObjStruct *)def->singleton;
   }
-  Value *fields = heap_fields(h, def->field_count);
-  ObjStruct *s = (ObjStruct *)new_obj(h, OBJ_STRUCT, sizeof(ObjStruct));
+  ObjStruct *s = (ObjStruct *)new_obj(
+      h, OBJ_STRUCT, aggregate_size(sizeof(ObjStruct), def->field_count));
   s->def = def;
-  s->fields = fields;
+  poison_values(s->fields, def->field_count);
   return s;
 }
 
@@ -388,15 +376,14 @@ ObjEnum *heap_enum(Heap *h, VariantDef *variant) {
     if (variant->singleton == NULL) {
       ObjEnum *e = (ObjEnum *)new_obj(h, OBJ_ENUM, sizeof(ObjEnum));
       e->variant = variant;
-      e->fields = NULL;
       variant->singleton = &e->obj;
     }
     return (ObjEnum *)variant->singleton;
   }
-  Value *fields = heap_fields(h, variant->field_count);
-  ObjEnum *e = (ObjEnum *)new_obj(h, OBJ_ENUM, sizeof(ObjEnum));
+  ObjEnum *e = (ObjEnum *)new_obj(
+      h, OBJ_ENUM, aggregate_size(sizeof(ObjEnum), variant->field_count));
   e->variant = variant;
-  e->fields = fields;
+  poison_values(e->fields, variant->field_count);
   return e;
 }
 
@@ -613,5 +600,8 @@ void heap_destroy(Heap *h) {
   if (h->strings != NULL) {
     al_free(&h->al, h->strings, sizeof(ObjString *) * (size_t)h->string_cap);
   }
+  // every object is gone, so the total must be back to zero — the one check
+  // that `obj_size` reports the size each object was allocated with.
+  assert(h->bytes_allocated == 0);
   *h = (Heap){0};
 }

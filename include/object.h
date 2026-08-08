@@ -187,13 +187,24 @@ typedef struct {
   Value *items;
 } ObjArray;
 
-// (a, b, c) — same shape as ObjArray minus the capacity (a tuple's length is
-// part of its type, so it can never grow), kept as a distinct ObjKind so
-// printing/equality read as a tuple rather than an array.
+// The three aggregates below are *fixed-arity*: a tuple's length is part of its
+// type and a struct's or a variant's field count comes from its declaration, so
+// none of them can ever grow. That is what lets the values live in the object's
+// own allocation, the way an ObjString's bytes do — one `heap_alloc` per
+// instance instead of two. An ObjArray cannot join them because
+// `heap_array_reserve` moves its buffer, which a flexible array member forbids.
+//
+// A consequence worth knowing at the constructors: with one allocation there is
+// no window in which the object exists and its values do not, so the
+// "allocate the payload first" ordering the growable objects need does not
+// arise here.
+
+// (a, b, c) — same shape as ObjArray minus the capacity, kept as a distinct
+// ObjKind so printing/equality read as a tuple rather than an array.
 typedef struct {
   Obj obj;
   int count;
-  Value *items;
+  Value items[];
 } ObjTuple;
 
 // struct instance; `fields` holds `def->field_count` values in declaration
@@ -201,7 +212,7 @@ typedef struct {
 typedef struct {
   Obj obj;
   StructDef *def;
-  Value *fields;
+  Value fields[];
 } ObjStruct;
 
 // enum variant instance; `fields` holds `variant->field_count` values in
@@ -210,7 +221,7 @@ typedef struct {
 typedef struct {
   Obj obj;
   VariantDef *variant;
-  Value *fields;
+  Value fields[];
 } ObjEnum;
 
 // a captured variable. while the closure's defining frame is still live the

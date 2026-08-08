@@ -1,0 +1,61 @@
+# A fixed-arity aggregate carries its values inside its own allocation, so its
+# size is a function of its arity — built under collection pressure, since a
+# wrong size is a wrong sweep rather than a wrong value.
+use std::io::print;
+use std::array;
+
+struct Wide {
+    a: int,
+    b: int,
+    c: int,
+    d: int,
+    e: int,
+    f: int,
+    g: int,
+    h: int,
+}
+
+enum Shape {
+    Empty,
+    One(int),
+    Many(int, int, int, int, int),
+}
+
+fun describe(s: Shape) -> int {
+    match s {
+        Shape::Empty => 0,
+        Shape::One(x) => x,
+        Shape::Many(a, b, c, d, e) => a + b + c + d + e,
+    }
+}
+
+fun main() {
+    var w = Wide { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8 };
+    print("{w.a} {w.d} {w.h}");
+#> 1 4 8
+
+    var t = (1, 2, 3, 4, 5, 6, 7, 8);
+    print("{t.0} {t.3} {t.7}");
+#> 1 4 8
+
+    print("{describe(Shape::Empty)}");
+#> 0
+    print("{describe(Shape::One(9))}");
+#> 9
+    print("{describe(Shape::Many(1, 2, 3, 4, 5))}");
+#> 15
+
+    # keep allocating so the aggregates above outlive several collections: a
+    # size that disagrees with the arity corrupts the sweep, not the read.
+    var keep: [Wide] = [];
+    for i in 0..200 {
+        keep.push(Wide { a: i, b: i, c: i, d: i, e: i, f: i, g: i, h: i });
+        var junk: [int] = array::fill(64, i);
+        junk.clear();
+    }
+    var last = keep[199];
+    print("{keep.len()} {last.a} {last.h}");
+#> 200 199 199
+    print("{w.a} {w.h} {t.0} {t.7}");
+#> 1 8 1 8
+}

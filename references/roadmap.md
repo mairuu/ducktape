@@ -2,9 +2,10 @@
 
 ## Start here
 
-**Last landed:** milestone 108 (`88aba30`) — `Bytes`, and the first thing a
-program can read. 673 tests, clean under debug, `--gc-stress` and
-`make sanitize`. Everything lands on `main`; there are no feature branches.
+**Last landed:** milestone 109 — a fixed-arity aggregate carries its values, so
+constructing one is a single allocation. 675 tests, clean under debug,
+`--gc-stress` and `make sanitize`. Everything lands on `main`; there are no
+feature branches.
 
 **Nothing is blocked, and nothing is owed.** Milestone 95 closed the last entry
 that was not a matter of appetite, and 103 the last one that was already
@@ -13,9 +14,10 @@ that was not a matter of appetite, and 103 the last one that was already
 **The four live directions**, in the order this file recommends them:
 
 1. **The iterator's allocation, and the compiler work behind it** — the only
-   direction left that is not breadth. Measured: `Some(x)` is 78% of what an
-   iterator costs and a call frame is 6%. Three steps, each useful alone — a
-   non-allocating `Option`, then inlining, then a CFG.
+   direction left that is not breadth. Milestone 109 took the first ~25% of it by
+   deleting the *second* allocation; `Some(x)` is still ~85% of what an iterator
+   costs and a call frame ~6%. Three steps, each useful alone — a non-allocating
+   `Option`, then inlining, then a CFG.
 2. **std breadth on the natives** — every piece with a design question in it is
    spent, so what remains is typing.
 3. **`Eq`** — recorded as *declined*, by two consumers that were asked for it by
@@ -288,6 +290,45 @@ to keep this file small. Everything from 100 on is below.
   opens and then refuses — and is tested). Remainder: no write side, no stdin,
   no `b[i]`, and no `reserve`/`extend`/`slice` on a `Bytes`.
 
+- **109. A fixed-arity aggregate carries its values.** A tuple, a struct instance
+  and an enum instance hold their values inside their own allocation as a
+  flexible array member, so constructing one calls the allocator once instead of
+  twice.
+  Design: `runtime.md` "A fixed-arity aggregate carries its values" + "The cost
+  model". **THE FINDING: the `Some(x)` that milestone 108 measured at 60.6ns was
+  two allocations, and the roadmap had recommended a representation change to fix
+  what was really a layout one.** `heap_enum` built the fields array and then the
+  object pointing at it, so every `Some`, every struct literal and every tuple
+  paid two mallocs, two sweeps and two entries on the all-objects list. The
+  eligibility rule is *growable versus not*: a tuple's length is part of its type
+  and a struct's field count comes from its declaration, so neither can grow,
+  while an `ObjArray` is disqualified by `heap_array_reserve` moving its buffer.
+  **SECOND FINDING: folding the values in makes initializing them provably dead
+  code.** Each constructor has exactly one caller — `OP_TUPLE`, `OP_STRUCT`,
+  `OP_ENUM` — and each fills every slot from the stack before anything can
+  allocate, so no collection ever sees a raw one; the `val_unit()` pre-fill was a
+  wasted `Value` write per field, and deleting it is a third of the milestone's
+  win at arity 2. What replaces it is a `DEBUG`-only poison (an unmappable
+  pointer), which costs nothing in release and turns a future mid-fill allocation
+  into a crash in the collector instead of a garbage pointer traced in silence.
+  Measured, two binaries interleaved, best-of-9 over 3,000,000 elements, as ns
+  per element over each binary's own `for` baseline: `it.next()` +81 → **+61**, a
+  `Some(x)` minted and matched +70 → **+52**, a 2-field struct literal +59 →
+  **+35**, a 2-tuple +61 → **+34**, and the no-aggregate control +7 → +4. **The
+  win grows with arity** (a per-object cost plus a per-field write), but **the
+  shares do not move** — the `Option` is still ~85% of an iterator's overhead, so
+  item 1's remaining steps keep their ranking against a lower ceiling. Not a
+  reader changed anywhere: `e->fields` is the same `Value *` after array decay,
+  so all 107 use sites compiled untouched. No opcode, no image change. Sabotage
+  12/12 attempted, 10 bit — the two no-ops are honest, one being the deleted
+  pre-fill (dead by construction, and the poison that replaced it *does* bite,
+  though only under `--gc-stress`) and the other milestone 67's singleton, whose
+  sharing the language cannot observe by design. New: an assertion in
+  `heap_destroy` that `bytes_allocated` is back to zero, which is what checks
+  that `obj_size` reports the size an object was allocated with now that only its
+  arity records it. Remainder: the values still cost a `Value` each, so the
+  representation question item 1 opens is untouched.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -305,6 +346,12 @@ wrong, and it landed in milestones 94–95.
    measurement under it: an iterator's `next()` costs 77.5ns/elem over the
    desugared loop, of which the call frame is 4.6 and the `Some(x)` it mints and
    destructures is 60.6 (`runtime.md` "The cost model" has the table).
+
+   **Milestone 109 spent the cheap quarter of this** — the `Some(x)` was *two*
+   allocations, and a fixed-arity aggregate now carries its values, so it is one.
+   That moved `it.next()` down ~25% and every struct literal ~40% without
+   touching the representation of anything. What is left below is unchanged in
+   kind, aimed at a ceiling that is now ~52ns rather than ~60.
 
    **THE FINDING, before any of it is built: `next()` is expensive and the call
    is not why.** The frame is 6% and the `Option` is 78%, so perfect inlining

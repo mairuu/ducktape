@@ -131,9 +131,9 @@ list used by sweep):
 | `OBJ_STRING` | interned: `len`, cached `hash`, flexible `chars[]` (NUL-terminated) |
 | `OBJ_STRBUF` | `len` written bytes inside a buffer of `cap`, `char *bytes` — a growable text buffer, deliberately *not* interned; see "Growing a string buffer" |
 | `OBJ_ARRAY` | `count` live values inside a buffer of `cap`, `Value *items` — see "Growing an array" |
-| `OBJ_TUPLE` | `count`, `Value *items` — the same shape minus the capacity (a tuple's length is part of its type, so it can never grow), kept as a distinct kind so printing/equality read as a tuple |
-| `OBJ_STRUCT` | `StructDef *def`, `Value *fields` (`def->field_count` entries, declaration order — not necessarily the initializer's source order) |
-| `OBJ_ENUM` | `VariantDef *variant`, `Value *fields` (`variant->field_count` entries, declaration order) |
+| `OBJ_TUPLE` | `count`, flexible `items[]` — the same shape minus the capacity, kept as a distinct kind so printing/equality read as a tuple |
+| `OBJ_STRUCT` | `StructDef *def`, flexible `fields[]` (`def->field_count` entries, declaration order — not necessarily the initializer's source order) |
+| `OBJ_ENUM` | `VariantDef *variant`, flexible `fields[]` (`variant->field_count` entries, declaration order) |
 | `OBJ_CLOSURE` | `FunDef *fun`, `ObjUpvalue **upvalues` (`upvalue_count` entries) — a capturing function value |
 | `OBJ_UPVALUE` | `Value *location` (→ a live stack slot while open, → `closed` once closed), `closed`, `next` (open-list link) |
 | `OBJ_DYN` | `Value inner` (the coerced value, stored as-is), `VTable *vtable` — a trait object |
@@ -141,6 +141,40 @@ list used by sweep):
 `StructDef`/`EnumDef`/`VariantDef` pointers are arena-owned (live for the
 whole compilation), not GC objects, so marking a struct/enum instance walks
 its `fields` array but never touches the def pointer itself.
+
+### A fixed-arity aggregate carries its values
+
+A tuple, a struct instance and an enum instance are all **fixed-arity**: a
+tuple's length is part of its type, and a struct's or a variant's field count
+comes from its declaration, so none of them can ever grow. That is what lets
+their values live inside the object's own allocation as a flexible array member,
+the way an `ObjString`'s bytes do — **one `heap_alloc` per instance instead of
+two**. An `ObjArray` cannot join them because `heap_array_reserve` moves its
+buffer, which a flexible array member forbids; the line is growable versus not.
+
+Three consequences, in the order they matter:
+
+- **The object's size is a function of its arity**, and the arity is recorded
+  only on the def (or, for a tuple, in `count`). So `obj_size` has to read it
+  back from the same place the constructor read it, because there is no stored
+  byte count. A disagreement between the two is a malloc-level corruption rather
+  than a wrong value, which is what `tests/run/aggregate_arity.dt` builds under
+  collection pressure to pin, and what the `bytes_allocated == 0` assertion in
+  `heap_destroy` checks over every program the suite runs.
+- **The "allocate the payload first" ordering stops applying.** A growable object
+  builds its buffer before its header so a collection inside the second
+  allocation cannot see a half-built object on the all-objects list. With one
+  allocation there is no window at all, so the hazard is gone rather than
+  handled.
+- **The values arrive unfilled, and that is load-bearing.** Each constructor has
+  exactly one caller — `OP_TUPLE`, `OP_STRUCT`, `OP_ENUM` — and each writes every
+  slot from the stack before doing anything that can allocate, so no collection
+  ever traces a raw slot. Initializing them to unit first would be a wasted
+  `Value` write per field, measurably (see "The cost model"). Under `DEBUG` the
+  slots are poisoned with an unmappable pointer instead, so a future caller that
+  allocates mid-fill crashes in the collector rather than tracing garbage in
+  silence — `--gc-stress` collects at every allocation, which is what makes the
+  suite the check on it.
 
 ### Fieldless defs are singletons
 
@@ -1515,6 +1549,32 @@ reach whatever the call costs; and the one change that would move this is an
 representation, not an optimisation, and one that pays at every `pop`, `find`,
 `get` and map lookup rather than only here. Milestone 67 already did the other
 half: `None` is interned, so it costs nothing.
+
+**Where that cost actually was: two allocations, not one.** Before milestone 109
+every aggregate construction called the allocator twice — once for the values and
+once for the object pointing at them — so the 60.6ns above was two mallocs, two
+sweeps and two entries on the all-objects list. Folding the values into the
+object (see "A fixed-arity aggregate carries its values") makes it one. Measured
+on one machine in one session, the two binaries interleaved, best-of-9 over
+3,000,000 elements, as ns/elem *over that binary's own* `for` baseline — the
+absolute figures run ~15% higher than the table above because the machine is
+slower, which is why the comparison is a delta:
+
+| | before | after |
+|---|---|---|
+| through one function call (the control: no aggregate) | +7 | +4 |
+| minting a `Some(x)` and matching it | +70 | **+52** |
+| `it.next()`, the real thing | +81 | **+61** |
+| a 2-field struct literal | +59 | **+35** |
+| a 2-tuple | +61 | **+34** |
+
+Two readings of that. **The win grows with arity** — a 1-field `Some` gains 26%
+and a 2-field struct 41% — because what is deleted is a per-*object* cost plus a
+per-*field* write, and the wider the aggregate the more of the second there is.
+And **the share is unchanged**: the `Option` is still ~85% of what `it.next()`
+costs over the `for`, so the conclusion above stands with a lower ceiling. A
+non-allocating `Option` is aiming at ~52ns rather than ~60, and inlining still
+buys only the frame.
 
 This is also why a stream's `Item` must be a chunk or a line and never a byte
 (`language.md` "`std::bytes`"): at 8 KiB per item the whole 103ns amortises to
