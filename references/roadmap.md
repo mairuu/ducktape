@@ -2,7 +2,7 @@
 
 ## Start here
 
-**Last landed:** milestone 112 (`SHA`) — `unused_item` now reports a `pub` item
+**Last landed:** milestone 112 (`69a007c`) — `unused_item` now reports a `pub` item
 too, since a program's tree is its whole audience. 686 tests, clean under debug,
 `--gc-stress` and `make sanitize`. Everything lands on `main`; there are no
 feature branches.
@@ -402,7 +402,7 @@ to keep this file small. Everything from 100 on is below.
   visibility of its own); and an item reached only from a dead one is reported
   *with* it rather than after.
 
-- **112. A program's tree is its whole audience** (`SHA`) — `unused_item` now
+- **112. A program's tree is its whole audience** (`69a007c`) — `unused_item` now
   reports a `pub` item as well, and the walk it needs became tree-wide.
   Design: `language.md` "An item nothing reaches", `architecture.md` "An item
   nothing reaches (`unused_item`)", `overview.md` "Pipeline" (a sixth phase).
