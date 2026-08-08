@@ -869,7 +869,74 @@ unified" limit stopped being a blocker and became a *cost*: `Output` works, it
 just has to be written down at every bound that keeps the result, because
 nothing infers one.)
 
-1. **Growing std on top of the natives** — the mechanism landed in milestone
+1. **The allocation the iterator pays, and the compiler work behind it.**
+   The one direction here that is not breadth. Measured 2026-08-08, `-O2`,
+   best-of-7 over 3M elements, process startup subtracted:
+
+   | | ns/elem | vs plain `for` |
+   |---|---|---|
+   | `for x in xs` | 25.6 | — |
+   | `+` a call frame | 30.2 | **+4.6** |
+   | `+` `Some(x)` and matching it | 86.2 | **+60.6** |
+   | `+` call *and* `Some(x)` | 91.4 | +65.8 |
+   | `it.next()` (the real thing) | 103.1 | +77.5 |
+
+   **THE FINDING, before any of it is built: `next()` is expensive and the call
+   is not why.** A frame is 4.6ns of the 77.5ns an iterator costs over the
+   desugared loop — 6%. The other 78% is allocating the `Some(x)` and tearing it
+   apart again, plus the collection that 3M dead enums provoke. So perfect
+   inlining would take `next()` from 103ns to ~98ns and change no decision:
+   milestone 108's chunk-granularity rule for streaming stands either way, since
+   at 8 KiB per item the per-item cost is 0.01 ns/byte.
+
+   That reframes what is worth building, into three steps that are each useful
+   alone and are listed in the order their payoff arrives:
+
+   1. **`Option<T>` that does not allocate.** Milestone 67 interned the *unit*
+      variants, so `None` is already free; `Some(x)` is the half left. For a `T`
+      that fits in one `Value` it could be a tagged `Value` rather than an
+      `ObjEnum`. This is a **representation** change, not an optimiser: no new
+      analysis, no IR, and it pays on every `pop`, `first`, `find`, `get`, `as?`
+      and hashmap lookup in the language rather than only inside a loop. It is
+      also the honest version of "foundation for the library" — the rest of this
+      item is not that.
+   2. **Inlining.** Feasible on the AST *today*, and the pieces exist:
+      `mono_request` already does `*instance = *origin` and compiles the same
+      node tree under a caller-supplied context (`cg->subst`), so "compile a body
+      in someone else's context" is built — inlining swaps the context from the
+      caller's types to the caller's frame and emits into the caller's chunk.
+      Milestone 88 makes the slot renumbering tractable (a local's slot is a
+      *stack position*, computed incrementally), and milestone 98's landing pads
+      are what an inlined `return` becomes. Depth capping is `mono`'s
+      `inst_depth`. What it buys directly is 4.6ns; what it buys *structurally*
+      is putting a `Some(x)` and the match that consumes it in one function.
+   3. **A CFG, and only then escape analysis.** The AST cannot carry this: no
+      control-flow graph, no def-use chains, and aggregates are handles so
+      aliasing is real. **It already has two named consumers**, which is what
+      separates it from architecture for its own sake — this item's escape
+      analysis, and milestone 107's remainder (per-store liveness, recorded in
+      the warts below as needing exactly this). Several milestones, not one.
+
+   **The shortcut worth knowing:** the pattern that costs the 60ns is narrow —
+   `while var Option::Some(x) = it.next()`. Once `next()` is inlined, the
+   variant is constructed and destructured in one expression tree with nothing
+   able to name it in between, so eliding it is a **peephole** (a match whose
+   scrutinee is a variant construction), not escape analysis. Reads the same way
+   milestone 107's `write_target` did: true by construction rather than by a
+   list. The general chain needs an IR; this specific win does not.
+
+   **On throwing the standard library away.** It is ~20 modules written *in
+   ducktape*, so nuking it is cheap and always will be — which is itself an
+   argument for spending sessions on the compiler rather than on breadth, since
+   every std module written now is one to be discarded and every compiler
+   capability survives. What is *not* cheap is the surface the compiler knows by
+   name, and that is the short list to stay conservative about: **14 `@lang`
+   items** (`display`, `ord`, `option`, `iterator`, the six operators, three
+   `pad_*`, `float`), the prelude closure in `src/module.c`, and the seven
+   builtin type names in `type_named_builtin`. `Option` being one of those is
+   why step 1 is a compiler milestone and not a std one.
+
+2. **Growing std on top of the natives** — the mechanism landed in milestone
    16 with a deliberately small registry, and the pieces with a design question
    behind them are done: a growable `ObjArray` (milestone 23, so `std::array`
    has `push`/`pop`), a growable text buffer (milestone 24, so a `string` can be
@@ -985,7 +1052,7 @@ name its own argument without macros, and that `assert_eq`'s `Display` bound is
 bought by the *message* rather than the comparison — belong to item 3 as much
 as here.)
 
-2. **A custom equality trait (`Eq`) — the named consumer has now declined it.**
+3. **A custom equality trait (`Eq`) — the named consumer has now declined it.**
    Not on the main line, and deliberately deferred rather than planned —
    recorded here so the reasoning survives. Milestone 63 built the hash map this
    item had been waiting for and found it wanted `Hash` and nothing else: `==`
@@ -1021,7 +1088,7 @@ as here.)
    to address — and milestone 63 showed the other way out of it, since
    `std::hash` simply declines to implement `Hash for float` at all.
 
-3. **Growing `std::io` past one read.** Milestone 108 spent the item that stood
+4. **Growing `std::io` past one read.** Milestone 108 spent the item that stood
    here — a packed `Bytes`, shipping with the milestone that first had something
    to read — and what is left of the direction is breadth with one decision in
    it. `read_file` is a single call that appends a whole file or fails; there is
@@ -1304,7 +1371,7 @@ via `Module.decl_base`) and is not part of the main line.
   one is still a bare `int` byte offset, so cutting inside a character is a
   runtime error rather than something that cannot be written. An opaque
   `StrPos`, obtainable only from a search or a walk, would make it the latter
-  and is roadmap item 3 below. The check itself is not the cost the byte-indexed
+  and is roadmap item 4 below. The check itself is not the cost the byte-indexed
   API was avoiding — it is two O(1) tests at `slice` — but the *spelling* is
   still one that lets a program name a position it did not get from the string
 - nothing hands over a `string`'s bytes: `len` counts them, `matches_at`
