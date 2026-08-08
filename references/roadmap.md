@@ -2,7 +2,7 @@
 
 ## Start here
 
-**Last landed:** milestone 110 (`TBD`) — a one-field enum variant carries itself
+**Last landed:** milestone 110 (`71d2684`) — a one-field enum variant carries itself
 in the `Value`, so `Some(x)` no longer allocates. 677 tests, clean under debug,
 `--gc-stress` and `make sanitize`. Everything lands on `main`; there are no
 feature branches.
@@ -330,7 +330,7 @@ to keep this file small. Everything from 100 on is below.
   arity records it. Remainder: the values still cost a `Value` each, so the
   representation question item 1 opens is untouched.
 
-- **110. A one-field variant needs no object** (`TBD`) — a variant with exactly
+- **110. A one-field variant needs no object** (`71d2684`) — a variant with exactly
   one field whose kind fits a machine word becomes a `VAL_VARIANT` — the variant
   pointer plus the field's bits, inside the `Value` — so `Some(x)` stops
   allocating.
