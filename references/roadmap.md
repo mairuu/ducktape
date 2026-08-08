@@ -2,8 +2,8 @@
 
 ## Start here
 
-**Last landed:** milestone 109 — a fixed-arity aggregate carries its values, so
-constructing one is a single allocation. 675 tests, clean under debug,
+**Last landed:** milestone 109 (`f45f176`) — a fixed-arity aggregate carries its
+values, so constructing one is a single allocation. 675 tests, clean under debug,
 `--gc-stress` and `make sanitize`. Everything lands on `main`; there are no
 feature branches.
 
@@ -290,10 +290,10 @@ to keep this file small. Everything from 100 on is below.
   opens and then refuses — and is tested). Remainder: no write side, no stdin,
   no `b[i]`, and no `reserve`/`extend`/`slice` on a `Bytes`.
 
-- **109. A fixed-arity aggregate carries its values.** A tuple, a struct instance
-  and an enum instance hold their values inside their own allocation as a
-  flexible array member, so constructing one calls the allocator once instead of
-  twice.
+- **109. A fixed-arity aggregate carries its values** (`f45f176`) — a tuple, a
+  struct instance and an enum instance hold their values inside their own
+  allocation as a flexible array member, so constructing one calls the allocator
+  once instead of twice.
   Design: `runtime.md` "A fixed-arity aggregate carries its values" + "The cost
   model". **THE FINDING: the `Some(x)` that milestone 108 measured at 60.6ns was
   two allocations, and the roadmap had recommended a representation change to fix
