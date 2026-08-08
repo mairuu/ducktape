@@ -30,9 +30,11 @@ implemented, with the not-yet-implemented table), `architecture.md`
 `grammar.ebnf`. **When you change syntax, pipeline behavior, or the runtime
 subset, update the matching references/ file in the same change.** Old notes
 in `.vscode/ref/` are historical — do not trust them.
-Completed milestones through 75 are archived in `references/history/` (two
-files, split at 54); the roadmap keeps 76 on. Archive again when it passes
-~150KB.
+Completed milestones through 99 are archived in `references/history/` (three
+files, split at 54, 75 and 99); the roadmap keeps 100 on. **Archive again when
+`roadmap.md` passes ~100KB** — the trigger is greppability, not disk, and past
+that the Done section stops being something a session reads. `roadmap.md` opens
+with a **Start here** block: keep it current, it is what answers "where am I".
 
 ### One narrative, one home
 

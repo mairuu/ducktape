@@ -2,7 +2,8 @@
 
 Split out of `references/roadmap.md` so the live roadmap stays greppable, the
 same way `done-through-m54.md` was. This is history: nothing here is a plan.
-The roadmap keeps milestone 76 onward, the "Next" list and the open warts.
+Milestones 76-99 are in `done-m76-m99.md`; the roadmap keeps 100 onward, the
+"Next" list and the open warts.
 
 - **Arithmetic operators over `std::ops` (milestone 55)** — `a + b` on a
   non-numeric type is the call `a.add(b)`, and `sum`/`product` are combinators.
