@@ -1,0 +1,93 @@
+# A one-field variant with a word-sized field lives in the Value itself, with no
+# heap object behind it, while a `range` field or a nested variant still needs
+# one. Both representations are built under collection pressure, since a field
+# the collector cannot see is a swept object rather than a wrong answer.
+use std::io::print;
+use std::array;
+
+enum Cell {
+    Empty,
+    Nums([int]),
+    Span(range),
+    Pair(int, int),
+}
+
+fun total(ns: [int]) -> int {
+    var t = 0;
+    for n in ns {
+        t = t + n;
+    }
+    return t;
+}
+
+fun span(r: range) -> int {
+    var t = 0;
+    for n in r {
+        t = t + n;
+    }
+    return t;
+}
+
+fun sum(c: Cell) -> int {
+    match c {
+        Cell::Empty => 0,
+        Cell::Nums(ns) => total(ns),
+        Cell::Span(r) => span(r),
+        Cell::Pair(a, b) => a + b,
+    }
+}
+
+fun main() {
+    # the inline one, the fieldless one, and the two that stay on the heap
+    print(Cell::Empty);
+#> Empty
+    print(Cell::Nums([1, 2, 3]));
+#> Nums([1, 2, 3])
+    print(Cell::Span(2..9));
+#> Span(2..9)
+    print(Cell::Pair(4, 5));
+#> Pair(4, 5)
+
+    print("{sum(Cell::Empty)} {sum(Cell::Nums([1, 2, 3]))}");
+#> 0 6
+    print("{sum(Cell::Span(2..9))} {sum(Cell::Pair(4, 5))}");
+#> 35 9
+
+    # Option is one of these and nothing more: a nested Some cannot be inline,
+    # so the two spellings sit either side of the fallback.
+    print(Some(41));
+#> Some(41)
+    print(Some(Some(41)));
+#> Some(Some(41))
+    print(Some(0..3));
+#> Some(0..3)
+    var none: Option<int> = None;
+    print(none);
+#> None
+
+    # representation never shows up in equality: it is a function of the field's
+    # kind, so equal values always agree on it.
+    print("{Some(1) == Some(1)} {Some(1) == Some(2)}");
+#> true false
+    print("{Some(0..3) == Some(0..3)} {Some(Some(1)) == Some(Some(1))}");
+#> true true
+    print("{Cell::Pair(1, 2) == Cell::Pair(1, 2)}");
+#> true
+
+    # the field is the only reference to each array, so a collector that does
+    # not trace an inline variant sweeps all 200 of them.
+    var cells: [Cell] = [];
+    for i in 0..200 {
+        cells.push(Cell::Nums(array::fill(3, i)));
+        var junk: [int] = array::fill(64, i);
+        junk.clear();
+    }
+    var total = 0;
+    for c in cells {
+        total = total + sum(c);
+    }
+    print("{cells.len()} {total}");
+#> 200 59700
+    print("{sum(cells[199])}");
+#> 597
+}

@@ -2,8 +2,8 @@
 
 ## Start here
 
-**Last landed:** milestone 109 (`f45f176`) — a fixed-arity aggregate carries its
-values, so constructing one is a single allocation. 675 tests, clean under debug,
+**Last landed:** milestone 110 (`TBD`) — a one-field enum variant carries itself
+in the `Value`, so `Some(x)` no longer allocates. 677 tests, clean under debug,
 `--gc-stress` and `make sanitize`. Everything lands on `main`; there are no
 feature branches.
 
@@ -14,10 +14,11 @@ that was not a matter of appetite, and 103 the last one that was already
 **The four live directions**, in the order this file recommends them:
 
 1. **The iterator's allocation, and the compiler work behind it** — the only
-   direction left that is not breadth. Milestone 109 took the first ~25% of it by
-   deleting the *second* allocation; `Some(x)` is still ~85% of what an iterator
-   costs and a call frame ~6%. Three steps, each useful alone — a non-allocating
-   `Option`, then inlining, then a CFG.
+   direction left that is not breadth. Milestones 109 and 110 spent the first two
+   of its three steps: `Some(x)` was two allocations, then one, and now none.
+   `it.next()` is down from +77.5 to +51ns/elem over the desugared loop, and what
+   is left is no longer an allocation — the remaining two steps are inlining and
+   a CFG.
 2. **std breadth on the natives** — every piece with a design question in it is
    spent, so what remains is typing.
 3. **`Eq`** — recorded as *declined*, by two consumers that were asked for it by
@@ -329,6 +330,44 @@ to keep this file small. Everything from 100 on is below.
   arity records it. Remainder: the values still cost a `Value` each, so the
   representation question item 1 opens is untouched.
 
+- **110. A one-field variant needs no object** (`TBD`) — a variant with exactly
+  one field whose kind fits a machine word becomes a `VAL_VARIANT` — the variant
+  pointer plus the field's bits, inside the `Value` — so `Some(x)` stops
+  allocating.
+  Design: `runtime.md` "A one-field variant needs no object" + "The cost model".
+  **THE FINDING: privileging `Option` would have been more code than not
+  privileging it.** The roadmap asked for a non-allocating `Option`; what the VM
+  needs to answer `OP_TAG` and `value_print` for an inline value is the variant's
+  tag and name, and an `Option`-only representation would have had to carry a lang
+  item into the image format to get them. A `VariantDef *` carries both already —
+  so the general version needs no new opcode, no codegen change, no image change,
+  and one branch in `OP_ENUM`. A user's enum gets the same win measured to the
+  nanosecond, which is the check that nothing is special-cased. Legal because a
+  variant has **no identity the language can observe**: the checker refuses `e.0`,
+  so `OP_FIELD_SET`'s `OBJ_ENUM` arm is unreachable from source and a pattern
+  binds rather than aliases — m67's fieldless singletons are the same argument one
+  field down. **SECOND FINDING, and the expensive one: the field's kind cannot go
+  in the four padding bytes beside `Value.kind`.** A member there is a member
+  every other `val_*` initializer leaves implicitly zero, and GCC answers that by
+  SSE-clearing all 24 bytes then overwriting three quarters of it scalar-wise —
+  `for x in xs { sum += x; }`, with no variant in it at all, went 123ms → 185ms
+  over 3M ints, +8% instructions but **+55% cycles** (store-forwarding stalls).
+  Found only because the harness reports each binary's own `for` baseline, which
+  is the thing that had no business moving. The kind lives in the variant
+  pointer's three spare low bits instead, so every existing `Value` is
+  byte-for-byte what it was; `VAL_VARIANT` being last in `ValueKind` is what keeps
+  a field's kind under 8, pinned by a `static_assert` either side and a `DEBUG`
+  assert on the alignment. Measured, medians of three interleaved runs agreeing to
+  ±2: a `Some(x)` minted and matched +54 → **+38**, `it.next()` +61 → **+51**, a
+  user enum's one-field variant +54 → **+38**, its two-field variant +55 → +56,
+  struct and tuple literals unmoved. Sabotage 12/12
+  attempted, 12 bit — and one bit **only** under `--gc-stress` (dropping the
+  collector's trace of an inline field passes 677/677 plain and segfaults under
+  stress), which is milestone 109's per-gate lesson repeating. Nothing the
+  language does changed: `print` output, equality and every test are identical.
+  Remainder: a field too wide for a word still allocates — a `range` payload and a
+  nested `Some`, the second of which is what bounds the nesting.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -347,11 +386,14 @@ wrong, and it landed in milestones 94–95.
    desugared loop, of which the call frame is 4.6 and the `Some(x)` it mints and
    destructures is 60.6 (`runtime.md` "The cost model" has the table).
 
-   **Milestone 109 spent the cheap quarter of this** — the `Some(x)` was *two*
-   allocations, and a fixed-arity aggregate now carries its values, so it is one.
-   That moved `it.next()` down ~25% and every struct literal ~40% without
-   touching the representation of anything. What is left below is unchanged in
-   kind, aimed at a ceiling that is now ~52ns rather than ~60.
+   **Step 1 is done, in two milestones.** 109 found the `Some(x)` was *two*
+   allocations and made it one; 110 made it none, by carrying a one-field variant
+   in the `Value`. Together they took `it.next()` from +77.5 to +51ns/elem and
+   every struct literal ~40%. **What that changes for steps 2 and 3: the next
+   term is no longer an allocation.** The `Option` is ~75% of the overhead rather
+   than 85%, and the rest is the call frame plus the iterator struct's own field
+   traffic — which is what inlining is for, so the ordering below still holds
+   while the shortcut at the end of this item has lost most of its prize.
 
    **THE FINDING, before any of it is built: `next()` is expensive and the call
    is not why.** The frame is 6% and the `Option` is 78%, so perfect inlining
@@ -361,14 +403,12 @@ wrong, and it landed in milestones 94–95.
    That reframes what is worth building, into three steps that are each useful
    alone and are listed in the order their payoff arrives:
 
-   1. **`Option<T>` that does not allocate.** Milestone 67 interned the *unit*
-      variants, so `None` is already free; `Some(x)` is the half left. For a `T`
-      that fits in one `Value` it could be a tagged `Value` rather than an
-      `ObjEnum`. This is a **representation** change, not an optimiser: no new
-      analysis, no IR, and it pays on every `pop`, `first`, `find`, `get`, `as?`
-      and hashmap lookup in the language rather than only inside a loop. It is
-      also the honest version of "foundation for the library" — the rest of this
-      item is not that.
+   1. ~~**`Option<T>` that does not allocate.**~~ **Done — milestone 110**, and
+      it generalised on the way: it is any one-field variant of any enum, not
+      `Option`, because a variant pointer identifies one and a lang item would
+      have had to be taught to the image format. `runtime.md` "A one-field variant
+      needs no object". What is *not* done is a `T` too wide for a word — a
+      `range` field, or a nested `Some` — which still allocates.
    2. **Inlining.** Feasible on the AST *today*, and the pieces exist:
       `mono_request` already does `*instance = *origin` and compiles the same
       node tree under a caller-supplied context (`cg->subst`), so "compile a body
@@ -386,13 +426,15 @@ wrong, and it landed in milestones 94–95.
       analysis, and milestone 107's remainder (per-store liveness, recorded in
       the warts below as needing exactly this). Several milestones, not one.
 
-   **The shortcut worth knowing:** the pattern that costs the 60ns is narrow —
-   `while var Option::Some(x) = it.next()`. Once `next()` is inlined, the
-   variant is constructed and destructured in one expression tree with nothing
+   **The shortcut worth knowing, and what milestone 110 did to it:** the pattern
+   is narrow — `while var Option::Some(x) = it.next()`. Once `next()` is inlined,
+   the variant is constructed and destructured in one expression tree with nothing
    able to name it in between, so eliding it is a **peephole** (a match whose
    scrutinee is a variant construction), not escape analysis. Reads the same way
    milestone 107's `write_target` did: true by construction rather than by a
-   list. The general chain needs an IR; this specific win does not.
+   list. The general chain needs an IR; this specific win does not. But the prize
+   is much smaller now: it used to be an allocation and is now a `Value` write
+   plus a tag test, so this is a tidiness argument rather than a performance one.
 
    **On throwing the standard library away.** It is ~20 modules written *in
    ducktape*, so nuking it is cheap and always will be — which is itself an

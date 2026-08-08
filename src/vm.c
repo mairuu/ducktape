@@ -655,6 +655,13 @@ static bool run(Vm *vm, int stop_depth) {
       uint16_t enum_slot = READ_U16();
       uint8_t tag = READ_BYTE();
       VariantDef *variant = &vm->exe->enums[enum_slot]->variants[tag];
+      // one word-sized field means no object at all — the whole instance fits
+      // in the Value. See `val_variant`; this is what makes `Some(x)` free.
+      if (variant->field_count == 1 && val_variant_fits(peek(vm, 0))) {
+        Value field = pop(vm);
+        push(vm, val_variant(variant, field));
+        break;
+      }
       Value *elems = vm->sp - variant->field_count; // still-live roots
       ObjEnum *e = heap_enum(vm->heap, variant);
       for (int i = 0; i < variant->field_count; i++) {
@@ -668,6 +675,11 @@ static bool run(Vm *vm, int stop_depth) {
     case OP_FIELD_GET: {
       uint8_t idx = READ_BYTE();
       Value v = pop(vm);
+      if (v.kind == VAL_VARIANT) {
+        assert(idx == 0 && "an inline variant has exactly one field");
+        push(vm, val_variant_field(v));
+        break;
+      }
       Value *fields;
       switch (v.as.obj->kind) {
       case OBJ_TUPLE:
@@ -691,6 +703,9 @@ static bool run(Vm *vm, int stop_depth) {
       uint8_t idx = READ_BYTE();
       Value value = pop(vm);
       Value v = pop(vm);
+      // an inline variant has no slot to write: assignment needs a place, and
+      // the checker refuses field access on an enum, so no source reaches here.
+      assert(v.kind == VAL_OBJ && "OP_FIELD_SET on a value with no fields");
       Value *fields;
       switch (v.as.obj->kind) {
       case OBJ_TUPLE:
@@ -711,9 +726,13 @@ static bool run(Vm *vm, int stop_depth) {
       break;
     }
 
-    case OP_TAG:
-      push(vm, val_int(val_as_enum(pop(vm))->variant->tag));
+    case OP_TAG: {
+      Value v = pop(vm);
+      VariantDef *variant =
+          v.kind == VAL_VARIANT ? val_variant_def(v) : val_as_enum(v)->variant;
+      push(vm, val_int(variant->tag));
       break;
+    }
 
     case OP_MAKE_DYN: {
       VTable *vt = vm->exe->vtables[READ_U16()];

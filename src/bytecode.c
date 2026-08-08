@@ -204,6 +204,11 @@ static void w_const(BcWriter *w, Value v) {
   case VAL_UNIT:
     w_u8(w, BC_C_UNIT);
     break;
+  // unreachable, like the range below: an inline variant is built by OP_ENUM
+  // at runtime, and no literal spells one.
+  case VAL_VARIANT:
+    w->ok = bc_error("an inline enum variant in a constant pool");
+    return;
   // unreachable: codegen never interns a range, so no pool holds one. Kept
   // because the switch is over ValueKind.
   case VAL_RANGE:

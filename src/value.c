@@ -7,6 +7,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+// the other half of `val_variant`'s bit trick: the field's kind is only spare
+// room in a VariantDef pointer if the pointer never uses those bits.
+static_assert(alignof(VariantDef) > VAL_INL_KIND_MASK,
+              "a VariantDef must be aligned past the field-kind bits");
+
 int value_format_float(double f, char *buf, size_t cap) {
   if (isnan(f)) {
     return snprintf(buf, cap, "NaN");
@@ -48,6 +53,27 @@ int value_format_float(double f, char *buf, size_t cap) {
   return len;
 }
 
+// shared by the two representations of a variant: an ObjEnum and an inline
+// one print identically, because which one it is says nothing about the value.
+static void print_variant(const VariantDef *variant, const Value *fields,
+                          FILE *out) {
+  fprintf(out, SV_FMT, SV_ARG(variant->name));
+  if (variant->field_count == 0) {
+    return;
+  }
+  fprintf(out, variant->is_tuple ? "(" : " { ");
+  for (int i = 0; i < variant->field_count; i++) {
+    if (i > 0) {
+      fprintf(out, ", ");
+    }
+    if (!variant->is_tuple) {
+      fprintf(out, SV_FMT ": ", SV_ARG(variant->fields[i].ident.name));
+    }
+    value_print(fields[i], out);
+  }
+  fprintf(out, variant->is_tuple ? ")" : " }");
+}
+
 void value_print(Value v, FILE *out) {
   switch (v.kind) {
   case VAL_INT:
@@ -82,6 +108,11 @@ void value_print(Value v, FILE *out) {
   case VAL_FUN:
     fprintf(out, "<fun " SV_FMT ">", SV_ARG(v.as.fun->name));
     break;
+  case VAL_VARIANT: {
+    Value field = val_variant_field(v);
+    print_variant(val_variant_def(v), &field, out);
+    break;
+  }
   case VAL_OBJ:
     switch (v.as.obj->kind) {
     case OBJ_STRING:
@@ -155,22 +186,7 @@ void value_print(Value v, FILE *out) {
     }
     case OBJ_ENUM: {
       ObjEnum *e = val_as_enum(v);
-      VariantDef *variant = e->variant;
-      fprintf(out, SV_FMT, SV_ARG(variant->name));
-      if (variant->field_count == 0) {
-        break;
-      }
-      fprintf(out, variant->is_tuple ? "(" : " { ");
-      for (int i = 0; i < variant->field_count; i++) {
-        if (i > 0) {
-          fprintf(out, ", ");
-        }
-        if (!variant->is_tuple) {
-          fprintf(out, SV_FMT ": ", SV_ARG(variant->fields[i].ident.name));
-        }
-        value_print(e->fields[i], out);
-      }
-      fprintf(out, variant->is_tuple ? ")" : " }");
+      print_variant(e->variant, e->fields, out);
       break;
     }
     case OBJ_CLOSURE:
@@ -211,6 +227,12 @@ bool value_equal(Value a, Value b) {
            a.as.range.end == b.as.range.end;
   case VAL_FUN:
     return a.as.fun == b.as.fun;
+  // Two equal values never differ in representation — whether a variant goes
+  // inline is decided by its field's *kind*, which equal fields share — so this
+  // never has to compare an inline variant against an ObjEnum and say yes.
+  case VAL_VARIANT:
+    return val_variant_def(a) == val_variant_def(b) &&
+           value_equal(val_variant_field(a), val_variant_field(b));
   case VAL_OBJ: {
     if (a.as.obj->kind != b.as.obj->kind) {
       return false;

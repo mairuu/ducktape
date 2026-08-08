@@ -22,6 +22,7 @@ points at a GC-managed heap object (`include/object.h`):
 | `VAL_RANGE` | start, end (`int64_t`) — always half-open; see `OP_RANGE` |
 | `VAL_FUN` | `FunDef *` (top-level function or method — a callable with no captures) |
 | `VAL_OBJ` | `Obj *` — string, array, tuple, struct, enum instance, or closure, see "Heap & GC" |
+| `VAL_VARIANT` | a one-field enum variant with no object behind it: the `VariantDef *` (with the field's kind in its spare low bits) and the field's word — see "A one-field variant needs no object" |
 
 A `char` is a plain value, not a heap object, which is the whole of its cost in
 the runtime: no allocation, no interning, no GC involvement, and `==` is a
@@ -58,6 +59,57 @@ nor an exponent survived — otherwise `1.0` would print as `1` and be
 indistinguishable from the `int`. `NaN`, `inf`, and `-inf` are spelled out.
 The scanner accepts exponent literals (`1e+18`), so every form printed is one
 the language can also read.
+
+### A one-field variant needs no object
+
+`OP_ENUM` looks at the variant it is about to build, and a variant with
+**exactly one field whose kind fits a machine word** becomes a `VAL_VARIANT`
+instead of an `ObjEnum`: the variant pointer and the field's bits, inside the
+Value, with no allocation and nothing for the sweep to do. `Option::Some(x)` is
+what this was built for — an iterator's `next()` minted one per element — but
+nothing in the mechanism is about `Option`. A variant pointer names any variant
+of any enum, so a user's `E::One(n)` gets the same treatment, and the
+`@lang("option")` item is never consulted. That is also why it is the cheaper
+design: blessing `Option` would need the VM to carry Some's tag and name, which
+means putting a lang item in the image format, where a variant pointer carries
+both already.
+
+**Why it is legal: a variant has no identity the language can observe.** The
+checker refuses field access on an enum (`e.0` is an error, which is what makes
+`OP_FIELD_SET`'s `OBJ_ENUM` arm unreachable from source), and a pattern *binds*
+rather than aliases — so there is no way to write through an instance and no way
+to compare two by address. Aggregates are otherwise handles, which is exactly
+why a struct or a tuple cannot take this path however narrow it is. Milestone
+67's fieldless singletons are this same argument one field further down.
+
+**Two fields fall back to the heap**, both because the variant pointer has taken
+half of what a Value has:
+
+- a `range` field (`Some(0..3)`) — the one kind wider than a word;
+- a field that is itself an inline variant (`Some(Some(1))`) — which is what
+  bounds the nesting, so `val_variant_field` never recurses more than once and
+  neither does `gc_mark_value`.
+
+Which representation a value gets is decided by the field's *kind* alone, so it
+is deterministic: two equal values always agree on it, and `value_equal` never
+has to compare an inline variant against an `ObjEnum` and answer yes. Both print
+identically (`print_variant` is shared), because which one it is says nothing
+about the value.
+
+**The field's kind lives in the variant pointer's three spare low bits, and that
+is a measured decision, not a space saving.** There are four unused bytes beside
+`Value.kind` — the padding before the union — and a member there is the obvious
+place for it. It costs **~20ns per interpreted loop iteration in programs with no
+variant in them at all**: a member outside the union is one every other `val_*`
+initializer leaves implicitly zero, and GCC answers that by clearing all 24 bytes
+with an SSE store and then overwriting three quarters of it scalar-wise, which
+stalls store-forwarding. Measured, `for x in xs { sum += x; }` over 3,000,000
+ints: 123ms → 185ms, +8% instructions but +55% cycles. Inside the union every
+existing Value stays byte-for-byte what it was. `VAL_VARIANT` is last in
+`ValueKind` so every kind a *field* can have is under 8; a `static_assert` in
+`value.h` pins that, one in `value.c` pins the `VariantDef` alignment the bits
+are stolen from, and a `DEBUG` assert in `val_variant` checks the allocator
+actually delivered it.
 
 ## Bytecode (`include/chunk.h`)
 
@@ -133,14 +185,16 @@ list used by sweep):
 | `OBJ_ARRAY` | `count` live values inside a buffer of `cap`, `Value *items` — see "Growing an array" |
 | `OBJ_TUPLE` | `count`, flexible `items[]` — the same shape minus the capacity, kept as a distinct kind so printing/equality read as a tuple |
 | `OBJ_STRUCT` | `StructDef *def`, flexible `fields[]` (`def->field_count` entries, declaration order — not necessarily the initializer's source order) |
-| `OBJ_ENUM` | `VariantDef *variant`, flexible `fields[]` (`variant->field_count` entries, declaration order) |
+| `OBJ_ENUM` | `VariantDef *variant`, flexible `fields[]` (`variant->field_count` entries, declaration order) — reached only when the variant has no fields (a singleton, below) or more than one, or its one field is too wide; see "A one-field variant needs no object" |
 | `OBJ_CLOSURE` | `FunDef *fun`, `ObjUpvalue **upvalues` (`upvalue_count` entries) — a capturing function value |
 | `OBJ_UPVALUE` | `Value *location` (→ a live stack slot while open, → `closed` once closed), `closed`, `next` (open-list link) |
 | `OBJ_DYN` | `Value inner` (the coerced value, stored as-is), `VTable *vtable` — a trait object |
 
 `StructDef`/`EnumDef`/`VariantDef` pointers are arena-owned (live for the
 whole compilation), not GC objects, so marking a struct/enum instance walks
-its `fields` array but never touches the def pointer itself.
+its `fields` array but never touches the def pointer itself. `gc_mark_value`
+still has to look inside a `VAL_VARIANT`, which is not a `VAL_OBJ` but can carry
+one as its field.
 
 ### A fixed-arity aggregate carries its values
 
@@ -1547,8 +1601,9 @@ inlining `next` would buy ~5ns of ~103, so a per-*byte* stream stays out of
 reach whatever the call costs; and the one change that would move this is an
 `Option<T>` that does not allocate for a `T` that fits in a `Value` — a
 representation, not an optimisation, and one that pays at every `pop`, `find`,
-`get` and map lookup rather than only here. Milestone 67 already did the other
-half: `None` is interned, so it costs nothing.
+`get` and map lookup rather than only here. Milestone 67 had already done the
+other half (`None` is interned, so it costs nothing), and milestone 110 did this
+one; the two tables below are the two steps that got there.
 
 **Where that cost actually was: two allocations, not one.** Before milestone 109
 every aggregate construction called the allocator twice — once for the values and
@@ -1575,6 +1630,32 @@ And **the share is unchanged**: the `Option` is still ~85% of what `it.next()`
 costs over the `for`, so the conclusion above stands with a lower ceiling. A
 non-allocating `Option` is aiming at ~52ns rather than ~60, and inlining still
 buys only the frame.
+
+**And what the remaining allocation was worth: about a third.** Milestone 110
+deleted it for a one-field variant ("A one-field variant needs no object"), same
+methodology, each figure the median of three interleaved runs that agreed to ±2:
+
+| | before | after |
+|---|---|---|
+| through one function call (the control: no variant) | +4 | +6 |
+| minting a `Some(x)` and matching it | +54 | **+38** |
+| `it.next()`, the real thing | +61 | **+51** |
+| a user enum's one-field variant | +54 | **+38** |
+| a user enum's two-field variant (still an `ObjEnum`) | +55 | **+56** |
+| a 2-field struct literal | +36 | +36 |
+| a 2-tuple | +37 | +37 |
+
+The last three rows are the ones worth reading. A user's enum gains exactly what
+`Option` gains, which is the check that nothing here is special-cased; a two-field
+variant pays only the noise floor for the `field_count == 1` test it now fails;
+and structs and tuples do not move, which is what says the `Value` change cost
+nothing to the programs that never build a variant.
+
+So the `Option` is now ~75% of `it.next()`'s overhead rather than ~85%, and the
+next term is no longer an allocation — what is left is the call frame plus the
+iterator struct's own field reads and writes. The direct `Some` case gained 16ns
+where `it.next()` gained 10, so a third of what `next` costs beyond the mint is
+elsewhere.
 
 This is also why a stream's `Item` must be a chunk or a line and never a byte
 (`language.md` "`std::bytes`"): at 8 KiB per item the whole 103ns amortises to

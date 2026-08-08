@@ -489,6 +489,10 @@ static void mark_obj(Obj *o) {
 void gc_mark_value(Value v) {
   if (v.kind == VAL_OBJ) {
     mark_obj(v.as.obj);
+  } else if (v.kind == VAL_VARIANT) {
+    // one level deep, always: a variant only goes inline when its field is not
+    // itself one (`val_variant_fits`), so this recursion cannot go further.
+    gc_mark_value(val_variant_field(v));
   }
 }
 
