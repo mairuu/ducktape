@@ -560,33 +560,6 @@ to keep this file small. Everything from 100 on is below.
   the code above it constructed is entered by tag: the construction, the tag
   test and the field read all go, and `it.next()` costs 17ns/elem over the
   `for` where it cost 48.
-
-- **117. The struct nothing else can see** (`15b2f0f`) — a `var` bound to a struct
-  or tuple literal and mentioned only as `x.f` is compiled as its fields: no
-  construction, each field a slot, a read or write an `OP_GET_LOCAL`/
-  `OP_SET_LOCAL`. A 2-field struct literal costs 7.8ns/elem over the plain `for`
-  where it cost 36 and a 2-tuple 7.3 where it cost 39 — ~80% off both, and the
-  allocation is simply gone.
-  Design: `runtime.md` "Escape analysis and scalar replacement" and the cost
-  model's last table. **THE FINDING: the escape question is SYNTACTIC, and the
-  graph is not wanted after all.** An aggregate is a handle, but there are no
-  borrows to take and no address to pass, so a *bare mention* is the only way one
-  reaches anywhere else — `x.f` is the one shape that keeps a value in, and
-  everything else escapes. So this is one walk asking "is every mention a field
-  access", sharing `scan_expr` with the inline-cost client, and the def-use
-  chains this file spent two milestones promising it would need were never
-  needed. Two other things fell out: **inside a closure even `x.f` escapes**,
-  since a capture is by slot and an exploded binding is several; and **one
-  `locals` entry per slot** (the first named, the rest anonymous) is what let
-  every scope's pop count stay a difference of `local_count`, so no other
-  bookkeeping in codegen learned that a binding can be more than one slot.
-  Sabotage 13/13 bit on the ten that were real; **three were no-ops**, and each
-  named its own boundary rather than a test gap — the `arity < 1` early-out
-  returns what the walk would have anyway, `locals_base` cannot matter where a
-  `VarEntry` is matched by identity, and the `dyn` guard is reachable only for a
-  `dyn` local nothing uses, since the one thing a `dyn` does is take a method
-  call. Remainder: a receiver escapes, so an iterator does not explode — see
-  item 1.
   Design: `runtime.md` "Threading a match into its constructions", the new
   cost-model table, "Match compilation", "Inlining".
   **THE FINDING: the per-path fact needs no analysis, because a path can be
@@ -621,6 +594,33 @@ to keep this file small. Everything from 100 on is below.
   covers every tag an arm-only match can produce — so the trap it patches is a
   net with no test behind it.
 
+- **117. The struct nothing else can see** (`15b2f0f`) — a `var` bound to a
+  struct or tuple literal and mentioned only as `x.f` is compiled as its fields:
+  no construction, each field a slot, a read or write an `OP_GET_LOCAL`/
+  `OP_SET_LOCAL`. A 2-field struct literal costs 7.8ns/elem over the plain `for`
+  where it cost 36 and a 2-tuple 7.3 where it cost 39 — ~80% off both, and the
+  allocation is simply gone.
+  Design: `runtime.md` "Escape analysis and scalar replacement" and the cost
+  model's last table. **THE FINDING: the escape question is SYNTACTIC, and the
+  graph is not wanted after all.** An aggregate is a handle, but there are no
+  borrows to take and no address to pass, so a *bare mention* is the only way
+  one reaches anywhere else — `x.f` is the one shape that keeps a value in, and
+  everything else escapes. So this is one walk asking "is every mention a field
+  access", sharing `scan_expr` with the inline-cost client, and the def-use
+  chains this file spent two milestones promising it would need were never
+  needed. Two other things fell out: **inside a closure even `x.f` escapes**,
+  since a capture is by slot and an exploded binding is several; and **one
+  `locals` entry per slot** (the first named, the rest anonymous) is what let
+  every scope's pop count stay a difference of `local_count`, so no other
+  bookkeeping in codegen learned that a binding can be more than one slot.
+  Sabotage 13/13 bit on the ten that were real; **three were no-ops**, and each
+  named its own boundary rather than a test gap — the `arity < 1` early-out
+  returns what the walk would have anyway, `locals_base` cannot matter where a
+  `VarEntry` is matched by identity, and the `dyn` guard is reachable only for a
+  `dyn` local nothing uses, since the one thing a `dyn` does is take a method
+  call. Remainder: a receiver escapes, so an iterator does not explode — see
+  item 1.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -641,10 +641,10 @@ wrong, and it landed in milestones 94–95.
 
    **Where it stands after 117: ~15ns/elem, from 77.5.** The allocation, the
    frame, the call's dispatches and the `Option` itself are all gone; what is
-   left is the iterator struct's own field reads and writes, which 117 can delete
-   for a local but not for a *receiver* — the one thing still open under this
-   heading (step 3). The rest of this item is the reasoning that got there, kept
-   because each step's finding outlived it.
+   left is the iterator struct's own field reads and writes, which 117 can
+   delete for a local but not for a *receiver* — the one thing still open under
+   this heading (step 3). The rest of this item is the reasoning that got there,
+   kept because each step's finding outlived it.
 
    **Step 1 is done, in two milestones.** 109 found the `Some(x)` was *two*
    allocations and made it one; 110 made it none, by carrying a one-field variant
@@ -702,17 +702,17 @@ wrong, and it landed in milestones 94–95.
       replacement".
 
       So the CFG has one consumer, liveness, and the forward direction found
-      nothing to ask it. The prerequisite that turned out to matter for the graph
-      was neither of the two it was built for: it was that the checker and
+      nothing to ask it. The prerequisite that turned out to matter for the
+      graph was neither of the two it was built for: it was that the checker and
       codegen disagreed about which binding a shadowed name meant.
 
       **What is left of this step** is scalar replacement across a *splice
       boundary*: an iterator is its `next()`'s receiver, and passing a receiver
-      is the value leaving whole, so `var it = xs.iter()` declines. Making it not
-      decline means binding a spliced `self` onto the caller's field slots, which
-      needs the inline decision known at the declaration and a materialising
-      fallback for where codegen later declines it. That is ~10ns of `next()`'s
-      remaining 15.
+      is the value leaving whole, so `var it = xs.iter()` declines. Making it
+      not decline means binding a spliced `self` onto the caller's field slots,
+      which needs the inline decision known at the declaration and a
+      materialising fallback for where codegen later declines it. That is ~10ns
+      of `next()`'s remaining 15.
 
    **The peephole: both halves now spent.** The *splice-boundary* half — a read
    of a parameter already in place, the slide that removed the value it just
