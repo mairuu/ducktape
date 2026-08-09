@@ -5,7 +5,7 @@
 **Last landed:** milestone 115 (`c90ac64`) — the **control-flow graph**, built per
 body in `src/cfg.c`, and its first consumer: `unused_assignment` now reports each
 dead store rather than one binding. It arrived by way of a soundness fix — two
-`var x` in one scope had the checker reading the first and codegen the last. 694
+`var x` in one scope had the checker reading the first and codegen the last. 696
 tests, clean under debug, `--gc-stress` and `make sanitize`. Everything lands on
 `main`; there are no feature branches.
 
