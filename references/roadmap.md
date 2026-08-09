@@ -2,7 +2,7 @@
 
 ## Start here
 
-**Last landed:** milestone 115 (`SHA`) — the **control-flow graph**, built per
+**Last landed:** milestone 115 (`c90ac64`) — the **control-flow graph**, built per
 body in `src/cfg.c`, and its first consumer: `unused_assignment` now reports each
 dead store rather than one binding. It arrived by way of a soundness fix — two
 `var x` in one scope had the checker reading the first and codegen the last. 694
