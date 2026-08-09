@@ -1,0 +1,20 @@
+#! bench: the same, through one function call
+#! n: 6000000
+#
+# The control row: a call whose body is one parameter read. What a call costs
+# over writing the body out by hand is entirely this row.
+use std::io::print;
+use std::array;
+
+fun id(x: int) -> int {
+    return x;
+}
+
+fun main() {
+    var xs = array::fill(6000000, 1);
+    var sum = 0;
+    for x in xs {
+        sum += id(x);
+    }
+    print("{sum}");
+}

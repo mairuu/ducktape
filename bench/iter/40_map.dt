@@ -1,0 +1,17 @@
+#! bench: it.map(f), a two-stage chain
+#! n: 6000000
+#
+# Two `next`s and two `Option`s per element: what a stage of a chain adds.
+use std::io::print;
+use std::option::Option;
+use std::array;
+
+fun main() {
+    var xs = array::fill(6000000, 1);
+    var sum = 0;
+    var it = xs.iter().map(|x: int| x + 1);
+    while var Option::Some(x) = it.next() {
+        sum += x;
+    }
+    print("{sum}");
+}

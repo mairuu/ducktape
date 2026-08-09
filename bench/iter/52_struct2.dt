@@ -1,0 +1,18 @@
+#! bench: a 2-field struct literal
+#! n: 6000000
+#
+# The same arity as the variant above, through the other aggregate.
+use std::io::print;
+use std::array;
+
+struct Pair { a: int, b: int }
+
+fun main() {
+    var xs = array::fill(6000000, 1);
+    var sum = 0;
+    for x in xs {
+        var p = Pair { a: x, b: x };
+        sum += p.a + p.b;
+    }
+    print("{sum}");
+}

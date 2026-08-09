@@ -1,0 +1,13 @@
+#! bench: the setup alone
+#! n: 1000000
+#! baseline
+#
+# The baseline every `array` row is measured against: the source array and
+# nothing done to it, so each row below reads as its own absolute cost.
+use std::io::print;
+use std::array;
+
+fun main() {
+    var src = array::fill(1000000, 7);
+    print("{src.len()}");
+}

@@ -1,0 +1,11 @@
+#! bench: copy n elements — extend
+#! n: 1000000
+use std::io::print;
+use std::array;
+
+fun main() {
+    var src = array::fill(1000000, 7);
+    var xs: [int] = [];
+    xs.extend(src);
+    print("{xs.len()}");
+}

@@ -2,10 +2,12 @@
 
 ## Start here
 
-**Last landed:** milestone 113 (`e66181b`) — a small body is now compiled into
-its caller instead of called, because a queue entry already carries everything
-a body has to be compiled under. 688 tests, clean under debug, `--gc-stress`
-and `make sanitize`. Everything lands on `main`; there are no feature branches.
+**Last landed:** milestone 114 (`SHA`) — the peephole 113 named, which takes a
+call whose body is one parameter read to *byte-identical* with writing the body
+out. Plus `bench/` and `make bench`, so the cost model's tables stop being
+re-derived once per performance milestone. 690 tests, clean under debug,
+`--gc-stress` and `make sanitize`. Everything lands on `main`; there are no
+feature branches.
 
 **Nothing is blocked, and nothing is owed.** Milestone 95 closed the last entry
 that was not a matter of appetite, and 103 the last one that was already
@@ -16,9 +18,10 @@ that was not a matter of appetite, and 103 the last one that was already
 1. **The iterator's allocation, and the compiler work behind it** — the only
    direction left that is not breadth, and now down to its last step. 109 and
    110 made `Some(x)` cost no allocation; 113 deleted the frame around
-   `next()`. What the frame turned out to be worth is the finding: **a call's
-   cost is opcodes, not the frame**, so inlining bought 8% and left three
-   dispatches a *peephole* could take. Step 3 is a CFG.
+   `next()`; 114 took the three dispatches that left, so **a call by name now
+   costs nothing at all** where the body is one parameter read. What remains on
+   `it.next()` is the `Option` and the iterator struct's own field traffic —
+   neither is a peephole. Step 3 is a CFG.
 2. **std breadth on the natives** — every piece with a design question in it is
    spent, so what remains is typing.
 3. **`Eq`** — recorded as *declined*, by two consumers that were asked for it by
@@ -479,6 +482,41 @@ to keep this file small. Everything from 100 on is below.
   inlined (bytecode grew 1.7-2.8x); and a spliced frame is missing from a runtime
   error's trace, which is the one place inlining is observable.
 
+- **114. The three dispatches a call had left** (`SHA`) — the peephole milestone
+  113 named: a read the slide is about to remove, and a landing pad reached by
+  falling into it. Plus `bench/` and `scripts/bench.sh`, so the cost model's
+  tables stop being re-derived once per performance milestone.
+  Design: `runtime.md` "The peephole" and "The cost model" (a fifth table),
+  `overview.md` repo layout.
+  **THE FINDING: the control row is not smaller, it is gone — and that is a
+  diff, not a measurement.** `bench/iter/00_for.dt` and `bench/iter/10_call.dt`
+  now compile to the same `main` chunk byte for byte apart from one global
+  index, so a call whose body is one parameter read costs *literally* nothing
+  over writing the body out. Timing only confirmed it (+3.6 → +0.9ns/elem,
+  baselines 0.4% apart). Two rewrites, both local: `emit_slide` unemits a read
+  of the lowest slot it is about to remove, because the copy and the original
+  are the same value and the original is already where the slide would leave it;
+  and a body whose last statement is a `return` leaves through a jump that *is*
+  the fall-through, so `compile_block` skips its dead epilogue and
+  `cg_inline_body` unemits the jump. Neither is about inlining — the first fires
+  for any block whose tail expression is its own first local.
+  **SECOND FINDING: what makes a backward rewrite safe is one number.**
+  `patch_jump` records the only position it ever targets, and `last_target ==
+  count` is the whole guard: where two arms of an `if` end in the same read, the
+  merge point is exactly the byte the fold would unemit. Sabotage 5 attempted,
+  3 bit and **2 were no-ops** — checking that the last instruction really is the
+  pad's own jump cannot be made to matter, because every other unconditional
+  exit a spliced body can emit is followed by the patch or the back edge of the
+  construct that owns it; and skipping a *live* tail expression after an exit is
+  sound too, but it would swallow the codegen diagnostics inside it.
+  **On the honest result:** only the control row moves. A real `it.next()` gives
+  up one dispatch of five opcodes plus an allocation, which is under the
+  harness's ~±1ns/elem floor — the rewrite pays where a body *is* its return
+  value, and the smaller the body the larger the share.
+  Remainders, both now warts: an argument that is already a local is still
+  copied into the parameter's slot, and the fold reaches only the first
+  parameter.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -526,9 +564,10 @@ wrong, and it landed in milestones 94–95.
       `Instance` itself, milestone 88's stack-position slots meant no prologue at
       all, and milestone 98's landing pad *is* an inlined `return`.
       `runtime.md` "Inlining". It bought 8% on `it.next()` and, more usefully,
-      the number underneath: **a frame is cheap and a call's cost is opcodes**,
-      so what is left to take is three dispatches and they belong to the
-      peephole below, not to any further inlining.
+      the number underneath: **a frame is cheap and a call's cost is opcodes**.
+      Milestone 114 then took the three dispatches it left (`runtime.md` "The
+      peephole"), which is where this stops: a call by name costs nothing, and
+      nothing further about *calling* is on the table.
    3. **A CFG, and only then escape analysis.** The AST cannot carry this: no
       control-flow graph, no def-use chains, and aggregates are handles so
       aliasing is real. **It already has two named consumers**, which is what
@@ -536,17 +575,16 @@ wrong, and it landed in milestones 94–95.
       analysis, and milestone 107's remainder (per-store liveness, recorded in
       the warts below as needing exactly this). Several milestones, not one.
 
-   **The peephole, which milestone 113 has now put within reach and enlarged.**
-   The original one was narrow — `while var Option::Some(x) = it.next()`, whose
-   variant is constructed and destructured in one expression tree once `next()`
-   is inlined, so eliding it is a peephole (a match whose scrutinee is a variant
-   construction) rather than escape analysis, true by construction the way
-   milestone 107's `write_target` was. Milestone 110 shrank that particular prize
-   to a `Value` write plus a tag test. But it also measured a second, larger one
-   at the *splice boundary*: a spliced call still emits a read of a parameter
-   already in place, a slide that removes the value it just copied, and a jump to
-   the instruction after next — three dispatches, and **all of what a call now
-   costs over writing the body out by hand**. None of them needs an IR either.
+   **The peephole, half spent.** The *splice-boundary* half — a read of a
+   parameter already in place, the slide that removed the value it just copied,
+   and the jump to the instruction after next — is **done, milestone 114**, and
+   it took a call by name to zero. What is left is the original, narrower one:
+   `while var Option::Some(x) = it.next()` constructs and destructures its
+   variant in one expression tree once `next()` is inlined, so eliding it is a
+   peephole (a match whose scrutinee is a variant construction) rather than
+   escape analysis, true by construction the way milestone 107's `write_target`
+   was. Milestone 110 already shrank that prize to a `Value` write plus a tag
+   test, so it is now the smaller of the two and it still needs no IR.
 
    **On throwing the standard library away.** It is ~20 modules written *in
    ducktape*, so nuking it is cheap and always will be — which is itself an
@@ -1047,9 +1085,18 @@ The corner where the honest answer is a data table nobody has shipped.
   definition inlined at every one of its call sites is compiled twice and the
   standalone copy is dead code in the image. Dropping it needs a pass after the
   queue drains, and the slots are already baked into the emitted code
-- **a body containing a closure is never inlined** (milestone 113). The
-  closure's `FunDef` would need a copy per splice, the way a generic's does —
-  one shared def compiled at several sites lets the last one win
+- **an argument that is already a local is still copied** (milestone 114). A
+  parameter is a fresh stack position, so `it.next()` pushes a second copy of
+  `it` and the epilogue slides it away — two dispatches per call that a
+  parameter *aliasing* the caller's slot would not spend. It is not a peephole:
+  the alias is only sound if no argument can be evaluated after it and the body
+  neither assigns the parameter nor captures it, which is three questions about
+  the whole call rather than one about the last instruction
+- **the read/slide fold only fires for the first parameter** (milestone 114).
+  The slide leaves its value at the lowest slot it removes, so only a read of
+  *that* slot is already in place; `return b` from a two-parameter body still
+  copies and slides. Reaching the others needs a store, which is the same
+  dispatch it would save
 
 ### Absent on purpose, or not yet wanted
 

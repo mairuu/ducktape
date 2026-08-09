@@ -25,6 +25,7 @@ names a file, that file is the source of truth. Historical design notes live in
 | `std/` | the standard library, written in ducktape; embedded into the binary at build time. The bodies that cannot be (`print`, array/string/char primitives, hash mixing) are bodyless declarations bound to `src/native.c`. `std/lib.dt` is the library root and declares the tree — a file is a module only once a `mod` names it, and only public where that `mod` says `pub`. `--std-module std::cmp` compiles one *as* that module and warns; `make test` lints them all under the `tests/pass` rule |
 | `scripts/run_tests.sh` | the test runner (invoked by `make test`). A `#! flags: …` line in a test file hands the compiler extra arguments — how the `-W` levels, which no source can set, are tested |
 | `scripts/embed_std.sh` | mirrors `std/**/*.dt` into `build/std_data.h` for `src/std_src.c`, keyed by path relative to `std/`. A loader, not a resolver: what exists is what `std/lib.dt` declares |
+| `bench/`, `scripts/bench.sh` | one directory per table in `runtime.md`'s cost model, its files the rows in name order (`#! bench:`, `#! n:`, `#! baseline` headers). Run by `make bench`; see `runtime.md` "The cost model" |
 | `editors/vscode/` | a VS Code extension: TextMate grammar + language config for `.dt` (highlighting only, no language server) |
 | `references/` | these docs + `grammar.ebnf` |
 
@@ -42,6 +43,7 @@ simply renders as an identifier.
 ```sh
 make               # build build/ducktape (BUILD=release for -O2)
 make test          # build + run the whole test suite
+make bench         # build release + time bench/ (ARGS="--against <binary>")
 ./build/ducktape file.dt                    # compile (type-check) only
 ./build/ducktape --run file.dt              # compile and execute main()
 ./build/ducktape --run --gc-stress file.dt  # + collect on every allocation

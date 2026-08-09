@@ -1,0 +1,16 @@
+#! bench: a 2-tuple
+#! n: 6000000
+#
+# The anonymous form of the row above.
+use std::io::print;
+use std::array;
+
+fun main() {
+    var xs = array::fill(6000000, 1);
+    var sum = 0;
+    for x in xs {
+        var p = (x, x);
+        sum += p.0 + p.1;
+    }
+    print("{sum}");
+}

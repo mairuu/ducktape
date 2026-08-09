@@ -1,0 +1,10 @@
+#! bench: drop n elements — clear
+#! n: 1000000
+use std::io::print;
+use std::array;
+
+fun main() {
+    var src = array::fill(1000000, 7);
+    src.clear();
+    print("{src.len()}");
+}

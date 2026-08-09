@@ -1,0 +1,13 @@
+#! bench: copy n elements — push loop
+#! n: 1000000
+use std::io::print;
+use std::array;
+
+fun main() {
+    var src = array::fill(1000000, 7);
+    var xs: [int] = [];
+    for v in src {
+        xs.push(v);
+    }
+    print("{xs.len()}");
+}

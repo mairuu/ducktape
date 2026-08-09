@@ -15,7 +15,17 @@ make test          # build + full test suite (must stay green)
                                               # -Wno-<lint>, -W<lint>
 make format        # clang-format over src/ and include/
 make sanitize      # rebuild under ASan+UBSan and run the suite
+make bench         # build release + time bench/; ARGS="--against <binary>"
+                   # for the two-column form, ARGS="--runs 3" for a quick look
 ```
+
+`bench/` is one directory per table in `references/runtime.md` "The cost
+model", its files the rows in name order. **Do not re-derive a harness for a
+performance milestone — add a row.** `scripts/bench.sh` already does the three
+things a delta needs to be worth reading: it times an image rather than a
+compile, it refuses to print a delta until both binaries agree on every
+program's output, and it prints each baseline's wall time, which is the only
+number comparable to a run from another day.
 
 A sanitizer finding is not a test failure — `make test` stays green while the
 binary does something undefined — so run `make sanitize` after touching memory

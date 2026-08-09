@@ -123,7 +123,28 @@ typedef struct Cg {
   int locals_base;
   int inline_depth;
   FunDef *inlining[CG_INLINE_MAX_DEPTH];
+
+  // ── what the peephole is allowed to look back at ──────────────────────────
+  //
+  // Three positions in the chunk, each the answer to one question a rewrite
+  // that unemits something has to ask. `last_target` is the highest position
+  // anything jumps to: code at or below it may be arrived at from elsewhere,
+  // so it can only be rewritten, never moved. `last_exit` is the position just
+  // past the last unconditional exit, so `last_exit == count` means what comes
+  // next is unreachable. `last_get_local` is where the last OP_GET_LOCAL was
+  // emitted, which is how `emit_slide` knows the byte before it is an opcode
+  // and not some other instruction's operand.
+  int last_target;
+  int last_exit;
+  int last_get_local;
 } Cg;
+
+// Is code emitted here reached? Only if the last instruction was not an
+// unconditional exit, or something jumps back to this exact point.
+static bool cg_unreachable(const Cg *cg) {
+  return cg->last_exit == cg->chunk->count &&
+         cg->last_target != cg->chunk->count;
+}
 
 // The frame a `break`/`continue` leaves: the innermost *loop* unlabelled, the
 // one that declared the name otherwise. Everything the two statements emit is
@@ -572,6 +593,7 @@ static void patch_jump(Cg *cg, int operand_ip) {
   assert(dist >= 0 && dist <= 0xffff && "jump too far");
   cg->chunk->code[operand_ip] = (uint8_t)((dist >> 8) & 0xff);
   cg->chunk->code[operand_ip + 1] = (uint8_t)(dist & 0xff);
+  cg->last_target = cg->chunk->count; // patching only ever targets here
 }
 
 static void emit_loop(Cg *cg, int target_ip) {
@@ -579,14 +601,47 @@ static void emit_loop(Cg *cg, int target_ip) {
   int dist = cg->chunk->count - target_ip + 2;
   assert(dist >= 0 && dist <= 0xffff && "loop body too large");
   emit2(cg, (uint8_t)((dist >> 8) & 0xff), (uint8_t)(dist & 0xff));
+  if (target_ip > cg->last_target) {
+    cg->last_target = target_ip; // a back edge is a target like any other
+  }
 }
 
-// pop `n` locals' stack slots without disturbing the value on top.
+// Read a local, and remember where: `emit_slide` below is the one rewrite that
+// looks at the instruction it follows, and a chunk cannot be scanned backwards.
+static void emit_get_local(Cg *cg, int slot) {
+  cg->last_get_local = cg->chunk->count;
+  emit2(cg, OP_GET_LOCAL, (uint8_t)slot);
+}
+
+// Pop `n` locals' stack slots without disturbing the value on top. Every caller
+// means the same n slots: the ones directly beneath the top, so the lowest of
+// them is at `cg->depth - 1 - n`.
+//
+// THE PEEPHOLE. When the value on top is a *copy of the lowest slot the slide
+// is about to remove* — `return x` where `x` is the first parameter of a
+// spliced body, a block whose tail expression is its own first local — the copy
+// and the original are the same value, and the original is already where the
+// slide would put it. So the read is unemitted and the slide degrades to
+// dropping what was stacked above: one instruction where there were two, or
+// none at all when nothing was.
 static void emit_slide(Cg *cg, int n) {
-  if (n > 0) {
-    emit2(cg, OP_SLIDE, (uint8_t)n);
-    cg->depth -= n;
+  if (n <= 0) {
+    return;
   }
+  bool folds = cg->last_get_local >= 0 &&
+               cg->last_get_local == cg->chunk->count - 2 &&
+               cg->last_target != cg->chunk->count &&
+               cg->chunk->code[cg->last_get_local + 1] == cg->depth - 1 - n;
+  if (folds) {
+    cg->chunk->count -= 2; // unemit the read; the original stays put
+    cg->last_get_local = -1;
+    if (n > 1) {
+      emit2(cg, OP_POPN, (uint8_t)(n - 1));
+    }
+  } else {
+    emit2(cg, OP_SLIDE, (uint8_t)n);
+  }
+  cg->depth -= n;
 }
 
 // Raw stack traffic, for the bytes a construct emits *around* the expressions
@@ -1031,6 +1086,7 @@ static void cg_emit_return(Cg *cg) {
   CgLoop *pad = cg->inline_pad;
   if (pad == NULL) {
     emit(cg, OP_RETURN);
+    cg->last_exit = cg->chunk->count;
     return;
   }
   assert(pad->break_count < CG_MAX_BREAKS && "fun_inline_cost caps the exits");
@@ -1040,6 +1096,7 @@ static void cg_emit_return(Cg *cg) {
     emit_slide(cg, n);
   }
   pad->break_jumps[pad->break_count++] = emit_jump(cg, OP_JUMP);
+  cg->last_exit = cg->chunk->count;
 }
 
 // ── expression / statement compilation ───────────────────────────────────────
@@ -1139,6 +1196,7 @@ static void compile_stmt_inner(Cg *cg, Stmt *stmt) {
       }
     }
     loop->break_jumps[loop->break_count++] = emit_jump(cg, OP_JUMP);
+    cg->last_exit = cg->chunk->count;
     break;
   }
 
@@ -1161,6 +1219,7 @@ static void compile_stmt_inner(Cg *cg, Stmt *stmt) {
       }
       loop->continue_jumps[loop->continue_count++] = emit_jump(cg, OP_JUMP);
     }
+    cg->last_exit = cg->chunk->count;
     break;
   }
 
@@ -1195,14 +1254,20 @@ static void compile_block(Cg *cg, Expr *expr) {
     compile_stmt(cg, block->stmts[i]);
   }
 
-  if (block->tail_expr != NULL) {
-    compile_expr(cg, block->tail_expr);
-  } else {
-    emit(cg, OP_UNIT);
+  // Everything here is the block's exit, and an exit the last statement already
+  // took is not reached: a `return`/`break` in tail position left the value
+  // where this would have put it. Only the statement-final case is skipped —
+  // with a tail expression there is still something to compile, whatever the
+  // statements above it did.
+  if (block->tail_expr != NULL || !cg_unreachable(cg)) {
+    if (block->tail_expr != NULL) {
+      compile_expr(cg, block->tail_expr);
+    } else {
+      emit(cg, OP_UNIT);
+    }
+    cg_close_scope(cg, saved_locals);
+    emit_slide(cg, cg->local_count - saved_locals);
   }
-
-  cg_close_scope(cg, saved_locals);
-  emit_slide(cg, cg->local_count - saved_locals);
   cg->local_count = saved_locals;
 
   if (labelled) {
@@ -1624,7 +1689,7 @@ static void compile_for_range(Cg *cg, Expr *expr) {
   // [range, i] as hidden + loop locals
   compile_expr(cg, for_->iterable);
   int range_slot = cg_add_local(cg, (StringView){0}, expr->span);
-  emit2(cg, OP_GET_LOCAL, (uint8_t)range_slot);
+  emit_get_local(cg, range_slot);
   emit(cg, OP_RANGE_START);
   int i_slot = cg_add_pushed_local(cg, for_->var_name, for_->var_span);
   // the loop-carried slots are all the body ever sees beneath it; the test and
@@ -1644,8 +1709,8 @@ static void compile_for_range(Cg *cg, Expr *expr) {
 
   int loop_start = cg->chunk->count;
   loop.start = loop_start;
-  emit2(cg, OP_GET_LOCAL, (uint8_t)range_slot);
-  emit2(cg, OP_GET_LOCAL, (uint8_t)i_slot);
+  emit_get_local(cg, range_slot);
+  emit_get_local(cg, i_slot);
   emit(cg, OP_RANGE_TEST);
   int exit_jump = emit_jump(cg, OP_JUMP_IF_FALSE);
   emit(cg, OP_POP);
@@ -1659,7 +1724,7 @@ static void compile_for_range(Cg *cg, Expr *expr) {
   for (int i = 0; i < loop.continue_count; i++) {
     patch_jump(cg, loop.continue_jumps[i]);
   }
-  emit2(cg, OP_GET_LOCAL, (uint8_t)i_slot);
+  emit_get_local(cg, i_slot);
   emit_const(cg, val_int(1));
   emit(cg, OP_ADD);
   emit2(cg, OP_SET_LOCAL, (uint8_t)i_slot);
@@ -1707,15 +1772,15 @@ static void compile_for_array(Cg *cg, Expr *expr) {
 
   int loop_start = cg->chunk->count;
   loop.start = loop_start;
-  emit2(cg, OP_GET_LOCAL, (uint8_t)idx_slot);
-  emit2(cg, OP_GET_LOCAL, (uint8_t)arr_slot);
+  emit_get_local(cg, idx_slot);
+  emit_get_local(cg, arr_slot);
   emit(cg, OP_LEN);
   emit(cg, OP_LT);
   int exit_jump = emit_jump(cg, OP_JUMP_IF_FALSE);
   emit(cg, OP_POP);
 
-  emit2(cg, OP_GET_LOCAL, (uint8_t)arr_slot);
-  emit2(cg, OP_GET_LOCAL, (uint8_t)idx_slot);
+  emit_get_local(cg, arr_slot);
+  emit_get_local(cg, idx_slot);
   emit(cg, OP_INDEX_GET);
   emit2(cg, OP_SET_LOCAL, (uint8_t)var_slot);
   emit(cg, OP_POP);
@@ -1729,7 +1794,7 @@ static void compile_for_array(Cg *cg, Expr *expr) {
   for (int i = 0; i < loop.continue_count; i++) {
     patch_jump(cg, loop.continue_jumps[i]);
   }
-  emit2(cg, OP_GET_LOCAL, (uint8_t)idx_slot);
+  emit_get_local(cg, idx_slot);
   emit_const(cg, val_int(1));
   emit(cg, OP_ADD);
   emit2(cg, OP_SET_LOCAL, (uint8_t)idx_slot);
@@ -1828,7 +1893,7 @@ static void compile_for_iter(Cg *cg, Expr *expr) {
   if (dyn_index >= 0) {
     // OP_DYN_METHOD pops the trait object and leaves [next, receiver], the
     // shape OP_CALL already understands; `next` takes only `self`.
-    emit2(cg, OP_GET_LOCAL, (uint8_t)iter_slot);  // [iter]
+    emit_get_local(cg, iter_slot);                // [iter]
     emit2(cg, OP_DYN_METHOD, (uint8_t)dyn_index); // [next, recv]
     emit2(cg, OP_CALL, 1);                        // [opt]
   } else {
@@ -1845,13 +1910,13 @@ static void compile_for_iter(Cg *cg, Expr *expr) {
       // the whole point of inlining: the `Some` this mints and the tag test
       // below it end up in one chunk, with no frame between them
       Instance inst = *found;
-      emit2(cg, OP_GET_LOCAL, (uint8_t)iter_slot); // [iter]
+      emit_get_local(cg, iter_slot); // [iter]
       cg_pushed(cg, 1);
       cg_inline_body(cg, &inst, body_depth, expr->span); // [opt]
     } else {
       cg_pushed(cg, 1);
       emit_slot(cg, OP_GET_GLOBAL, target->slot);
-      emit2(cg, OP_GET_LOCAL, (uint8_t)iter_slot);    // [next, iter]
+      emit_get_local(cg, iter_slot);                  // [next, iter]
       emit2(cg, OP_CALL, (uint8_t)next->param_count); // [opt]
     }
   }
@@ -1972,8 +2037,20 @@ static void cg_inline_body(Cg *cg, const Instance *inst, int base_depth,
   // Falling off the end is the last exit, and it lands where every `return`
   // slid its value to — so the landing pad is the body's own exit, with
   // nothing to emit at it.
-  cg_close_scope(cg, saved_locals);
-  emit_slide(cg, cg->depth - base_depth - 1);
+  //
+  // Unless the body *ended* in a `return`: then the jump it left through is the
+  // last instruction, its target is the byte after it, and the fall-through
+  // this would emit is code no path reaches. Unemitting the jump costs the pad
+  // nothing — the exit arrives by falling into it instead.
+  if (pad.break_count > 0 && cg_unreachable(cg) &&
+      pad.break_jumps[pad.break_count - 1] + 2 == cg->chunk->count) {
+    cg->chunk->count -= 3;
+    pad.break_count--;
+    cg->last_exit = -1; // reached by fall-through now
+  } else {
+    cg_close_scope(cg, saved_locals);
+    emit_slide(cg, cg->depth - base_depth - 1);
+  }
   for (int i = 0; i < pad.break_count; i++) {
     patch_jump(cg, pad.break_jumps[i]);
   }
@@ -2708,7 +2785,7 @@ static void jump_list_patch(Cg *cg, JumpList *list) {
 // pushes the value at `acc`'s location: the subject local, then one
 // OP_FIELD_GET per accessor path segment.
 static void emit_accessor(Cg *cg, const Accessor *acc) {
-  emit2(cg, OP_GET_LOCAL, (uint8_t)acc->base_slot);
+  emit_get_local(cg, acc->base_slot);
   for (int i = 0; i < acc->path_len; i++) {
     emit2(cg, OP_FIELD_GET, acc->path[i]);
   }
@@ -3172,7 +3249,7 @@ static void compile_expr_inner(Cg *cg, Expr *expr) {
 
   case EXPR_SELF: {
     if (cg->self_slot >= 0) {
-      emit2(cg, OP_GET_LOCAL, (uint8_t)cg->self_slot);
+      emit_get_local(cg, cg->self_slot);
       break;
     }
     // inside a closure the receiver belongs to the enclosing method's frame,
@@ -3242,7 +3319,7 @@ static void compile_expr_inner(Cg *cg, Expr *expr) {
 
     int local = cg_find_local(cg, name);
     if (local >= 0) {
-      emit2(cg, OP_GET_LOCAL, (uint8_t)cg->locals[local].slot);
+      emit_get_local(cg, cg->locals[local].slot);
       break;
     }
 
@@ -3363,7 +3440,9 @@ static void compile_fun_body(Mono *mono, FunDef *fun, FunDef *body_of,
            .diags = diags,
            .al = mono->al,
            .ok = true,
-           .self_slot = -1};
+           .self_slot = -1,
+           .last_exit = -1,
+           .last_get_local = -1};
   cg.chunk = al_alloc_zero_for(mono->al, Chunk);
   chunk_init(cg.chunk, mono->al);
 
@@ -3428,6 +3507,8 @@ static void compile_closure(Cg *cg, Expr *expr) {
               .al = cg->al,
               .ok = true,
               .self_slot = -1,
+              .last_exit = -1,
+              .last_get_local = -1,
               .parent = cg};
   child.chunk = al_alloc_zero_for(cg->al, Chunk);
   chunk_init(child.chunk, cg->al);

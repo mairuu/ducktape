@@ -1,0 +1,17 @@
+#! bench: for x in xs { sum += x; }
+#! n: 6000000
+#! baseline
+#
+# The baseline every `iter` row is measured against: the same traversal with no
+# call, no aggregate and no iterator in it.
+use std::io::print;
+use std::array;
+
+fun main() {
+    var xs = array::fill(6000000, 1);
+    var sum = 0;
+    for x in xs {
+        sum += x;
+    }
+    print("{sum}");
+}

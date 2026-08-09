@@ -1,0 +1,19 @@
+#! bench: minting a Some(x) and matching it
+#! n: 6000000
+#
+# The `Option` an iterator's `next` returns, without the iterator.
+use std::io::print;
+use std::option::Option;
+use std::array;
+
+fun main() {
+    var xs = array::fill(6000000, 1);
+    var sum = 0;
+    for x in xs {
+        match Option::Some(x) {
+            Option::Some(v) => { sum += v; },
+            Option::None => {},
+        }
+    }
+    print("{sum}");
+}

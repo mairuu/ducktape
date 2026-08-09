@@ -129,6 +129,15 @@ sanitize:
 	@$(MAKE) DEFS="$(SANFLAGS)" LDFLAGS="$(SANFLAGS)"
 	@sh scripts/run_tests.sh $(BUILDDIR)/$(TARGET)
 
+# bench/ against a release build, because a debug one measures -O0 and nothing
+# else. ARGS passes the script's own flags through: `make bench ARGS="--against
+# build/ducktape.before"` is the two-column form every performance milestone
+# wants.
+.PHONY: bench
+bench:
+	@$(MAKE) BUILD=release
+	@sh scripts/bench.sh $(ARGS) $(BUILDDIR)/$(TARGET)
+
 .PHONY: clean
 clean:
 	$(RM) -r $(BUILDDIR) $(CCJSON)
@@ -153,6 +162,7 @@ help:
 	@echo "  run     - build and run"
 	@echo "  test    - build and run the test suite"
 	@echo "  sanitize- rebuild under ASan+UBSan and run the suite"
+	@echo "  bench   - build release and time bench/ (ARGS=... for its flags)"
 	@echo "  clean   - remove build artifacts and compile_commands.json"
 	@echo "  format  - run clang-format over all sources"
 	@echo "  tidy    - run clang-tidy (requires compile_commands.json)"

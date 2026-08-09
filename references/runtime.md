@@ -943,15 +943,54 @@ has already refused a `break` whose loop is not inside the body.
 deep, one already open on the current path, and one whose locals would not fit
 the caller's frame: every node can name at most one local and leave one
 temporary live, so twice the node count bounds the slots a splice adds, and a
-one-byte slot operand is what that has to stay under. A body containing a
-closure is refused outright, since the closure's `FunDef` would need a copy per
-splice the way an instantiation does. The *depth* cap is what makes recursion
+one-byte slot operand is what that has to stay under. A closure in the body
+costs nothing extra: `compile_closure` already mints a `FunDef` per splice, the
+way it does per instantiation. The *depth* cap is what makes recursion
 terminate; the recursion check only stops copies that would then be pointless.
 
 **What it costs.** The callee still gets its own chunk and its own global slot —
 `cg_call_target` reaches it before the decision is made — so a body inlined at
 every one of its call sites is compiled twice and the standalone copy is dead
 code in the image. Bytecode grew 1.7-2.8x over the programs measured.
+
+### The peephole
+
+Two rewrites, each looking only at the instruction just emitted. Both exist for
+what a splice leaves behind — the parameters it reads back and the pad it jumps
+to — but neither is about inlining, and both fire in ordinary code as well.
+
+Three positions on `Cg` are what makes looking backwards safe, since a chunk
+cannot be scanned in reverse: `last_get_local` (where the last `OP_GET_LOCAL`
+went, so the byte before the current end is known to be an opcode and not some
+other instruction's operand), `last_target` (the highest position anything
+jumps to) and `last_exit` (just past the last unconditional exit).
+`cg_unreachable` is the two watermarks together: the last instruction was an
+exit *and* nothing jumps back here.
+
+**A read the slide is about to remove is not a read.** Every `emit_slide(n)`
+means the same n slots — the ones directly beneath the top — so the lowest of
+them is at `depth - 1 - n`. When the value on top is a copy of *that* slot the
+copy and the original are the same value, and the original is already where the
+slide would leave it: the read is unemitted and the slide degrades to an
+`OP_POPN` over whatever was stacked above it, or to nothing at all when nothing
+was. `return x` where `x` is a spliced body's first parameter is the shape this
+was written for; a block whose tail expression is its own first local is the
+same rewrite with no call in sight.
+
+**A landing pad reached by falling into it needs no jump.** A body whose last
+statement is a `return` leaves through a jump that is the last instruction
+emitted, so the pad is the byte after it and the fall-through epilogue is code
+no path reaches. `compile_block` skips the tail unit and the scope close when
+`cg_unreachable` says its statements already left; `cg_inline_body` then finds
+the pad jump last, unemits it, and lets that exit arrive by falling in. Both
+halves are needed — the block's dead epilogue sits between the jump and the pad
+otherwise.
+
+**`last_target` is the whole of the safety argument.** Rewriting the last
+instruction is sound only if no other path arrives between it and here, and
+`patch_jump` records the one position it ever targets. Where the two arms of an
+`if` end in the same read, the merge point is exactly the byte the fold would
+unemit, and that check is what declines it.
 
 ### Trait objects
 
@@ -1735,11 +1774,37 @@ attributes to "a call frame" is mostly *dispatch*, and inlining recovers a
 little under half of it. `it.next()` drops 8%, which leaves the `Option` at
 ~81% of what remains.
 
-**What that leaves for a peephole.** Those three surviving dispatches are all
-removable in principle and none of them by inlining: `return x` where `x` is the
-last argument reads back a value already in place, the slide then removes the
-value it just copied, and the jump goes to the instruction after next. They are
-now the whole of what a call costs over writing the body out by hand.
+**And what the peephole took: all three.** Milestone 114 unemits the read, the
+slide and the jump (see "The peephole"). The control row's answer is not a
+measurement — `bench/iter/00_for.dt` and `bench/iter/10_call.dt` now compile to
+the *same* `main` chunk, byte for byte apart from one global index, so a call
+whose body is one parameter read costs literally nothing over writing the body
+out. The timing only confirms it, best of 9 interleaved runs over 6,000,000
+elements with the two baselines 0.4% apart:
+
+| | before | after |
+|---|---|---|
+| through one function call (the control) | +3.6 | **+0.9** |
+| minting a `Some(x)` and matching it | +31.7 | +32.8 |
+| `it.next()`, the real thing | +47.2 | +48.0 |
+| `it.map(f)`, a two-stage chain | +92.7 | +91.7 |
+
+**Only the control row moves, and that is the honest result.** A real `next()`
+gives up just the pad jump — one dispatch of the five opcodes and the allocation
+each element costs — which is under this harness's noise floor of ~±1ns/elem.
+The rewrite pays where a body *is* its return value, and the smaller the body
+the larger the share; there is nothing left for a peephole to take, and what
+`it.next()` still costs over the `for` is the `Option` and the iterator struct's
+own field traffic.
+
+**Reproducing any of the above.** `make bench` times `bench/`, one directory per
+table, and `make bench ARGS="--against <binary>"` runs two binaries side by side
+— compiling each program to an image first so no row carries its own compile,
+checking both binaries agree on every program's output before printing a delta,
+and printing each baseline's wall time, which is the one number on the page
+comparable to a previous run. The tables above were taken on different machines
+in different sessions, so their absolute columns are not comparable to each
+other; the deltas are.
 
 **What this does not license.** A native's argument for existing is deleted
 iterations, not familiarity: a map in C would delete none (`std::collections`

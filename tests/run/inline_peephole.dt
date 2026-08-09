@@ -1,0 +1,120 @@
+# The peephole rewrites emitted bytes, so what this pins is the two ways that
+# could go wrong: a read folded into the slide that removes it when something
+# else jumps between them, and a landing pad reached by a jump that was deleted
+# for being the fall-through.
+use std::io::print;
+
+# The fold's own shape: the value returned is the parameter the slide removes,
+# so both instructions go and the argument is left where it already was. The
+# argument still has to be evaluated exactly once.
+fun id(x: int) -> int {
+    return x;
+}
+
+# The same with something stacked above it — the slide degrades to a pop rather
+# than vanishing, and the second argument's effect must survive.
+fun first(a: int, _b: int) -> int {
+    return a;
+}
+
+# Not the fold: `b` is not the slot the slide would leave the value in.
+fun second(_a: int, b: int) -> int {
+    return b;
+}
+
+# Both arms end in the read the fold wants to unemit, and the arms' merge point
+# is exactly the byte after the second one — so folding it would leave the
+# `true` path popping a value the `false` path never pushed.
+fun either(x: int, c: bool) -> int {
+    if c { x } else { x }
+}
+
+# Three exits, the last of them in tail position: its jump to the pad is the
+# fall-through, and the two above it are not.
+fun sign(n: int) -> int {
+    if n < 0 {
+        return -1;
+    }
+    if n > 0 {
+        return 1;
+    }
+    return 0;
+}
+
+# A tail expression after an exit-only branch: the pad is reached by the jump
+# over the `else`, so nothing may be deleted for being last.
+fun at_least(n: int, lo: int) -> int {
+    if n >= lo { n } else { return lo; }
+}
+
+# Not an inlined body at all — a block whose tail expression is its own first
+# local folds the same way, which is the rewrite's general form.
+fun doubled(n: int) -> int {
+    var t = n * 2;
+    t
+}
+
+# A labelled block whose last statement is a `break`: everything after it is
+# unreachable, and the landing pad is still where both breaks arrive.
+fun clamp(n: int) -> int {
+    return 'pick: {
+        if n > 9 {
+            break 'pick 9;
+        }
+        break 'pick n;
+    };
+}
+
+# A captured local in a block that ends by returning: the close the block would
+# emit is dead, and the closure must still outlive the frame.
+fun adder(n: int) -> fun(int) -> int {
+    var base = n * 10;
+    return |v: int| v + base;
+}
+
+# An argument the peephole may unemit the *read* of is still an argument: this
+# says so once per evaluation.
+fun effect(v: int) -> int {
+    print("eval {v}");
+    return v;
+}
+
+fun main() {
+    print("{id(1)}");
+#> 1
+    print("{id(effect(2))}");
+#> eval 2
+#> 2
+
+    print("{first(3, 4)}");
+#> 3
+    print("{first(5, effect(6))}");
+#> eval 6
+#> 5
+
+    print("{second(7, 8)}");
+#> 8
+    print("{second(effect(9), 10)}");
+#> eval 9
+#> 10
+
+    print("{either(11, true)} {either(11, false)}");
+#> 11 11
+
+    print("{sign(-5)} {sign(0)} {sign(5)}");
+#> -1 0 1
+
+    print("{at_least(12, 4)} {at_least(2, 4)}");
+#> 12 4
+
+    print("{doubled(6)}");
+#> 12
+
+    print("{clamp(3)} {clamp(30)}");
+#> 3 9
+
+    var add20 = adder(2);
+    var add30 = adder(3);
+    print("{add20(1)} {add30(1)} {add20(2)}");
+#> 21 31 22
+}

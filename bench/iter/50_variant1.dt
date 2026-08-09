@@ -1,0 +1,21 @@
+#! bench: a user enum's one-field variant
+#! n: 6000000
+#
+# The same aggregate as `Some(x)`, declared by a program rather than by std:
+# what an `Option` costs is not special to `Option`.
+use std::io::print;
+use std::array;
+
+enum One { A(int), B }
+
+fun main() {
+    var xs = array::fill(6000000, 1);
+    var sum = 0;
+    for x in xs {
+        match One::A(x) {
+            One::A(v) => { sum += v; },
+            One::B => {},
+        }
+    }
+    print("{sum}");
+}

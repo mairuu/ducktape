@@ -1,0 +1,10 @@
+#! bench: build n elements — array::fill
+#! n: 1000000
+use std::io::print;
+use std::array;
+
+fun main() {
+    var src = array::fill(1000000, 7);
+    var xs = array::fill(src.len(), 7);
+    print("{xs.len()}");
+}

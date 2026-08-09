@@ -1,0 +1,20 @@
+#! bench: a user enum's two-field variant
+#! n: 6000000
+#
+# The row above with one more field: what is per-object and what is per-field.
+use std::io::print;
+use std::array;
+
+enum Two { A(int, int), B }
+
+fun main() {
+    var xs = array::fill(6000000, 1);
+    var sum = 0;
+    for x in xs {
+        match Two::A(x, x) {
+            Two::A(a, b) => { sum += a + b; },
+            Two::B => {},
+        }
+    }
+    print("{sum}");
+}
