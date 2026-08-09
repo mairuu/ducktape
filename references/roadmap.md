@@ -2,12 +2,12 @@
 
 ## Start here
 
-**Last landed:** milestone 117 (`15b2f0f`) — **the struct nothing else can see**. A `var`
-bound to a struct or tuple literal and mentioned only as `x.f` is compiled as
-its fields, so it is never allocated: a 2-field struct literal costs 7.8ns/elem
-over the plain `for` where it cost 36, a 2-tuple 7.3 where it cost 39. 702
-tests, clean under debug, `--gc-stress` and `make sanitize`. Everything lands on
-`main`; there are no feature branches.
+**Last landed:** milestone 117 (`15b2f0f`) — **the struct nothing else can
+see**. A `var` bound to a struct or tuple literal and mentioned only as `x.f` is
+compiled as its fields, so it is never allocated: a 2-field struct literal costs
+7.8ns/elem over the plain `for` where it cost 36, a 2-tuple 7.3 where it cost
+39. 702 tests, clean under debug, `--gc-stress` and `make sanitize`. Everything
+lands on `main`; there are no feature branches.
 
 **Nothing is blocked, and nothing is owed.** Milestone 95 closed the last entry
 that was not a matter of appetite, and 103 the last one that was already
