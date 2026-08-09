@@ -518,7 +518,7 @@ to keep this file small. Everything from 100 on is below.
   parameter.
 
 - **115. A control-flow graph, and a store that no longer hides behind its
-  binding** (`SHA`) — `unused_assignment` now reports each dead *store*, over
+  binding** (`c90ac64`) — `unused_assignment` now reports each dead *store*, over
   liveness on a graph built per body (`src/cfg.c`).
   Design: `architecture.md` "Liveness, and the store grain", `language.md`
   "Statements and blocks" + "Warnings and `@allow`", `overview.md` phase 5.
