@@ -2,13 +2,13 @@
 
 ## Start here
 
-**Last landed:** milestone 118 (`12a0b2f`) — **the receiver that is not a value**.
-An exploded binding now survives being a spliced call's receiver, and a call
-whose callee always constructs its result is a fresh initializer, so `var it =
-xs.iter()` is three slots and `it.next()` costs **7.7ns/elem** over the plain
-`for` where this direction began at 77.5. 708 tests, clean under debug,
-`--gc-stress` and `make sanitize`. Everything lands on `main`; there are no
-feature branches.
+**Last landed:** milestone 118 (`12a0b2f`) — **the receiver that is not a
+value**. An exploded binding now survives being a spliced call's receiver, and
+a call whose callee always constructs its result is a fresh initializer, so
+`var it = xs.iter()` is three slots and `it.next()` costs **7.7ns/elem** over
+the plain `for` where this direction began at 77.5. 708 tests, clean under
+debug, `--gc-stress` and `make sanitize`. Everything lands on `main`; there are
+no feature branches.
 
 **Nothing is blocked, and nothing is owed.** Milestone 95 closed the last entry
 that was not a matter of appetite, and 103 the last one that was already
