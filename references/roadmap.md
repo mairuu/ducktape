@@ -20,8 +20,11 @@ that was not a matter of appetite, and 103 the last one that was already
    allocation; 113 deleted the frame around `next()`; 114 took the three
    dispatches that left, so **a call by name now costs nothing at all** where the
    body is one parameter read. 115 built the CFG step 3 asked for and spent it on
-   liveness, so what is left of this item is **escape analysis on that graph** —
-   which will want def-use chains the graph does not carry yet.
+   liveness. What is left is **a forward analysis over that graph**, and the
+   "narrow peephole" this file has carried since the item was written has
+   collapsed into it — a spliced `next()` reaches its landing pad from two
+   returns, so the scrutinee is a merge and no peephole can see it. Two
+   consumers, one question.
 2. **std breadth on the natives** — every piece with a design question in it is
    spent, so what remains is typing.
 3. **`Eq`** — recorded as *declined*, by two consumers that were asked for it by
@@ -604,27 +607,51 @@ wrong, and it landed in milestones 94–95.
       Milestone 114 then took the three dispatches it left (`runtime.md` "The
       peephole"), which is where this stops: a call by name costs nothing, and
       nothing further about *calling* is on the table.
-   3. **A CFG, and only then escape analysis.** **The graph is done — milestone
-      115**, built per body in `src/cfg.c` and spent on the second of its two
-      named consumers, milestone 107's per-store liveness.
+   3. **A CFG, and then what a forward analysis over it buys.** **The graph is
+      done — milestone 115**, built per body in `src/cfg.c` and spent on the
+      second of its two named consumers, milestone 107's per-store liveness.
       `architecture.md` "Liveness, and the store grain". What it carries is
-      control flow and binding events, which is all liveness needed; **escape
-      analysis is the remaining consumer and wants what the graph still lacks**
-      — def-use chains, and an answer for aggregates, which are handles so
-      aliasing is real. The prerequisite that turned out to matter was neither:
-      it was that the checker and codegen disagreed about which binding a
+      control flow and *binding* events, which is all liveness needed. What is
+      left of this item is the forward direction over the same graph — def-use
+      over values rather than bindings — and it now has **two** consumers rather
+      than one, because the peephole below turned out to be the same question:
+
+      - **the variant a match never needed built.** Every path into the
+        scrutinee of `while var Option::Some(x) = it.next()` pushes a
+        construction of a known tag; knowing that is what lets the construct and
+        the destructure both go. The cheap consumer, and the one to prove the
+        machinery on
+      - **escape analysis**, the substantial one, which additionally wants an
+        answer for aggregates — they are handles, so two names reach one object
+        and aliasing is real
+
+      The prerequisite that turned out to matter for the graph was neither of
+      those: it was that the checker and codegen disagreed about which binding a
       shadowed name meant.
 
-   **The peephole, half spent.** The *splice-boundary* half — a read of a
-   parameter already in place, the slide that removed the value it just copied,
-   and the jump to the instruction after next — is **done, milestone 114**, and
-   it took a call by name to zero. What is left is the original, narrower one:
-   `while var Option::Some(x) = it.next()` constructs and destructures its
-   variant in one expression tree once `next()` is inlined, so eliding it is a
-   peephole (a match whose scrutinee is a variant construction) rather than
-   escape analysis, true by construction the way milestone 107's `write_target`
-   was. Milestone 110 already shrank that prize to a `Value` write plus a tag
-   test, so it is now the smaller of the two and it still needs no IR.
+   **The peephole: one half spent, one half withdrawn.** The *splice-boundary*
+   half — a read of a parameter already in place, the slide that removed the
+   value it just copied, and the jump to the instruction after next — is
+   **done, milestone 114**, and it took a call by name to zero.
+
+   **The other half was never a peephole, and this file claimed otherwise from
+   the day the item was written.** The claim: `while var Option::Some(x) =
+   it.next()` constructs and destructures its variant in one expression tree
+   once `next()` is inlined, so a match whose scrutinee is a variant
+   construction could be folded by looking at the last instruction. It cannot.
+   Inside a splice `cg_emit_return` emits **a jump to the landing pad per
+   return**, and an iterator's `next()` has two exits *by definition* — the
+   exhausted path builds `None`, the yielding path builds `Some` — which every
+   `next()` in `std/iter.dt` does. So the scrutinee is a **merge of two
+   constructions**, and milestone 114's own safety rule declines a backward
+   rewrite at exactly a merge point: `last_target` is the whole of that
+   argument. The fold would fire only on a body with a single return, which an
+   iterator structurally is not, so its consumer set in std is empty.
+
+   What eliding the `Some` actually needs is *every path into this point pushes
+   a variant construction, and of which tag* — a forward, per-path fact. That is
+   a question for the graph milestone 115 built, not for the instruction behind
+   the cursor, which is why it now sits under step 3 rather than beside it.
 
    **On throwing the standard library away.** It is ~20 modules written *in
    ducktape*, so nuking it is cheap and always will be — which is itself an
