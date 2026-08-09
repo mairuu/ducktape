@@ -400,7 +400,7 @@ void tc_report_unused_items(TypeChecker *tc, Module *m);
 // ValueScope
 // ═══════════════════════════════════════════════════════════════════════════════
 
-typedef struct {
+struct VarEntry {
   StringView name;
   Type *type;
   Span span; // where the binding was written, for the unused warning
@@ -419,10 +419,13 @@ typedef struct {
   union {
     FunDef *fun; // when type.kind == TY_FUN
   } as;          // payload for certain kinds of entries
-} VarEntry;
+};
 
 struct ValueScope {
-  VarEntry *entries;
+  // entries are allocated one at a time so a `VarEntry *` outlives the scope
+  // that holds it: the AST records the entry each name resolved to, and the
+  // array behind them is grown (and so moved) after that.
+  VarEntry **entries;
   int count;
   int cap;
 

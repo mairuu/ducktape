@@ -1,0 +1,23 @@
+#! expect: warning[unused_assignment]: value assigned to 'total' is never read
+# A store whose value nothing goes on to read, in a binding that *is* read —
+# the half the declaration grain could not see, and what the control-flow graph
+# is for. `tests/pass/assign_reads.dt` is the silent half.
+use std::io::print;
+
+fun main() {
+    # the initializer, overwritten before anything reads it
+    var total = 0;
+    total = 7;
+    print("{total}");
+
+    # a compound store is a read of the old value and a store of a new one, so
+    # a lone `+=` with nothing after it is dead on its own
+    var counted = 1;
+    print("{counted}");
+    counted += 1;
+
+    # every path out of the branch stores, so the value above them is dead
+    var picked = 0;
+    if total > 3 { picked = 1; } else { picked = 2; }
+    print("{picked}");
+}

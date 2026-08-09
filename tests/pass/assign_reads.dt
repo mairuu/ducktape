@@ -1,35 +1,39 @@
-# Which ways of naming a binding count as *reading* it. Only a plain `=` into a
-# bare name does not, so everything here is silent — and stderr being empty is
-# the point: this is what stops the store rule from widening.
+# Which stores stay silent once the grain is the store rather than the binding.
+# Everything here is a value something goes on to read, and stderr being empty
+# is the point: this is what stops the liveness pass from widening.
+# `tests/warn/unused_store.dt` is the other half.
 use std::io::print;
 
 struct Point { x: int, y: int }
 
-fun ignores(seed: int) -> int {
-    seed = 99;
+# a parameter the body reads before storing into: the caller's value is wanted
+fun bumped(seed: int) -> int {
+    seed = seed + 1;
     return seed;
 }
 
 fun main() {
-    # a compound assignment consults the old value, so its target is read
+    # a compound assignment consults the old value, so each of these reads the
+    # store before it
     var counted = 0;
     counted += 1;
     counted <<= 1;
 
-    # a field or an element store needs the object in hand first
+    # a field or an element store is a store into the *object*, which the
+    # binding holding it is read to reach
     var p = Point { x: 1, y: 2 };
     p.x = 9;
     var xs = [1, 2];
     xs[0] = 9;
 
-    # a store followed by a read is the ordinary case
-    var live = 1;
-    live = 2;
+    # a store read only on one path out of a branch is live on that path
+    var forked = 1;
+    if counted > 0 { forked = 2; }
 
     # the underscore hatch covers a binding whose whole life is the store, which
     # with no `drop` in the language is how a reference is released
     var _dropped = 1;
     _dropped = 2;
 
-    print("{counted}{p.x}{xs[0]}{live}{ignores(1)}");
+    print("{counted}{p.x}{xs[0]}{forked}{bumped(1)}");
 }

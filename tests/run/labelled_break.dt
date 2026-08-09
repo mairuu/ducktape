@@ -62,7 +62,10 @@ fun count_before_the_third_column() -> int {
 }
 
 # the unwind spans a temporary *and* two loops at once: `id`'s callee is
-# pushed, the `while` is live, and the break's value has to outlive all of it
+# pushed, the `while` is live, and the break's value has to outlive all of it.
+# `@allow` because the break fires on the first turn, so nothing reads `guard`
+# — the counter is here to make the inner loop real, not to count.
+@allow("unused_assignment")
 fun break_two_loops_past_a_callee() -> int {
     'outer: loop {
         var guard = 0;

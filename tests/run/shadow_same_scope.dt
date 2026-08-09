@@ -1,0 +1,28 @@
+# Two `var x` in one block are two bindings, and a name resolves to the later
+# one. The checker used to take the *first* while codegen took the last, so a
+# redeclaration at a different type type-checked against the wrong one and the
+# VM read the value as whatever that said.
+use std::io::print;
+
+fun main() {
+    var x = 1;
+    print("{x}");
+#> 1
+    var x = "two";
+    print("{x}");
+#> two
+
+    # the shadowed binding is still there and still typed as it was, so the
+    # initializer below reads an `int` and the name after it is the new one
+    var n = 1;
+    var n = n + 10;
+    print("{n}");
+#> 11
+
+    # an inner scope shadows as it always did, and the outer one comes back
+    var depth = "outer";
+    if true { var depth = "inner"; print("{depth}"); }
+#> inner
+    print("{depth}");
+#> outer
+}

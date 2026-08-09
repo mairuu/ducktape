@@ -2485,10 +2485,11 @@ the flag from leaking into the target's sub-expressions or the right-hand side.
 
 `vscope_pop` then chooses between two names for one condition: nothing read this
 binding, and `written` says whether the stores into it were the whole of its
-life. So the grain is the binding rather than the store — one report, at the
-declaration — where Rust's `unused_assignments` reports each dead store and needs
-liveness to do it. The cheap consequence is that a value read *anywhere* clears
-the binding, dead stores included, and that `counted += 1` alone is silent.
+life. **That is still one report at the declaration, and it is now the only one
+that binding gets**: a name nothing reads is one mistake, so the store-grain
+pass below stays quiet about every store into it. Where the binding *is* read,
+the question of which stores were wanted needs a control-flow graph, and that is
+"Liveness, and the store grain" below.
 
 **An import.** Each `UseAlias` carries a `used` flag; the four places an import
 can bind a name — the type scope, the value scope, the variant table, the
@@ -2513,6 +2514,73 @@ reachable through exactly one import pins it; through two, neither. The impls
 only vote when *no* alias of the declaration was named, because deleting one
 unnamed alias beside a named one leaves the line, and everything it makes
 visible, in place.
+
+### Liveness, and the store grain (`src/cfg.c`)
+
+A binding's *stores* cannot be answered by a flag on the entry, because the
+answer differs per store and per path: `var x = 1; x = 2; print("{x}")` has one
+dead store and one live one, and which is which depends on the order the two
+run in. That is a question about control flow, so the compiler builds one.
+
+**The graph is per body, and built after the body is checked.** `tc_check_fun`,
+`tc_check_impl` and `tc_check_trait` each call `tc_check_body_flow`, which hands
+`cfg_check_body` the body and the scope open around it — the scope holding
+exactly the signature's bindings, so the parameter list needs no second
+spelling. After the check is the first moment every name in the body has
+resolved, and resolution is the one thing this pass refuses to redo: the checker
+records the `VarEntry *` each name landed on (`ExprPath.resolved_local`,
+`PatternBind.entry`, `FieldPat.entry`, `ExprFor.var_entry`, `ClosureParam.entry`)
+and the graph reads them. Nothing else would guarantee the two agree, and a lint
+that disagrees with the checker about which `x` a name means reports on the
+wrong line. That guarantee is also why `ValueScope` allocates its entries one at
+a time: the array behind them grows, so a `VarEntry *` handed out early would
+otherwise move.
+
+**A block is a list of binding events, not of values.** `CfgOp` is
+`(CFG_STORE | CFG_READ, local, span)` and nothing more — an expression is walked
+for which bindings it reads and stores, and everything else about it is dropped.
+The builder is one walk in evaluation order (`scan_expr` in `codegen.c` is the
+same shape) with a cursor for the block being filled; a construct that branches
+ends the cursor's block and opens what its arms need, and `cur == CFG_NONE` is
+control having left, so events are dropped and edges out of it are no-ops until
+the walk arrives somewhere reachable again. The branching set is `if`, `while`,
+`loop`, `for`, `match`, `and`/`or`, a labelled block, `break`/`continue`,
+`return`, and `?` — which leaves by the same door a `return` does, so it is a
+two-armed branch whose other arm carries the `Ok` on.
+
+**Every assignment into a bare name is a store here**, where the checker's
+`write_target` counts only a plain `=`. The two rules differ because the
+questions do: at the declaration grain a compound `a op= b` is a *read*, and at
+this grain it is a read and a store both, which is what makes a lone
+`counted += 1` a dead store. A pattern binding is a store too — the value came
+from the subject being taken apart — and so is a parameter, whose store the
+signature makes and the caller fills, which is why that report says *passed*
+rather than *assigned*.
+
+**The answer is backward liveness to a fixpoint.** A binding is live at a point
+when some path from it reads the binding before storing into it again; a store
+whose binding is not live where it lands is dead. The fixpoint is what a loop
+costs: a back edge means a block's answer depends on one not computed yet, so
+the sweep repeats until no `live_in` changes. Reports are then collected in a
+second backward walk over reachable blocks and sorted by span, since block order
+is the order the *builder* opened them and a loop or a match interleaves that.
+
+Three exemptions, each for a reason the analysis cannot supply:
+
+- **a binding nothing reads at all** — `vscope_pop` already reported it, once,
+  at the declaration. Naming its stores as well would be the same news several
+  times
+- **a binding a closure captures** — an upvalue is shared rather than copied and
+  a closure runs at a time no graph of this body can name, so a captured binding
+  is marked out of the answer. `cfg_local` does the marking: a name a body reads
+  that belongs to an enclosing graph is a capture by construction, found on the
+  parent chain rather than by a walk of its own. The closure's body then gets a
+  graph in its own right
+- **an unreachable block** — `unreachable_code` already has it
+
+`self` and any `_` name are not tracked at all, which is the same hatch the
+declaration grain offers one level down: they never enter the local table, so no
+store into one is ever weighed.
 
 ### An item nothing reaches (`unused_item`)
 

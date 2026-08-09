@@ -2,12 +2,12 @@
 
 ## Start here
 
-**Last landed:** milestone 114 (`a2b871d`) — the peephole 113 named, which takes a
-call whose body is one parameter read to *byte-identical* with writing the body
-out. Plus `bench/` and `make bench`, so the cost model's tables stop being
-re-derived once per performance milestone. 690 tests, clean under debug,
-`--gc-stress` and `make sanitize`. Everything lands on `main`; there are no
-feature branches.
+**Last landed:** milestone 115 (`SHA`) — the **control-flow graph**, built per
+body in `src/cfg.c`, and its first consumer: `unused_assignment` now reports each
+dead store rather than one binding. It arrived by way of a soundness fix — two
+`var x` in one scope had the checker reading the first and codegen the last. 694
+tests, clean under debug, `--gc-stress` and `make sanitize`. Everything lands on
+`main`; there are no feature branches.
 
 **Nothing is blocked, and nothing is owed.** Milestone 95 closed the last entry
 that was not a matter of appetite, and 103 the last one that was already
@@ -16,12 +16,12 @@ that was not a matter of appetite, and 103 the last one that was already
 **The four live directions**, in the order this file recommends them:
 
 1. **The iterator's allocation, and the compiler work behind it** — the only
-   direction left that is not breadth, and now down to its last step. 109 and
-   110 made `Some(x)` cost no allocation; 113 deleted the frame around
-   `next()`; 114 took the three dispatches that left, so **a call by name now
-   costs nothing at all** where the body is one parameter read. What remains on
-   `it.next()` is the `Option` and the iterator struct's own field traffic —
-   neither is a peephole. Step 3 is a CFG.
+   direction left that is not breadth. 109 and 110 made `Some(x)` cost no
+   allocation; 113 deleted the frame around `next()`; 114 took the three
+   dispatches that left, so **a call by name now costs nothing at all** where the
+   body is one parameter read. 115 built the CFG step 3 asked for and spent it on
+   liveness, so what is left of this item is **escape analysis on that graph** —
+   which will want def-use chains the graph does not carry yet.
 2. **std breadth on the natives** — every piece with a design question in it is
    spent, so what remains is typing.
 3. **`Eq`** — recorded as *declined*, by two consumers that were asked for it by
@@ -517,6 +517,42 @@ to keep this file small. Everything from 100 on is below.
   copied into the parameter's slot, and the fold reaches only the first
   parameter.
 
+- **115. A control-flow graph, and a store that no longer hides behind its
+  binding** (`SHA`) — `unused_assignment` now reports each dead *store*, over
+  liveness on a graph built per body (`src/cfg.c`).
+  Design: `architecture.md` "Liveness, and the store grain", `language.md`
+  "Statements and blocks" + "Warnings and `@allow`", `overview.md` phase 5.
+  **THE FINDING: the graph's prerequisite was a soundness bug, not a data
+  structure.** Liveness rests on "the binding the checker resolved is the one
+  codegen will read", so the pass records the `VarEntry *` each name landed on
+  rather than re-resolving — and recording it showed the two did not agree.
+  `vscope_find` scanned a scope *forwards*, so `var x = 1; var x = "two";` typed
+  the later `x` as `int` while codegen read the later slot: `x + 1` type-checked
+  and the VM added 1 to a string pointer. One reversed loop fixes it, and
+  `ValueScope` had to allocate entries singly for the recorded pointers to
+  survive the array growing. **SECOND FINDING: the exemptions carry the design,
+  not the dataflow.** Backward liveness to a fixpoint is textbook; what decides
+  whether the lint is usable is that a binding nothing reads *anywhere* keeps
+  its single report at the declaration (one mistake, one message), that a
+  captured binding is excluded because an upvalue is shared — found on the
+  parent graph's chain, so a closure needs no walk of its own — and that a
+  compound `a op= b` is a store here where `write_target` calls it a read, which
+  is the whole of why `counted += 1` alone is now reported. The events are
+  `(kind, local, span)` and nothing else, so the graph knows control flow and
+  the AST keeps the data. Its first act was to report **4 test files, every one
+  of them right** — a `+=` before an unconditional `break`, a store written to
+  prove it is unobservable, and two dead initializers — and **std needed no
+  change at all**, milestone 107's result a second time.
+  **THIRD FINDING: a match's arms are a chain, not a fan.** Hanging every arm
+  off the subject reads as the obvious shape and is wrong: an arm is reached
+  because every arm above it declined, and an arm declines in *two* places — its
+  pattern did not match, or its guard said no after the bindings were made.
+  Without that second edge a store in an earlier guard is invisible to the arms
+  below, which is a false positive rather than a missed one, and
+  `tests/run/match_guard_flow.dt` is the program that showed it.
+  Remainder: escape analysis is the other named consumer and is not built; the
+  graph has no def-use chains, which is what that will want.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -568,12 +604,16 @@ wrong, and it landed in milestones 94–95.
       Milestone 114 then took the three dispatches it left (`runtime.md` "The
       peephole"), which is where this stops: a call by name costs nothing, and
       nothing further about *calling* is on the table.
-   3. **A CFG, and only then escape analysis.** The AST cannot carry this: no
-      control-flow graph, no def-use chains, and aggregates are handles so
-      aliasing is real. **It already has two named consumers**, which is what
-      separates it from architecture for its own sake — this item's escape
-      analysis, and milestone 107's remainder (per-store liveness, recorded in
-      the warts below as needing exactly this). Several milestones, not one.
+   3. **A CFG, and only then escape analysis.** **The graph is done — milestone
+      115**, built per body in `src/cfg.c` and spent on the second of its two
+      named consumers, milestone 107's per-store liveness.
+      `architecture.md` "Liveness, and the store grain". What it carries is
+      control flow and binding events, which is all liveness needed; **escape
+      analysis is the remaining consumer and wants what the graph still lacks**
+      — def-use chains, and an answer for aggregates, which are handles so
+      aliasing is real. The prerequisite that turned out to matter was neither:
+      it was that the checker and codegen disagreed about which binding a
+      shadowed name meant.
 
    **The peephole, half spent.** The *splice-boundary* half — a read of a
    parameter already in place, the slide that removed the value it just copied,
@@ -725,7 +765,9 @@ Each of these is a *second* diagnostic for what a reader sees as one mistake, or
 - the unused-binding warnings of one function come out in **scope-close** order
   rather than source order, so an inner block's precede an outer one's whatever
   their lines. Sorting the bag would need notes to stop attaching to the
-  diagnostic before them by position (milestone 89)
+  diagnostic before them by position (milestone 89). Milestone 115's dead-store
+  reports sort themselves before they are emitted, which is the same fix done
+  one pass early rather than the general one
 
 ### Lints and `@allow`
 
@@ -736,7 +778,19 @@ The lint family's remainders. What is missing is mostly grain — which thing a 
   milestone 89 there *is* a warning severity for this to use, and as of 92 the
   entry to hang it on (`VarEntry.span`, `used`) — what is missing is now only
   the analysis, and the policy call about whether shadowing deserves one at all
-  (Rust does not warn on it)
+  (Rust does not warn on it). Milestone 115 fixed the half that was not a
+  policy call: the checker and codegen used to disagree about *which* binding a
+  shadowed name meant, so the shadowed one now merely warns as unused
+- **a parameter is reported twice over, in two wordings** (milestone 115).
+  A parameter the body overwrites and never reads gets "value *passed* to" from
+  the graph, which knows the store is the signature's; one that is never read at
+  all gets "value *assigned* to" from `vscope_pop`, which cannot tell a
+  parameter from a local. Both are `unused_assignment`, and the second is the
+  wrong word for the same reason the first was
+- **the graph is rebuilt from nothing per body and answers one question**
+  (milestone 115). Liveness is the only consumer, so `cfg_check_body` builds,
+  answers and drops it; escape analysis will want it kept, and will want def-use
+  chains the events do not carry — an event names a binding, not a value
 - a lint's level is **all-or-nothing over a compile**: `-W` (milestone 97) takes
   no module path, so one module cannot be held to a level the rest is not, and
   the only per-declaration control is `@allow`, which only goes downwards. Nor
@@ -757,12 +811,6 @@ The lint family's remainders. What is missing is mostly grain — which thing a 
   spelling of its own. The cost is a pattern kind implemented in five places
   (sema ×3, codegen ×2, ast) that nothing constructs, and `var y = _;` being a
   legal read of a binding nobody meant to make
-- `unused_assignment`'s grain is the **binding**, not the store, so a dead store
-  into a binding that is read *somewhere* is invisible: `var x = 1; x = 2;` warns
-  but `var x = 1; x = 2; print("{x}");` does not, and neither does a lone
-  `counted += 1`, whose target the compound operator genuinely reads. Rust
-  reports each store and needs liveness over a control-flow graph to do it,
-  which is the cost this defers rather than avoids
 
 ### Types, traits and coherence
 

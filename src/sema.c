@@ -1,6 +1,7 @@
 #include "sema.h"
 #include "allocator.h"
 #include "ast.h"
+#include "cfg.h"
 #include "diag.h"
 #include "module.h"
 #include "string_utils.h"
@@ -6034,7 +6035,7 @@ static bool check_struct_pattern(CheckCtx *ctx, Pattern *pattern,
         check_pattern(ctx, fp->sub_pattern, ctx->tc->t_poison);
       } else {
         vscope_define(ctx->vscope, fp->ident.name, ctx->tc->t_poison,
-                      ctx->diags, fp->span, NULL);
+                      ctx->diags, fp->span, &fp->entry);
       }
     }
     return true;
@@ -6114,7 +6115,7 @@ static bool check_struct_pattern(CheckCtx *ctx, Pattern *pattern,
       assert(!struct_def->is_tuple &&
              "tuple struct patterns must have sub-patterns");
       vscope_define(ctx->vscope, fp->ident.name, field_ty, ctx->diags, fp->span,
-                    NULL);
+                    &fp->entry);
     }
   }
   return !sub_pattern_error;
@@ -6133,7 +6134,7 @@ static bool check_variant_pattern(CheckCtx *ctx, Pattern *pattern,
         check_pattern(ctx, fp->sub_pattern, ctx->tc->t_poison);
       } else {
         vscope_define(ctx->vscope, fp->ident.name, ctx->tc->t_poison,
-                      ctx->diags, fp->span, NULL);
+                      ctx->diags, fp->span, &fp->entry);
       }
     }
     return true;
@@ -6227,7 +6228,7 @@ static bool check_variant_pattern(CheckCtx *ctx, Pattern *pattern,
       assert(!variant_def->is_tuple &&
              "tuple variant patterns must have sub-patterns");
       vscope_define(ctx->vscope, fp->ident.name, field_ty, ctx->diags, fp->span,
-                    NULL);
+                    &fp->entry);
     }
   }
 
@@ -6306,7 +6307,7 @@ static bool check_pattern(CheckCtx *ctx, Pattern *pattern, Type *expected_ty) {
     }
 
     vscope_define(ctx->vscope, pattern->as.bind.name, expected_ty, ctx->diags,
-                  pattern->span, NULL);
+                  pattern->span, &pattern->as.bind.entry);
     break;
   }
   case PAT_VARIANT: {
@@ -6795,7 +6796,7 @@ static void bind_pattern_poison(CheckCtx *ctx, Pattern *pat) {
     break;
   case PAT_BIND:
     vscope_define(ctx->vscope, pat->as.bind.name, ctx->tc->t_poison, ctx->diags,
-                  pat->span, NULL);
+                  pat->span, &pat->as.bind.entry);
     break;
   case PAT_TUPLE:
     for (int i = 0; i < pat->as.tuple.count; i++) {
@@ -6813,7 +6814,7 @@ static void bind_pattern_poison(CheckCtx *ctx, Pattern *pat) {
         bind_pattern_poison(ctx, fields[i].sub_pattern);
       } else {
         vscope_define(ctx->vscope, fields[i].ident.name, ctx->tc->t_poison,
-                      ctx->diags, fields[i].span, NULL);
+                      ctx->diags, fields[i].span, &fields[i].entry);
       }
     }
     break;
@@ -7911,7 +7912,8 @@ static Type *resolve_closure_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
   ctx->vscope = vscope_push(ctx->vscope, ctx->al);
   for (int i = 0; i < closure->param_count; i++) {
     vscope_define(ctx->vscope, closure->params[i].name, param_types.ptr[i],
-                  ctx->diags, closure->params[i].span, NULL);
+                  ctx->diags, closure->params[i].span,
+                  &closure->params[i].entry);
   }
 
   Type *body_ty = resolve_expr(ctx, closure->body, ret_ty);
@@ -8818,6 +8820,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     VarEntry *ve = expr == ctx->write_target
                        ? vscope_lookup_write(ctx->vscope, name)
                        : vscope_lookup(ctx->vscope, name);
+    expr->as.path_expr.resolved_local = ve;
     tc_item_named(ctx->tc, ve ? ve->item : NULL);
     if (!ve) {
       // a bare unit struct names a value as well as a type: `struct Unit;`
@@ -9366,7 +9369,7 @@ static Type *resolve_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
 
     ctx->vscope = vscope_push(ctx->vscope, ctx->al);
     vscope_define(ctx->vscope, for_->var_name, item_ty, ctx->diags,
-                  for_->var_span, NULL);
+                  for_->var_span, &for_->var_entry);
     check_label_shadow(ctx, for_->label);
     CheckLoop frame = {
         .kind = CHECK_LOOP_FOR, .label = for_->label, .parent = ctx->loops};
@@ -9701,6 +9704,14 @@ static Type *resolve_expr_coerced(CheckCtx *ctx, Expr *expr, Type *expected) {
   return actual;
 }
 
+// The flow pass over a body the checker has just finished. The scope open at
+// this moment holds exactly the signature's bindings, so it is also the list of
+// stores the entry block needs — a parameter is a binding the caller filled.
+static void tc_check_body_flow(CheckCtx *cctx, Expr *body) {
+  cfg_check_body(body, cctx->vscope->entries, cctx->vscope->count, cctx->diags,
+                 cctx->al);
+}
+
 static void tc_check_fun(TypeChecker *tc, Decl *decl) {
   assert(decl->kind == DECL_FUN && "expected fun decl");
   DeclFun *fun_decl = &decl->as.fun_decl;
@@ -9737,6 +9748,7 @@ static void tc_check_fun(TypeChecker *tc, Decl *decl) {
   }
 
   resolve_expr_coerced(&cctx, fun_decl->body, fun_def->return_type);
+  tc_check_body_flow(&cctx, fun_decl->body);
 
   // end var scope
   cctx.vscope = vscope_pop(cctx.vscope, cctx.diags);
@@ -10057,6 +10069,7 @@ static void tc_check_impl(TypeChecker *tc, Decl *decl) {
       }
 
       resolve_expr_coerced(&cctx, fun_decl->body, fun_def->return_type);
+      tc_check_body_flow(&cctx, fun_decl->body);
 
       // end method var scope
       cctx.vscope = vscope_pop(cctx.vscope, cctx.diags);
@@ -10139,6 +10152,7 @@ static void tc_check_trait(TypeChecker *tc, Decl *decl) {
     }
 
     resolve_expr_coerced(&cctx, fun->body, cctx.return_type);
+    tc_check_body_flow(&cctx, fun->body);
 
     // end method var scope
     cctx.vscope = vscope_pop(cctx.vscope, cctx.diags);
@@ -10221,7 +10235,7 @@ static bool name_is_deliberate(StringView name) {
 ValueScope *vscope_pop(ValueScope *scope, DiagBag *diags) {
   assert(scope->parent && "cannot pop root scope");
   for (int i = 0; i < scope->count; i++) {
-    VarEntry *ve = &scope->entries[i];
+    VarEntry *ve = scope->entries[i];
     // `self` is written by the *signature*, not by the body, so a method that
     // does not need it has nothing to delete — unlike every other binding here.
     if (ve->used || name_is_deliberate(ve->name) ||
@@ -10248,20 +10262,24 @@ ValueScope *vscope_pop(ValueScope *scope, DiagBag *diags) {
 // one walk, two marks. A read is also a use of whatever *bound* the name, which
 // is how an import learns it was wanted; a store is not, so it leaves `origin`
 // alone — nothing can be assigned to through a `use` anyway.
+//
+// Both loops run innermost-first, and within a scope that means *backwards*:
+// two `var x` in one block are two entries, and the later one shadows.
 static VarEntry *vscope_find(ValueScope *scope, StringView name,
                              bool is_write) {
   for (ValueScope *s = scope; s; s = s->parent) {
-    for (int i = 0; i < s->count; i++) {
-      if (sv_equal(s->entries[i].name, name)) {
+    for (int i = s->count - 1; i >= 0; i--) {
+      VarEntry *ve = s->entries[i];
+      if (sv_equal(ve->name, name)) {
         if (is_write) {
-          s->entries[i].written = true;
+          ve->written = true;
         } else {
-          s->entries[i].used = true;
-          if (s->entries[i].origin != NULL) {
-            *s->entries[i].origin = true;
+          ve->used = true;
+          if (ve->origin != NULL) {
+            *ve->origin = true;
           }
         }
-        return &s->entries[i];
+        return ve;
       }
     }
   }
@@ -10281,9 +10299,9 @@ VarEntry *vscope_lookup_write(ValueScope *scope, StringView name) {
 // linker's question and names nothing. See tscope_peek.
 VarEntry *vscope_peek(ValueScope *scope, StringView name) {
   for (ValueScope *s = scope; s; s = s->parent) {
-    for (int i = 0; i < s->count; i++) {
-      if (sv_equal(s->entries[i].name, name)) {
-        return &s->entries[i];
+    for (int i = s->count - 1; i >= 0; i--) {
+      if (sv_equal(s->entries[i]->name, name)) {
+        return s->entries[i];
       }
     }
   }
@@ -10297,20 +10315,23 @@ void vscope_define(ValueScope *scope, StringView name, Type *type,
 
   if (scope->count >= scope->cap) {
     int new_cap = scope->cap == 0 ? 4 : scope->cap * 2;
-    scope->entries =
-        al_realloc(scope->al, scope->entries, sizeof(VarEntry) * scope->cap,
-                   sizeof(VarEntry) * new_cap);
+    scope->entries = al_realloc(scope->al, scope->entries,
+                                sizeof(VarEntry *) * (size_t)scope->cap,
+                                sizeof(VarEntry *) * (size_t)new_cap);
     assert(scope->entries && "out of memory");
     scope->cap = new_cap;
   }
 
-  scope->entries[scope->count++] = (VarEntry){
+  VarEntry *ve = al_alloc_zero_for(scope->al, VarEntry);
+  assert(ve && "out of memory");
+  *ve = (VarEntry){
       .name = name,
       .type = type,
       .span = span,
   };
+  scope->entries[scope->count++] = ve;
   if (ref) {
-    *ref = &scope->entries[scope->count - 1];
+    *ref = ve;
   }
 }
 

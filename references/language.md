@@ -125,6 +125,9 @@ var _pinned: Shape = g();     # ... silent: a leading `_` says it is deliberate
 
 A bare `_` is an ordinary identifier, so it is that rule at length one and the
 usual wildcard spellings (`Some(_)`, `Point { x: _, y }`) cost nothing extra.
+Two `var x` in one block are two bindings and the later one shadows: the earlier
+keeps its own type and its own value, and every mention after the second
+declaration means the second.
 Two bindings are exempt without a prefix: `self`, which the signature writes
 rather than the body, and every parameter of an `@native`/`@intrinsic`, whose
 body is in C and names nothing here. A struct pattern's **shorthand** binds
@@ -139,20 +142,44 @@ while the stores stand:
 
 ```
 var stale = 1;  stale = 2;    # warning: value assigned to 'stale' is never read
-var live = 1;   live = 2;   print("{live}");   # ... silent: something reads it
 var _dropped = f();  _dropped = g();           # ... silent: the `_` again
 ```
 
 Every other way of reaching a name **is** a read, including the ones that write
 through it: a compound assignment consults the old value by definition
 (`counted += 1`), and `p.x = 9` or `xs[0] = 9` must have the object in hand
-before storing into it. So the last line above is how a reference is released —
-with no `drop` in the language, overwriting the binding is the only way, and the
-`_` prefix is what says the store was the point.
+before storing into it. So the second line above is how a reference is released
+— with no `drop` in the language, overwriting the binding is the only way, and
+the `_` prefix is what says the store was the point.
 
-The grain is the **binding**, not the store: one report per binding, at its
-declaration, and a binding that is read *anywhere* is silent however many dead
-stores it also holds.
+**And a store nothing reads warns even where the binding is wanted.** The
+question is asked per store, over the paths that leave it: a store is dead when
+nothing reads the binding before the next store into it, on any path at all.
+
+```
+var x = 1;  x = 2;  print("{x}");   # warning on `var x = 1`: overwritten first
+var total = 0;  total += 1;         # warning on the `+=`: at this grain it stores
+for x in xs { x = 9; }              # warning on `x`: the loop's value discarded
+
+fun ignores(seed: int) -> int {     # warning: value *passed* to 'seed', never
+    seed = 99;  return seed;        # read — the caller filled it, not the body
+}
+
+var picked = 0;                     # warning: every path below stores first
+if c { picked = 1; } else { picked = 2; }   print("{picked}");
+```
+
+A compound `a op= b` is a read *and* a store here, which is why `total += 1`
+alone is reported where the paragraph above calls it a read. A parameter is a
+store the signature makes, and a pattern binding is one too — the value came
+from the subject being taken apart.
+
+Three things stay silent, each for a reason the paths cannot supply: a binding
+nothing reads *anywhere* (already reported once, at its declaration — one
+mistake, one message), a binding a closure captures (it is shared, and the
+closure runs at a time no reading of this body can name), and a store in code
+nothing reaches (`unreachable_code` has it). `self` and any `_` name are exempt
+throughout, as above.
 
 ## Expressions
 
@@ -3177,7 +3204,7 @@ the report prints, what silences it, and what a `-W` flag takes:
 | Lint | What it says |
 |---|---|
 | `unused_variable` | a binding nothing ever names (above, "Statements and blocks") |
-| `unused_assignment` | a binding something stores into and nothing reads (above, "Statements and blocks") |
+| `unused_assignment` | a store nothing goes on to read, or a binding whose whole life is stores (above, "Statements and blocks") |
 | `unused_import` | a `use` binding a name nothing writes, whose impls arrive anyway ("Modules") |
 | `unused_item` | a `fun`/`struct`/`enum`/`trait` nothing reachable names (below) |
 | `unused_label` | a loop's or block's label no `break`/`continue` names ("Expressions") |
@@ -3330,7 +3357,7 @@ See the gaps table below for what suppression still cannot do.
 | reading `while true { }` as endless | its condition is an expression, and the checker reads types rather than values — `loop { }` is the spelling that asks no condition (milestone 86) |
 | `!` in a position asking a structural question | `if panic("x") { }`, `for x in panic("x")`, and `r?` inside a `-> !` function are all refused: those sites ask "is it a `bool`/an `Iterator`/the same enum?", not "does it flow here?", and `!` answers none of them. Harmless, since the code below is unreachable either way |
 | tuple-struct struct-patterns `Pair { a, b }` | write the constructor spelling `Pair(a, b)` — "matching tuple struct with struct pattern syntax is not allowed" |
-| variable shadowing diagnostics | a `var` may silently shadow an earlier one in the same scope (top-level *item* names do collide — that is an error). There is a warning severity for it to use since milestone 89; what is missing is the analysis, and the choice about whether shadowing deserves one at all |
+| variable shadowing diagnostics | a `var` may silently shadow an earlier one in the same scope, though the shadowed binding is now reliably the *earlier* one (milestone 115) and warns as unused like any other (top-level *item* names do collide — that is an error). There is a warning severity for it to use since milestone 89; what is missing is the analysis, and the choice about whether shadowing deserves one at all |
 | seeing a warning from the standard library | warnings are advice to an author, so they are dropped for the embedded std that every program compiles from source — which is also why `-Werror` cannot escalate one. `./build/ducktape --std-module std::cmp` compiles that module as the root, reading its source from disk, and does warn — the module path says which module it is, and nothing is inferred from the shape of a filesystem path |
 | a level that `@allow` cannot overrule (Rust's `forbid`) | `-Werror` loses to an `@allow` on the declaration, deliberately, and there is no fourth level that wins. A build that must not be silenced anywhere has to grep for the attribute |
 | a lint level over less than the whole compile | `-W` is a blanket: it takes no path, so one module cannot be held to a level the rest is not. `@allow` is the only per-declaration control, and it only goes downwards |

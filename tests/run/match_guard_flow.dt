@@ -1,0 +1,25 @@
+# A match's arms are a chain, not a fan: an arm runs because every arm above it
+# declined, and an arm declines in two places — its pattern did not match, or
+# its guard said no after the bindings were made. The store in the guard below
+# is read only by an arm underneath it, so the liveness pass needs that second
+# edge or it condemns the store; stderr being empty is the assertion.
+use std::io::print;
+
+fun guarded(a: int) -> int {
+    var y = 0;
+    match a {
+        1 => 100,
+        n if { y = 5; n > 2 } => n,
+        _ => y,
+    }
+}
+
+fun main() {
+    print("{guarded(1)}");
+#> 100
+    print("{guarded(9)}");
+#> 9
+    # the guard ran, stored, and then declined — so the last arm reads the 5
+    print("{guarded(2)}");
+#> 5
+}

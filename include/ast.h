@@ -23,6 +23,10 @@ typedef struct Path Path;
 
 typedef struct Obj Obj; // object.h; only ever a `singleton` below
 
+// sema.h; the binding a name resolved to, recorded on the nodes that declare
+// or read one so a later pass need do no name resolution of its own.
+typedef struct VarEntry VarEntry;
+
 typedef struct Module Module;
 typedef struct StructDef StructDef;
 typedef struct EnumDef EnumDef;
@@ -712,11 +716,15 @@ typedef struct {
   FieldIdent ident;
   Pattern *sub_pattern; // NULL means shorthand, bind same name as field
   Span span;
+  // the binding a *shorthand* introduced, under the field's own name. A field
+  // with a sub-pattern binds nothing itself, and leaves this NULL.
+  VarEntry *entry;
 } FieldPat;
 
 // Pattern union variants
 typedef struct {
   StringView name;
+  VarEntry *entry; // the binding this introduced; NULL until the checker runs
 } PatternBind;
 
 typedef struct {
@@ -872,6 +880,7 @@ typedef struct {
   TypeNode *type_annotation;
   bool is_self;
   Span span;
+  VarEntry *entry; // the binding it introduced; NULL until the checker runs
 } ClosureParam;
 
 typedef struct {
@@ -957,6 +966,10 @@ typedef struct {
   // spelling over, for the case where there is no receiver to carry it.
   Type *bound_trait; // TY_TRAIT — the trait reference the bound named
   Type *bound_self;
+
+  // the binding a single-segment path resolved to, for a name that is one.
+  // NULL for a path naming an item — a function, a variant, an import.
+  VarEntry *resolved_local;
 } ExprPath;
 
 typedef struct {
@@ -1105,6 +1118,7 @@ typedef struct {
   LoopLabel label;
   StringView var_name;
   Span var_span;
+  VarEntry *var_entry; // the loop variable's binding; NULL until checked
   Expr *iterable;
   Expr *body;
 
