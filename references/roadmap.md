@@ -2,7 +2,7 @@
 
 ## Start here
 
-**Last landed:** milestone 118 (`SHA`) — **the receiver that is not a value**.
+**Last landed:** milestone 118 (`12a0b2f`) — **the receiver that is not a value**.
 An exploded binding now survives being a spliced call's receiver, and a call
 whose callee always constructs its result is a fresh initializer, so `var it =
 xs.iter()` is three slots and `it.next()` costs **7.7ns/elem** over the plain
@@ -616,7 +616,7 @@ to keep this file small. Everything from 100 on is below.
   call. Remainder: a receiver escapes, so an iterator does not explode — see
   item 1.
 
-- **118. The receiver that is not a value** (`SHA`) — an exploded binding
+- **118. The receiver that is not a value** (`12a0b2f`) — an exploded binding
   survives being a spliced call's receiver: the splice binds `self` onto the
   caller's field slots and pushes nothing, so `self.front += 1` writes the slot
   the loop reads. With that, a *call* whose callee always constructs its result
