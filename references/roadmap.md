@@ -2,7 +2,7 @@
 
 ## Start here
 
-**Last landed:** milestone 114 (`SHA`) — the peephole 113 named, which takes a
+**Last landed:** milestone 114 (`a2b871d`) — the peephole 113 named, which takes a
 call whose body is one parameter read to *byte-identical* with writing the body
 out. Plus `bench/` and `make bench`, so the cost model's tables stop being
 re-derived once per performance milestone. 690 tests, clean under debug,
@@ -482,7 +482,7 @@ to keep this file small. Everything from 100 on is below.
   inlined (bytecode grew 1.7-2.8x); and a spliced frame is missing from a runtime
   error's trace, which is the one place inlining is observable.
 
-- **114. The three dispatches a call had left** (`SHA`) — the peephole milestone
+- **114. The three dispatches a call had left** (`a2b871d`) — the peephole milestone
   113 named: a read the slide is about to remove, and a landing pad reached by
   falling into it. Plus `bench/` and `scripts/bench.sh`, so the cost model's
   tables stop being re-derived once per performance milestone.
