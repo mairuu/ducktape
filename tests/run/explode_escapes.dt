@@ -1,0 +1,65 @@
+# The other side of scalar replacement: every way a local aggregate leaves as a
+# whole value, each of which has to keep its object. A struct is a handle here,
+# so exploding one that something else can still reach would lose a write.
+use std::io::print;
+
+struct Pair { a: int, b: int }
+
+fun bump(p: Pair) -> int {
+    p.a += 100;
+    return p.a;
+}
+
+fun make() -> Pair {
+    var p = Pair { a: 1, b: 2 };
+    return p; # returned: the caller holds the object this built
+}
+
+impl Pair {
+    fun total(self) -> int { return self.a + self.b; }
+}
+
+fun main() {
+    # bound to a second name: one object, two ways in
+    var p = Pair { a: 1, b: 2 };
+    var q = p;
+    q.a = 9;
+    print("{p.a}");
+#> 9
+
+    # passed as an argument, and the callee's write is seen here
+    var r = Pair { a: 1, b: 2 };
+    print("{bump(r)} {r.a}");
+#> 101 101
+
+    # a closure capturing a field still captures the object, so it reads the
+    # write that happened after it was made
+    var s = Pair { a: 5, b: 6 };
+    var f = || s.a;
+    s.a = 50;
+    print("{f()}");
+#> 50
+
+    # a method call is the receiver leaving as a whole value
+    var m = Pair { a: 4, b: 5 };
+    print("{m.total()}");
+#> 9
+
+    # a match subject, and `make`'s returned object
+    var k = Pair { a: 1, b: 2 };
+    match k {
+        Pair { a: 1, b: bb } => { print("one {bb}"); },
+        Pair { a: _, b: _ } => { print("other"); },
+    }
+#> one 2
+    print("{make().a}");
+#> 1
+
+    # reassigned as a whole: the binding is not its fields
+    var z = Pair { a: 1, b: 2 };
+    print("{z.a}");
+#> 1
+    z = Pair { a: 8, b: 9 };
+    print("{z.a} {z.b}");
+#> 8 9
+}

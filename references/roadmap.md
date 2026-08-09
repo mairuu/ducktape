@@ -2,12 +2,12 @@
 
 ## Start here
 
-**Last landed:** milestone 116 (`18487b1`) — **the variant a match never built**. A
-`match` whose subject the code above it constructed is entered by tag, so the
-construction, the tag test and the field read all go: `it.next()` costs
-17ns/elem over the plain `for` where it cost 48, and a `Some(x)` minted and
-matched costs 8.5 where it cost 30. 698 tests, clean under debug, `--gc-stress`
-and `make sanitize`. Everything lands on `main`; there are no feature branches.
+**Last landed:** milestone 117 — **the struct nothing else can see**. A `var`
+bound to a struct or tuple literal and mentioned only as `x.f` is compiled as
+its fields, so it is never allocated: a 2-field struct literal costs 7.8ns/elem
+over the plain `for` where it cost 36, a 2-tuple 7.3 where it cost 39. 702
+tests, clean under debug, `--gc-stress` and `make sanitize`. Everything lands on
+`main`; there are no feature branches.
 
 **Nothing is blocked, and nothing is owed.** Milestone 95 closed the last entry
 that was not a matter of appetite, and 103 the last one that was already
@@ -19,10 +19,12 @@ that was not a matter of appetite, and 103 the last one that was already
    direction left that is not breadth, and now nearly spent. 109 and 110 made
    `Some(x)` cost no allocation; 113 deleted the frame around `next()`; 114 took
    the three dispatches that left; 115 built a CFG and spent it on liveness; 116
-   deleted the `Option` itself where a match is fed by a construction. **What
-   remains under this heading is escape analysis**, which wants the def-use
-   chains the graph does not carry. It is the last of the forward direction's
-   two named consumers: 116 was the other, and it turned out to need no graph.
+   deleted the `Option` itself where a match is fed by a construction; 117
+   stopped allocating a local aggregate nothing else can see. **What remains is
+   that last one crossing a splice boundary**, so an iterator — which is its
+   `next()`'s receiver, and a receiver is the value leaving whole — can be
+   exploded too. Neither of the forward direction's two named consumers wanted a
+   graph in the end.
 2. **std breadth on the natives** — every piece with a design question in it is
    spent, so what remains is typing.
 3. **`Eq`** — recorded as *declined*, by two consumers that were asked for it by
@@ -551,13 +553,40 @@ to keep this file small. Everything from 100 on is below.
   Without that second edge a store in an earlier guard is invisible to the arms
   below, which is a false positive rather than a missed one, and
   `tests/run/match_guard_flow.dt` is the program that showed it.
-  Remainder: escape analysis is the other named consumer and is not built; the
-  graph has no def-use chains, which is what that will want.
+  Remainder: escape analysis is the other named consumer and is not built.
+  (Milestone 117 built it, and it asked the graph nothing.)
 
 - **116. The variant a match never built** (`18487b1`) — a `match` whose subject
   the code above it constructed is entered by tag: the construction, the tag
   test and the field read all go, and `it.next()` costs 17ns/elem over the
   `for` where it cost 48.
+
+- **117. The struct nothing else can see** (`SHA`) — a `var` bound to a struct
+  or tuple literal and mentioned only as `x.f` is compiled as its fields: no
+  construction, each field a slot, a read or write an `OP_GET_LOCAL`/
+  `OP_SET_LOCAL`. A 2-field struct literal costs 7.8ns/elem over the plain `for`
+  where it cost 36 and a 2-tuple 7.3 where it cost 39 — ~80% off both, and the
+  allocation is simply gone.
+  Design: `runtime.md` "Escape analysis and scalar replacement" and the cost
+  model's last table. **THE FINDING: the escape question is SYNTACTIC, and the
+  graph is not wanted after all.** An aggregate is a handle, but there are no
+  borrows to take and no address to pass, so a *bare mention* is the only way one
+  reaches anywhere else — `x.f` is the one shape that keeps a value in, and
+  everything else escapes. So this is one walk asking "is every mention a field
+  access", sharing `scan_expr` with the inline-cost client, and the def-use
+  chains this file spent two milestones promising it would need were never
+  needed. Two other things fell out: **inside a closure even `x.f` escapes**,
+  since a capture is by slot and an exploded binding is several; and **one
+  `locals` entry per slot** (the first named, the rest anonymous) is what let
+  every scope's pop count stay a difference of `local_count`, so no other
+  bookkeeping in codegen learned that a binding can be more than one slot.
+  Sabotage 13/13 bit on the ten that were real; **three were no-ops**, and each
+  named its own boundary rather than a test gap — the `arity < 1` early-out
+  returns what the walk would have anyway, `locals_base` cannot matter where a
+  `VarEntry` is matched by identity, and the `dyn` guard is reachable only for a
+  `dyn` local nothing uses, since the one thing a `dyn` does is take a method
+  call. Remainder: a receiver escapes, so an iterator does not explode — see
+  item 1.
   Design: `runtime.md` "Threading a match into its constructions", the new
   cost-model table, "Match compilation", "Inlining".
   **THE FINDING: the per-path fact needs no analysis, because a path can be
@@ -610,11 +639,12 @@ wrong, and it landed in milestones 94–95.
    desugared loop, of which the call frame is 4.6 and the `Some(x)` it mints and
    destructures is 60.6 (`runtime.md` "The cost model" has the table).
 
-   **Where it stands after 116: 17.1ns/elem, from 77.5.** The allocation, the
+   **Where it stands after 117: ~15ns/elem, from 77.5.** The allocation, the
    frame, the call's dispatches and the `Option` itself are all gone; what is
-   left is the iterator struct's own field reads and writes. Only escape
-   analysis (step 3) is still open under this heading. The rest of this item is
-   the reasoning that got there, kept because each step's finding outlived it.
+   left is the iterator struct's own field reads and writes, which 117 can delete
+   for a local but not for a *receiver* — the one thing still open under this
+   heading (step 3). The rest of this item is the reasoning that got there, kept
+   because each step's finding outlived it.
 
    **Step 1 is done, in two milestones.** 109 found the `Some(x)` was *two*
    allocations and made it one; 110 made it none, by carrying a one-field variant
@@ -662,15 +692,27 @@ wrong, and it landed in milestones 94–95.
       last thing emitted, and the paths that cannot answer are left the tag test
       they had. `runtime.md` "Threading a match into its constructions".
 
-      What is left is **escape analysis**, the substantial one, which wants
-      def-use over *values* — an event names a binding — and additionally wants
-      an answer for aggregates, since they are handles and two names reach one
-      object. That is the one thing still asking for a forward pass over the
-      graph.
+      The other, **escape analysis, is done — milestone 117, and it wanted no
+      graph either.** This file predicted it would need def-use over *values*,
+      because an aggregate is a handle and two names reach one object. Both
+      halves are true and the conclusion did not follow: with no borrows to take
+      and no address to pass, a *bare mention* is the only way a handle travels,
+      so "does every mention read a field" is a question about syntax and the
+      graph has nothing to add to it. `runtime.md` "Escape analysis and scalar
+      replacement".
 
-      The prerequisite that turned out to matter for the graph was neither of
-      those: it was that the checker and codegen disagreed about which binding a
-      shadowed name meant.
+      So the CFG has one consumer, liveness, and the forward direction found
+      nothing to ask it. The prerequisite that turned out to matter for the graph
+      was neither of the two it was built for: it was that the checker and
+      codegen disagreed about which binding a shadowed name meant.
+
+      **What is left of this step** is scalar replacement across a *splice
+      boundary*: an iterator is its `next()`'s receiver, and passing a receiver
+      is the value leaving whole, so `var it = xs.iter()` declines. Making it not
+      decline means binding a spliced `self` onto the caller's field slots, which
+      needs the inline decision known at the declaration and a materialising
+      fallback for where codegen later declines it. That is ~10ns of `next()`'s
+      remaining 15.
 
    **The peephole: both halves now spent.** The *splice-boundary* half — a read
    of a parameter already in place, the slide that removed the value it just
@@ -848,10 +890,12 @@ The lint family's remainders. What is missing is mostly grain — which thing a 
   all gets "value *assigned* to" from `vscope_pop`, which cannot tell a
   parameter from a local. Both are `unused_assignment`, and the second is the
   wrong word for the same reason the first was
-- **the graph is rebuilt from nothing per body and answers one question**
-  (milestone 115). Liveness is the only consumer, so `cfg_check_body` builds,
-  answers and drops it; escape analysis will want it kept, and will want def-use
-  chains the events do not carry — an event names a binding, not a value
+- **the graph has exactly one consumer** (milestone 115). Liveness is it, so
+  `cfg_check_body` builds the graph, answers and drops it. Both consumers the
+  *forward* direction named turned out not to want it — 116 read a construction
+  off the last instruction, 117 asked a question about syntax — so nothing is
+  waiting on the def-use chains the events do not carry, and the second question
+  that would justify keeping a graph per body has yet to turn up
 - a lint's level is **all-or-nothing over a compile**: `-W` (milestone 97) takes
   no module path, so one module cannot be held to a level the rest is not, and
   the only per-declaration control is `@allow`, which only goes downwards. Nor

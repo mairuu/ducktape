@@ -1,0 +1,53 @@
+# Scalar replacement: a local aggregate mentioned only as `x.f` is compiled as
+# its fields, so the object is never built. What this pins is that the rewrite
+# is invisible — reads, writes, compound writes and field order all answer the
+# way the object would have.
+use std::io::print;
+
+struct Pair { a: int, b: int }
+struct Wide { p: int, q: int, r: int, s: int }
+
+fun main() {
+    var p = Pair { a: 3, b: 4 };
+    print("{p.a} {p.b}");
+#> 3 4
+
+    p.a = 10;
+    p.b += 5;
+    p.a *= 2;
+    print("{p.a} {p.b}");
+#> 20 9
+
+    # the initializer's source order is not the definition's, and slot k has to
+    # be the field `resolved_index` k names
+    var q = Pair { b: 7, a: 6 };
+    print("{q.a} {q.b}");
+#> 6 7
+
+    var w = Wide { p: 1, q: 2, r: 3, s: 4 };
+    w.r = w.p + w.s;
+    print("{w.p} {w.q} {w.r} {w.s}");
+#> 1 2 5 4
+
+    var t = (1, 2.5);
+    print("{t.0} {t.1}");
+#> 1 2.5
+
+    # a `for` body redeclares its own each turn, so the slots are minted and
+    # popped 3 times over
+    var sum = 0;
+    for i in 0..3 {
+        var e = Pair { a: i, b: i * 10 };
+        e.a += 1;
+        sum += e.a + e.b;
+    }
+    print("{sum}");
+#> 36
+
+    # the outer explodes; the inner is a field's value and stays an object
+    var n = Pair { a: 1, b: 2 };
+    var outer = (n, 5);
+    outer.0.a = 77;
+    print("{n.a} {outer.1}");
+#> 77 5
+}

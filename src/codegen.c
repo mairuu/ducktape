@@ -30,6 +30,18 @@ typedef struct {
   // duplicated assignment target already pushed beneath it.
   int slot;
   bool is_captured; // a nested closure captures this slot (needs closing)
+
+  // ── an exploded aggregate ──────────────────────────────────────────────────
+  //
+  // A local whose object was never built: `field_slots` consecutive slots from
+  // `slot` hold its fields, and this entry is the first of that many in
+  // `locals` — the ones above it are anonymous, so one entry still means one
+  // slot and every scope's pop count stays a difference of `local_count`.
+  // `entry` is set only here, and is what a field access matches on: the
+  // checker resolved the name, so codegen asks its question rather than a
+  // second one about shadowing.
+  int field_slots;
+  VarEntry *entry;
 } CgLocal;
 
 // one entry in a closure's capture list: where the value comes from in the
@@ -186,6 +198,12 @@ typedef struct Cg {
   // the match the subject being compiled feeds, if any. Saved and restored
   // around a subject, so a nested one cannot steal an outer one's exits.
   CgThread *thread;
+
+  // the body being compiled, which is the scope escape analysis has to search:
+  // a declaration asks whether the *rest of this body* ever mentions its name
+  // as anything but a field access. Swapped around a splice and a closure, both
+  // of which are a different body written somewhere else.
+  Expr *body_root;
 } Cg;
 
 // Is code emitted here reached? Only if the last instruction was not an
@@ -910,25 +928,56 @@ static FieldInit *find_field_init(FieldInit *fields, int count, bool is_tuple,
   return NULL;
 }
 
-// ── inlining: which bodies may be spliced ────────────────────────────────────
+// ── one walk over a body, two questions ──────────────────────────────────────
 //
-// Compiling a call as the callee's own body in the caller's chunk costs one
-// thing at compile time — a second copy of the code — and the rule that keeps
-// that bounded is a size cap. So the question this walk answers is "how big is
-// this body", counted in AST nodes, with `-1` for the shapes it will not take
-// at all. The count is also what bounds the *frame*: every node can name at
-// most one local and leave at most one temporary live, so twice the count
-// bounds the slots a splice adds above the caller's.
+// **Which bodies may be spliced.** Compiling a call as the callee's own body in
+// the caller's chunk costs one thing at compile time — a second copy of the
+// code — and the rule that keeps that bounded is a size cap. So the first
+// question is "how big is this body", counted in AST nodes, with `-1` for the
+// shapes it will not take at all. The count is also what bounds the *frame*:
+// every node can name at most one local and leave at most one temporary live,
+// so twice the count bounds the slots a splice adds above the caller's.
+//
+// **Whether a binding escapes.** An aggregate that never leaves as a whole
+// value need not be built — its fields can be slots. `binding` asks that, and
+// the answer is *syntactic*: a bare mention is the only way an aggregate can
+// reach anywhere else, since there are no borrows to take and no address to
+// pass, so `x.f` is the one shape that keeps a value in. Nothing about values
+// or dataflow has to be tracked, and the graph `cfg.c` builds is not consulted.
+//
+// A client sets the fields it reads and ignores the others: `binding == NULL`
+// is the size question, and then this walk emits exactly the counts it always
+// did.
 
 typedef struct {
   int nodes;
   int returns; // `return` and `?`, which leave through one shared landing pad
   bool ok;
-} InlineScan;
 
-static void scan_expr(InlineScan *s, Expr *e);
+  // the binding under question, NULL for the size client. `escapes` is the
+  // pessimistic answer, so every shape this walk does not understand sets it.
+  VarEntry *binding;
+  bool escapes;
+  // inside a closure's body, where even `x.f` escapes: a capture is by slot and
+  // an exploded binding is several, so there is no one slot to capture.
+  bool in_closure;
+} BodyScan;
 
-static void scan_pattern(InlineScan *s, Pattern *p) {
+static void scan_expr(BodyScan *s, Expr *e);
+
+// Is `e` the bare name this scan is asking about?
+static bool scan_names_binding(const BodyScan *s, const Expr *e) {
+  return s->binding != NULL && e != NULL && e->kind == EXPR_PATH &&
+         e->as.path_expr.resolved_local == s->binding;
+}
+
+// The same, and reading a field *through* it keeps the value in — which is not
+// true inside a closure, where the capture is by slot.
+static bool scan_reads_binding(const BodyScan *s, const Expr *e) {
+  return !s->in_closure && scan_names_binding(s, e);
+}
+
+static void scan_pattern(BodyScan *s, Pattern *p) {
   if (p == NULL) {
     return;
   }
@@ -959,10 +1008,11 @@ static void scan_pattern(InlineScan *s, Pattern *p) {
     break;
   default:
     s->ok = false;
+    s->escapes = true;
   }
 }
 
-static void scan_stmt(InlineScan *s, Stmt *st) {
+static void scan_stmt(BodyScan *s, Stmt *st) {
   if (st == NULL) {
     return;
   }
@@ -987,10 +1037,11 @@ static void scan_stmt(InlineScan *s, Stmt *st) {
     break;
   default:
     s->ok = false;
+    s->escapes = true;
   }
 }
 
-static void scan_expr(InlineScan *s, Expr *e) {
+static void scan_expr(BodyScan *s, Expr *e) {
   if (e == NULL) {
     return;
   }
@@ -1003,7 +1054,14 @@ static void scan_expr(InlineScan *s, Expr *e) {
   case EXPR_CHAR:
   case EXPR_UNIT:
   case EXPR_SELF:
+    break;
+
   case EXPR_PATH:
+    // reached only where the shapes below declined to skip it, so this is the
+    // binding used as a whole value: an argument, a subject, a returned thing.
+    if (scan_names_binding(s, e)) {
+      s->escapes = true;
+    }
     break;
 
   case EXPR_INTERPOLATED:
@@ -1021,7 +1079,14 @@ static void scan_expr(InlineScan *s, Expr *e) {
     scan_expr(s, e->as.unary.operand);
     break;
   case EXPR_ASSIGN:
-    scan_expr(s, e->as.assign.target);
+    // `x.f = v` and `x.f op= v` write a field, which needs no object either.
+    // `x = v` does not skip: it is an EXPR_PATH target and escapes below.
+    if (e->as.assign.target->kind == EXPR_FIELD &&
+        scan_reads_binding(s, e->as.assign.target->as.field.object)) {
+      s->nodes += 2; // the field and the name under it, unvisited
+    } else {
+      scan_expr(s, e->as.assign.target);
+    }
     scan_expr(s, e->as.assign.value);
     scan_expr(s, e->as.assign.op_call);
     break;
@@ -1041,7 +1106,11 @@ static void scan_expr(InlineScan *s, Expr *e) {
     scan_expr(s, e->as.index.index);
     break;
   case EXPR_FIELD:
-    scan_expr(s, e->as.field.object);
+    if (scan_reads_binding(s, e->as.field.object)) {
+      s->nodes++; // the name under it, which this walk must not call a use
+    } else {
+      scan_expr(s, e->as.field.object);
+    }
     break;
   case EXPR_METHOD_CALL:
     scan_expr(s, e->as.method_call.object);
@@ -1113,17 +1182,22 @@ static void scan_expr(InlineScan *s, Expr *e) {
     }
     break;
 
-  case EXPR_CLOSURE:
+  case EXPR_CLOSURE: {
     // its body is duplicated with the rest, and `compile_closure` gives it a
     // FunDef per splice the way it does per instantiation
     for (int i = 0; i < e->as.closure.param_count; i++) {
       s->nodes++;
     }
+    bool outer = s->in_closure;
+    s->in_closure = true;
     scan_expr(s, e->as.closure.body);
+    s->in_closure = outer;
     break;
+  }
 
   default:
     s->ok = false;
+    s->escapes = true; // a shape this walk cannot read is not one to rewrite
   }
 }
 
@@ -1134,7 +1208,7 @@ static int fun_inline_cost(FunDef *fun) {
   if (fun->inline_cost != 0) {
     return fun->inline_cost;
   }
-  InlineScan s = {.ok = fun->body != NULL};
+  BodyScan s = {.ok = fun->body != NULL};
   scan_expr(&s, fun->body);
   bool ok = s.ok && s.nodes <= CG_INLINE_MAX_COST &&
             s.returns < CG_MAX_BREAKS; // the landing pad is one jump list
@@ -1228,13 +1302,112 @@ static void cg_thread_arm(Cg *cg, Expr *call) {
   }
 }
 
+// ── scalar replacement ───────────────────────────────────────────────────────
+//
+// A `var` bound to an aggregate *this body builds*, and mentioned nowhere but
+// as `x.f`, is compiled as its fields: the construction is never emitted and
+// each field is a slot. Both halves are needed and neither implies the other —
+// the escape scan says no other name can see the object, and building it here
+// says no other name already does, which a bare initializer (`var b = a;`)
+// would not.
+//
+// The declaration mints one `locals` entry per field, the first carrying the
+// name and the rest anonymous, so a scope still pops `local_count` slots and no
+// other bookkeeping in this file learns about any of it.
+
+// The number of slots to explode this declaration into, or 0 to compile it as
+// the object it is written as.
+static int cg_explode_arity(Cg *cg, Stmt *stmt) {
+  StmtVar *var = &stmt->as.var_stmt;
+  if (var->binding->kind != PAT_BIND || var->else_block != NULL ||
+      var->binding->as.bind.entry == NULL || cg->body_root == NULL) {
+    return 0;
+  }
+  Expr *init = var->initializer;
+  // A coercion wants the object it is about to wrap in a vtable. Only reachable
+  // for a `dyn` local nothing ever uses: the one thing a `dyn` can do is take a
+  // method call, and that is the receiver leaving as a whole value.
+  if (init == NULL || init->coerce_dyn != NULL) {
+    return 0;
+  }
+  int arity;
+  if (init->kind == EXPR_TUPLE) {
+    arity = init->as.tuple.count;
+  } else if (init->kind == EXPR_STRUCT_INIT) {
+    arity = init->as.struct_init.resolved_struct->as.struc.def->field_count;
+  } else {
+    return 0;
+  }
+  if (arity < 1) {
+    return 0; // a fieldless `Empty {}`: the walk below would answer 0 anyway
+  }
+
+  BodyScan s = {.binding = var->binding->as.bind.entry};
+  scan_expr(&s, cg->body_root);
+  return s.escapes ? 0 : arity;
+}
+
+// Push an aggregate's fields as themselves — the construction the binding no
+// longer needs. Field order is the *definition's*, exactly as
+// `compile_struct_init` orders it, so slot k holds the field `resolved_index` k
+// names.
+static void compile_explode_init(Cg *cg, Expr *init, int arity) {
+  if (init->kind == EXPR_TUPLE) {
+    for (int i = 0; i < arity; i++) {
+      compile_expr(cg, init->as.tuple.elems[i]);
+    }
+    return;
+  }
+  ExprStructInit *si = &init->as.struct_init;
+  StructDef *def = si->resolved_struct->as.struc.def;
+  for (int i = 0; i < arity; i++) {
+    compile_expr(cg, find_field_init(si->fields, si->field_count, def->is_tuple,
+                                     def->fields[i].ident)
+                         ->value);
+  }
+}
+
+// Name the `arity` values on top of the stack as one binding. A struct only
+// ever exploded reaches no slot space at all — `cg_reach_struct` is a
+// construction's doing, and there is no longer a construction.
+static void cg_add_exploded_local(Cg *cg, Pattern *bind, int arity, Span span) {
+  int base = cg->depth - arity;
+  cg_add_local_at(cg, bind->as.bind.name, base, span);
+  cg->locals[cg->local_count - 1].field_slots = arity;
+  cg->locals[cg->local_count - 1].entry = bind->as.bind.entry;
+  for (int i = 1; i < arity; i++) {
+    cg_add_local_at(cg, (StringView){0}, base + i, span);
+  }
+}
+
+// The slot holding field `index` of an exploded binding, or -1 when `object` is
+// anything else. Matched on the `VarEntry` the checker resolved rather than on
+// the name, so the two sides of a shadowed name cannot disagree — which is also
+// why the `locals_base` bound `cg_find_local` needs is belt: a binding is one
+// entry, so no splice can match an outer body's.
+static int cg_exploded_field(Cg *cg, Expr *object, int index) {
+  if (object->kind != EXPR_PATH ||
+      object->as.path_expr.resolved_local == NULL) {
+    return -1;
+  }
+  VarEntry *ve = object->as.path_expr.resolved_local;
+  for (int i = cg->local_count - 1; i >= cg->locals_base; i--) {
+    if (cg->locals[i].entry == ve) {
+      assert(index < cg->locals[i].field_slots && "field index out of range");
+      return cg->locals[i].slot + index;
+    }
+  }
+  return -1;
+}
+
 // The statement counterpart of `compile_expr`'s invariant, and the reason no
 // case below balances its own stack either: a statement leaves behind exactly
 // the locals it declared and nothing else. `var` leaves one (its initializer's
-// slot *is* the variable) or several when the binding is a pattern; everything
-// else leaves none, and `return`/`break`/`continue` leave by another edge
-// entirely, so what the depth reads afterwards only has to match the paths that
-// do reach the next statement.
+// slot *is* the variable), several when the binding is a pattern or its
+// aggregate was exploded; everything else leaves none, and
+// `return`/`break`/`continue` leave by another edge entirely, so what the depth
+// reads afterwards only has to match the paths that do reach the next
+// statement.
 static void compile_stmt_inner(Cg *cg, Stmt *stmt);
 
 static void compile_stmt(Cg *cg, Stmt *stmt) {
@@ -1253,6 +1426,14 @@ static void compile_stmt_inner(Cg *cg, Stmt *stmt) {
 
   case STMT_VAR: {
     StmtVar *var = &stmt->as.var_stmt;
+
+    int arity = cg_explode_arity(cg, stmt);
+    if (arity > 0) {
+      compile_explode_init(cg, var->initializer, arity);
+      cg_add_exploded_local(cg, var->binding, arity, stmt->span);
+      break;
+    }
+
     compile_expr(cg, var->initializer);
 
     if (var->binding->kind == PAT_BIND && var->else_block == NULL) {
@@ -1614,6 +1795,27 @@ static void compile_field_assign(Cg *cg, Expr *expr) {
   ExprAssign *assign = &expr->as.assign;
   ExprField *field = &assign->target->as.field;
   uint8_t idx = (uint8_t)field->resolved_index;
+
+  // an exploded binding's field *is* a local, so this is `x op= v` on a slot —
+  // no object beneath, and OP_SET_LOCAL leaves the value the way OP_FIELD_SET
+  // does.
+  int slot = cg_exploded_field(cg, field->object, field->resolved_index);
+  if (slot >= 0) {
+    if (assign->op == TOKEN_EQ) {
+      compile_expr(cg, assign->value);
+    } else {
+      CgCompound c;
+      if (!cg_compound_begin(cg, expr, &c)) { // [callee?]
+        return;
+      }
+      emit_get_local(cg, slot); // [.., current]
+      cg_pushed(cg, 1);
+      compile_expr(cg, assign->value); // [.., current, value]
+      cg_compound_end(cg, expr, &c);   // [combined]
+    }
+    emit2(cg, OP_SET_LOCAL, (uint8_t)slot);
+    return;
+  }
 
   compile_expr(cg, field->object); // [obj]
 
@@ -2181,6 +2383,7 @@ static void cg_inline_body(Cg *cg, const Instance *inst, int base_depth,
   CgLoop *saved_pad = cg->inline_pad;
   int saved_base = cg->locals_base;
   int saved_splice = cg->splice_id;
+  Expr *saved_root = cg->body_root;
 
   cg->splice_id = ++cg->splice_seq;
   // the site that compiled the call armed this if its value is the subject of
@@ -2197,6 +2400,7 @@ static void cg_inline_body(Cg *cg, const Instance *inst, int base_depth,
   cg->loop = NULL;
   cg->inline_pad = &pad;
   cg->locals_base = saved_locals;
+  cg->body_root = origin->body;
   cg->inlining[cg->inline_depth++] = origin;
 
   compile_expr(cg, origin->body);
@@ -2231,6 +2435,7 @@ static void cg_inline_body(Cg *cg, const Instance *inst, int base_depth,
   cg->loop = saved_loop;
   cg->inline_pad = saved_pad;
   cg->locals_base = saved_base;
+  cg->body_root = saved_root;
   cg->local_count = saved_locals;
   cg->depth = base_depth + 1;
 }
@@ -3682,6 +3887,11 @@ static void compile_expr_inner(Cg *cg, Expr *expr) {
 
   case EXPR_FIELD: {
     ExprField *field = &expr->as.field;
+    int slot = cg_exploded_field(cg, field->object, field->resolved_index);
+    if (slot >= 0) {
+      emit_get_local(cg, slot);
+      break;
+    }
     compile_expr(cg, field->object);
     emit2(cg, OP_FIELD_GET, (uint8_t)field->resolved_index);
     break;
@@ -3909,6 +4119,7 @@ static void compile_fun_body(Mono *mono, FunDef *fun, FunDef *body_of,
     }
   }
 
+  cg.body_root = body_of->body;
   compile_expr(&cg, body_of->body);
   emit(&cg, OP_RETURN);
 
@@ -3968,6 +4179,7 @@ static void compile_closure(Cg *cg, Expr *expr) {
     cg_add_pushed_local(&child, closure->params[i].name, expr->span);
   }
 
+  child.body_root = closure->body;
   compile_expr(&child, closure->body);
   emit(&child, OP_RETURN);
   fun->chunk = child.chunk;

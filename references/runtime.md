@@ -1052,6 +1052,43 @@ and the construct compiles exactly as it did before — the threaded path is
 entered only once some exit has actually reported, so declining costs nothing
 and changes no byte.
 
+### Escape analysis and scalar replacement
+
+A `var` bound to an aggregate the body *builds*, and mentioned nowhere but as
+`x.f`, is compiled as its fields: no `OP_STRUCT`/`OP_TUPLE` is emitted, each
+field is a frame slot, and a read or a write of one is an
+`OP_GET_LOCAL`/`OP_SET_LOCAL`. `var p = Pair { a: x, b: x }; sum += p.a + p.b`
+costs no allocation at all.
+
+**The question is syntactic, and that is the whole finding.** An aggregate is a
+handle, so exploding one that something else can still reach would lose a write
+— but there are no borrows to take and no address to pass, so a *bare mention*
+is the only way one gets anywhere else. `x.f` is the single shape that keeps a
+value in, and every other occurrence of the name escapes: an argument, a match
+subject, a `for` iterable, a returned value, a method-call receiver, a second
+binding, an assignment to the whole name. So the analysis is one walk asking
+"is every mention a field access", with no dataflow in it and no use for the
+graph `cfg.c` builds.
+
+**Two halves, and neither implies the other.** The scan says no *other* name can
+see the object; building it here says no other name *already* does, which
+`var b = a;` would not — so the initializer has to be a literal in this body,
+and only a struct or tuple literal is one.
+
+**Inside a closure even `x.f` escapes.** A capture is by slot and an exploded
+binding is several, so there is no one slot to capture.
+
+**One `locals` entry per slot.** The declaration mints `arity` of them, the
+first carrying the name and the rest anonymous. That is what keeps every scope's
+pop count a difference of `local_count` (`compile_block`, the loop frames,
+`compile_stmt`'s depth invariant): nothing else in codegen learns that a binding
+can be more than one slot. A field access matches on the `VarEntry` the checker
+resolved rather than on the name, so the two sides of a shadowed name cannot
+disagree.
+
+A struct only ever exploded reaches no slot space either — `cg_reach_struct` is
+a construction's doing, and there is no longer a construction.
+
 ### Trait objects
 
 Monomorphisation rests on the observation that *the runtime is uniform in
@@ -1885,6 +1922,27 @@ different program.
 What is left of `it.next()` over the `for` is ~17ns/elem, and it is now the
 iterator struct's own field traffic — no `Option`, no frame, no dispatch for the
 call.
+
+**And then the struct itself, where nothing else can see it.** Milestone 117
+compiles a local aggregate as its fields (see "Escape analysis and scalar
+replacement"). Best of 7 interleaved runs over 6,000,000 elements, the two
+baselines 0.7% apart:
+
+| | before | after |
+|---|---|---|
+| a 2-field struct literal | +36.2 | **+7.8** |
+| a 2-tuple | +38.6 | **+7.3** |
+| `it.next()`, the real thing | +16.1 | +15.2 |
+| minting a `Some(x)` and matching it | +7.9 | +8.2 |
+| a user enum's two-field variant | +42.5 | +42.6 |
+
+**Only the two rows that bind a literal to a local move, and they lose ~80%.**
+What is left of them is the field values being pushed and added, which is the
+work the program asked for; the allocation and the four field accesses are gone.
+Nothing else moves, and `it.next()` is the row that says where this stops: the
+iterator is `next()`'s *receiver*, and a receiver is the value leaving as a
+whole, so the analysis declines it. A two-field variant is untouched for the
+same reason — a variant is matched, not read through a field.
 
 **Reproducing any of the above.** `make bench` times `bench/`, one directory per
 table, and `make bench ARGS="--against <binary>"` runs two binaries side by side
