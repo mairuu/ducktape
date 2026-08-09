@@ -672,6 +672,9 @@ exhaustiveness (`architecture.md` "Match exhaustiveness"), but a guarded arm
 cannot count towards coverage, so a match whose only applicable arms are
 guarded can still fall through — this stays a real, reachable runtime error.
 
+None of it runs where the subject is a value the code below it *built* — see
+"Threading a match into its constructions".
+
 #### Destructuring a `var`
 
 A `var` binding is that machinery with no arms: `compile_destructure` is the
@@ -929,7 +932,10 @@ would otherwise shadow.
 slides its value down over the parameters and jumps to the pad, which is the
 code `STMT_BREAK` already emits. `?` leaves the same way (`cg_emit_return` is
 the one door), and falling off the end lands where the slides do, so the pad
-has nothing to emit at it.
+has nothing to emit at it. Where the body's end is unreachable there is
+no falling off at all, and the epilogue is not emitted — which is ordinarily
+three dead bytes and, since milestone 116, how a splice whose every `return`
+threaded leaves nothing behind it.
 
 **What a spliced body may see.** It was written inside another function, so
 `cg_find_local` stops at `Cg.locals_base` (the first parameter's entry) and
@@ -991,6 +997,60 @@ instruction is sound only if no other path arrives between it and here, and
 `patch_jump` records the one position it ever targets. Where the two arms of an
 `if` end in the same read, the merge point is exactly the byte the fold would
 unemit, and that check is what declines it.
+
+### Threading a match into its constructions
+
+A `match` over a value the code above it *built* need not build it. The site
+that builds a variant knows its tag, so it knows which arm runs: it can jump
+into that arm directly, with the variant's field standing where the variant
+would have been. `while var Option::Some(x) = it.next()` over an inlined
+`next()` is the shape this exists for, and it deletes the `OP_ENUM`, the
+`OP_TAG`/`OP_EQ`/`OP_JUMP_IF_FALSE` test and the binding's `OP_FIELD_GET` —
+eight dispatches per element down to one.
+
+**The fact is per path, and no path infers it.** Each exit *reports* what it
+pushed as it leaves, at the one moment it is the last instruction emitted;
+`cg_last_variant` is that reading, and it is the slide's fold one construct
+wider (an `OP_ENUM` is four bytes, `last_enum` remembers where it went, and
+`last_target` is what says no other path arrives between it and here). A path
+that has nothing to report is left the tag test it always had, at a **merge**
+that keeps the old code for exactly that reason — so nothing has to be proved
+about *every* path, which is what a forward analysis over a graph would have
+been for.
+
+**What a continuation is.** One per arm, plus `CG_THREAD_OTHER` for every tag
+no arm names — the trap for a `match`, the `else` for an `if var`, the exit for
+a `while var` or a `for`. Four constructs register them (`compile_match`,
+`compile_if_binding`, `compile_while_binding`, `compile_for_iter`) and share
+one `CgThread`; every arrival at an entry, threaded or tested, comes by a
+patched jump, so the entries can be laid out in whatever order the construct
+wants.
+
+**What the subject slot holds.** A one-field variant is *unemitted*, so the
+field itself lands in the hidden local and `cg_thread_bind` reads the slot
+rather than a field of it. Every other arity keeps its instance — a fieldless
+variant has nothing to leave behind and a wider one is still an object the arm
+reads through — so the slot's contents are decided by the variant's arity
+alone, which both the threaded entry and the merge can therefore agree on
+without communicating. That is also why the merge's own extraction is one
+`OP_FIELD_GET 0`: the slot is the top of the stack, so the instance is replaced
+in place.
+
+**Which splice is the subject's.** Not the first one met — an argument is
+compiled before the call it belongs to, so the first body spliced into
+`match wrap(next())` is `next`'s, whose value is an argument. The site
+compiling a call *arms* the claim when the node is the subject's own
+(`cg_thread_arm`), and the splice records the id it was given; a `return`
+threads only while that id is the one being compiled. The id is a serial
+rather than the pad's address, because a dead frame's address is a live
+frame's soon enough.
+
+**What declines.** An arm a tag alone cannot select: a guard, a refutable
+sub-pattern, a binding or wildcard arm (which would want the whole value the
+slot no longer holds), a pattern that does not name every field. Any of those
+and the construct compiles exactly as it did before — the threaded path is
+entered only once some exit has actually reported, so declining costs nothing
+and changes no byte.
 
 ### Trait objects
 
@@ -1796,6 +1856,35 @@ The rewrite pays where a body *is* its return value, and the smaller the body
 the larger the share; there is nothing left for a peephole to take, and what
 `it.next()` still costs over the `for` is the `Option` and the iterator struct's
 own field traffic.
+
+**And then the `Option` itself went.** Milestone 116 threads a match into the
+constructions that feed it (see "Threading a match into its constructions"), so
+`it.next()`'s `Some` is neither built nor taken apart. Best of 7 interleaved
+runs over 6,000,000 elements, the two baselines 0.2% apart:
+
+| | before | after |
+|---|---|---|
+| through one function call (the control) | +0.0 | +0.9 |
+| minting a `Some(x)` and matching it | +30.2 | **+8.5** |
+| `it.next()`, the real thing | +47.6 | **+17.1** |
+| `it.map(f)`, a two-stage chain | +91.3 | **+40.4** |
+| a user enum's one-field variant | +31.2 | **+8.3** |
+| a user enum's two-field variant | +52.6 | **+44.2** |
+| a 2-field struct literal | +39.8 | +40.4 |
+| a 2-tuple | +41.6 | +41.1 |
+
+**The one-field rows lose ~73% and the two-field row ~16%**, which is the shape
+of what is deleted: the tag test and the field read go for any arity, and the
+*construction* only where the variant is one field wide — a two-field variant
+is still an `ObjEnum` and still allocates. Structs and tuples do not move,
+because nothing about them is a tag. `array/drop n elements — pop loop` gains
+the same way (+54 → +30) without being an iterator at all: `pop` returns an
+`Option<T>` that its caller matches, which is the same three instructions in a
+different program.
+
+What is left of `it.next()` over the `for` is ~17ns/elem, and it is now the
+iterator struct's own field traffic — no `Option`, no frame, no dispatch for the
+call.
 
 **Reproducing any of the above.** `make bench` times `bench/`, one directory per
 table, and `make bench ARGS="--against <binary>"` runs two binaries side by side

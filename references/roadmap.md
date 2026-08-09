@@ -2,12 +2,12 @@
 
 ## Start here
 
-**Last landed:** milestone 115 (`c90ac64`) — the **control-flow graph**, built per
-body in `src/cfg.c`, and its first consumer: `unused_assignment` now reports each
-dead store rather than one binding. It arrived by way of a soundness fix — two
-`var x` in one scope had the checker reading the first and codegen the last. 696
-tests, clean under debug, `--gc-stress` and `make sanitize`. Everything lands on
-`main`; there are no feature branches.
+**Last landed:** milestone 116 (`SHA`) — **the variant a match never built**. A
+`match` whose subject the code above it constructed is entered by tag, so the
+construction, the tag test and the field read all go: `it.next()` costs
+17ns/elem over the plain `for` where it cost 48, and a `Some(x)` minted and
+matched costs 8.5 where it cost 30. 698 tests, clean under debug, `--gc-stress`
+and `make sanitize`. Everything lands on `main`; there are no feature branches.
 
 **Nothing is blocked, and nothing is owed.** Milestone 95 closed the last entry
 that was not a matter of appetite, and 103 the last one that was already
@@ -16,15 +16,13 @@ that was not a matter of appetite, and 103 the last one that was already
 **The four live directions**, in the order this file recommends them:
 
 1. **The iterator's allocation, and the compiler work behind it** — the only
-   direction left that is not breadth. 109 and 110 made `Some(x)` cost no
-   allocation; 113 deleted the frame around `next()`; 114 took the three
-   dispatches that left, so **a call by name now costs nothing at all** where the
-   body is one parameter read. 115 built the CFG step 3 asked for and spent it on
-   liveness. What is left is **a forward analysis over that graph**, and the
-   "narrow peephole" this file has carried since the item was written has
-   collapsed into it — a spliced `next()` reaches its landing pad from two
-   returns, so the scrutinee is a merge and no peephole can see it. Two
-   consumers, one question.
+   direction left that is not breadth, and now nearly spent. 109 and 110 made
+   `Some(x)` cost no allocation; 113 deleted the frame around `next()`; 114 took
+   the three dispatches that left; 115 built a CFG and spent it on liveness; 116
+   deleted the `Option` itself where a match is fed by a construction. **What
+   remains under this heading is escape analysis**, which wants the def-use
+   chains the graph does not carry. It is the last of the forward direction's
+   two named consumers: 116 was the other, and it turned out to need no graph.
 2. **std breadth on the natives** — every piece with a design question in it is
    spent, so what remains is typing.
 3. **`Eq`** — recorded as *declined*, by two consumers that were asked for it by
@@ -556,6 +554,44 @@ to keep this file small. Everything from 100 on is below.
   Remainder: escape analysis is the other named consumer and is not built; the
   graph has no def-use chains, which is what that will want.
 
+- **116. The variant a match never built** (`SHA`) — a `match` whose subject
+  the code above it constructed is entered by tag: the construction, the tag
+  test and the field read all go, and `it.next()` costs 17ns/elem over the
+  `for` where it cost 48.
+  Design: `runtime.md` "Threading a match into its constructions", the new
+  cost-model table, "Match compilation", "Inlining".
+  **THE FINDING: the per-path fact needs no analysis, because a path can be
+  asked while it is still the last thing emitted.** This file had the item down
+  as a forward dataflow over milestone 115's graph — prove *every* path into
+  the scrutinee pushes a construction, and of which tag. It is the wrong
+  question twice over. A path does not have to be *found* to be a construction:
+  at the moment it leaves it is four bytes behind the cursor, which is
+  milestone 114's `last_target` argument applied to `OP_ENUM` instead of
+  `OP_GET_LOCAL`. And nothing has to hold for *every* path: the paths that
+  cannot report their tag meet a **merge** that keeps the tag test they always
+  had, so the analysis degrades per path rather than all at once — which is why
+  `Take::next`, half of whose exits are its source's answer, threads the half
+  it can. The graph is not consulted and did not need to be.
+  Second finding: **the slot's contents are decided by the variant's arity, and
+  that is what lets two code paths agree without communicating.** A one-field
+  variant is unemitted so the field lands in the subject's hidden local; every
+  other arity keeps its instance. The threaded entry and the merge each compute
+  that from the `VariantDef` alone.
+  Sabotage 14/12 bit, and the three that did not each paid: two were no-ops
+  first and named a real test gap (nothing merged two *different* constructions
+  into one value — `last_target`'s whole job — and the "guard" in the new test
+  was an `if` in an arm body, not a guard), and the third found a **live bug**:
+  the first splice inside a subject is not the subject's, since `wrap(next())`
+  compiles the argument first, so `wrap`'s body was being skipped entirely.
+  Claims are now armed by the site that knows which call node it is compiling,
+  and identified by a serial rather than the pad's address. The remaining no-op
+  is honest: skipping a dead splice epilogue is code size, not behaviour.
+  Remainder: a two-field variant still allocates (only a one-field one is
+  unemitted), a subject that is a block or an `if` rather than a call arms
+  nothing, and `CG_THREAD_OTHER` in a `match` is now unreachable — exhaustiveness
+  covers every tag an arm-only match can produce — so the trap it patches is a
+  net with no test behind it.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -573,6 +609,12 @@ wrong, and it landed in milestones 94–95.
    measurement under it: an iterator's `next()` costs 77.5ns/elem over the
    desugared loop, of which the call frame is 4.6 and the `Some(x)` it mints and
    destructures is 60.6 (`runtime.md` "The cost model" has the table).
+
+   **Where it stands after 116: 17.1ns/elem, from 77.5.** The allocation, the
+   frame, the call's dispatches and the `Option` itself are all gone; what is
+   left is the iterator struct's own field reads and writes. Only escape
+   analysis (step 3) is still open under this heading. The rest of this item is
+   the reasoning that got there, kept because each step's finding outlived it.
 
    **Step 1 is done, in two milestones.** 109 found the `Some(x)` was *two*
    allocations and made it one; 110 made it none, by carrying a one-field variant
@@ -611,47 +653,39 @@ wrong, and it landed in milestones 94–95.
       done — milestone 115**, built per body in `src/cfg.c` and spent on the
       second of its two named consumers, milestone 107's per-store liveness.
       `architecture.md` "Liveness, and the store grain". What it carries is
-      control flow and *binding* events, which is all liveness needed. What is
-      left of this item is the forward direction over the same graph — def-use
-      over values rather than bindings — and it now has **two** consumers rather
-      than one, because the peephole below turned out to be the same question:
+      control flow and *binding* events, which is all liveness needed.
 
-      - **the variant a match never needed built.** Every path into the
-        scrutinee of `while var Option::Some(x) = it.next()` pushes a
-        construction of a known tag; knowing that is what lets the construct and
-        the destructure both go. The cheap consumer, and the one to prove the
-        machinery on
-      - **escape analysis**, the substantial one, which additionally wants an
-        answer for aggregates — they are handles, so two names reach one object
-        and aliasing is real
+      Of the two consumers this step named for the *forward* direction, one is
+      **done and did not use the graph**: milestone 116 deleted the variant a
+      match never needed built, and the finding is that the fact is not a
+      dataflow at all — a path can be asked what it pushed while it is still the
+      last thing emitted, and the paths that cannot answer are left the tag test
+      they had. `runtime.md` "Threading a match into its constructions".
+
+      What is left is **escape analysis**, the substantial one, which wants
+      def-use over *values* — an event names a binding — and additionally wants
+      an answer for aggregates, since they are handles and two names reach one
+      object. That is the one thing still asking for a forward pass over the
+      graph.
 
       The prerequisite that turned out to matter for the graph was neither of
       those: it was that the checker and codegen disagreed about which binding a
       shadowed name meant.
 
-   **The peephole: one half spent, one half withdrawn.** The *splice-boundary*
-   half — a read of a parameter already in place, the slide that removed the
-   value it just copied, and the jump to the instruction after next — is
-   **done, milestone 114**, and it took a call by name to zero.
+   **The peephole: both halves now spent.** The *splice-boundary* half — a read
+   of a parameter already in place, the slide that removed the value it just
+   copied, and the jump to the instruction after next — is **done, milestone
+   114**, and it took a call by name to zero.
 
-   **The other half was never a peephole, and this file claimed otherwise from
-   the day the item was written.** The claim: `while var Option::Some(x) =
-   it.next()` constructs and destructures its variant in one expression tree
-   once `next()` is inlined, so a match whose scrutinee is a variant
-   construction could be folded by looking at the last instruction. It cannot.
-   Inside a splice `cg_emit_return` emits **a jump to the landing pad per
-   return**, and an iterator's `next()` has two exits *by definition* — the
-   exhausted path builds `None`, the yielding path builds `Some` — which every
-   `next()` in `std/iter.dt` does. So the scrutinee is a **merge of two
-   constructions**, and milestone 114's own safety rule declines a backward
-   rewrite at exactly a merge point: `last_target` is the whole of that
-   argument. The fold would fire only on a body with a single return, which an
-   iterator structurally is not, so its consumer set in std is empty.
-
-   What eliding the `Some` actually needs is *every path into this point pushes
-   a variant construction, and of which tag* — a forward, per-path fact. That is
-   a question for the graph milestone 115 built, not for the instruction behind
-   the cursor, which is why it now sits under step 3 rather than beside it.
+   **The other half was never a peephole *and never needed a graph either*.**
+   This file argued at length that `while var Option::Some(x) = it.next()` could
+   not be folded by looking at the last instruction, because a spliced `next()`
+   reaches its landing pad from two returns and milestone 114's `last_target`
+   declines a rewrite at a merge. Both halves of that are true and the
+   conclusion did not follow: the fold does not belong at the merge, it belongs
+   at **each return**, where the construction *is* the last instruction and
+   `last_target` says so. Milestone 116 is that, plus a merge that keeps the old
+   tag test for whatever arrives without an answer.
 
    **On throwing the standard library away.** It is ~20 modules written *in
    ducktape*, so nuking it is cheap and always will be — which is itself an
@@ -1167,6 +1201,22 @@ The corner where the honest answer is a data table nobody has shipped.
   the alias is only sound if no argument can be evaluated after it and the body
   neither assigns the parameter nor captures it, which is three questions about
   the whole call rather than one about the last instruction
+- **only a one-field variant is unbuilt** (milestone 116). Threading deletes the
+  tag test and the field read for any arity, but the construction itself only
+  where the field can stand in the subject's slot — a two-field variant is still
+  an `ObjEnum` and still allocates, so its arms gain ~16% where a one-field
+  variant's gain ~73%. Wider arities would need the slot to hold several values,
+  which is a slide that keeps more than one
+- **a threaded subject must be a call node** (milestone 116). The claim is armed
+  by the site compiling the subject's own call, so a subject that is a block, an
+  `if`, or anything else with a construction at its tail arms nothing and keeps
+  its tag test. The fall-through claim covers the one other shape that matters,
+  a subject that *is* a construction
+- **a threaded `match`'s trap is unreachable** (milestone 116). Every tag no arm
+  names goes to `CG_THREAD_OTHER`, which for a `match` is `OP_MATCH_FAIL` — but
+  an arm that could leave a tag uncovered (a guard, a binding arm) declines
+  threading, and exhaustiveness covers the rest. It is a net with no test behind
+  it, like `compile_coerce_dyn`'s abstract-target guard
 - **the read/slide fold only fires for the first parameter** (milestone 114).
   The slide leaves its value at the lowest slot it removes, so only a read of
   *that* slot is already in place; `return b` from a two-parameter body still

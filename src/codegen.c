@@ -73,6 +73,42 @@ typedef struct CgLoop {
   struct CgLoop *parent;
 } CgLoop;
 
+// ── threading a match into the constructions that feed it ────────────────────
+//
+// A `match` over a value every path *builds* need not build it: the site that
+// builds it knows the tag, so it knows which arm runs, and can jump into that
+// arm with the variant's field where the variant would have been. The fact is
+// per path and it is never inferred — each path reports what it pushed as it
+// leaves, and a path that has nothing to report is left the tag test it always
+// had, at a merge that keeps its old code for exactly that reason.
+//
+// A continuation is an arm; `CG_THREAD_OTHER` is the one every tag no arm
+// names goes to (the next test, the `else`, the loop's exit, the trap).
+#define CG_MAX_THREAD_CONTS 7
+#define CG_THREAD_OTHER CG_MAX_THREAD_CONTS
+#define CG_MAX_THREAD_EXITS 16
+
+typedef struct CgThread {
+  // the variant each continuation is entered for
+  VariantDef *takes[CG_MAX_THREAD_CONTS];
+  int cont_count;
+
+  int jumps[CG_MAX_THREAD_CONTS + 1][CG_MAX_THREAD_EXITS];
+  int jump_count[CG_MAX_THREAD_CONTS + 1];
+  int taken; // exits routed; zero means nothing was rewritten at all
+
+  // Which splice's `return`s are this subject's exits. Not the first one met —
+  // an argument is compiled before the call it belongs to, so the first splice
+  // in `match wrap(next())` is `next`'s, whose value is an argument and not the
+  // subject at all. `call` is the subject's own call node; the site compiling
+  // it arms the claim, and `splice` is the id `cg_inline_body` then took. An id
+  // rather than the pad's address, because a dead frame's address is a live
+  // frame's address soon enough.
+  Expr *call;
+  bool armed;
+  int splice;
+} CgThread;
+
 typedef struct Cg {
   Module *m;        // the module being compiled (name lookups are module-local)
   ImplIndex *impls; // the impl set this body may select from — see Instance
@@ -123,6 +159,10 @@ typedef struct Cg {
   int locals_base;
   int inline_depth;
   FunDef *inlining[CG_INLINE_MAX_DEPTH];
+  // the splice being compiled, and where the next one's identity comes from.
+  // Never reused, so a closed splice cannot be mistaken for a later one.
+  int splice_id;
+  int splice_seq;
 
   // ── what the peephole is allowed to look back at ──────────────────────────
   //
@@ -133,10 +173,19 @@ typedef struct Cg {
   // past the last unconditional exit, so `last_exit == count` means what comes
   // next is unreachable. `last_get_local` is where the last OP_GET_LOCAL was
   // emitted, which is how `emit_slide` knows the byte before it is an opcode
-  // and not some other instruction's operand.
+  // and not some other instruction's operand. `last_enum` is the same trick for
+  // the four bytes an OP_ENUM occupies, which is what lets a construction be
+  // recognised — and unbuilt — from the merge below it.
   int last_target;
   int last_exit;
   int last_get_local;
+  int last_enum;
+  EnumDef *last_enum_def;
+  uint8_t last_enum_tag;
+
+  // the match the subject being compiled feeds, if any. Saved and restored
+  // around a subject, so a nested one cannot steal an outer one's exits.
+  CgThread *thread;
 } Cg;
 
 // Is code emitted here reached? Only if the last instruction was not an
@@ -644,6 +693,53 @@ static void emit_slide(Cg *cg, int n) {
   cg->depth -= n;
 }
 
+// The variant the last instruction built, or NULL. Same shape as the fold
+// above and the same safety argument: an OP_ENUM is four bytes and a chunk
+// cannot be read backwards, so the position is remembered, and `last_target`
+// is what says no other path arrives between it and here.
+static VariantDef *cg_last_variant(const Cg *cg) {
+  if (cg->last_enum_def == NULL || cg->last_enum != cg->chunk->count - 4 ||
+      cg->last_target == cg->chunk->count) {
+    return NULL;
+  }
+  return &cg->last_enum_def->variants[cg->last_enum_tag];
+}
+
+// Route the path that is leaving into the continuation its tag selects, and
+// stop building the variant that named it: a one-field one is unemitted
+// outright, so the field stays where the instance would have been, and every
+// other arity keeps its instance as the placeholder the entry reads through.
+// Returns the continuation, or -1 when this path cannot say what it pushed.
+//
+// Called *before* whatever slide carries the value out, which is why it only
+// unemits and does not jump: the caller still owes the value its trip down.
+static int cg_thread_claim(Cg *cg, CgThread *th) {
+  VariantDef *built = cg_last_variant(cg);
+  if (built == NULL) {
+    return -1;
+  }
+  int cont = CG_THREAD_OTHER;
+  for (int i = 0; i < th->cont_count; i++) {
+    if (th->takes[i] == built) {
+      cont = i;
+      break;
+    }
+  }
+  if (th->jump_count[cont] >= CG_MAX_THREAD_EXITS) {
+    return -1;
+  }
+  if (built->field_count == 1) {
+    cg->chunk->count -= 4; // the field it was about to wrap is the value now
+    cg->last_enum_def = NULL;
+  }
+  th->taken++;
+  return cont;
+}
+
+static void cg_thread_jump(CgThread *th, int cont, int ip) {
+  th->jumps[cont][th->jump_count[cont]++] = ip;
+}
+
 // Raw stack traffic, for the bytes a construct emits *around* the expressions
 // it contains — a condition popped before the body, a hidden local set up by
 // hand. Everything inside one `compile_expr` accounts for itself, so these are
@@ -1090,12 +1186,23 @@ static void cg_emit_return(Cg *cg) {
     return;
   }
   assert(pad->break_count < CG_MAX_BREAKS && "fun_inline_cost caps the exits");
+  // this splice is the subject of a match, and this exit knows which arm it
+  // selects: the value stops being a variant and the jump goes to the arm.
+  CgThread *th = cg->thread;
+  int cont = (th != NULL && th->splice != 0 && th->splice == cg->splice_id)
+                 ? cg_thread_claim(cg, th)
+                 : -1;
+
   int n = cg->depth - pad->break_depth - 1;
   if (n > 0) {
     cg_close_scope(cg, pad->break_base);
     emit_slide(cg, n);
   }
-  pad->break_jumps[pad->break_count++] = emit_jump(cg, OP_JUMP);
+  if (cont >= 0) {
+    cg_thread_jump(th, cont, emit_jump(cg, OP_JUMP));
+  } else {
+    pad->break_jumps[pad->break_count++] = emit_jump(cg, OP_JUMP);
+  }
   cg->last_exit = cg->chunk->count;
 }
 
@@ -1108,6 +1215,18 @@ static FunDef *cg_bound_target(Cg *cg, Type *self, Type *trait_ref,
                                Span span);
 static void compile_destructure(Cg *cg, Pattern *pat, int subject_slot,
                                 Expr *else_block);
+static void cg_thread_merge(Cg *cg, CgThread *th, int subject_slot);
+static bool cg_thread_enter(Cg *cg, CgThread *th, int cont, int depth);
+
+// The call about to be spliced is the subject of a threaded match, so the
+// splice it opens owns that match's exits. Armed here rather than inside the
+// splice because only this site knows *which* call it is compiling: the
+// arguments below it have been spliced already.
+static void cg_thread_arm(Cg *cg, Expr *call) {
+  if (cg->thread != NULL && cg->thread->call == call) {
+    cg->thread->armed = true;
+  }
+}
 
 // The statement counterpart of `compile_expr`'s invariant, and the reason no
 // case below balances its own stack either: a statement leaves behind exactly
@@ -1888,6 +2007,15 @@ static void compile_for_iter(Cg *cg, Expr *expr) {
   int loop_start = cg->chunk->count;
   loop.start = loop_start;
 
+  // `Some` binds the loop variable and runs the body; every other tag is the
+  // exit. Both are continuations a `next()` that constructs its answer can jump
+  // to directly — see "Threading a match into its constructions".
+  CgThread th = {0};
+  CgThread *saved_thread = cg->thread;
+  th.takes[0] = for_->some_variant;
+  th.cont_count = 1;
+  cg->thread = &th;
+
   // opt = iter.next() — the receiver is the hidden local, not a re-eval, so its
   // cursor advances across turns rather than restarting.
   if (dyn_index >= 0) {
@@ -1900,6 +2028,7 @@ static void compile_for_iter(Cg *cg, Expr *expr) {
     FunDef *target =
         cg_call_target(cg, next, &mc->inst, &impl_subst, expr->span);
     if (target == NULL) {
+      cg->thread = saved_thread; // `th` is about to go out of scope
       cg->loop = loop.parent;
       cg->local_count = saved_locals;
       emit(cg, OP_UNIT);
@@ -1908,10 +2037,12 @@ static void compile_for_iter(Cg *cg, Expr *expr) {
     const Instance *found = cg_inline_choice(cg, target);
     if (found != NULL) {
       // the whole point of inlining: the `Some` this mints and the tag test
-      // below it end up in one chunk, with no frame between them
+      // below it end up in one chunk, with no frame between them — and once
+      // they are, neither has to happen at all
       Instance inst = *found;
       emit_get_local(cg, iter_slot); // [iter]
       cg_pushed(cg, 1);
+      th.armed = true; // this call *is* the subject; there is no other
       cg_inline_body(cg, &inst, body_depth, expr->span); // [opt]
     } else {
       cg_pushed(cg, 1);
@@ -1919,6 +2050,34 @@ static void compile_for_iter(Cg *cg, Expr *expr) {
       emit_get_local(cg, iter_slot);                  // [next, iter]
       emit2(cg, OP_CALL, (uint8_t)next->param_count); // [opt]
     }
+  }
+  cg->thread = saved_thread;
+
+  if (th.taken > 0) {
+    cg->depth = body_depth + 1; // the value `next()` left, in its own slot
+    cg_thread_merge(cg, &th, body_depth);
+
+    cg_thread_enter(cg, &th, 0, body_depth + 1);
+    emit2(cg, OP_SET_LOCAL, (uint8_t)var_slot); // var = the payload itself
+    emit(cg, OP_POP);
+    cg->depth = body_depth;
+    compile_expr(cg, for_->body);
+    emit(cg, OP_POP);
+    cg_popped(cg, 1);
+    emit_loop(cg, loop_start);
+
+    cg_thread_enter(cg, &th, CG_THREAD_OTHER, body_depth + 1);
+    emit(cg, OP_POP); // the placeholder no arm read
+    cg_popped(cg, 1);
+    cg_close_scope(cg, saved_locals); // detach a captured loop var
+    emit2(cg, OP_POPN, 2);            // var, iter
+    for (int i = 0; i < loop.break_count; i++) {
+      patch_jump(cg, loop.break_jumps[i]);
+    }
+    cg->loop = loop.parent;
+    cg->local_count = saved_locals;
+    emit(cg, OP_UNIT); // loops evaluate to unit
+    return;
   }
 
   // Some -> bind and run the body; None -> exit
@@ -2021,7 +2180,15 @@ static void cg_inline_body(Cg *cg, const Instance *inst, int base_depth,
   CgLoop *saved_loop = cg->loop;
   CgLoop *saved_pad = cg->inline_pad;
   int saved_base = cg->locals_base;
+  int saved_splice = cg->splice_id;
 
+  cg->splice_id = ++cg->splice_seq;
+  // the site that compiled the call armed this if its value is the subject of
+  // a threaded match; the returns below are then that match's paths.
+  if (cg->thread != NULL && cg->thread->armed) {
+    cg->thread->armed = false;
+    cg->thread->splice = cg->splice_id;
+  }
   cg->m = origin->module;
   cg->impls = inst->impls;
   cg->subst = inst->subst;
@@ -2047,15 +2214,15 @@ static void cg_inline_body(Cg *cg, const Instance *inst, int base_depth,
     cg->chunk->count -= 3;
     pad.break_count--;
     cg->last_exit = -1; // reached by fall-through now
-  } else {
+  } else if (!cg_unreachable(cg)) {
     cg_close_scope(cg, saved_locals);
     emit_slide(cg, cg->depth - base_depth - 1);
   }
   for (int i = 0; i < pad.break_count; i++) {
     patch_jump(cg, pad.break_jumps[i]);
   }
-
   cg->inline_depth--;
+  cg->splice_id = saved_splice;
   cg->m = saved_m;
   cg->impls = saved_impls;
   cg->subst = saved_subst;
@@ -2106,6 +2273,7 @@ static void compile_call(Cg *cg, Expr *expr) {
       for (int i = 0; i < call->arg_count; i++) {
         compile_expr(cg, call->args[i]);
       }
+      cg_thread_arm(cg, expr);
       cg_inline_body(cg, &inst, base_depth, expr->span);
       return;
     }
@@ -2578,6 +2746,7 @@ static void compile_method_call(Cg *cg, Expr *expr) {
     }
   }
   if (found != NULL) {
+    cg_thread_arm(cg, expr);
     cg_inline_body(cg, &inst, base_depth, expr->span);
     return;
   }
@@ -2690,6 +2859,11 @@ static void compile_variant_init(Cg *cg, Expr *expr) {
                         variant->fields[i].ident);
     compile_expr(cg, fi->value);
   }
+  // remembered for `cg_last_variant`: this is the one construction a merge
+  // below may decide was never needed.
+  cg->last_enum = cg->chunk->count;
+  cg->last_enum_def = enum_def;
+  cg->last_enum_tag = variant->tag;
   emit_slot(cg, OP_ENUM, enum_def->slot);
   emit(cg, variant->tag);
 }
@@ -2926,6 +3100,167 @@ static void compile_pattern_bind(Cg *cg, Pattern *pat, Accessor acc) {
   }
 }
 
+// ── threading, the consumer's half ───────────────────────────────────────────
+//
+// A threaded exit jumps *past* every test the arms would have run, so an arm
+// the tag alone cannot select would be skipped rather than tried: nothing below
+// the variant may still ask a question, and a guard is a question.
+static bool cg_pattern_irrefutable(Pattern *pat) {
+  switch (pat->kind) {
+  case PAT_WILDCARD:
+  case PAT_BIND:
+    return true;
+  case PAT_LITERAL:
+  case PAT_VARIANT:
+    return false;
+  case PAT_TUPLE:
+    for (int i = 0; i < pat->as.tuple.count; i++) {
+      if (!cg_pattern_irrefutable(pat->as.tuple.elems[i])) {
+        return false;
+      }
+    }
+    return true;
+  case PAT_STRUCT:
+    for (int i = 0; i < pat->as.struc.field_count; i++) {
+      Pattern *sub = pat->as.struc.fields[i].sub_pattern;
+      if (sub != NULL && !cg_pattern_irrefutable(sub)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
+static bool cg_thread_pattern(Pattern *pat) {
+  if (pat->kind != PAT_VARIANT) {
+    return false;
+  }
+  VariantDef *variant = pat->as.variant.resolved_variant;
+  // a field the pattern does not name would be read through an accessor the
+  // one-field entry has already spent
+  if (variant == NULL || pat->as.variant.field_count != variant->field_count) {
+    return false;
+  }
+  for (int i = 0; i < pat->as.variant.field_count; i++) {
+    Pattern *sub = pat->as.variant.fields[i].sub_pattern;
+    if (sub != NULL && !cg_pattern_irrefutable(sub)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool cg_thread_one(CgThread *th, Pattern *pat) {
+  if (!cg_thread_pattern(pat)) {
+    return false;
+  }
+  th->takes[0] = pat->as.variant.resolved_variant;
+  th->cont_count = 1;
+  return true;
+}
+
+static bool cg_thread_arms(CgThread *th, MatchArm *arms, int count) {
+  if (count == 0 || count > CG_MAX_THREAD_CONTS) {
+    return false;
+  }
+  for (int i = 0; i < count; i++) {
+    if (arms[i].guard != NULL || !cg_thread_pattern(arms[i].pattern)) {
+      return false;
+    }
+    th->takes[i] = arms[i].pattern->as.variant.resolved_variant;
+  }
+  th->cont_count = count;
+  return true;
+}
+
+// Compile the value the construct dispatches on, with its exits reporting
+// themselves. The value it leaves *here*, if it leaves one, is one more exit —
+// which is how a subject that is itself a construction (`match Some(x)`) needs
+// no splice to be threaded.
+static void cg_thread_subject(Cg *cg, CgThread *th, Expr *subject) {
+  CgThread *saved = cg->thread;
+  th->call = subject;
+  cg->thread = th;
+  compile_expr(cg, subject);
+  cg->thread = saved;
+
+  if (cg_unreachable(cg)) {
+    return;
+  }
+  int cont = cg_thread_claim(cg, th);
+  if (cont < 0) {
+    return;
+  }
+  cg_thread_jump(th, cont, emit_jump(cg, OP_JUMP));
+  cg->last_exit = cg->chunk->count;
+}
+
+// Whatever still arrives holding a built variant meets one tag test per
+// continuation — the fail chain the arms used to be — and has its field taken
+// out in place, so a path that reported its tag and a path that was asked enter
+// the same code with the same stack. Emitted only where something arrives.
+static void cg_thread_merge(Cg *cg, CgThread *th, int subject_slot) {
+  if (cg_unreachable(cg)) {
+    return;
+  }
+  int base = cg->depth; // the subject is the top of the stack, in its own slot
+  for (int i = 0; i < th->cont_count; i++) {
+    VariantDef *variant = th->takes[i];
+    emit_get_local(cg, subject_slot);
+    emit(cg, OP_TAG);
+    cg_pushed(cg, 1);
+    emit_const(cg, val_int(variant->tag));
+    cg_pushed(cg, 1);
+    emit(cg, OP_EQ);
+    cg_popped(cg, 1);
+    int miss = emit_jump(cg, OP_JUMP_IF_FALSE); // peeks; the arms pop it
+    emit(cg, OP_POP);
+    cg_popped(cg, 1);
+    if (variant->field_count == 1) {
+      emit2(cg, OP_FIELD_GET, 0); // in place: the slot is the top of the stack
+    }
+    cg_thread_jump(th, i, emit_jump(cg, OP_JUMP));
+    patch_jump(cg, miss);
+    cg->depth = base + 1;
+    emit(cg, OP_POP);
+    cg_popped(cg, 1);
+  }
+  cg_thread_jump(th, CG_THREAD_OTHER, emit_jump(cg, OP_JUMP));
+  cg->last_exit = cg->chunk->count;
+}
+
+// Enter a continuation: everything that jumped here arrives with the same
+// stack, whichever way it decided. False when nothing does.
+static bool cg_thread_enter(Cg *cg, CgThread *th, int cont, int depth) {
+  cg->depth = depth;
+  if (th->jump_count[cont] == 0) {
+    return false;
+  }
+  for (int i = 0; i < th->jump_count[cont]; i++) {
+    patch_jump(cg, th->jumps[cont][i]);
+  }
+  return true;
+}
+
+// The names an entry binds. A one-field variant left its *field* in the
+// subject's slot, so the sub-pattern reads that slot rather than a field of it
+// — which is the whole of what deleting the construction costs the arm.
+static void cg_thread_bind(Cg *cg, Pattern *pat, Accessor acc) {
+  VariantDef *variant = pat->as.variant.resolved_variant;
+  if (variant->field_count != 1) {
+    compile_pattern_bind(cg, pat, acc);
+    return;
+  }
+  FieldPat *fp = &pat->as.variant.fields[0];
+  if (fp->sub_pattern != NULL) {
+    compile_pattern_bind(cg, fp->sub_pattern, acc);
+  } else {
+    emit_accessor(cg, &acc);
+    cg_add_pushed_local(cg, fp->ident.name, fp->span);
+  }
+}
+
 // a `var` binding is a one-arm match with no guard and no body: the subject is
 // already in `subject_slot`, so the whole statement is the two pattern passes.
 // The checker rejects a refutable binding, but its answer is tri-state — an
@@ -2969,6 +3304,43 @@ static void compile_destructure(Cg *cg, Pattern *pat, int subject_slot,
   compile_pattern_bind(cg, pat, acc);
 }
 
+// The same match with the tag tests gone: every arm is entered by a jump the
+// construction below it already knew to make, and the merge above catches
+// whatever path could not say. The subject's slot holds a one-field variant's
+// *field*, which is what `cg_thread_bind` reads and what the final slide drops.
+static void compile_match_threaded(Cg *cg, Expr *expr, CgThread *th,
+                                   int subject_slot, int saved_locals_outer) {
+  ExprMatch *match = &expr->as.match;
+  int saved_locals = cg->local_count;
+  int arm_depth = cg->depth;
+  Accessor subject_acc = {.base_slot = subject_slot};
+  JumpList end_jumps = {0};
+
+  cg_thread_merge(cg, th, subject_slot);
+
+  // a tag no arm names, which only the merge can produce: the trap the fall
+  // past every arm used to be.
+  if (cg_thread_enter(cg, th, CG_THREAD_OTHER, arm_depth)) {
+    emit(cg, OP_MATCH_FAIL);
+  }
+
+  for (int i = 0; i < match->arm_count; i++) {
+    MatchArm *arm = &match->arms[i];
+    cg_thread_enter(cg, th, i, arm_depth);
+    cg->local_count = saved_locals;
+    cg_thread_bind(cg, arm->pattern, subject_acc);
+    compile_expr(cg, arm->body);
+    cg_close_scope(cg, saved_locals); // a closure may capture a bound name
+    emit_slide(cg, cg->local_count - saved_locals);
+    jump_list_push(cg, &end_jumps, arm->span, emit_jump(cg, OP_JUMP));
+  }
+
+  cg->local_count = saved_locals;
+  jump_list_patch(cg, &end_jumps);
+  emit_slide(cg, 1); // drop the hidden subject local, keep the arm result
+  cg->local_count = saved_locals_outer;
+}
+
 // each arm: test the pattern (jumping to the next arm on failure), bind its
 // names, run the (optional) guard — false unwinds the binds and falls
 // through to the next arm same as a failed test — then the body, sliding
@@ -2979,9 +3351,19 @@ static void compile_match(Cg *cg, Expr *expr) {
   ExprMatch *match = &expr->as.match;
   int saved_locals_outer = cg->local_count;
 
-  compile_expr(cg, match->subject);
+  CgThread th = {0};
+  if (cg_thread_arms(&th, match->arms, match->arm_count)) {
+    cg_thread_subject(cg, &th, match->subject);
+  } else {
+    compile_expr(cg, match->subject);
+  }
   int subject_slot = cg_add_local(cg, (StringView){0}, expr->span);
   int saved_locals = cg->local_count;
+
+  if (th.taken > 0) {
+    compile_match_threaded(cg, expr, &th, subject_slot, saved_locals_outer);
+    return;
+  }
   // every arm is an alternative reached from the same place, so each starts
   // from this depth rather than from whatever the arm before it left
   int arm_depth = cg->depth;
@@ -3051,13 +3433,46 @@ static void compile_if_binding(Cg *cg, Expr *expr) {
   ExprIf *if_ = &expr->as.if_expr;
   int saved_outer = cg->local_count;
 
-  compile_expr(cg, if_->condition);
+  CgThread th = {0};
+  if (cg_thread_one(&th, if_->binding)) {
+    cg_thread_subject(cg, &th, if_->condition);
+  } else {
+    compile_expr(cg, if_->condition);
+  }
   int subject_slot = cg_add_local(cg, (StringView){0}, expr->span);
   int saved = cg->local_count;
+  Accessor acc = {.base_slot = subject_slot};
+
+  if (th.taken > 0) {
+    // the `else` is every tag the binding does not name, so it is the merge's
+    // fall-through as much as the failed test's
+    int entry_depth = cg->depth;
+    cg_thread_merge(cg, &th, subject_slot);
+
+    cg_thread_enter(cg, &th, CG_THREAD_OTHER, entry_depth);
+    if (if_->else_branch != NULL) {
+      compile_expr(cg, if_->else_branch);
+    } else {
+      emit(cg, OP_UNIT);
+      cg_pushed(cg, 1);
+    }
+    int else_end = emit_jump(cg, OP_JUMP);
+
+    cg_thread_enter(cg, &th, 0, entry_depth);
+    cg->local_count = saved;
+    cg_thread_bind(cg, if_->binding, acc);
+    compile_expr(cg, if_->then_block);
+    cg_close_scope(cg, saved); // a closure may capture a bound name
+    emit_slide(cg, cg->local_count - saved);
+
+    patch_jump(cg, else_end);
+    emit_slide(cg, 1); // drop the hidden subject, keep the branch's result
+    cg->local_count = saved_outer;
+    return;
+  }
   // where a failed test lands: the subject is a local by now, and the test's
   // own bool is still above it because OP_JUMP_IF_FALSE never pops.
   int fail_depth = cg->depth + 1;
-  Accessor acc = {.base_slot = subject_slot};
 
   JumpList fails = {0};
   compile_pattern_test(cg, if_->binding, acc, &fails);
@@ -3105,10 +3520,43 @@ static void compile_while_binding(Cg *cg, Expr *expr) {
   };
   cg->loop = &loop;
 
-  compile_expr(cg, wh->condition);
+  CgThread th = {0};
+  if (cg_thread_one(&th, wh->binding)) {
+    cg_thread_subject(cg, &th, wh->condition);
+  } else {
+    compile_expr(cg, wh->condition);
+  }
   int subject_slot = cg_add_local(cg, (StringView){0}, expr->span);
   int fail_depth = cg->depth + 1; // the failed test's bool, above the subject
   Accessor acc = {.base_slot = subject_slot};
+
+  if (th.taken > 0) {
+    int entry_depth = cg->depth;
+    cg_thread_merge(cg, &th, subject_slot);
+
+    cg_thread_enter(cg, &th, 0, entry_depth);
+    cg_thread_bind(cg, wh->binding, acc);
+    compile_expr(cg, wh->body);
+    emit(cg, OP_POP); // the body's value
+    cg_popped(cg, 1);
+    cg_close_scope(cg, saved_outer);
+    emit2(cg, OP_POPN, (uint8_t)(cg->local_count - saved_outer));
+    cg_popped(cg, cg->local_count - saved_outer);
+    cg->local_count = saved_outer;
+    emit_loop(cg, loop.start);
+
+    // any other tag ends the loop; the subject's slot holds a placeholder no
+    // arm read
+    cg_thread_enter(cg, &th, CG_THREAD_OTHER, entry_depth);
+    emit(cg, OP_POP);
+    cg_popped(cg, 1);
+    for (int i = 0; i < loop.break_count; i++) {
+      patch_jump(cg, loop.break_jumps[i]);
+    }
+    cg->loop = loop.parent;
+    emit(cg, OP_UNIT); // loops evaluate to unit
+    return;
+  }
 
   JumpList fails = {0};
   compile_pattern_test(cg, wh->binding, acc, &fails);
@@ -3442,7 +3890,8 @@ static void compile_fun_body(Mono *mono, FunDef *fun, FunDef *body_of,
            .ok = true,
            .self_slot = -1,
            .last_exit = -1,
-           .last_get_local = -1};
+           .last_get_local = -1,
+           .last_enum = -1};
   cg.chunk = al_alloc_zero_for(mono->al, Chunk);
   chunk_init(cg.chunk, mono->al);
 
@@ -3509,6 +3958,7 @@ static void compile_closure(Cg *cg, Expr *expr) {
               .self_slot = -1,
               .last_exit = -1,
               .last_get_local = -1,
+              .last_enum = -1,
               .parent = cg};
   child.chunk = al_alloc_zero_for(cg->al, Chunk);
   chunk_init(child.chunk, cg->al);

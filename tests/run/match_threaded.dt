@@ -1,0 +1,204 @@
+# A match whose subject every path *constructs* is entered by tag, so neither
+# the variant nor the tag test is emitted. This pins what still has to happen
+# where an arm cannot be selected by its tag alone, and where only some of the
+# paths can say what they built.
+#> some 7
+#> none
+#> pair 3 4
+#> A 1
+#> B 0
+#> wrap none
+#> wrap some 3
+#> literal zero
+#> literal other 5
+#> guard big 9
+#> guard small 1
+#> catch-all Some(1)
+#> while 1 2 3
+#> for 1 2 3
+#> take 1 2
+#> mixed some 1
+#> mixed none
+#> break at 2
+#> nested 4
+#> unit-ish 6
+#> closure 11
+use std::io::print;
+use std::option::Option;
+
+enum Shape {
+    Dot,
+    Pair(int, int),
+    One(int),
+}
+
+enum Two {
+    A(int),
+    B(int),
+}
+
+# Both arms of the `if` end in a construction and the *merge* is what the value
+# comes from, so the instruction behind the cursor belongs to one path only:
+# neither exit may be read as this return's answer.
+fun two(n: int) -> Two {
+    return if n > 0 { Two::A(n) } else { Two::B(n) };
+}
+
+# every exit is a construction of a known tag: both arms are entered directly
+fun classify(n: int) -> Option<int> {
+    if n > 0 {
+        return Option::Some(n);
+    }
+    return Option::None;
+}
+
+# An argument is compiled *before* the call it belongs to, so the first body
+# spliced into `wrap(classify(n), k)` is `classify`'s — whose value is an
+# argument and not the subject. Only the subject's own call may be threaded.
+fun wrap(o: Option<int>, k: int) -> Option<int> {
+    if k == 0 {
+        return Option::None;
+    }
+    return o;
+}
+
+# a two-field variant keeps its instance — only a one-field one is unbuilt,
+# because only there is the field what the slot would have held
+fun shape(n: int) -> Shape {
+    if n == 0 {
+        return Shape::Dot;
+    }
+    if n == 1 {
+        return Shape::Pair(3, 4);
+    }
+    return Shape::One(n);
+}
+
+fun main() {
+    match classify(7) {
+        Option::Some(v) => { print("some {v}"); },
+        Option::None => { print("none"); },
+    }
+    match classify(0) {
+        Option::Some(v) => { print("some {v}"); },
+        Option::None => { print("none"); },
+    }
+    match shape(1) {
+        Shape::Dot => { print("dot"); },
+        Shape::Pair(a, b) => { print("pair {a} {b}"); },
+        Shape::One(v) => { print("one {v}"); },
+    }
+
+    match two(1) {
+        Two::A(v) => { print("A {v}"); },
+        Two::B(v) => { print("B {v}"); },
+    }
+    match two(0) {
+        Two::A(v) => { print("A {v}"); },
+        Two::B(v) => { print("B {v}"); },
+    }
+
+    match wrap(classify(3), 0) {
+        Option::Some(v) => { print("wrap some {v}"); },
+        Option::None => { print("wrap none"); },
+    }
+    match wrap(classify(3), 1) {
+        Option::Some(v) => { print("wrap some {v}"); },
+        Option::None => { print("wrap none"); },
+    }
+
+    # a refutable sub-pattern is still a question, so this match keeps its tests
+    match classify(0) {
+        Option::Some(0) => { print("literal zero"); },
+        Option::Some(v) => { print("literal other {v}"); },
+        Option::None => { print("literal zero"); },
+    }
+    match classify(5) {
+        Option::Some(0) => { print("literal zero"); },
+        Option::Some(v) => { print("literal other {v}"); },
+        Option::None => { print("literal zero"); },
+    }
+
+    # a guard is a question too, and one an entry by tag would never ask
+    match classify(9) {
+        Option::Some(v) if v > 5 => { print("guard big {v}"); },
+        Option::Some(v) => { print("guard small {v}"); },
+        Option::None => { print("guard none"); },
+    }
+    match classify(1) {
+        Option::Some(v) if v > 5 => { print("guard big {v}"); },
+        Option::Some(v) => { print("guard small {v}"); },
+        Option::None => { print("guard none"); },
+    }
+
+    # a binding arm covers the whole value, which a threaded entry no longer
+    # has: the subject slot would hold the payload
+    match classify(1) {
+        other => { print("catch-all {other}"); },
+    }
+
+    var xs = [1, 2, 3];
+    var it = xs.iter();
+    var out = "while";
+    while var Option::Some(x) = it.next() {
+        out = "{out} {x}";
+    }
+    print(out);
+
+    var fout = "for";
+    for y in xs.iter() {
+        fout = "{fout} {y}";
+    }
+    print(fout);
+
+    # `Take::next` returns its source's answer on one path and builds `None` on
+    # the other, so one path reports its tag and one arrives with the variant
+    # built — the merge is what catches the second
+    var tout = "take";
+    var t = xs.iter().take(2);
+    while var Option::Some(x) = t.next() {
+        tout = "{tout} {x}";
+    }
+    print(tout);
+
+    # the same mix under a `match`, where the paths that could not report their
+    # tag meet the test the arms used to run
+    var t2 = xs.iter().take(1);
+    match t2.next() {
+        Option::Some(x) => { print("mixed some {x}"); },
+        Option::None => { print("mixed none"); },
+    }
+    match t2.next() {
+        Option::Some(x) => { print("mixed some {x}"); },
+        Option::None => { print("mixed none"); },
+    }
+
+    for z in xs.iter() {
+        if z == 2 {
+            print("break at {z}");
+            break;
+        }
+    }
+
+    # a match inside the body that feeds another match
+    match classify(4) {
+        Option::Some(v) => match classify(v) {
+            Option::Some(w) => { print("nested {w}"); },
+            Option::None => { print("nested none"); },
+        },
+        Option::None => { print("nested outer none"); },
+    }
+
+    if var Shape::One(v) = shape(6) {
+        print("unit-ish {v}");
+    } else {
+        print("unit-ish else");
+    }
+
+    # a bound name captured out of a threaded arm has to survive the slot going
+    var add = match classify(2) {
+        Option::Some(v) => |n: int| n + v,
+        Option::None => |n: int| n,
+    };
+    print("closure {add(9)}");
+}
