@@ -1,0 +1,31 @@
+# The cold path: an exploded receiver whose call is not spliced after all. The
+# object is rebuilt from the slots for the duration of the call and read back
+# out of afterwards, so a callee that mutates `self` still reaches the slots.
+#
+# `deep` is what reaches it — compiled inside two splices, where a third is
+# refused, so the declaration's choice and the call's disagree.
+use std::io::print;
+
+struct Pair { a: int, b: int }
+
+impl Pair {
+    fun bump(self) -> int {
+        self.a += 10;
+        return self.a + self.b;
+    }
+}
+
+fun deep() -> int {
+    var p = Pair { a: 1, b: 2 };
+    var t = p.bump();
+    return t + p.a; # 13 + 11: the write-back is what makes `p.a` 11
+}
+
+fun mid() -> int { return deep(); }
+
+fun main() {
+    print("{mid()}");
+#> 24
+    print("{deep()}");
+#> 24
+}

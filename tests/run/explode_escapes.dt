@@ -40,7 +40,8 @@ fun main() {
     print("{f()}");
 #> 50
 
-    # a method call is the receiver leaving as a whole value
+    # a method call whose callee reads `self` through fields does *not* escape —
+    # `explode_receiver.dt` is that case. It answers the same either way.
     var m = Pair { a: 4, b: 5 };
     print("{m.total()}");
 #> 9

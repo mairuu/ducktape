@@ -1072,8 +1072,30 @@ graph `cfg.c` builds.
 
 **Two halves, and neither implies the other.** The scan says no *other* name can
 see the object; building it here says no other name *already* does, which
-`var b = a;` would not — so the initializer has to be a literal in this body,
-and only a struct or tuple literal is one.
+`var b = a;` would not.
+
+**What counts as building it.** A struct or tuple literal, or **a call whose
+callee always constructs its result** — one exit, and the returned expression
+is the construction itself. That second form is what `var it = xs.iter();`
+needs, and the restriction is the whole of its soundness: a callee that bound
+the object to a name first could have handed it to something else on the way
+out. The object such a call returns is real, so the fields are read out of it
+into slots and the object is left behind in a slot of its own, dead — one
+allocation once, rather than a shuffle to reclaim the slot.
+
+**A method call keeps the value in too, when the callee only reads `self`
+through fields.** The splice then binds `self` onto the *caller's* field slots
+and pushes no receiver at all, so `self.front += 1` inside an inlined `next()`
+writes the slot the loop around it reads. `self` gets no `locals` entry for
+this: the slots belong to the frame the body was spliced into, and claiming
+them twice would move every pop count measured from the first parameter.
+
+**Where the splice does not happen, the object is rebuilt for the call.** Built
+from the slots, passed, and read back out of afterwards — a struct is a handle,
+so the callee's writes land in the object and the read-back is what returns
+them to the slots. This is the cold path: the declaration and the call can only
+disagree through `cg_inline_choice`'s frame-fit test, since everything else it
+weighs is a property of the body or constant across one body.
 
 **Inside a closure even `x.f` escapes.** A capture is by slot and an exploded
 binding is several, so there is no one slot to capture.
@@ -1939,10 +1961,35 @@ baselines 0.7% apart:
 **Only the two rows that bind a literal to a local move, and they lose ~80%.**
 What is left of them is the field values being pushed and added, which is the
 work the program asked for; the allocation and the four field accesses are gone.
-Nothing else moves, and `it.next()` is the row that says where this stops: the
+Nothing else moves, and `it.next()` is the row that says where this stopped: the
 iterator is `next()`'s *receiver*, and a receiver is the value leaving as a
-whole, so the analysis declines it. A two-field variant is untouched for the
-same reason — a variant is matched, not read through a field.
+whole. A two-field variant is untouched for a different reason — a variant is
+matched, not read through a field.
+
+**And then the receiver.** Milestone 118 lets an exploded binding survive being
+a spliced call's receiver, and lets a call whose callee always constructs its
+result be the fresh initializer — the two halves `var it = xs.iter(); it.next()`
+needs. Best of 7 interleaved runs over 6,000,000 elements, the two baselines
+2.2% apart:
+
+| | before | after |
+|---|---|---|
+| `it.next()`, the real thing | +15.8 | **+7.7** |
+| `it.map(f)`, a two-stage chain | +40.5 | +39.0 |
+| a 2-field struct literal | +7.3 | +7.4 |
+| minting a `Some(x)` and matching it | +7.7 | +8.6 |
+
+**`it.next()` halves, and the chain does not.** The iterator is three slots now,
+so `self.front`, `self.xs` and `self.taken_back` are `OP_GET_LOCAL`s and the
+cursor advances with an `OP_SET_LOCAL` — no object, no `OP_FIELD_GET`, and no
+receiver pushed per call. The chain moves barely at all because only the outer
+`Map` explodes: `map` stores `self` into the adapter it returns, so the source
+iterator is a value leaving whole and keeps its object, and `self.inner.next()`
+still reads a field of a real one.
+
+**Where `it.next()` has come to.** +77.5ns/elem over the plain `for` at the
+start of this direction, +7.7 now — the allocation, the frame, the call's
+dispatches, the `Option` and the iterator struct itself, one milestone each.
 
 **Reproducing any of the above.** `make bench` times `bench/`, one directory per
 table, and `make bench ARGS="--against <binary>"` runs two binaries side by side

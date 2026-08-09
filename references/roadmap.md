@@ -2,29 +2,24 @@
 
 ## Start here
 
-**Last landed:** milestone 117 (`15b2f0f`) — **the struct nothing else can
-see**. A `var` bound to a struct or tuple literal and mentioned only as `x.f` is
-compiled as its fields, so it is never allocated: a 2-field struct literal costs
-7.8ns/elem over the plain `for` where it cost 36, a 2-tuple 7.3 where it cost
-39. 702 tests, clean under debug, `--gc-stress` and `make sanitize`. Everything
-lands on `main`; there are no feature branches.
+**Last landed:** milestone 118 (`SHA`) — **the receiver that is not a value**.
+An exploded binding now survives being a spliced call's receiver, and a call
+whose callee always constructs its result is a fresh initializer, so `var it =
+xs.iter()` is three slots and `it.next()` costs **7.7ns/elem** over the plain
+`for` where this direction began at 77.5. 708 tests, clean under debug,
+`--gc-stress` and `make sanitize`. Everything lands on `main`; there are no
+feature branches.
 
 **Nothing is blocked, and nothing is owed.** Milestone 95 closed the last entry
 that was not a matter of appetite, and 103 the last one that was already
 *designed*. Every item under "Next" is a choice.
 
-**The four live directions**, in the order this file recommends them:
+**Item 1 of "Next" — the iterator, and the compiler work behind it — is
+spent**, at milestone 118. Ten milestones took `it.next()` from +77.5ns/elem
+over the plain `for` to +7.7, and the direction has no step left in it; its
+entry keeps the reasoning because each finding outlived its milestone.
+**Everything that remains is breadth**, so the three below are all appetite:
 
-1. **The iterator's allocation, and the compiler work behind it** — the only
-   direction left that is not breadth, and now nearly spent. 109 and 110 made
-   `Some(x)` cost no allocation; 113 deleted the frame around `next()`; 114 took
-   the three dispatches that left; 115 built a CFG and spent it on liveness; 116
-   deleted the `Option` itself where a match is fed by a construction; 117
-   stopped allocating a local aggregate nothing else can see. **What remains is
-   that last one crossing a splice boundary**, so an iterator — which is its
-   `next()`'s receiver, and a receiver is the value leaving whole — can be
-   exploded too. Neither of the forward direction's two named consumers wanted a
-   graph in the end.
 2. **std breadth on the natives** — every piece with a design question in it is
    spent, so what remains is typing.
 3. **`Eq`** — recorded as *declined*, by two consumers that were asked for it by
@@ -621,6 +616,38 @@ to keep this file small. Everything from 100 on is below.
   call. Remainder: a receiver escapes, so an iterator does not explode — see
   item 1.
 
+- **118. The receiver that is not a value** (`SHA`) — an exploded binding
+  survives being a spliced call's receiver: the splice binds `self` onto the
+  caller's field slots and pushes nothing, so `self.front += 1` writes the slot
+  the loop reads. With that, a *call* whose callee always constructs its result
+  counts as a fresh initializer, the other half `var it = xs.iter()` needed.
+  `it.next()` costs 7.7ns/elem over the plain `for` where it cost 15.8, and 77.5
+  when this direction opened.
+  Design: `runtime.md` "Escape analysis and scalar replacement", extended, and
+  the cost model's last table. **THE FINDING: `self` is not a parameter here, it
+  is an alias, and the way to say so is to give it no slot of its own.** Naming
+  it at the group's base like any other parameter breaks every pop count
+  measured from the first one — `cg_close_scope` starts at
+  `locals[break_base].slot`, which becomes the *caller's* frame once `self`
+  claims a slot below the splice. Leaving `self` out of `locals` entirely and
+  carrying it as `self_slot` + `self_field_slots` is smaller and is also the
+  truth: those slots belong to the frame the body was spliced into. Second:
+  **freshness through a call is a one-exit rule, and the exit has to be the
+  construction** — a callee that binds the object to a name first could have
+  handed it to something else on the way out. Third: the declaration's inline
+  choice and the call's can disagree, and only through the frame-fit test, so
+  the cold path rebuilds the object for the call and reads its fields back
+  afterwards; a struct is a handle, so the callee's writes land in that object
+  and the read-back returns them to the slots. Sabotage 12/12 bit after one
+  round trip: **"more than one exit is fine" survived first and was a live
+  miscompile**, not a boundary — a callee returning `self.kept` on one path and
+  a construction on the last was exploded on both, and
+  `tests/run/explode_receiver_escapes.dt` pins it now. The one honest survivor
+  is "never collect the calls", which only turns the optimisation off.
+  Remainder: `it.map(f)` is unmoved at +39, because a chain's source is stored
+  into the adapter and so leaves whole; and a plain `fun` call is never a fresh
+  initializer, since `cg_static_callee` reads only a method call's resolution.
+
 ## Next (in recommended order)
 
 Estimates are relative to one focused session ≈ the checker-completion
@@ -633,11 +660,11 @@ by appetite rather than by necessity. Nothing here is load-bearing any more:
 the module system was the one item that replaced infrastructure known to be
 wrong, and it landed in milestones 94–95.
 
-1. **The allocation the iterator pays, and the compiler work behind it.**
-   The one direction here that is not breadth, and the only one with a
-   measurement under it: an iterator's `next()` costs 77.5ns/elem over the
-   desugared loop, of which the call frame is 4.6 and the `Some(x)` it mints and
-   destructures is 60.6 (`runtime.md` "The cost model" has the table).
+1. ~~**The allocation the iterator pays, and the compiler work behind it.**~~
+   **Spent at milestone 118**, ten milestones after it opened: `it.next()` cost
+   77.5ns/elem over the desugared loop and now costs 7.7. Everything below is
+   the reasoning that got there, kept because each step's finding outlived it —
+   there is no step left to take.
 
    **Where it stands after 117: ~15ns/elem, from 77.5.** The allocation, the
    frame, the call's dispatches and the `Option` itself are all gone; what is

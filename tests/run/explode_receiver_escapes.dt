@@ -1,0 +1,72 @@
+# The receiver rule's other side: a method call keeps the value in only when the
+# callee reads `self` through fields, and a call initializer is fresh only when
+# the callee returns the construction itself. Each case here would print a
+# different number if the rule let it through, because a struct is a handle and
+# exploding an aliased one loses the write.
+use std::io::print;
+
+struct Pair { a: int, b: int }
+struct Maker { seed: int }
+struct Holder { kept: Pair }
+
+impl Pair {
+    # `self` leaves whole: the array holds the object, so the caller's later
+    # write to `p.a` has to be visible through it
+    fun stash(self, sink: [Pair]) { sink.push(self); }
+}
+
+impl Maker {
+    # the exit is a *name*, not the construction — the object was handed to
+    # `sink` before being returned, so it is not this caller's alone
+    fun leak(self, sink: [Pair]) -> Pair {
+        var p = Pair { a: self.seed, b: 2 };
+        sink.push(p);
+        return p;
+    }
+    # the exit *is* the construction: fresh, so the caller may take it apart
+    fun fresh(self) -> Pair { return Pair { a: self.seed, b: 9 }; }
+}
+
+impl Holder {
+    # TWO exits, and only the last one constructs. Reading the last statement
+    # alone would call this fresh and be wrong on the other path.
+    fun get(self, make_new: bool) -> Pair {
+        if make_new == false {
+            return self.kept;
+        }
+        return Pair { a: 0, b: 0 };
+    }
+}
+
+fun main() {
+    # a callee that stores `self`
+    var sink: [Pair] = [];
+    var p = Pair { a: 1, b: 2 };
+    p.stash(sink);
+    p.a = 99;
+    print("{sink[0].a}");
+#> 99
+
+    # a call initializer whose callee let the object out first
+    var held: [Pair] = [];
+    var m = Maker { seed: 5 };
+    var q = m.leak(held);
+    q.a = 42;
+    print("{held[0].a}");
+#> 42
+
+    # the same shape, returning the construction: exploding this one is sound,
+    # and nothing outside can tell either way
+    var r = m.fresh();
+    r.a += 1;
+    print("{r.a} {r.b}");
+#> 6 9
+
+    # a callee with a second exit that returns something it did not build: the
+    # object `q2` names is `h.kept`, so a write through it has to be seen there
+    var h = Holder { kept: Pair { a: 1, b: 2 } };
+    var q2 = h.get(false);
+    q2.a = 77;
+    print("{h.kept.a}");
+#> 77
+}

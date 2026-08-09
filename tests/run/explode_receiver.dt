@@ -1,0 +1,66 @@
+# Scalar replacement across a splice boundary: a method call on an exploded
+# receiver binds the callee's `self` onto the caller's field slots, so a callee
+# that mutates `self.f` writes the slot the caller reads. The iterator is the
+# shape this exists for — `var it = xs.iter()` is fresh because `iter` always
+# constructs what it returns, so `it` is three slots and `next` advances one.
+use std::io::print;
+use std::option::Option;
+use std::array;
+
+struct Counter { n: int, step: int }
+
+impl Counter {
+    # mutates `self`: what the caller reads afterwards has to see it
+    fun tick(self) -> int {
+        self.n += self.step;
+        return self.n;
+    }
+    fun peek(self) -> int { return self.n; }
+}
+
+fun main() {
+    var c = Counter { n: 0, step: 3 };
+    print("{c.tick()} {c.tick()} {c.peek()} {c.n}");
+#> 3 6 6 6
+
+    # the mutation and a direct field write interleave on the same slots
+    c.n = 100;
+    print("{c.tick()} {c.n}");
+#> 103 103
+
+    # a call initializer: `iter` returns a construction, so `it` is its fields
+    var xs = array::fill(4, 2);
+    var sum = 0;
+    var it = xs.iter();
+    while var Option::Some(x) = it.next() {
+        sum += x;
+    }
+    print("{sum}");
+#> 8
+
+    # the cursor is a slot and it survives being read between calls
+    var it2 = xs.iter();
+    var first = it2.next();
+    var second = it2.next();
+    match first {
+        Option::Some(a) => { print("first {a}"); },
+        Option::None => { print("none"); },
+    }
+#> first 2
+    match second {
+        Option::Some(b) => { print("second {b}"); },
+        Option::None => { print("none"); },
+    }
+#> second 2
+
+    # a two-stage chain: `it3` holds `m`, so `it3` keeps its object while the
+    # `Map` that wraps it is exploded
+    var it3 = xs.iter();
+    var m = it3.map(|v: int| v * 10);
+    var msum = 0;
+    while var Option::Some(y) = m.next() {
+        msum += y;
+    }
+    print("{msum}");
+#> 80
+}
