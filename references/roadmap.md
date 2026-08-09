@@ -2,7 +2,7 @@
 
 ## Start here
 
-**Last landed:** milestone 117 — **the struct nothing else can see**. A `var`
+**Last landed:** milestone 117 (`15b2f0f`) — **the struct nothing else can see**. A `var`
 bound to a struct or tuple literal and mentioned only as `x.f` is compiled as
 its fields, so it is never allocated: a 2-field struct literal costs 7.8ns/elem
 over the plain `for` where it cost 36, a 2-tuple 7.3 where it cost 39. 702
@@ -561,7 +561,7 @@ to keep this file small. Everything from 100 on is below.
   test and the field read all go, and `it.next()` costs 17ns/elem over the
   `for` where it cost 48.
 
-- **117. The struct nothing else can see** (`SHA`) — a `var` bound to a struct
+- **117. The struct nothing else can see** (`15b2f0f`) — a `var` bound to a struct
   or tuple literal and mentioned only as `x.f` is compiled as its fields: no
   construction, each field a slot, a read or write an `OP_GET_LOCAL`/
   `OP_SET_LOCAL`. A 2-field struct literal costs 7.8ns/elem over the plain `for`
