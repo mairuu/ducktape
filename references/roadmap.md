@@ -2,7 +2,7 @@
 
 ## Start here
 
-**Last landed:** milestone 116 (`SHA`) — **the variant a match never built**. A
+**Last landed:** milestone 116 (`18487b1`) — **the variant a match never built**. A
 `match` whose subject the code above it constructed is entered by tag, so the
 construction, the tag test and the field read all go: `it.next()` costs
 17ns/elem over the plain `for` where it cost 48, and a `Some(x)` minted and
@@ -554,7 +554,7 @@ to keep this file small. Everything from 100 on is below.
   Remainder: escape analysis is the other named consumer and is not built; the
   graph has no def-use chains, which is what that will want.
 
-- **116. The variant a match never built** (`SHA`) — a `match` whose subject
+- **116. The variant a match never built** (`18487b1`) — a `match` whose subject
   the code above it constructed is entered by tag: the construction, the tag
   test and the field read all go, and `it.next()` costs 17ns/elem over the
   `for` where it cost 48.
