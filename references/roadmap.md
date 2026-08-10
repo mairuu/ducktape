@@ -2,13 +2,13 @@
 
 ## Start here
 
-**Last landed:** milestone 119 (`763d535`) — **scope exit is a thing you can
-write**. `defer` is block-grained and evaluated at the exit: the expression is
-compiled again at every way out of its block, so it reads the locals as they
-are then. No new opcode and no image change — the VM never learns the word.
-714 tests, clean under debug, `--gc-stress` and `make sanitize`. It was built
-on `feature/defer-poc` and merged; that branch was the one exception to
-everything landing on `main`.
+**Last landed:** milestone 120 (`3543157`) — **the name codegen no longer
+resolves**. A reference is matched on the `VarEntry` the checker resolved it
+to, not on its name, so `CgDeferSkip` and `Cg.locals_base` are both gone: a
+shadowed name is a different binding, and a spliced body's bindings are its
+own. It also closed a crash that predates it — a closure calling the function
+around it expanded splices until the C stack ran out. 714 tests, clean under
+`make sanitize`, and the bench agrees with 119 on every row.
 
 **Nothing is blocked, and nothing is owed.** Milestone 95 closed the last entry
 that was not a matter of appetite, and 103 the last one that was already
@@ -18,11 +18,8 @@ that was not a matter of appetite, and 103 the last one that was already
 spent**, at milestone 118. Ten milestones took `it.next()` from +77.5ns/elem
 over the plain `for` to +7.7, and the direction has no step left in it; its
 entry keeps the reasoning because each finding outlived its milestone.
-**Everything under "Next" is breadth**, so the three below are all appetite —
-but 119 left one compiler item behind that is not: codegen resolves a local by
-*name* where the checker already resolved it to a `VarEntry`, and `CgDeferSkip`
-is the patch over the seam. It is a wart rather than a milestone here because
-it deletes machinery instead of adding a feature.
+**Everything under "Next" is breadth** — 119 left one compiler item that was
+not, and 120 spent it — so the three below are all appetite.
 
 2. **std breadth on the natives** — every piece with a design question in it is
    spent, so what remains is typing.
@@ -35,7 +32,7 @@ it deletes machinery instead of adding a feature.
 first, each pointing at the commit that holds the full write-up — `git log` is
 the home for a milestone's story, not this file. `Known warts` is the checklist
 to pick from when nothing under `Next` appeals; entries there name the milestone
-that recorded them. Milestones through 99 live in `history/`.
+that recorded them. Milestones through 119 live in `history/`.
 
 ## Done
 
@@ -44,6 +41,26 @@ Milestones **through 54** are in `history/done-through-m54.md`, **55-75** in
 **100-119** in `history/done-m100-m119.md`, split out to keep this file small.
 Everything from 120 on is below.
 
+- **120. The name codegen no longer resolves** (`3543157`) — codegen matches a
+  reference against the `VarEntry` the checker resolved it to, not against its
+  name, which is the identity `src/cfg.c` already reads. `CgDeferSkip` and
+  `Cg.locals_base` are deleted with the walk they corrected: a shadowed name is
+  a different binding, and a spliced body's bindings are its own. The plumbing
+  was `ParamDef.entry`, the one binding form that had none, and `self` became
+  the ordinary parameter binding the checker always made it.
+  Design: `runtime.md` "Codegen shapes" (the second bullet) and "What a spliced
+  body may see", `architecture.md` "Scopes and name resolution".
+  **THE FINDING: the reverse scan is load-bearing, and shadowing is not why.**
+  Sabotage turned it around and three tests broke, where "one binding is one
+  entry" says it cannot matter — but a body spliced into *itself* puts one
+  binding on the stack twice, since `cg->inlining` blocks the second round of
+  self-recursion and not the first. The innermost is the callee's own, so
+  `cg->locals` is a scope stack after all. Chasing it found a crash older than
+  the milestone: `compile_closure` zeroed the splice chain, so `|| f(..)` inside
+  `f` reset both the depth cap and the recursion check and expanded until the C
+  stack ran out; the child compiler now inherits both. Sabotage 9/10, the
+  survivor unreachable rather than untested (a closure's `ParamDef` mirror — a
+  splice needs a call by name). Remainder: none.
 
 ## Next (in recommended order)
 
@@ -685,17 +702,6 @@ The corner where the honest answer is a data table nobody has shipped.
   an arm that could leave a tag uncovered (a guard, a binding arm) declines
   threading, and exhaustiveness covers the rest. It is a net with no test behind
   it, like `compile_coerce_dyn`'s abstract-target guard
-- **codegen resolves a local by name, where the checker resolved it by entry**
-  (milestone 119). Every `EXPR_PATH` already carries the `VarEntry *` it landed
-  on and `cfg.c` reads it; `cg_find_local` asks a second question about the same
-  name, and `defer` is the first construct where the two answers can differ —
-  an exit sits below declarations the `defer` sits above, so `CgDeferSkip` hides
-  that span of `Cg.locals` while a body emits. There are only two real call
-  sites (the assignment target, `EXPR_PATH`), both already holding the node.
-  Switching to entry identity deletes `CgDeferSkip` *and* `Cg.locals_base` — a
-  callee's entry cannot equal a caller's, so a splice's name barrier becomes
-  implied rather than enforced. The weight is plumbing an entry into every
-  `cg_add_local`, parameters especially
 - **a body holding a `defer` is refused a splice** (milestone 119).
   `Cg.defers_base` already makes one come out right — a spliced `return` runs
   the callee's scopes and stops at the caller's — and the sabotage that turned
