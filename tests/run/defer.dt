@@ -1,0 +1,92 @@
+# `defer` is block-grained and evaluated at the exit, not at the declaration:
+# the deferred expression is compiled again at every way out of the block it
+# sits in, so it reads the locals as they are then.
+#> body
+#> b
+#> a
+#> x now = 1
+#> x at exit = 99
+#> shadow is 2
+#> sees 1
+#> main body
+#> outer body
+#> inner-most
+#> built
+#> p.x=1 p.y=2
+#> whole 3
+#> local 12
+use std::io::print;
+
+struct Pt { x: int, y: int }
+
+fun sum(q: Pt) -> int { q.x + q.y }
+
+# innermost-out, and within a block in reverse declaration order
+fun order() {
+    defer print("a");
+    defer print("b");
+    print("body");
+}
+
+# The value read is the one at the exit, not the one the `defer` was written
+# beside. Nothing but the deferred body reads `99`, and it reads it at the
+# block's end — so the silence here is also the liveness lint being told where
+# a deferred read happens.
+fun late_read() {
+    var x = 1;
+    defer print("x at exit = {x}");
+    print("x now = {x}");
+    x = 99;
+}
+
+# a later binding of the same name is invisible to a defer written above it:
+# the exit sits below a declaration the `defer` sits above
+fun shadowed() {
+    var x = 1;
+    defer print("sees {x}");
+    var x = 2;
+    print("shadow is {x}");
+}
+
+# `defer { .. }` is the block form, and a deferred body may defer in turn
+fun nested() {
+    defer {
+        defer print("inner-most");
+        print("outer body");
+    }
+    print("main body");
+}
+
+# a binding a `defer` reads through a field stays exploded; one it names whole
+# would not
+fun exploded() {
+    var p = Pt { x: 1, y: 2 };
+    defer print("p.x={p.x} p.y={p.y}");
+    print("built");
+}
+
+# the mirror of it: a binding whose only mention as a *whole* value is inside a
+# deferred body still escapes, so the object is built
+fun escapes_only_in_defer() {
+    var p = Pt { x: 1, y: 2 };
+    defer print("whole {sum(p)}");
+}
+
+# a name the body declares itself is above the hidden span, so it resolves
+fun declares_its_own() {
+    var n = 2;
+    defer {
+        var scaled = n * 6;
+        print("local {scaled}");
+    }
+}
+
+fun main() {
+    order();
+    late_read();
+    shadowed();
+    nested();
+    exploded();
+    escapes_only_in_defer();
+    declares_its_own();
+}

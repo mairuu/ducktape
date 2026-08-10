@@ -1274,6 +1274,7 @@ typedef enum {
   STMT_RETURN,   // return expr? ;
   STMT_BREAK,    // break expr? ;
   STMT_CONTINUE, // continue ;
+  STMT_DEFER,    // defer expr ;  |  defer { .. }
   STMT_POISON,   // sentinel
 } StmtKind;
 
@@ -1313,6 +1314,14 @@ typedef struct {
   LoopLabel label;
 } StmtContinue;
 
+// `defer expr;`. The expression runs on the way out of the *block* the
+// statement sits in — every exit, in reverse declaration order — and it runs
+// there rather than here: it is compiled at each exit point and so reads the
+// locals as they are then, not as they were when the `defer` was reached.
+typedef struct {
+  Expr *expr;
+} StmtDefer;
+
 struct Stmt {
   StmtKind kind;
   Span span;
@@ -1323,6 +1332,7 @@ struct Stmt {
     StmtReturn return_stmt;
     StmtBreak break_stmt;
     StmtContinue continue_stmt;
+    StmtDefer defer_stmt;
   } as;
 };
 

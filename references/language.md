@@ -107,12 +107,43 @@ break;  continue;             # inside loops only
 break x;                      # ... and the value form only inside a `loop`
 'outer: for x in xs { .. }    # a loop may be named
 break 'outer;  continue 'outer;   # ... and then left from any depth inside it
+defer release(h);             # runs on the way out of the enclosing block
+defer { a(); b(); }           # ... the block form, for more than one thing
 ```
 
 Blocks are expressions: the trailing expression without `;` is the block's
 value; otherwise the block is `()`. A trailing block-form `if`/`match`/`loop`
 counts as the tail (`fun abs(n: int) -> int { if n < 0 { -n } else { n } }`).
 A block ending in `return` has type `!` (never), which unifies with anything.
+
+### `defer`
+
+`defer` is **block-grained** and **evaluated at the exit**. The expression runs
+on every way out of the block it sits in — falling off the end, `return`, `?`,
+`break`, `continue` — innermost block first and within a block in reverse
+declaration order. A `defer` control never reached never runs, and a `defer` in
+a loop body runs once per turn, including the turn a `continue` cuts short.
+
+It is not evaluated where it is written. The expression is compiled again at
+each exit and reads the locals as they are *then*:
+
+```
+var n = 1;
+defer print("{n}");           # prints 2
+n = 2;
+```
+
+A binding declared *after* a `defer` is invisible to it, even under the same
+name — the `defer` was written above that declaration, so the name means the
+one in scope there. The value is discarded, as an expression statement's is.
+
+**Nothing may leave a deferred body**: no `return`, `?`, `break` or `continue`
+naming anything outside it, since the block it belongs to is already on its way
+out. A loop written inside the body is its own and may be broken normally.
+
+**A panic does not run defers.** A panic aborts rather than unwinds, so `defer`
+is ergonomics rather than a guarantee: it is not the mechanism to lean on for
+releasing a resource no matter what happens.
 
 A binding nothing ever names **warns** — a `var`, a pattern binding, a
 parameter, a closure parameter, a `for` variable, all of them:

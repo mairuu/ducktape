@@ -1809,6 +1809,10 @@ void dump_stmt(const Stmt *s, int indent) {
   case STMT_CONTINUE:
     dump_label(s->as.continue_stmt.label, "ContinueStmt");
     break;
+  case STMT_DEFER:
+    fprintf(stdout, "DeferStmt\n");
+    dump_expr(s->as.defer_stmt.expr, indent + 1);
+    break;
   case STMT_POISON:
     fprintf(stdout, "<POISON STMT>\n");
     break;

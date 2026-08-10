@@ -1,0 +1,12 @@
+#! expect: 'return' cannot leave a 'defer'
+# `return` and `?` are the same refusal: the exit the deferred body would take
+# is the one already being taken.
+enum Res { Ok(int), Err(string) }
+
+fun fallible() -> Res { Res::Ok(1) }
+
+fun main() -> Res {
+    defer { return Res::Ok(0); }
+    defer { var _v = fallible()?; }
+    Res::Ok(2)
+}

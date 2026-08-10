@@ -1,0 +1,14 @@
+#! expect: 'break' cannot leave a 'defer'
+# A deferred body runs while the block around it is already exiting, so nothing
+# outside it is a target: the enclosing loop is not found and an enclosing label
+# is not in scope.
+fun main() {
+    'outer: loop {
+        loop {
+            defer { break 'outer; }
+            defer { continue; }
+            break;
+        }
+        break 'outer;
+    }
+}

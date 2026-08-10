@@ -27,6 +27,7 @@ static const char *token_type_string[] = {
     [TOKEN_AS] = "AS",
     [TOKEN_BREAK] = "BREAK",
     [TOKEN_CONTINUE] = "CONTINUE",
+    [TOKEN_DEFER] = "DEFER",
     [TOKEN_DYN] = "DYN",
     [TOKEN_ELSE] = "ELSE",
     [TOKEN_ENUM] = "ENUM",
@@ -464,13 +465,10 @@ static const Keyword kw4[] = { //
     {"type", TOKEN_TYPE}, {"true", TOKEN_TRUE}, {NULL, 0}};
 
 static const Keyword kw5[] = { //
-    {"break", TOKEN_BREAK},
-    {"match", TOKEN_MATCH},
-    {"trait", TOKEN_TRAIT},
-    {"false", TOKEN_FALSE},
-    {"where", TOKEN_WHERE},
-    {"while", TOKEN_WHILE},
-    {NULL, 0}};
+    {"break", TOKEN_BREAK}, {"defer", TOKEN_DEFER},
+    {"match", TOKEN_MATCH}, {"trait", TOKEN_TRAIT},
+    {"false", TOKEN_FALSE}, {"where", TOKEN_WHERE},
+    {"while", TOKEN_WHILE}, {NULL, 0}};
 
 static const Keyword kw6[] = { //
     {"return", TOKEN_RETURN},

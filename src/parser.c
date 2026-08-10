@@ -217,6 +217,7 @@ static void sync_to_stmt(Parser *p) {
     case TOKEN_RETURN:
     case TOKEN_BREAK:
     case TOKEN_CONTINUE:
+    case TOKEN_DEFER:
     case TOKEN_IF:
     case TOKEN_FOR:
     case TOKEN_MATCH:
@@ -1043,9 +1044,10 @@ static Stmt *parse_stmt(Parser *p);
 static bool is_pure_stmt(Parser *p) {
   return check_tok(p, TOKEN_VAR) || check_tok(p, TOKEN_RETURN) ||
          check_tok(p, TOKEN_BREAK) || check_tok(p, TOKEN_CONTINUE) ||
-         check_tok(p, TOKEN_IF) || check_tok(p, TOKEN_FOR) ||
-         check_tok(p, TOKEN_MATCH) || check_tok(p, TOKEN_WHILE) ||
-         check_tok(p, TOKEN_LOOP) || check_tok(p, TOKEN_LABEL);
+         check_tok(p, TOKEN_DEFER) || check_tok(p, TOKEN_IF) ||
+         check_tok(p, TOKEN_FOR) || check_tok(p, TOKEN_MATCH) ||
+         check_tok(p, TOKEN_WHILE) || check_tok(p, TOKEN_LOOP) ||
+         check_tok(p, TOKEN_LABEL);
 }
 
 // One token, and the caller decides what may legally follow it: a `:` and a
@@ -2500,6 +2502,31 @@ Stmt *parse_stmt(Parser *p) {
       return ast_stmt(STMT_POISON, span_merge(start_span, current_tok_span(p)),
                       p->al);
     }
+    return stmt;
+  }
+
+  if (match_tok(p, TOKEN_DEFER)) {
+    Span defer_span = token_span(previous_tok(p));
+    // `defer { .. }` is the one place a bare block is a statement head, and it
+    // is not an ambiguity: a `{` here can only open the deferred body, so it
+    // needs no `;` after it the way `defer close(f);` does.
+    Expr *body;
+    if (check_tok(p, TOKEN_LBRACE)) {
+      body = parse_block(p);
+    } else {
+      body = parse_expr(p);
+      if (body->kind != EXPR_POISON &&
+          !consume_tok(p, TOKEN_SEMICOLON, "expected ';' after 'defer'")) {
+        return ast_stmt(STMT_POISON,
+                        span_merge(start_span, current_tok_span(p)), p->al);
+      }
+    }
+    if (body->kind == EXPR_POISON) {
+      return ast_stmt(STMT_POISON, span_merge(start_span, body->span), p->al);
+    }
+    Stmt *stmt =
+        ast_stmt(STMT_DEFER, span_merge(defer_span, body->span), p->al);
+    stmt->as.defer_stmt.expr = body;
     return stmt;
   }
 

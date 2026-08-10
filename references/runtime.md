@@ -606,6 +606,47 @@ sees it, since a ducktape string carries its own length and `fopen` does not.
   `"... is not supported by the VM yet"` and fails codegen — it never
   crashes at runtime.
 
+### `defer`
+
+Nothing is emitted at a `defer`. The expression joins the enclosing block's
+`CgDeferScope` — a stack frame beside `CgLoop`, pushed by `compile_block` and
+chained through `Cg.defers` — and every exit written *below* it compiles it
+again. So the deferred body is duplicated per exit, and reads the locals as they
+are at that exit rather than as they were at the declaration.
+
+"Has this defer been reached" therefore needs no runtime flag. Control inside a
+block only runs forward, so a defer is pending at an exit exactly when the exit
+is written below it, and that is a fact the compiler already has as it walks.
+
+Each exit runs everything from `Cg.defers` out to the floor it is leaving for,
+innermost scope first and within a scope in reverse declaration order, with the
+value it carries computed first — the value may read the locals the bodies are
+about to be given, and it is the bodies that must not disturb it:
+
+| exit | floor |
+| --- | --- |
+| falling off a block's end | the block's own scope only |
+| `break` / `continue` | `CgLoop.defer_base`, recorded when the frame opened |
+| `return` and `?` | `Cg.defers_base` — NULL, or the caller's chain in a splice |
+
+`cg_emit_return` is the one door for the last row, so `return` and `?` are one
+site. A spliced body's `return` leaves the *callee*, which is why the splice
+sets `defers_base` to the caller's chain: the block the call sits in is not
+being left. A body containing a `defer` is not spliceable at all (`scan_stmt`
+clears `ok`) — its exits attach to a block the callee does not have.
+
+Two smaller consequences. Codegen resolves a local by *name*, and an exit sits
+below declarations the `defer` sits above, so `CgDeferSkip` hides that span of
+`Cg.locals` while a body is emitting — otherwise a later binding of the same
+name would answer for the one the author wrote. And emitting code between a
+construction and the `return` that carries it costs the m116 thread, which reads
+the construction off the last instruction emitted: a `defer` in an iterator's
+`next` makes it decline. That is speed, not correctness.
+
+`src/cfg.c` mirrors the whole chain (`CfgDefer`), because the liveness lint has
+to see those reads where they happen or a store nothing but a `defer` reads
+looks dead.
+
 ### Compound assignment
 
 `a op= b` is `a = a op b`, so codegen's job is the *place*: it is compiled once

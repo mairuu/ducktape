@@ -1,0 +1,187 @@
+# Every way out of a block runs its defers: falling off the end, `return`, `?`,
+# `break` and `continue` — and a `break` that leaves several blocks at once runs
+# all of them, innermost first.
+#> early defer
+#> 6
+#> fell through
+#> early defer
+#> 0
+#> i=1
+#> iter end
+#> iter end
+#> i=3
+#> iter end
+#> tick 1
+#> tick 2
+#> tick 3
+#> in loop
+#> after loop
+#> around
+#> in turn
+#> in turn
+#> after while
+#> around again
+#> inner defer
+#> inner defer
+#> outer defer
+#> 2
+#> got 20
+#> outer leaving
+#> ok 21
+#> outer leaving
+#> err neg
+#> mid
+#> caller leaving
+#> 2
+#> next tick
+#> 2
+#> next tick
+#> 1
+#> next tick
+#> 0
+#> next tick
+#> mark=49
+#> 1
+use std::io::print;
+
+enum Res { Ok(int), Err(string) }
+
+struct Count { n: int }
+
+fun early(n: int) -> int {
+    defer print("early defer");
+    if n > 0 {
+        return n * 2;
+    }
+    print("fell through");
+    0
+}
+
+fun continues() {
+    var i = 0;
+    while i < 3 {
+        defer print("iter end");
+        i = i + 1;
+        if i == 2 {
+            continue;
+        }
+        print("i={i}");
+    }
+}
+
+fun for_break() {
+    for x in [1, 2, 3, 4] {
+        defer print("tick {x}");
+        if x == 3 { break; }
+    }
+}
+
+# A `break` runs the scopes it is *leaving* and stops there. The block around
+# the loop is not one of them — its defer belongs to the function's exit, and
+# running it here would run it twice, once early.
+fun break_stops_at_the_loop() {
+    defer print("around");
+    loop {
+        defer print("in loop");
+        break;
+    }
+    print("after loop");
+}
+
+# the same floor for a `continue`, which is reached far more often
+fun continue_stops_at_the_loop() {
+    defer print("around again");
+    var i = 0;
+    while i < 2 {
+        defer print("in turn");
+        i += 1;
+        continue;
+    }
+    print("after while");
+}
+
+# `break 'outer` leaves two blocks, so it runs two scopes' worth
+fun labelled_break() -> int {
+    'outer: loop {
+        defer print("outer defer");
+        var i = 0;
+        loop {
+            defer print("inner defer");
+            i = i + 1;
+            if i == 2 {
+                break 'outer i;
+            }
+        }
+    }
+}
+
+fun fallible(n: int) -> Res {
+    if n < 0 { Res::Err("neg") } else { Res::Ok(n * 10) }
+}
+
+# `?` is a `return` spelled shorter, and leaves through the same defers
+fun propagates(n: int) -> Res {
+    defer print("outer leaving");
+    var v = fallible(n)?;
+    print("got {v}");
+    Res::Ok(v + 1)
+}
+
+fun tiny(a: int) -> int { return a + 1; }
+
+# a spliced body's `return` leaves the callee, not the block the call sits in:
+# "mid" has to come first
+fun splice_host() -> int {
+    defer print("caller leaving");
+    var v = tiny(1);
+    print("mid");
+    v
+}
+
+# m116 threads a `while var` into the construction that feeds it by reading the
+# construction off the last instruction emitted. A defer emits code between the
+# two, so the thread declines — which must cost speed and not correctness.
+impl Count {
+    fun next(self) -> Option<int> {
+        defer print("next tick");
+        if self.n <= 0 {
+            return Option::None;
+        }
+        self.n = self.n - 1;
+        Option::Some(self.n)
+    }
+}
+
+# the liveness lint has to place a deferred read at the exit: `return` is the
+# only way out of this block, and the defer is the only thing that reads
+# `mark`. A graph that missed the read would report the binding — and the
+# empty-stderr rule on `tests/run` is what makes the silence a test
+fun store_read_only_by_defer(n: int) -> int {
+    var mark = n * 7;
+    defer print("mark={mark}");
+    return 1;
+}
+
+fun main() {
+    print(early(3));
+    print(early(0));
+    continues();
+    for_break();
+    break_stops_at_the_loop();
+    continue_stops_at_the_loop();
+    print(labelled_break());
+    match propagates(2) {
+        Res::Ok(v) => print("ok {v}"),
+        Res::Err(e) => print("err {e}"),
+    }
+    match propagates(-1) {
+        Res::Ok(v) => print("ok {v}"),
+        Res::Err(e) => print("err {e}"),
+    }
+    print(splice_host());
+    var c = Count { n: 3 };
+    while var Option::Some(v) = c.next() {
+        print(v);
+    }
+    print(store_read_only_by_defer(7));
+}

@@ -206,6 +206,12 @@ stmt           = varDecl
                     block *)
                | "continue" LABEL? ";"
                  (* the LABEL may not name a block: it runs once *)
+               | "defer" ( block | expr ";" )
+                 (* runs on the way out of the enclosing block, at every exit,
+                    in reverse declaration order. the block form is the one
+                    place a bare `{` is a statement head, so it takes no ";".
+                    nothing may leave the body: no return, `?`, break or
+                    continue naming anything outside it *)
                | expr ";"
                | labelled | ifExpr | matchExpr | whileExpr | loopExpr | forExpr ;
                  (* block-form expressions need no ";" as statements *)

@@ -57,7 +57,7 @@ Notables:
   strands the `>=`). Unlike `>>>` against `>>` there is no longest-match rule to
   get right, because the `=`-carrying token pins the run's length.
 - `parse_block` — statements vs. tail expression. `is_pure_stmt` routes
-  `var/return/break/continue/if/for/match/while/loop` and a leading label
+  `var/return/break/continue/defer/if/for/match/while/loop` and a leading label
   through `parse_stmt`, but a parsed `if`/`match`/`loop` statement immediately
   before `}` is unwrapped into the block's tail (that's what makes
   `{ if c { 1 } else { 2 } }` an `int` block). `while` and `for` are not on
@@ -65,7 +65,10 @@ Notables:
   label lands on the node rather than around it, so a labelled `loop` is
   promoted like any other. `break 'l? expr?` needs no lookahead — a block is
   not an expression primary, so anything but `;` after it starts a value, and
-  the scanner has already told a label from a character literal.
+  the scanner has already told a label from a character literal. `defer` is the
+  one statement whose body may be a bare block, and it needs no lookahead
+  either: a `{` there can only open that body, so the block form takes no `;`
+  and everything else parses as an expression that does.
 - A label is consumed in `parse_primary` ahead of the three loop forms and the
   block form, and whichever follows takes it; nothing else may follow one, which
   is what keeps a label from being an expression. A labelled block is an
@@ -2318,6 +2321,16 @@ statement not within a loop" names the label when a block is the only thing in
 scope. And `continue` **refuses a block frame** outright: a block runs once, so
 `continue_*` on the codegen side is never even reached for one.
 
+A **`defer` body** is resolved where it is written — names bind there, not where
+it runs — under a `CHECK_LOOP_DEFER` frame pushed onto the same list. That frame
+is not a target: it carries no label, joins no exit, and both of
+`check_loop_target`'s searches simply stop at it, so an enclosing loop is not
+found and an enclosing label is not in scope. `return` and `?` ask
+`check_in_defer` for the same frame. So "nothing leaves a deferred body" is one
+rule in one place rather than a flag each of the four exits has to remember, and
+a loop written *inside* the body is an ordinary target because its frame is
+pushed above the barrier.
+
 When the pattern cannot be checked — a poisoned initializer, or a mismatch
 that stopped the walk partway — `bind_pattern_poison` defines the remaining
 names as poison. `vscope_lookup` returns the *first* entry it finds, so the
@@ -2547,6 +2560,12 @@ the walk arrives somewhere reachable again. The branching set is `if`, `while`,
 `loop`, `for`, `match`, `and`/`or`, a labelled block, `break`/`continue`,
 `return`, and `?` — which leaves by the same door a `return` does, so it is a
 two-armed branch whose other arm carries the `Ok` on.
+
+A `defer` is not an event where it is written: it joins a `CfgDefer` scope, and
+each exit below it walks the deferred bodies before cutting its edge, mirroring
+`codegen.c`'s chain exit for exit. The graph has to place those reads where they
+run or a store nothing but a `defer` reads looks dead — and, going the other
+way, the store a `defer`'s own read is placed *after* stays correctly dead.
 
 **Every assignment into a bare name is a store here**, where the checker's
 `write_target` counts only a plain `=`. The two rules differ because the

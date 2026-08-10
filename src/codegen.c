@@ -89,9 +89,40 @@ typedef struct CgLoop {
   // the stack and the landing pad needs nothing further. Every other loop
   // shares that pad with the exit it falls out of, which carries no value.
   bool break_takes_value;
+  // the defer chain as it stood when this frame opened. An exit through it runs
+  // every scope above this one, which is exactly the blocks it is leaving.
+  struct CgDeferScope *defer_base;
 
   struct CgLoop *parent;
 } CgLoop;
+
+// ── defer ────────────────────────────────────────────────────────────────────
+//
+// Nothing is emitted at a `defer`. The expression is compiled again at every
+// exit the block has, so it reads the locals as they are *then* rather than as
+// they were where it was written — and "has this defer been reached" needs no
+// runtime flag, because control inside a block only runs forward: a defer is
+// pending at an exit exactly when the exit is written below it.
+#define CG_MAX_DEFERS 16
+
+typedef struct CgDeferScope {
+  struct CgDeferScope *parent;
+  Expr *exprs[CG_MAX_DEFERS];
+  int local_counts[CG_MAX_DEFERS]; // where `Cg.locals` stood at each `defer`
+  int count;
+} CgDeferScope;
+
+// While a deferred body is being emitted: the span of `Cg.locals` it was
+// written *above*, and so must not resolve. Codegen finds a local by name, and
+// an exit sits below declarations the `defer` sits above, so without this a
+// later binding of the same name would answer for the one the author meant.
+// Names the body declares itself land above `hi` — where the list stood when
+// this emission began — and stay visible. Chained, since a deferred body may
+// itself defer.
+typedef struct CgDeferSkip {
+  struct CgDeferSkip *parent;
+  int lo, hi;
+} CgDeferSkip;
 
 // ── threading a match into the constructions that feed it ────────────────────
 //
@@ -163,6 +194,16 @@ typedef struct Cg {
 
   CgLoop *loop;
   bool ok;
+
+  // ── defer ─────────────────────────────────────────────────────────────────
+  //
+  // `defers` is the enclosing blocks' pending deferred bodies. `defers_base` is
+  // where a `return` stops — NULL in a function of its own, the caller's chain
+  // inside a splice, since a spliced `return` leaves the callee and not the
+  // block the call sits in. `defer_skip` is set only while a body is emitting.
+  CgDeferScope *defers;
+  CgDeferScope *defers_base;
+  CgDeferSkip *defer_skip;
 
   int self_slot; // -1 outside a method; the frame slot holding `self`
   // >0 when this body was spliced onto an *exploded* receiver: `self` is not a
@@ -819,6 +860,17 @@ static int cg_add_pushed_local(Cg *cg, StringView name, Span span) {
   return cg_add_local(cg, name, span);
 }
 
+// is `i` inside a range the deferred body now being emitted must not see? NULL
+// — nothing being deferred — is every caller but one.
+static bool cg_defer_hides(const Cg *cg, int i) {
+  for (const CgDeferSkip *s = cg->defer_skip; s != NULL; s = s->parent) {
+    if (i >= s->lo && i < s->hi) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // the *index* in `cg->locals`, since callers need both halves: the slot to
 // emit, and the entry to mark captured. The search stops at `locals_base`,
 // which is 0 outside an inlined body and the first parameter's entry inside
@@ -826,7 +878,8 @@ static int cg_add_pushed_local(Cg *cg, StringView name, Span span) {
 // itself is a global, never whatever the host frame happens to call the same.
 static int cg_find_local(Cg *cg, StringView name) {
   for (int i = cg->local_count - 1; i >= cg->locals_base; i--) {
-    if (cg->locals[i].name.len > 0 && sv_equal(cg->locals[i].name, name)) {
+    if (cg->locals[i].name.len > 0 && sv_equal(cg->locals[i].name, name) &&
+        !cg_defer_hides(cg, i)) {
       return i;
     }
   }
@@ -1063,6 +1116,16 @@ static void scan_stmt(BodyScan *s, Stmt *st) {
     break;
   case STMT_CONTINUE:
     break;
+  case STMT_DEFER:
+    // A body holding a `defer` is refused a splice. `Cg.defers_base` already
+    // makes one come out right — a spliced `return` runs the callee's scopes
+    // and stops at the caller's — so this is a choice and not a requirement:
+    // relaxing it is an optimisation, and belongs with the bench row that
+    // justifies it. The escape client still walks the expression, which is not
+    // optional — a binding a `defer` mentions is mentioned.
+    s->ok = false;
+    scan_expr(s, st->as.defer_stmt.expr);
+    break;
   default:
     s->ok = false;
     s->escapes = true;
@@ -1294,12 +1357,17 @@ static const Instance *cg_inline_choice(Cg *cg, FunDef *target) {
   return inst;
 }
 
+static void cg_emit_defers(Cg *cg, CgDeferScope *until);
+
 // Leave the function with its value on top of the stack. Inside a spliced body
 // there is no frame to drop: the value slides down over the parameters the
 // arguments became and jumps to the landing pad. That is milestone 98's
 // labelled block to the letter — same frame, same jump list, same slide — so an
 // inlined `return` needs no machinery of its own, only the target.
 static void cg_emit_return(Cg *cg) {
+  // The value is on the stack already, so this is the exit's own order: what
+  // leaves is computed, then everything the frame is leaving gets to run.
+  cg_emit_defers(cg, cg->defers_base);
   CgLoop *pad = cg->inline_pad;
   if (pad == NULL) {
     emit(cg, OP_RETURN);
@@ -1339,6 +1407,36 @@ static void compile_destructure(Cg *cg, Pattern *pat, int subject_slot,
 static bool cg_reach_struct(Cg *cg, StructDef *def);
 static void cg_thread_merge(Cg *cg, CgThread *th, int subject_slot);
 static bool cg_thread_enter(Cg *cg, CgThread *th, int cont, int depth);
+
+// Every deferred body from the current scope out to (not including) `until`,
+// innermost scope first and within a scope in reverse declaration order. The
+// exit's own value is already on the stack beneath them; each body's is popped,
+// so the net effect on the stack is nothing.
+static void cg_emit_defers(Cg *cg, CgDeferScope *until) {
+  CgDeferScope *outer = cg->defers;
+  CgDeferScope *outer_base = cg->defers_base;
+  // Nothing is pending *inside* a deferred body, and nothing exits one — the
+  // checker refuses that — so the chain stops for the duration. Without it a
+  // `return` written in one anyway would emit the list it is a member of.
+  cg->defers = NULL;
+  cg->defers_base = NULL;
+  for (CgDeferScope *s = outer; s != NULL && s != until; s = s->parent) {
+    for (int i = s->count - 1; i >= 0; i--) {
+      CgDeferSkip skip = {.parent = cg->defer_skip,
+                          .lo = s->local_counts[i],
+                          .hi = cg->local_count};
+      cg->defer_skip = &skip;
+      int base = cg->depth, base_locals = cg->local_count;
+      compile_expr(cg, s->exprs[i]);
+      emit(cg, OP_POP);
+      cg->local_count = base_locals;
+      cg->depth = base;
+      cg->defer_skip = skip.parent;
+    }
+  }
+  cg->defers = outer;
+  cg->defers_base = outer_base;
+}
 
 // The call about to be spliced is the subject of a threaded match, so the
 // splice it opens owns that match's exits. Armed here rather than inside the
@@ -1658,6 +1756,7 @@ static void compile_stmt_inner(Cg *cg, Stmt *stmt) {
         cg_pushed(cg, 1);
       }
     }
+    cg_emit_defers(cg, loop->defer_base);
     // everything the loop has stacked since it began, minus the value being
     // carried out past it
     int n = cg->depth - loop->break_depth - (loop->break_takes_value ? 1 : 0);
@@ -1678,6 +1777,7 @@ static void compile_stmt_inner(Cg *cg, Stmt *stmt) {
   case STMT_CONTINUE: {
     CgLoop *loop = cg_loop_target(cg, stmt->as.continue_stmt.label);
     assert(loop && "continue outside loop got past the checker");
+    cg_emit_defers(cg, loop->defer_base);
     int n = cg->depth - loop->continue_depth;
     if (n > 0) {
       cg_close_scope(cg, loop->continue_base); // detach captures before popping
@@ -1695,6 +1795,21 @@ static void compile_stmt_inner(Cg *cg, Stmt *stmt) {
       loop->continue_jumps[loop->continue_count++] = emit_jump(cg, OP_JUMP);
     }
     cg->last_exit = cg->chunk->count;
+    break;
+  }
+
+  case STMT_DEFER: {
+    // Nothing is emitted here. The body joins the block's list, and every exit
+    // written below this point compiles it.
+    CgDeferScope *scope = cg->defers;
+    assert(scope && "a defer outside a block got past the parser");
+    if (scope->count >= CG_MAX_DEFERS) {
+      diag_error(cg->diags, stmt->span, "too many defers in one block");
+      cg->ok = false;
+      break;
+    }
+    scope->local_counts[scope->count] = cg->local_count;
+    scope->exprs[scope->count++] = stmt->as.defer_stmt.expr;
     break;
   }
 
@@ -1718,12 +1833,17 @@ static void compile_block(Cg *cg, Expr *expr) {
       .break_base = saved_locals,
       .break_depth = cg->depth,
       .break_takes_value = true,
+      .defer_base = cg->defers,
       .parent = cg->loop,
   };
   bool labelled = block->label.name.len > 0;
   if (labelled) {
     cg->loop = &frame;
   }
+
+  // opened after the frame, so a `break` out of this block runs its defers too
+  CgDeferScope defers = {.parent = cg->defers};
+  cg->defers = &defers;
 
   for (int i = 0; i < block->stmt_count; i++) {
     compile_stmt(cg, block->stmts[i]);
@@ -1739,10 +1859,13 @@ static void compile_block(Cg *cg, Expr *expr) {
       compile_expr(cg, block->tail_expr);
     } else {
       emit(cg, OP_UNIT);
+      cg_pushed(cg, 1); // the defers below need the depth to be honest
     }
+    cg_emit_defers(cg, defers.parent); // falling off the end is an exit too
     cg_close_scope(cg, saved_locals);
     emit_slide(cg, cg->local_count - saved_locals);
   }
+  cg->defers = defers.parent;
   cg->local_count = saved_locals;
 
   if (labelled) {
@@ -2118,6 +2241,7 @@ static void compile_while(Cg *cg, Expr *expr) {
       .break_base = cg->local_count,
       .continue_depth = cg->depth,
       .break_depth = cg->depth,
+      .defer_base = cg->defers,
       .parent = cg->loop,
   };
   cg->loop = &loop;
@@ -2158,6 +2282,7 @@ static void compile_loop(Cg *cg, Expr *expr) {
       .continue_depth = cg->depth,
       .break_depth = cg->depth,
       .break_takes_value = true,
+      .defer_base = cg->defers,
       .parent = cg->loop,
   };
   cg->loop = &loop;
@@ -2199,6 +2324,7 @@ static void compile_for_range(Cg *cg, Expr *expr) {
       .break_base = saved_locals,
       .continue_depth = cg->depth,
       .break_depth = entry_depth,
+      .defer_base = cg->defers,
       .parent = cg->loop,
   };
   cg->loop = &loop;
@@ -2262,6 +2388,7 @@ static void compile_for_array(Cg *cg, Expr *expr) {
       .break_base = saved_locals,
       .continue_depth = cg->depth,
       .break_depth = entry_depth,
+      .defer_base = cg->defers,
       .parent = cg->loop,
   };
   cg->loop = &loop;
@@ -2377,6 +2504,7 @@ static void compile_for_iter(Cg *cg, Expr *expr) {
       .break_base = saved_locals,
       .continue_depth = cg->depth,
       .break_depth = entry_depth,
+      .defer_base = cg->defers,
       .parent = cg->loop,
   };
   cg->loop = &loop;
@@ -2568,6 +2696,7 @@ static void cg_inline_body(Cg *cg, const Instance *inst, int base_depth,
   int saved_base = cg->locals_base;
   int saved_splice = cg->splice_id;
   Expr *saved_root = cg->body_root;
+  CgDeferScope *saved_defers_base = cg->defers_base;
 
   cg->splice_id = ++cg->splice_seq;
   // the site that compiled the call armed this if its value is the subject of
@@ -2584,6 +2713,9 @@ static void cg_inline_body(Cg *cg, const Instance *inst, int base_depth,
   cg->self_field_slots = self_group != NULL ? self_group->arity : 0;
   cg->loop = NULL;
   cg->inline_pad = &pad;
+  // a `return` in here leaves the callee, not the block the call sits in, so
+  // the caller's pending defers are below the floor rather than above it
+  cg->defers_base = cg->defers;
   cg->locals_base = saved_locals;
   cg->body_root = origin->body;
   cg->inlining[cg->inline_depth++] = origin;
@@ -2620,6 +2752,7 @@ static void cg_inline_body(Cg *cg, const Instance *inst, int base_depth,
   cg->self_field_slots = saved_self_fields;
   cg->loop = saved_loop;
   cg->inline_pad = saved_pad;
+  cg->defers_base = saved_defers_base;
   cg->locals_base = saved_base;
   cg->body_root = saved_root;
   cg->local_count = saved_locals;
@@ -3976,6 +4109,7 @@ static void compile_while_binding(Cg *cg, Expr *expr) {
       .break_base = saved_outer,
       .continue_depth = cg->depth,
       .break_depth = cg->depth,
+      .defer_base = cg->defers,
       .parent = cg->loop,
   };
   cg->loop = &loop;

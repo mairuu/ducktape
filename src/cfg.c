@@ -48,6 +48,20 @@ typedef struct {
   bool reachable;
 } CfgBlock;
 
+// The deferred expressions a block has passed, in declaration order. They run
+// on the way out — at every exit, innermost scope first and within a scope in
+// reverse — so this chain mirrors codegen's: the graph has to see those reads
+// where they happen, or a store nothing but a `defer` reads looks dead. The cap
+// is codegen's, which refuses the program outright past it, so silently
+// dropping the overflow here never reaches a diagnostic.
+#define CFG_MAX_DEFERS 16
+
+typedef struct CfgDefer {
+  struct CfgDefer *parent;
+  Expr *exprs[CFG_MAX_DEFERS];
+  int count;
+} CfgDefer;
+
 // A `break`/`continue` target. A labelled block is one too — it takes a
 // `break`, so it is an edge out of the middle of a body — but it has nothing to
 // continue to, which is the whole of the difference here.
@@ -57,6 +71,7 @@ typedef struct CfgLoop {
   bool is_loop;
   int break_target;
   int continue_target; // CFG_NONE for a labelled block
+  CfgDefer *defers; // the chain as it was here: a break runs everything above
 } CfgLoop;
 
 typedef struct Cfg {
@@ -79,6 +94,7 @@ typedef struct Cfg {
   int cur;
   int exit;
   CfgLoop *loops;
+  CfgDefer *defers;
 
   // the graph of the enclosing function, when this one is a closure's. A name
   // this body reads that belongs out there is a capture.
@@ -259,6 +275,27 @@ static CfgLoop *cfg_find_loop(Cfg *c, LoopLabel label, bool need_continue) {
   return NULL;
 }
 
+// Every deferred body from the cursor's scope out to (not including) `until`,
+// innermost first and within a scope in reverse declaration order — the order
+// they run in.
+static void cfg_emit_defers(Cfg *c, CfgDefer *until) {
+  CfgDefer *outer = c->defers;
+  // A deferred body has no pending defers of its own and no exit out of itself
+  // — the checker refuses one — so the chain stops while it is being walked. A
+  // `return` written inside one anyway would otherwise re-enter this list and
+  // walk itself forever, before the diagnostic that refuses it is read.
+  c->defers = NULL;
+  // `until` is a floor in *this* chain, so it is reached before the end — but a
+  // refused program can walk from a shorter chain than the exit measured, and
+  // the diagnostic still has to be the thing that stops it.
+  for (CfgDefer *d = outer; d != NULL && d != until; d = d->parent) {
+    for (int i = d->count - 1; i >= 0; i--) {
+      cfg_expr(c, d->exprs[i]);
+    }
+  }
+  c->defers = outer;
+}
+
 static void cfg_block_expr(Cfg *c, Expr *e) {
   ExprBlock *blk = &e->as.block;
   int join = CFG_NONE;
@@ -269,14 +306,19 @@ static void cfg_block_expr(Cfg *c, Expr *e) {
                       .label = blk->label.name,
                       .is_loop = false,
                       .break_target = join,
-                      .continue_target = CFG_NONE};
+                      .continue_target = CFG_NONE,
+                      .defers = c->defers};
     c->loops = &frame;
   }
 
+  CfgDefer scope = {.parent = c->defers};
+  c->defers = &scope;
   for (int i = 0; i < blk->stmt_count; i++) {
     cfg_stmt(c, blk->stmts[i]);
   }
   cfg_expr(c, blk->tail_expr);
+  cfg_emit_defers(c, scope.parent); // falling off the end is an exit too
+  c->defers = scope.parent;
 
   if (join != CFG_NONE) {
     c->loops = frame.parent;
@@ -321,7 +363,8 @@ static void cfg_while_expr(Cfg *c, Expr *e) {
                    .label = w->label.name,
                    .is_loop = true,
                    .break_target = exit_b,
-                   .continue_target = header};
+                   .continue_target = header,
+                   .defers = c->defers};
   c->loops = &frame;
   cfg_expr(c, w->body);
   c->loops = frame.parent;
@@ -339,7 +382,8 @@ static void cfg_loop_expr(Cfg *c, Expr *e) {
                    .label = l->label.name,
                    .is_loop = true,
                    .break_target = exit_b,
-                   .continue_target = header};
+                   .continue_target = header,
+                   .defers = c->defers};
   c->loops = &frame;
   cfg_expr(c, l->body);
   c->loops = frame.parent;
@@ -365,7 +409,8 @@ static void cfg_for_expr(Cfg *c, Expr *e) {
                    .label = f->label.name,
                    .is_loop = true,
                    .break_target = exit_b,
-                   .continue_target = header};
+                   .continue_target = header,
+                   .defers = c->defers};
   c->loops = &frame;
   cfg_expr(c, f->body);
   c->loops = frame.parent;
@@ -517,7 +562,10 @@ static void cfg_expr(Cfg *c, Expr *e) {
     // whose other arm carries on with the `Ok`
     cfg_expr(c, e->as.propagate.operand);
     int test = c->cur;
-    cfg_edge(c, test, c->exit);
+    cfg_open(c, test); // the Err arm: the defers run on the way out
+    cfg_emit_defers(c, NULL);
+    cfg_edge(c, c->cur, c->exit);
+    c->cur = test;
     cfg_open(c, test);
     break;
   }
@@ -606,8 +654,12 @@ static void cfg_stmt(Cfg *c, Stmt *s) {
     break;
   }
 
+  // The value goes first and the defers after it, which is the order they run
+  // in: the expression leaving is evaluated before anything the block is on its
+  // way out of gets to run.
   case STMT_RETURN:
     cfg_expr(c, s->as.return_stmt.value);
+    cfg_emit_defers(c, NULL);
     cfg_edge(c, c->cur, c->exit);
     c->cur = CFG_NONE;
     break;
@@ -615,6 +667,7 @@ static void cfg_stmt(Cfg *c, Stmt *s) {
   case STMT_BREAK: {
     cfg_expr(c, s->as.break_stmt.value);
     CfgLoop *l = cfg_find_loop(c, s->as.break_stmt.label, false);
+    cfg_emit_defers(c, l != NULL ? l->defers : NULL);
     cfg_edge(c, c->cur, l != NULL ? l->break_target : c->exit);
     c->cur = CFG_NONE;
     break;
@@ -622,8 +675,18 @@ static void cfg_stmt(Cfg *c, Stmt *s) {
 
   case STMT_CONTINUE: {
     CfgLoop *l = cfg_find_loop(c, s->as.continue_stmt.label, true);
+    cfg_emit_defers(c, l != NULL ? l->defers : NULL);
     cfg_edge(c, c->cur, l != NULL ? l->continue_target : c->exit);
     c->cur = CFG_NONE;
+    break;
+  }
+
+  case STMT_DEFER: {
+    // Nothing runs here: the body is registered, and the exits below emit it.
+    CfgDefer *d = c->defers;
+    if (d != NULL && d->count < CFG_MAX_DEFERS) {
+      d->exprs[d->count++] = s->as.defer_stmt.expr;
+    }
     break;
   }
 

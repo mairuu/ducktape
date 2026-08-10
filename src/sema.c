@@ -4842,6 +4842,8 @@ static const char *check_loop_name(CheckLoopKind kind) {
     return "for";
   case CHECK_LOOP_BLOCK:
     return "block";
+  case CHECK_LOOP_DEFER:
+    return "defer";
   }
   return "loop";
 }
@@ -4849,6 +4851,26 @@ static const char *check_loop_name(CheckLoopKind kind) {
 // what a frame is, for a message that does not care which loop form it is
 static const char *check_target_name(CheckLoopKind kind) {
   return kind == CHECK_LOOP_BLOCK ? "block" : "loop";
+}
+
+// Is a `defer` body being resolved? A closure resets the frame list, so a
+// `return` written inside one is the closure's own and stops here.
+static bool check_in_defer(CheckCtx *ctx) {
+  for (CheckLoop *loop = ctx->loops; loop != NULL; loop = loop->parent) {
+    if (loop->kind == CHECK_LOOP_DEFER) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// The one refusal every exit out of a deferred body shares — `return`, `?`,
+// `break` and `continue` are four spellings of the same impossibility.
+static void check_defer_escape(CheckCtx *ctx, Span span, const char *keyword) {
+  diag_error(ctx->diags, span,
+             "'%s' cannot leave a 'defer': the block it belongs to is already "
+             "on its way out",
+             keyword);
 }
 
 // Which target a `break`/`continue` leaves. Unlabelled it is the innermost
@@ -4859,26 +4881,46 @@ static const char *check_target_name(CheckLoopKind kind) {
 // the list. NULL means the question was already answered with a diagnostic.
 static CheckLoop *check_loop_target(CheckCtx *ctx, LoopLabel label, Span span,
                                     const char *keyword) {
+  // A deferred body runs while the block around it is already leaving, so
+  // nothing outside it is a target it could leave for. The barrier frame stops
+  // both searches — an enclosing loop is not found, an enclosing label is not
+  // in scope — and `stop` is how the refusal knows to say so.
+  CheckLoop *stop = NULL;
   if (label.name.len == 0) {
     for (CheckLoop *loop = ctx->loops; loop != NULL; loop = loop->parent) {
+      if (loop->kind == CHECK_LOOP_DEFER) {
+        stop = loop;
+        break;
+      }
       if (loop->kind != CHECK_LOOP_BLOCK) {
         return loop;
       }
     }
-    diag_error(ctx->diags, span, "%s statement not within a loop", keyword);
-    if (ctx->loops != NULL) {
-      diag_note(ctx->diags, ctx->loops->label.span,
-                "this block is labelled, but a bare '%s' names a loop: write "
-                "'%s " SV_FMT "' to leave the block",
-                keyword, keyword, SV_ARG(ctx->loops->label.name));
+    if (stop == NULL) {
+      diag_error(ctx->diags, span, "%s statement not within a loop", keyword);
+      if (ctx->loops != NULL) {
+        diag_note(ctx->diags, ctx->loops->label.span,
+                  "this block is labelled, but a bare '%s' names a loop: write "
+                  "'%s " SV_FMT "' to leave the block",
+                  keyword, keyword, SV_ARG(ctx->loops->label.name));
+      }
+      return NULL;
     }
-    return NULL;
   }
-  for (CheckLoop *loop = ctx->loops; loop != NULL; loop = loop->parent) {
+  for (CheckLoop *loop = ctx->loops; stop == NULL && loop != NULL;
+       loop = loop->parent) {
+    if (loop->kind == CHECK_LOOP_DEFER) {
+      stop = loop;
+      break;
+    }
     if (sv_equal(loop->label.name, label.name)) {
       loop->used = true;
       return loop;
     }
+  }
+  if (stop != NULL) {
+    check_defer_escape(ctx, span, keyword);
+    return NULL;
   }
   // a closure resets the list, so an enclosing loop is genuinely out of scope
   // here rather than merely unnamed — the message says "in scope" for that.
@@ -5046,8 +5088,21 @@ static void resolve_stmt(CheckCtx *ctx, Stmt *stmt) {
     }
     break;
   }
+  case STMT_DEFER: {
+    // The body is resolved *here* — names bind where the `defer` is written,
+    // not where it runs — under a barrier frame that refuses any exit out of
+    // it. Its value is discarded like an expression statement's.
+    CheckLoop barrier = {.kind = CHECK_LOOP_DEFER, .parent = ctx->loops};
+    ctx->loops = &barrier;
+    resolve_expr(ctx, stmt->as.defer_stmt.expr, NULL);
+    ctx->loops = barrier.parent;
+    break;
+  }
   case STMT_RETURN: {
     StmtReturn *ret = &stmt->as.return_stmt;
+    if (check_in_defer(ctx)) {
+      check_defer_escape(ctx, stmt->span, "return");
+    }
     Type *val_ty = ret->value != NULL
                        ? resolve_expr(ctx, ret->value, ctx->return_type)
                        : ctx->tc->t_unit;
@@ -7773,6 +7828,12 @@ static Type *resolve_downcast_expr(CheckCtx *ctx, Expr *expr) {
 
 static Type *resolve_propagate_expr(CheckCtx *ctx, Expr *expr) {
   ExprPropagate *prop = &expr->as.propagate;
+
+  // `?` is a `return` spelled shorter, and leaves a deferred body for the same
+  // reason that one cannot.
+  if (check_in_defer(ctx)) {
+    check_defer_escape(ctx, expr->span, "?");
+  }
 
   Type *op_ty = resolve_expr(ctx, prop->operand, ctx->return_type);
   op_ty = infer_apply(&ctx->infer, op_ty, ctx->al);

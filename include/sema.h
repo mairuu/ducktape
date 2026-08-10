@@ -566,6 +566,11 @@ typedef enum {
   CHECK_LOOP_WHILE,
   CHECK_LOOP_FOR,
   CHECK_LOOP_BLOCK,
+  // Not a target at all: the barrier a `defer` body is resolved under. It
+  // carries no label and joins no exit — both searches simply stop at it,
+  // which is how "control may not leave a deferred body" is one rule in one
+  // place rather than a flag every exit has to remember to read.
+  CHECK_LOOP_DEFER,
 } CheckLoopKind;
 
 typedef struct CheckLoop {
