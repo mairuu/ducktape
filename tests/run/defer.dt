@@ -15,6 +15,8 @@
 #> p.x=1 p.y=2
 #> whole 3
 #> local 12
+#> local 20
+#> param 2
 use std::io::print;
 
 struct Pt { x: int, y: int }
@@ -72,13 +74,22 @@ fun escapes_only_in_defer() {
     defer print("whole {sum(p)}");
 }
 
-# a name the body declares itself is above the hidden span, so it resolves
+# a name the deferred body declares itself is its own binding, so it resolves
+# alongside the ones the body reads from the scope around it
 fun declares_its_own() {
     var n = 2;
     defer {
         var scaled = n * 6;
         print("local {scaled}");
     }
+}
+
+# a parameter is a binding like any other, so a `var` of the same name below the
+# `defer` shadows it for the code below and not for the deferred body
+fun param_shadowed(n: int) {
+    defer print("param {n}");
+    var n = n * 10;
+    print("local {n}");
 }
 
 fun main() {
@@ -89,4 +100,5 @@ fun main() {
     exploded();
     escapes_only_in_defer();
     declares_its_own();
+    param_shadowed(2);
 }

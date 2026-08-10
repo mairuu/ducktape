@@ -511,7 +511,8 @@ struct ImplDef {
 typedef struct {
   StringView name;
   Type *param_type;
-  bool is_self; // implicit "self"
+  bool is_self;    // implicit "self"
+  VarEntry *entry; // the binding it introduced; NULL until the checker runs
 } ParamDef;
 
 // `@native("io_print")` / `@intrinsic("array_len")` on a bodyless `fun` — the

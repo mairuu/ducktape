@@ -25,4 +25,15 @@ fun main() {
 #> inner
     print("{depth}");
 #> outer
+
+    print("{captures(3)}");
+#> 3 30
+}
+
+# A capture names a binding, not a name: the closure was written above the
+# shadow, so the cell it closes over is the parameter's whatever comes later.
+fun captures(n: int) -> string {
+    var f = || "{n}";
+    var n = n * 10;
+    return "{f()} {n}";
 }

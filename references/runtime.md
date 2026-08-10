@@ -451,8 +451,19 @@ sees it, since a ducktape string carries its own length and `fopen` does not.
 
 ## Codegen shapes (`src/codegen.c`)
 
-- Locals are compile-time tracked (`Cg.locals`, name → frame slot); the
+- Locals are compile-time tracked (`Cg.locals`, binding → frame slot); the
   initializer's stack slot *is* the variable. Params occupy slots 0..n-1.
+- **A reference is matched on the binding, never on the name.** The checker
+  resolved every path to a `VarEntry` and left it on the node
+  (`ExprPath.resolved_local`, and the `entry` on each pattern, parameter and
+  loop variable), so `cg_find_local` reads that answer rather than asking a
+  second question about scopes — the same identity `src/cfg.c` reads. Two
+  bindings sharing a name are two entries, so shadowing needs no rule, a `defer`
+  emitted at an exit reads what it was written beside, and a spliced body cannot
+  reach the frame it landed in. `self` is a binding like any other parameter and
+  is looked up the same way, through `Cg.self_entry`; the anonymous slots a
+  construct needs (a `for`'s iterator, a `match`'s subject) carry no entry and
+  so match nothing.
 - **A local's slot is a stack position, not its index in `Cg.locals`.** The two
   agree only while nothing else is pending, and a block is an expression here,
   so a `var` can be declared with an operand, a callee, an array element or a
@@ -635,13 +646,14 @@ sets `defers_base` to the caller's chain: the block the call sits in is not
 being left. A body containing a `defer` is not spliceable at all (`scan_stmt`
 clears `ok`) — its exits attach to a block the callee does not have.
 
-Two smaller consequences. Codegen resolves a local by *name*, and an exit sits
-below declarations the `defer` sits above, so `CgDeferSkip` hides that span of
-`Cg.locals` while a body is emitting — otherwise a later binding of the same
-name would answer for the one the author wrote. And emitting code between a
-construction and the `return` that carries it costs the m116 thread, which reads
-the construction off the last instruction emitted: a `defer` in an iterator's
-`next` makes it decline. That is speed, not correctness.
+An exit sits below declarations the `defer` sits above, so the locals in scope
+where a body is emitted are not the ones it was written among. Nothing has to
+hide them: the body's paths carry the bindings the checker resolved where it was
+written, and a later `var` of the same name is a different binding. One smaller
+consequence remains — emitting code between a construction and the `return` that
+carries it costs the m116 thread, which reads the construction off the last
+instruction emitted, so a `defer` in an iterator's `next` makes it decline. That
+is speed, not correctness.
 
 `src/cfg.c` mirrors the whole chain (`CfgDefer`), because the liveness lint has
 to see those reads where they happen or a store nothing but a `defer` reads
@@ -978,12 +990,13 @@ no falling off at all, and the epilogue is not emitted — which is ordinarily
 three dead bytes and, since milestone 116, how a splice whose every `return`
 threaded leaves nothing behind it.
 
-**What a spliced body may see.** It was written inside another function, so
-`cg_find_local` stops at `Cg.locals_base` (the first parameter's entry) and
-`cg_resolve_upvalue` refuses outright: a free name in the body is a global,
-never whatever the frame around it happens to call the same. `cg->loop` is
-severed for the same reason, though nothing can observe that one — the checker
-has already refused a `break` whose loop is not inside the body.
+**What a spliced body may see.** It was written inside another function, and
+that is now all the barrier there is: codegen matches a reference against the
+`VarEntry` the checker resolved it to, so a free name in the body is a global
+rather than whatever the frame around it happens to call the same — the body's
+bindings are its own. `cg->loop` is severed explicitly, though nothing can
+observe that one, the checker having already refused a `break` whose loop is not
+inside the body.
 
 **What it will not take.** `cg_inline_choice` refuses a body over
 `CG_INLINE_MAX_COST` (40) AST nodes, a splice already `CG_INLINE_MAX_DEPTH` (2)
@@ -994,6 +1007,12 @@ one-byte slot operand is what that has to stay under. A closure in the body
 costs nothing extra: `compile_closure` already mints a `FunDef` per splice, the
 way it does per instantiation. The *depth* cap is what makes recursion
 terminate; the recursion check only stops copies that would then be pointless.
+
+**Both cross a closure boundary**, because a closure body is a new frame and not
+a new splice chain: `compile_closure`'s child compiler inherits `inline_depth`
+and `inlining`, so a call in it to an origin being spliced around it is
+recursion. Resetting them let `|| f(..)` written inside `f` expand until the C
+stack ran out (milestone 120).
 
 **What it costs.** The callee still gets its own chunk and its own global slot —
 `cg_call_target` reaches it before the decision is made — so a body inlined at
@@ -1142,12 +1161,12 @@ weighs is a property of the body or constant across one body.
 binding is several, so there is no one slot to capture.
 
 **One `locals` entry per slot.** The declaration mints `arity` of them, the
-first carrying the name and the rest anonymous. That is what keeps every scope's
-pop count a difference of `local_count` (`compile_block`, the loop frames,
-`compile_stmt`'s depth invariant): nothing else in codegen learns that a binding
-can be more than one slot. A field access matches on the `VarEntry` the checker
-resolved rather than on the name, so the two sides of a shadowed name cannot
-disagree.
+first carrying the binding and the rest anonymous. That is what keeps every
+scope's pop count a difference of `local_count` (`compile_block`, the loop
+frames, `compile_stmt`'s depth invariant): nothing else in codegen learns that a
+binding can be more than one slot. A field access finds the group the way any
+reference finds its local, and then asks the one question that separates the two
+— `field_slots`, which only a binding whose aggregate was never built has.
 
 A struct only ever exploded reaches no slot space either — `cg_reach_struct` is
 a construction's doing, and there is no longer a construction.

@@ -2166,8 +2166,12 @@ Neither `*_define` detects duplicates and both lookups return the *first*
 match, so anything that can collide has to check first — see "Modules" and
 `tc_check_duplicate_decls`.
 **A value scope holds no slots.** A binding's runtime position is a *stack*
-position, which only codegen knows (milestone 88), so `Cg.locals` numbers them
-and nothing sema records is read back. A function's slot lives on the `FunDef`,
+position, which only codegen knows (milestone 88), so `Cg.locals` numbers them.
+What *is* read back is the binding's identity: every node that declares or reads
+one keeps its `VarEntry *`, and both later passes key on that pointer rather than
+resolving the name a second time — `src/cfg.c` for liveness, codegen for the
+slot (milestone 120). Two resolvers of one name can only be made to agree by
+having one of them not resolve. A function's slot lives on the `FunDef`,
 assigned program-wide by codegen, and travels with the copied `ve->as` — which is
 also what codegen reads off `ExprPath.resolved_fun`, since a name may be an alias
 for a function in another module.

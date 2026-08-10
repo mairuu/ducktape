@@ -7975,6 +7975,12 @@ static Type *resolve_closure_expr(CheckCtx *ctx, Expr *expr, Type *hint) {
     vscope_define(ctx->vscope, closure->params[i].name, param_types.ptr[i],
                   ctx->diags, closure->params[i].span,
                   &closure->params[i].entry);
+    // the two spellings of one parameter: codegen reaches a closure's through
+    // the AST node and a spliced body's through the FunDef. Only the first is
+    // live — a splice needs a call *by name* and a closure is only ever called
+    // through a value — so this keeps `ParamDef.entry` total rather than
+    // feeding a reader.
+    def->params[i].entry = closure->params[i].entry;
   }
 
   Type *body_ty = resolve_expr(ctx, closure->body, ret_ty);
@@ -9805,7 +9811,7 @@ static void tc_check_fun(TypeChecker *tc, Decl *decl) {
   for (int i = 0; i < fun_def->param_count; i++) {
     vscope_define(cctx.vscope, fun_def->params[i].name,
                   fun_def->params[i].param_type, cctx.diags,
-                  fun_decl->params[i].span, NULL);
+                  fun_decl->params[i].span, &fun_def->params[i].entry);
   }
 
   resolve_expr_coerced(&cctx, fun_decl->body, fun_def->return_type);
@@ -10126,7 +10132,7 @@ static void tc_check_impl(TypeChecker *tc, Decl *decl) {
             param_def->is_self ? sv_from_cstr("self") : param_def->name;
 
         vscope_define(cctx.vscope, param_name, param_def->param_type,
-                      cctx.diags, fun_decl->params[j].span, NULL);
+                      cctx.diags, fun_decl->params[j].span, &param_def->entry);
       }
 
       resolve_expr_coerced(&cctx, fun_decl->body, fun_def->return_type);
@@ -10209,7 +10215,7 @@ static void tc_check_trait(TypeChecker *tc, Decl *decl) {
     cctx.vscope = vscope_push(cctx.vscope, cctx.al);
     for (int j = 0; j < fun->param_count; j++) {
       vscope_define(cctx.vscope, fun->params[j].name, fun->params[j].param_type,
-                    cctx.diags, item->params[j].span, NULL);
+                    cctx.diags, item->params[j].span, &fun->params[j].entry);
     }
 
     resolve_expr_coerced(&cctx, fun->body, cctx.return_type);

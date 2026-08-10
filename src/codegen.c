@@ -27,7 +27,11 @@
 #define CG_EXPLODE_MAX_CALLS 8
 
 typedef struct {
-  StringView name; // empty for hidden locals
+  // Which binding this is, and the only thing a reference is matched against:
+  // the checker already resolved every name to a `VarEntry`, so codegen reads
+  // that answer instead of asking a second question about scopes. NULL for the
+  // hidden locals a construct needs a slot for, which no source names.
+  VarEntry *entry;
   // The *frame* slot this local occupies, which is where the stack happened to
   // be when it was declared — not its index in `Cg.locals`. The two agree only
   // while nothing else is pending on the stack, and a block is an expression
@@ -42,13 +46,10 @@ typedef struct {
   // `slot` hold its fields, and this entry is the first of that many in
   // `locals` — the ones above it are anonymous, so one entry still means one
   // slot and every scope's pop count stays a difference of `local_count`.
-  // `entry` is set only here, and is what a field access matches on: the
-  // checker resolved the name, so codegen asks its question rather than a
-  // second one about shadowing. `def` is what the aggregate was, kept because a
-  // call this binding cannot be spliced into has to be handed a real one
-  // (NULL for a tuple, which `OP_TUPLE` builds from its arity alone).
+  // `def` is what the aggregate was, kept because a call this binding cannot be
+  // spliced into has to be handed a real one (NULL for a tuple, which
+  // `OP_TUPLE` builds from its arity alone).
   int field_slots;
-  VarEntry *entry;
   StructDef *def;
 } CgLocal;
 
@@ -105,24 +106,15 @@ typedef struct CgLoop {
 // pending at an exit exactly when the exit is written below it.
 #define CG_MAX_DEFERS 16
 
+// A deferred body is emitted at an exit, which sits below declarations the
+// `defer` sits above — so the locals in scope *there* are not the ones it was
+// written among. Nothing has to hide them: its paths carry the bindings the
+// checker resolved, and a later `var` of the same name is a different binding.
 typedef struct CgDeferScope {
   struct CgDeferScope *parent;
   Expr *exprs[CG_MAX_DEFERS];
-  int local_counts[CG_MAX_DEFERS]; // where `Cg.locals` stood at each `defer`
   int count;
 } CgDeferScope;
-
-// While a deferred body is being emitted: the span of `Cg.locals` it was
-// written *above*, and so must not resolve. Codegen finds a local by name, and
-// an exit sits below declarations the `defer` sits above, so without this a
-// later binding of the same name would answer for the one the author meant.
-// Names the body declares itself land above `hi` — where the list stood when
-// this emission began — and stay visible. Chained, since a deferred body may
-// itself defer.
-typedef struct CgDeferSkip {
-  struct CgDeferSkip *parent;
-  int lo, hi;
-} CgDeferSkip;
 
 // ── threading a match into the constructions that feed it ────────────────────
 //
@@ -200,12 +192,16 @@ typedef struct Cg {
   // `defers` is the enclosing blocks' pending deferred bodies. `defers_base` is
   // where a `return` stops — NULL in a function of its own, the caller's chain
   // inside a splice, since a spliced `return` leaves the callee and not the
-  // block the call sits in. `defer_skip` is set only while a body is emitting.
+  // block the call sits in.
   CgDeferScope *defers;
   CgDeferScope *defers_base;
-  CgDeferSkip *defer_skip;
 
   int self_slot; // -1 outside a method; the frame slot holding `self`
+  // the receiver's binding, which is what a closure capturing `self` looks the
+  // slot up by — `self` is a `VarEntry` like any parameter, it just has no path
+  // to carry it. Inherited by a closure's child compiler, since the frame it
+  // names is further out than the child's parent may be.
+  VarEntry *self_entry;
   // >0 when this body was spliced onto an *exploded* receiver: `self` is not a
   // value in a slot but this many fields from `self_slot`, so `self.f` reads
   // the caller's slot directly and a write lands where the caller will read it.
@@ -218,13 +214,12 @@ typedef struct Cg {
   //
   // `inline_pad` is the landing pad its `return`s leave through, and it is an
   // ordinary CgLoop because an inlined return *is* a break carrying a value out
-  // of a labelled block. `locals_base` is the first entry of `locals` the body
-  // may see: everything below belongs to the frame it was spliced into, whose
-  // names it must not resolve. `inlining` is the chain of origins currently
-  // being spliced, which is what stops a recursive call from expanding forever.
-  // All of it is saved and restored around a splice, so nesting works.
+  // of a labelled block. `inlining` is the chain of origins currently being
+  // spliced, which is what stops a recursive call from expanding forever. A
+  // spliced body needs no floor in `locals`: its bindings are its own, so a
+  // name it does not declare cannot match the frame it landed in. All of it is
+  // saved and restored around a splice, so nesting works.
   CgLoop *inline_pad;
-  int locals_base;
   int inline_depth;
   FunDef *inlining[CG_INLINE_MAX_DEPTH];
   // the splice being compiled, and where the next one's identity comes from.
@@ -833,7 +828,7 @@ static void cg_popped(Cg *cg, int n) {
 // a parameter (a later argument may still name a caller local that a parameter
 // would shadow). Returns that *frame slot*, which is what every
 // OP_GET_LOCAL/OP_SET_LOCAL wants — never an index into `cg->locals`.
-static int cg_add_local_at(Cg *cg, StringView name, int slot, Span span) {
+static int cg_add_local_at(Cg *cg, VarEntry *entry, int slot, Span span) {
   // Two limits, and the slot is the one that binds: `cg->locals` has room for
   // CG_MAX_LOCALS entries, but what a one-byte operand can address is a
   // *position*, and positions count the temporaries stacked between locals as
@@ -844,42 +839,35 @@ static int cg_add_local_at(Cg *cg, StringView name, int slot, Span span) {
     cg->ok = false;
     return 0;
   }
-  cg->locals[cg->local_count++] = (CgLocal){.name = name, .slot = slot};
+  cg->locals[cg->local_count++] = (CgLocal){.entry = entry, .slot = slot};
   return slot;
 }
 
 // Name the value on top of the stack.
-static int cg_add_local(Cg *cg, StringView name, Span span) {
-  return cg_add_local_at(cg, name, cg->depth - 1, span);
+static int cg_add_local(Cg *cg, VarEntry *entry, Span span) {
+  return cg_add_local_at(cg, entry, cg->depth - 1, span);
 }
 
 // The same, for a value a raw `emit` just pushed rather than one `compile_expr`
 // left behind — only the latter is accounted for automatically.
-static int cg_add_pushed_local(Cg *cg, StringView name, Span span) {
+static int cg_add_pushed_local(Cg *cg, VarEntry *entry, Span span) {
   cg->depth++;
-  return cg_add_local(cg, name, span);
-}
-
-// is `i` inside a range the deferred body now being emitted must not see? NULL
-// — nothing being deferred — is every caller but one.
-static bool cg_defer_hides(const Cg *cg, int i) {
-  for (const CgDeferSkip *s = cg->defer_skip; s != NULL; s = s->parent) {
-    if (i >= s->lo && i < s->hi) {
-      return true;
-    }
-  }
-  return false;
+  return cg_add_local(cg, entry, span);
 }
 
 // the *index* in `cg->locals`, since callers need both halves: the slot to
-// emit, and the entry to mark captured. The search stops at `locals_base`,
-// which is 0 outside an inlined body and the first parameter's entry inside
-// one: a spliced body was written elsewhere, so a name it does not declare
-// itself is a global, never whatever the host frame happens to call the same.
-static int cg_find_local(Cg *cg, StringView name) {
-  for (int i = cg->local_count - 1; i >= cg->locals_base; i--) {
-    if (cg->locals[i].name.len > 0 && sv_equal(cg->locals[i].name, name) &&
-        !cg_defer_hides(cg, i)) {
+// emit, and the entry to mark captured. The list is a stack and the innermost
+// match wins — but what the scan walks back past is not shadowing, since a
+// shadowed name is a *different* binding. It is the one thing that puts a
+// binding on the stack twice: a body spliced into itself. Self-recursion is
+// spliced exactly once (`Cg.inlining` stops the next round), and there the
+// innermost is the callee's own parameter, which is the one its body means.
+static int cg_find_local(Cg *cg, VarEntry *entry) {
+  if (entry == NULL) {
+    return -1; // a path naming an item, or a hidden local's non-name
+  }
+  for (int i = cg->local_count - 1; i >= 0; i--) {
+    if (cg->locals[i].entry == entry) {
       return i;
     }
   }
@@ -906,18 +894,15 @@ static int cg_add_upvalue(Cg *cg, bool is_local, uint8_t index, Span span) {
   return cg->upvalue_count++;
 }
 
-// resolve `name` as an upvalue of `cg`: a variable owned by some enclosing
+// resolve `entry` as an upvalue of `cg`: a variable owned by some enclosing
 // function. returns the upvalue index, or -1 if not found in any parent.
 // walking out marks the owning local `is_captured` so its defining scope
 // closes the upvalue when the slot dies.
-static int cg_resolve_upvalue(Cg *cg, StringView name, Span span) {
-  // The other half of `cg_find_local`'s barrier: a name an inlined body does
-  // not declare cannot be a capture either, since the function it was written
-  // in is not the one whose frame is around it now.
-  if (cg->parent == NULL || cg->inline_pad != NULL) {
+static int cg_resolve_upvalue(Cg *cg, VarEntry *entry, Span span) {
+  if (cg->parent == NULL) {
     return -1;
   }
-  int local = cg_find_local(cg->parent, name);
+  int local = cg_find_local(cg->parent, entry);
   if (local >= 0) {
     cg->parent->locals[local].is_captured = true;
     // the capture names a *frame slot* in the parent, not a position in its
@@ -925,7 +910,7 @@ static int cg_resolve_upvalue(Cg *cg, StringView name, Span span) {
     return cg_add_upvalue(cg, true, (uint8_t)cg->parent->locals[local].slot,
                           span);
   }
-  int upvalue = cg_resolve_upvalue(cg->parent, name, span);
+  int upvalue = cg_resolve_upvalue(cg->parent, entry, span);
   if (upvalue >= 0) {
     return cg_add_upvalue(cg, false, (uint8_t)upvalue, span);
   }
@@ -1422,16 +1407,11 @@ static void cg_emit_defers(Cg *cg, CgDeferScope *until) {
   cg->defers_base = NULL;
   for (CgDeferScope *s = outer; s != NULL && s != until; s = s->parent) {
     for (int i = s->count - 1; i >= 0; i--) {
-      CgDeferSkip skip = {.parent = cg->defer_skip,
-                          .lo = s->local_counts[i],
-                          .hi = cg->local_count};
-      cg->defer_skip = &skip;
       int base = cg->depth, base_locals = cg->local_count;
       compile_expr(cg, s->exprs[i]);
       emit(cg, OP_POP);
       cg->local_count = base_locals;
       cg->depth = base;
-      cg->defer_skip = skip.parent;
     }
   }
   cg->defers = outer;
@@ -1602,7 +1582,7 @@ static void compile_explode_init(Cg *cg, Expr *init, int arity) {
 // reclaim it.
 static void compile_explode_call(Cg *cg, Expr *init, int arity, Span span) {
   compile_expr(cg, init); // [obj]
-  int obj = cg_add_local(cg, (StringView){0}, span);
+  int obj = cg_add_local(cg, NULL, span);
   for (int i = 0; i < arity; i++) {
     emit_get_local(cg, obj);
     emit2(cg, OP_FIELD_GET, (uint8_t)i);
@@ -1616,35 +1596,29 @@ static void compile_explode_call(Cg *cg, Expr *init, int arity, Span span) {
 static void cg_add_exploded_local(Cg *cg, Pattern *bind, int arity,
                                   StructDef *def, Span span) {
   int base = cg->depth - arity;
-  cg_add_local_at(cg, bind->as.bind.name, base, span);
+  cg_add_local_at(cg, bind->as.bind.entry, base, span);
   cg->locals[cg->local_count - 1].field_slots = arity;
-  cg->locals[cg->local_count - 1].entry = bind->as.bind.entry;
   cg->locals[cg->local_count - 1].def = def;
   for (int i = 1; i < arity; i++) {
-    cg_add_local_at(cg, (StringView){0}, base + i, span);
+    cg_add_local_at(cg, NULL, base + i, span);
   }
 }
 
-// The exploded binding `object` names, or false. Matched on the `VarEntry` the
-// checker resolved rather than on the name, so the two sides of a shadowed name
-// cannot disagree — which is also why the `locals_base` bound `cg_find_local`
-// needs is belt here: a binding is one entry, so no splice can match an outer
-// body's.
+// The exploded binding `object` names, or false. It is `cg_find_local` plus the
+// one question that separates a group from an ordinary local: `field_slots`,
+// which only a binding whose aggregate was never built has.
 static bool cg_exploded_group(Cg *cg, Expr *object, CgGroup *out) {
-  if (object->kind != EXPR_PATH ||
-      object->as.path_expr.resolved_local == NULL) {
+  if (object->kind != EXPR_PATH) {
     return false;
   }
-  VarEntry *ve = object->as.path_expr.resolved_local;
-  for (int i = cg->local_count - 1; i >= cg->locals_base; i--) {
-    if (cg->locals[i].entry == ve) {
-      *out = (CgGroup){.slot = cg->locals[i].slot,
-                       .arity = cg->locals[i].field_slots,
-                       .def = cg->locals[i].def};
-      return true;
-    }
+  int i = cg_find_local(cg, object->as.path_expr.resolved_local);
+  if (i < 0 || cg->locals[i].field_slots == 0) {
+    return false;
   }
-  return false;
+  *out = (CgGroup){.slot = cg->locals[i].slot,
+                   .arity = cg->locals[i].field_slots,
+                   .def = cg->locals[i].def};
+  return true;
 }
 
 // The slot holding field `index` of an exploded binding, or -1 when `object` is
@@ -1711,7 +1685,7 @@ static void compile_stmt_inner(Cg *cg, Stmt *stmt) {
 
     if (var->binding->kind == PAT_BIND && var->else_block == NULL) {
       // the initializer's stack slot becomes the local
-      cg_add_local(cg, var->binding->as.bind.name, stmt->span);
+      cg_add_local(cg, var->binding->as.bind.entry, stmt->span);
       break;
     }
 
@@ -1719,7 +1693,7 @@ static void compile_stmt_inner(Cg *cg, Stmt *stmt) {
     // pattern's accessors read from, and the names it binds are appended
     // above it. The temp costs a slot for the rest of the scope, which is
     // what keeps every bound name a plain local like any other.
-    int subject_slot = cg_add_local(cg, (StringView){0}, stmt->span);
+    int subject_slot = cg_add_local(cg, NULL, stmt->span);
     compile_destructure(cg, var->binding, subject_slot, var->else_block);
     break;
   }
@@ -1808,7 +1782,6 @@ static void compile_stmt_inner(Cg *cg, Stmt *stmt) {
       cg->ok = false;
       break;
     }
-    scope->local_counts[scope->count] = cg->local_count;
     scope->exprs[scope->count++] = stmt->as.defer_stmt.expr;
     break;
   }
@@ -2154,17 +2127,17 @@ static void compile_assign(Cg *cg, Expr *expr) {
     return;
   }
 
-  StringView name = assign->target->as.path_expr.path.segments[0].name;
+  VarEntry *entry = assign->target->as.path_expr.resolved_local;
   // a target is either a local of this function or an upvalue captured from an
   // enclosing one; both read/write through the same get/set opcode pair.
-  int local = cg_find_local(cg, name);
+  int local = cg_find_local(cg, entry);
   uint8_t get_op, set_op, operand;
   if (local >= 0) {
     get_op = OP_GET_LOCAL;
     set_op = OP_SET_LOCAL;
     operand = (uint8_t)cg->locals[local].slot;
   } else {
-    int upvalue = cg_resolve_upvalue(cg, name, assign->target->span);
+    int upvalue = cg_resolve_upvalue(cg, entry, assign->target->span);
     if (upvalue < 0) {
       cg_error(cg, assign->target->span, "assignment to a non-local");
       emit(cg, OP_UNIT);
@@ -2309,10 +2282,10 @@ static void compile_for_range(Cg *cg, Expr *expr) {
 
   // [range, i] as hidden + loop locals
   compile_expr(cg, for_->iterable);
-  int range_slot = cg_add_local(cg, (StringView){0}, expr->span);
+  int range_slot = cg_add_local(cg, NULL, expr->span);
   emit_get_local(cg, range_slot);
   emit(cg, OP_RANGE_START);
-  int i_slot = cg_add_pushed_local(cg, for_->var_name, for_->var_span);
+  int i_slot = cg_add_pushed_local(cg, for_->var_entry, for_->var_span);
   // the loop-carried slots are all the body ever sees beneath it; the test and
   // the read that run in between balance out, but saying so beats trusting it
   int body_depth = cg->depth;
@@ -2374,11 +2347,11 @@ static void compile_for_array(Cg *cg, Expr *expr) {
   // [arr, idx, var] as hidden + loop locals; var is a placeholder (unit)
   // until the first bounds-checked read.
   compile_expr(cg, for_->iterable);
-  int arr_slot = cg_add_local(cg, (StringView){0}, expr->span);
+  int arr_slot = cg_add_local(cg, NULL, expr->span);
   emit_const(cg, val_int(0));
-  int idx_slot = cg_add_pushed_local(cg, (StringView){0}, expr->span);
+  int idx_slot = cg_add_pushed_local(cg, NULL, expr->span);
   emit(cg, OP_UNIT);
-  int var_slot = cg_add_pushed_local(cg, for_->var_name, for_->var_span);
+  int var_slot = cg_add_pushed_local(cg, for_->var_entry, for_->var_span);
   int body_depth = cg->depth;
 
   CgLoop loop = {
@@ -2492,9 +2465,9 @@ static void compile_for_iter(Cg *cg, Expr *expr) {
   // [iter, var]: `iter` is the receiver, whose cursor advances in place; `var`
   // is a placeholder (unit) until each `Some` binds it, reused every turn.
   compile_expr(cg, for_->iterable);
-  int iter_slot = cg_add_local(cg, (StringView){0}, expr->span);
+  int iter_slot = cg_add_local(cg, NULL, expr->span);
   emit(cg, OP_UNIT);
-  int var_slot = cg_add_pushed_local(cg, for_->var_name, for_->var_span);
+  int var_slot = cg_add_pushed_local(cg, for_->var_entry, for_->var_span);
   int body_depth = cg->depth;
 
   CgLoop loop = {
@@ -2667,14 +2640,18 @@ static void cg_inline_body(Cg *cg, const Instance *inst, int base_depth,
   // fields are already slots of the frame around this splice, so `self` takes
   // no position of its own and the arguments after it move down one.
   int pushed = 0;
+  VarEntry *self_entry = NULL;
   for (int i = 0; i < origin->param_count; i++) {
     bool is_self = origin->params[i].is_self;
+    if (is_self) {
+      self_entry = origin->params[i].entry;
+    }
     if (is_self && self_group != NULL) {
       self_slot = self_group->slot;
       continue;
     }
-    StringView name = is_self ? sv_from_cstr("self") : origin->params[i].name;
-    int slot = cg_add_local_at(cg, name, base_depth + pushed++, span);
+    int slot = cg_add_local_at(cg, origin->params[i].entry,
+                               base_depth + pushed++, span);
     if (is_self) {
       self_slot = slot;
     }
@@ -2690,10 +2667,10 @@ static void cg_inline_body(Cg *cg, const Instance *inst, int base_depth,
   Subst saved_subst = cg->subst;
   int saved_inst_depth = cg->inst_depth;
   int saved_self_slot = cg->self_slot;
+  VarEntry *saved_self_entry = cg->self_entry;
   int saved_self_fields = cg->self_field_slots;
   CgLoop *saved_loop = cg->loop;
   CgLoop *saved_pad = cg->inline_pad;
-  int saved_base = cg->locals_base;
   int saved_splice = cg->splice_id;
   Expr *saved_root = cg->body_root;
   CgDeferScope *saved_defers_base = cg->defers_base;
@@ -2710,13 +2687,13 @@ static void cg_inline_body(Cg *cg, const Instance *inst, int base_depth,
   cg->subst = inst->subst;
   cg->inst_depth = inst->depth;
   cg->self_slot = self_slot;
+  cg->self_entry = self_entry;
   cg->self_field_slots = self_group != NULL ? self_group->arity : 0;
   cg->loop = NULL;
   cg->inline_pad = &pad;
   // a `return` in here leaves the callee, not the block the call sits in, so
   // the caller's pending defers are below the floor rather than above it
   cg->defers_base = cg->defers;
-  cg->locals_base = saved_locals;
   cg->body_root = origin->body;
   cg->inlining[cg->inline_depth++] = origin;
 
@@ -2749,11 +2726,11 @@ static void cg_inline_body(Cg *cg, const Instance *inst, int base_depth,
   cg->subst = saved_subst;
   cg->inst_depth = saved_inst_depth;
   cg->self_slot = saved_self_slot;
+  cg->self_entry = saved_self_entry;
   cg->self_field_slots = saved_self_fields;
   cg->loop = saved_loop;
   cg->inline_pad = saved_pad;
   cg->defers_base = saved_defers_base;
-  cg->locals_base = saved_base;
   cg->body_root = saved_root;
   cg->local_count = saved_locals;
   cg->depth = base_depth + 1;
@@ -3647,7 +3624,7 @@ static void compile_pattern_bind(Cg *cg, Pattern *pat, Accessor acc) {
 
   case PAT_BIND:
     emit_accessor(cg, &acc);
-    cg_add_pushed_local(cg, pat->as.bind.name, pat->span);
+    cg_add_pushed_local(cg, pat->as.bind.entry, pat->span);
     break;
 
   case PAT_TUPLE:
@@ -3668,7 +3645,7 @@ static void compile_pattern_bind(Cg *cg, Pattern *pat, Accessor acc) {
         compile_pattern_bind(cg, fp->sub_pattern, field_acc);
       } else {
         emit_accessor(cg, &field_acc);
-        cg_add_pushed_local(cg, fp->ident.name, fp->span);
+        cg_add_pushed_local(cg, fp->entry, fp->span);
       }
     }
     break;
@@ -3685,7 +3662,7 @@ static void compile_pattern_bind(Cg *cg, Pattern *pat, Accessor acc) {
         compile_pattern_bind(cg, fp->sub_pattern, field_acc);
       } else {
         emit_accessor(cg, &field_acc);
-        cg_add_pushed_local(cg, fp->ident.name, fp->span);
+        cg_add_pushed_local(cg, fp->entry, fp->span);
       }
     }
     break;
@@ -3850,7 +3827,7 @@ static void cg_thread_bind(Cg *cg, Pattern *pat, Accessor acc) {
     compile_pattern_bind(cg, fp->sub_pattern, acc);
   } else {
     emit_accessor(cg, &acc);
-    cg_add_pushed_local(cg, fp->ident.name, fp->span);
+    cg_add_pushed_local(cg, fp->entry, fp->span);
   }
 }
 
@@ -3950,7 +3927,7 @@ static void compile_match(Cg *cg, Expr *expr) {
   } else {
     compile_expr(cg, match->subject);
   }
-  int subject_slot = cg_add_local(cg, (StringView){0}, expr->span);
+  int subject_slot = cg_add_local(cg, NULL, expr->span);
   int saved_locals = cg->local_count;
 
   if (th.taken > 0) {
@@ -4032,7 +4009,7 @@ static void compile_if_binding(Cg *cg, Expr *expr) {
   } else {
     compile_expr(cg, if_->condition);
   }
-  int subject_slot = cg_add_local(cg, (StringView){0}, expr->span);
+  int subject_slot = cg_add_local(cg, NULL, expr->span);
   int saved = cg->local_count;
   Accessor acc = {.base_slot = subject_slot};
 
@@ -4120,7 +4097,7 @@ static void compile_while_binding(Cg *cg, Expr *expr) {
   } else {
     compile_expr(cg, wh->condition);
   }
-  int subject_slot = cg_add_local(cg, (StringView){0}, expr->span);
+  int subject_slot = cg_add_local(cg, NULL, expr->span);
   int fail_depth = cg->depth + 1; // the failed test's bool, above the subject
   Accessor acc = {.base_slot = subject_slot};
 
@@ -4301,7 +4278,7 @@ static void compile_expr_inner(Cg *cg, Expr *expr) {
     }
     // inside a closure the receiver belongs to the enclosing method's frame,
     // so it is captured like any other local it mentions.
-    int upvalue = cg_resolve_upvalue(cg, sv_from_cstr("self"), expr->span);
+    int upvalue = cg_resolve_upvalue(cg, cg->self_entry, expr->span);
     if (upvalue < 0) {
       // `self` outside a method is a checker error, so this is unreachable
       // from a program that got here — reported rather than asserted, since a
@@ -4362,15 +4339,15 @@ static void compile_expr_inner(Cg *cg, Expr *expr) {
       cg_emit_target(cg, fun, &expr->as.path_expr.inst, NULL, expr->span);
       break;
     }
-    StringView name = path->segments[0].name;
+    VarEntry *entry = expr->as.path_expr.resolved_local;
 
-    int local = cg_find_local(cg, name);
+    int local = cg_find_local(cg, entry);
     if (local >= 0) {
       emit_get_local(cg, cg->locals[local].slot);
       break;
     }
 
-    int upvalue = cg_resolve_upvalue(cg, name, expr->span);
+    int upvalue = cg_resolve_upvalue(cg, entry, expr->span);
     if (upvalue >= 0) {
       emit2(cg, OP_GET_UPVALUE, (uint8_t)upvalue);
       break;
@@ -4495,16 +4472,15 @@ static void compile_fun_body(Mono *mono, FunDef *fun, FunDef *body_of,
   chunk_init(cg.chunk, mono->al);
 
   for (int i = 0; i < fun->param_count; i++) {
-    // the receiver is named, not anonymous: a closure in the body captures it
-    // by that name like any other local (the parser leaves `self` nameless,
-    // and `self` is a keyword, so nothing else can claim the slot).
-    bool is_self = fun->params[i].is_self;
-    StringView name = is_self ? sv_from_cstr("self") : fun->params[i].name;
+    // the receiver is a binding like any other parameter — the checker defines
+    // it under the name `self`, which is a keyword, so nothing else can claim
+    // the slot — and a closure in the body captures it through that entry.
     // the caller pushed these before the frame opened, so they are slots
     // 0..n-1 and the depth starts out counting them
-    int slot = cg_add_pushed_local(&cg, name, body_of->span);
-    if (is_self) {
+    int slot = cg_add_pushed_local(&cg, fun->params[i].entry, body_of->span);
+    if (fun->params[i].is_self) {
       cg.self_slot = slot;
+      cg.self_entry = fun->params[i].entry;
     }
   }
 
@@ -4556,16 +4532,25 @@ static void compile_closure(Cg *cg, Expr *expr) {
               .al = cg->al,
               .ok = true,
               .self_slot = -1,
+              // the receiver is not in this frame, but naming it is how a
+              // `self` in the body reaches the method's frame further out
+              .self_entry = cg->self_entry,
               .last_exit = -1,
               .last_get_local = -1,
               .last_enum = -1,
               .parent = cg};
+  // A closure body is a new frame but not a new splice chain: an origin being
+  // spliced around this closure is still being spliced, so a call to it in here
+  // is recursion. Resetting the chain let `|| f(..)` inside `f` expand until
+  // the C stack ran out.
+  child.inline_depth = cg->inline_depth;
+  memcpy(child.inlining, cg->inlining, sizeof(child.inlining));
   child.chunk = al_alloc_zero_for(cg->al, Chunk);
   chunk_init(child.chunk, cg->al);
 
   for (int i = 0; i < closure->param_count; i++) {
     // slots 0..n-1 of the closure's own frame, like any function's params
-    cg_add_pushed_local(&child, closure->params[i].name, expr->span);
+    cg_add_pushed_local(&child, closure->params[i].entry, expr->span);
   }
 
   child.body_root = closure->body;

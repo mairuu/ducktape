@@ -89,6 +89,17 @@ fun fact(n: int) -> int {
     return n * fact(n - 1);
 }
 
+# The same, reached through a closure: a closure body is a new frame but not a
+# new chain, so the call in it is still recursion. It used to be a fresh chain,
+# and the expansion ran the compiler out of stack.
+fun countdown(n: int) -> int {
+    if n <= 0 {
+        return 0;
+    }
+    var step = || countdown(n - 1);
+    return 1 + step();
+}
+
 fun main() {
     var a = 1;
     var b = 2;
@@ -129,8 +140,8 @@ fun main() {
     print("{show(3)} {show(true)}");
 #> <3> <true>
 
-    print("{fact(5)}");
-#> 120
+    print("{fact(5)} {countdown(3)}");
+#> 120 3
 
     var add10 = adder(10);
     var add100 = adder(100);
