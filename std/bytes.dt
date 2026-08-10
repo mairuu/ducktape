@@ -54,6 +54,27 @@ impl Bytes {
     @native("bytes_is_utf8")
     fun is_utf8(self) -> bool;
 
+    # Room for `capacity` octets, taken now rather than a doubling at a time.
+    @native("bytes_reserve")
+    fun reserve(self, capacity: int);
+
+    # Keep the first `len` octets. A length at or above the current one is a
+    # no-op: this shortens and does not grow.
+    @native("bytes_truncate")
+    fun truncate(self, len: int);
+
+    # Append every octet of `other`, which may be `self`.
+    @native("bytes_extend")
+    fun extend(self, other: Bytes);
+
+    # The octets in `from..to` as a new buffer, cutting anywhere: a `Bytes` has
+    # no character boundary to respect, which is `string::slice`'s one rule and
+    # the difference between the two types read from the slicing side. The copy
+    # is not shared — a `Bytes` is mutable, so a view would be two names for
+    # octets either could change.
+    @native("bytes_slice")
+    fun slice(self, from: int, to: int) -> Bytes;
+
     fun is_empty(self) -> bool {
         return self.len() == 0;
     }

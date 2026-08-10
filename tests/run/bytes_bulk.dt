@@ -1,0 +1,63 @@
+# The bulk half of `Bytes`, the four `[T]` grew in milestone 106. Pins that
+# `extend` may take the buffer it is extending, that `truncate` only shortens,
+# and that a slice is a copy that cuts anywhere.
+use std::io::print;
+
+fun main() {
+    var b = Bytes::new();
+    b.push(1);
+    b.push(2);
+
+    # room is not length: reserving changes nothing a program can see
+    b.reserve(64);
+    print(b.len());
+#> 2
+
+    b.extend("A".to_utf8());
+    print(b);
+#> Bytes[1, 2, 65]
+
+    # the source may be the destination — the copy reads the buffer the reserve
+    # may have moved, not the one it was handed. Sized to make it move: a buffer
+    # full to its 16-byte capacity reallocates on the way to twice its length,
+    # so reading the source first is a use-after-free (a sanitizer finding, not
+    # a wrong answer — `make test` alone would not see it)
+    var full = Bytes::new();
+    full.extend("0123456789abcdef".to_utf8());
+    full.extend(full);
+    print(string::from_utf8(full).unwrap());
+#> 0123456789abcdef0123456789abcdef
+
+    b.extend(b);
+    print(b);
+#> Bytes[1, 2, 65, 1, 2, 65]
+
+    # a slice is a new buffer: mutating it leaves the original alone
+    var part = b.slice(1, 4);
+    print(part);
+#> Bytes[2, 65, 1]
+    part.set(0, 9);
+    print(b.get(1));
+#> 2
+
+    # an empty cut is legal anywhere in range, including at the end
+    print(b.slice(6, 6).is_empty());
+#> true
+
+    # a `Bytes` has no character boundary to respect: this cuts a `é` in half
+    var text = "é".to_utf8();
+    print(text.slice(0, 1).is_utf8());
+#> false
+
+    b.truncate(2);
+    print(b);
+#> Bytes[1, 2]
+
+    # truncate only shortens; a length at or above the current one is a no-op
+    b.truncate(7);
+    print(b.len());
+#> 2
+    b.truncate(0);
+    print(b.is_empty());
+#> true
+}

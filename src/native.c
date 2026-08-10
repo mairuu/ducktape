@@ -4,6 +4,7 @@
 
 #include <errno.h>
 #include <limits.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -35,12 +36,35 @@ static Value n_io_print(NativeCtx *ctx, Value *args, int argc) {
   return val_unit();
 }
 
+// Every io native answers the same way, and milestone 102's rule is why: none
+// of them can mint a `Result`, so the failure leaves as a string and the
+// ducktape wrapper turns it into `Err`. Empty is success — a message that says
+// nothing is not one a failure can produce.
+static Value io_ok(NativeCtx *ctx) {
+  return val_obj(&heap_intern(ctx->heap, "", 0)->obj);
+}
+
+static Value io_fail(NativeCtx *ctx, const char *fmt, ...) {
+  char msg[512];
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(msg, sizeof msg, fmt, ap);
+  va_end(ap);
+  return val_obj(&heap_intern(ctx->heap, msg, (int)strlen(msg))->obj);
+}
+
+// `fopen` reads to the first NUL, so a path containing one names a different
+// file than the string does — a ducktape string carries its own length.
+// Refused rather than silently truncated.
+static bool io_path_ok(ObjString *path) {
+  return (int)strlen(path->chars) == path->len;
+}
+
 // The read side, and the shape it takes is what milestone 102's rule leaves:
 // a native cannot mint a `Result`, so the two answers leave by different doors.
 // The bytes are *appended* to the caller's buffer — the one out-parameter a
 // mutable object makes possible — and the return is the failure, empty when
-// there was none. A successful read has no message, so the empty string is a
-// sentinel nothing else can produce.
+// there was none.
 //
 // Read in chunks rather than sized by `ftell`: a length is a property of a
 // regular file, and a pipe or a /proc entry answers zero for it while still
@@ -50,19 +74,13 @@ static Value n_io_read_file(NativeCtx *ctx, Value *args, int argc) {
   ObjString *path = val_as_string(args[0]);
   ObjBytes *out = val_as_bytes(args[1]);
 
-  char msg[512];
-  // `fopen` reads to the first NUL, so a path containing one names a different
-  // file than the string does. Refused rather than silently truncated.
-  if ((int)strlen(path->chars) != path->len) {
-    snprintf(msg, sizeof msg, "cannot read a path containing a NUL byte");
-    return val_obj(&heap_intern(ctx->heap, msg, (int)strlen(msg))->obj);
+  if (!io_path_ok(path)) {
+    return io_fail(ctx, "cannot read a path containing a NUL byte");
   }
 
   FILE *file = fopen(path->chars, "rb");
   if (file == NULL) {
-    snprintf(msg, sizeof msg, "cannot read '%s': %s", path->chars,
-             strerror(errno));
-    return val_obj(&heap_intern(ctx->heap, msg, (int)strlen(msg))->obj);
+    return io_fail(ctx, "cannot read '%s': %s", path->chars, strerror(errno));
   }
 
   // Restored on every failure path, so a partial read leaves the caller's
@@ -92,10 +110,161 @@ static Value n_io_read_file(NativeCtx *ctx, Value *args, int argc) {
 
   if (failure != NULL) {
     out->len = start;
-    snprintf(msg, sizeof msg, "cannot read '%s': %s", path->chars, failure);
-    return val_obj(&heap_intern(ctx->heap, msg, (int)strlen(msg))->obj);
+    return io_fail(ctx, "cannot read '%s': %s", path->chars, failure);
   }
-  return val_obj(&heap_intern(ctx->heap, "", 0)->obj);
+  return io_ok(ctx);
+}
+
+// The write side, and it makes a weaker promise than the read side on purpose.
+// A failed read restores the caller's buffer (`out->len = start`), so `Err`
+// means nothing was appended; a file that took half its bytes before the disk
+// filled cannot be un-written, so `Err` here says only that the write did not
+// finish. Making it atomic would mean a temporary and a rename — a policy, and
+// one a program can write on top of this rather than one to bake in.
+//
+// `fclose` is checked, and is not a formality: a buffered write reports its
+// failure *there*, because the `fwrite` that filled the last buffer succeeded
+// and the flush behind it is what meets ENOSPC.
+static Value n_io_write_file(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  ObjString *path = val_as_string(args[0]);
+  ObjBytes *data = val_as_bytes(args[1]);
+  bool append = args[2].as.b;
+
+  if (!io_path_ok(path)) {
+    return io_fail(ctx, "cannot write a path containing a NUL byte");
+  }
+
+  FILE *file = fopen(path->chars, append ? "ab" : "wb");
+  if (file == NULL) {
+    return io_fail(ctx, "cannot write '%s': %s", path->chars, strerror(errno));
+  }
+
+  const char *failure = NULL;
+  if (data->len > 0 &&
+      fwrite(data->bytes, 1, (size_t)data->len, file) != (size_t)data->len) {
+    failure = strerror(errno);
+  }
+  if (fclose(file) != 0 && failure == NULL) {
+    failure = strerror(errno);
+  }
+  if (failure != NULL) {
+    return io_fail(ctx, "cannot write '%s': %s", path->chars, failure);
+  }
+  return io_ok(ctx);
+}
+
+// One line, handed over: the trailing CR goes, the encoding is checked, the
+// callback runs. Answers what the walk should do next.
+typedef enum {
+  IO_LINE_GO,
+  IO_LINE_STOP,     // the program asked to stop; not a failure
+  IO_LINE_BAD_UTF8, // the file is not text, which only a line can discover
+  IO_LINE_UNWIND,   // the callback failed; it was reported there
+} IoLine;
+
+static IoLine io_line_out(NativeCtx *ctx, Value fn, ObjBytes *acc) {
+  int len = acc->len;
+  // a CRLF file reads as an LF one, which is the same answer `str::lines` gives
+  // and the only place this walk edits what it read.
+  if (len > 0 && acc->bytes[len - 1] == '\r') {
+    len--;
+  }
+  if (len > 0 && !utf8_validate(acc->bytes, len)) {
+    return IO_LINE_BAD_UTF8;
+  }
+  // `acc` is rooted by the caller, so the intern's collection cannot take it;
+  // the fresh string is rooted by `native_call` pushing it as an argument, with
+  // nothing allocating in between.
+  Value line = val_obj(
+      &heap_intern(ctx->heap, acc->bytes != NULL ? acc->bytes : "", len)->obj);
+  Value keep_going;
+  if (!native_call(ctx, fn, &line, 1, &keep_going)) {
+    return IO_LINE_UNWIND;
+  }
+  return keep_going.as.b ? IO_LINE_GO : IO_LINE_STOP;
+}
+
+// Lines arrive by *callback*, and nothing else could close the file. A pull
+// shape — `for line in io::lines(path)` — needs an object holding the open
+// file, and a `break` abandons it: with no destructors and no unwinding (a
+// panic does not run a `defer`), nothing in the language could be made to close
+// one. A push keeps the open/close pair inside this one C frame, where `fclose`
+// runs on every path the VM can take back into it.
+//
+// The accumulator is an `ObjBytes` rather than a C buffer: it grows the way
+// every other buffer here grows, and rooting it is what keeps it alive across
+// the collection the callback may trigger.
+static Value n_io_read_lines(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  ObjString *path = val_as_string(args[0]);
+
+  if (!io_path_ok(path)) {
+    return io_fail(ctx, "cannot read a path containing a NUL byte");
+  }
+  FILE *file = fopen(path->chars, "rb");
+  if (file == NULL) {
+    return io_fail(ctx, "cannot read '%s': %s", path->chars, strerror(errno));
+  }
+
+  ObjBytes *acc = heap_bytes(ctx->heap);
+  native_root(ctx, val_obj(&acc->obj));
+
+  const char *failure = NULL;
+  int bad_line = 0; // the line that was not UTF-8, 1-based; 0 when all were
+  int line_no = 1;
+  bool going = true;
+  char chunk[8192];
+  while (going && failure == NULL && bad_line == 0) {
+    size_t got = fread(chunk, 1, sizeof chunk, file);
+    if (got == 0) {
+      if (ferror(file)) {
+        failure = strerror(errno);
+      }
+      break;
+    }
+    if ((int64_t)acc->len + (int64_t)got > INT_MAX) {
+      failure = "line is too long";
+      break;
+    }
+    // one reserve for the whole chunk: at most `got` bytes are appended before
+    // the next read, however many lines they split into.
+    heap_bytes_reserve(ctx->heap, acc, acc->len + (int)got);
+    for (size_t i = 0; i < got; i++) {
+      if (chunk[i] != '\n') {
+        acc->bytes[acc->len++] = chunk[i];
+        continue;
+      }
+      IoLine step = io_line_out(ctx, args[1], acc);
+      acc->len = 0;
+      line_no++;
+      if (step != IO_LINE_GO) {
+        going = false;
+        bad_line = step == IO_LINE_BAD_UTF8 ? line_no - 1 : 0;
+        break;
+      }
+    }
+  }
+  // a file not ending in a newline still ends in a line; one that does owes
+  // nothing, which is exactly `acc->len == 0`.
+  if (going && failure == NULL && acc->len > 0) {
+    IoLine step = io_line_out(ctx, args[1], acc);
+    bad_line = step == IO_LINE_BAD_UTF8 ? line_no : 0;
+  }
+  fclose(file);
+  native_unroot(ctx, 1);
+
+  if (ctx->unwinding) {
+    return val_unit(); // reported where it happened; say nothing more
+  }
+  if (bad_line != 0) {
+    return io_fail(ctx, "cannot read '%s': line %d is not valid UTF-8",
+                   path->chars, bad_line);
+  }
+  if (failure != NULL) {
+    return io_fail(ctx, "cannot read '%s': %s", path->chars, failure);
+  }
+  return io_ok(ctx);
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -854,6 +1023,94 @@ static Value n_bytes_clear(NativeCtx *ctx, Value *args, int argc) {
   return val_unit();
 }
 
+// The bulk half, and the same four `[T]` grew in milestone 106 for the same
+// reason: each has a ducktape spelling that is an interpreted loop over a
+// native call, which is all cost and no decision. A length narrows the way
+// `array_len_ok` narrows, and for the same reason — `(int)` of 2^33 is 0.
+static bool bytes_len_ok(NativeCtx *ctx, int64_t n) {
+  if (n < 0) {
+    ctx->error = "byte length cannot be negative";
+    return false;
+  }
+  if (n > INT_MAX) {
+    ctx->error = "byte length is too large";
+    return false;
+  }
+  return true;
+}
+
+static Value n_bytes_reserve(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  if (!bytes_len_ok(ctx, args[1].as.i)) {
+    return val_unit();
+  }
+  heap_bytes_reserve(ctx->heap, val_as_bytes(args[0]), (int)args[1].as.i);
+  return val_unit();
+}
+
+// Shortening is only `len`; the dropped octets stay in the buffer and stop
+// being readable, which is the window `clear` already leaves. Growing is not
+// this function's business, so a length at or above the current one is a no-op.
+static Value n_bytes_truncate(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  if (!bytes_len_ok(ctx, args[1].as.i)) {
+    return val_unit();
+  }
+  ObjBytes *b = val_as_bytes(args[0]);
+  int n = (int)args[1].as.i;
+  if (n < b->len) {
+    b->len = n;
+  }
+  return val_unit();
+}
+
+// `b.extend(b)` is a program a program may write, so the source is read *after*
+// the reserve: growing reallocates `bytes`, and when the two are one object the
+// buffer that moved is the one being copied from.
+static Value n_bytes_extend(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  ObjBytes *b = val_as_bytes(args[0]);
+  int added = val_as_bytes(args[1])->len;
+  if (added == 0) {
+    return val_unit();
+  }
+  if (!bytes_len_ok(ctx, (int64_t)b->len + added)) {
+    return val_unit();
+  }
+  heap_bytes_reserve(ctx->heap, b, b->len + added);
+  memcpy(b->bytes + b->len, val_as_bytes(args[1])->bytes, (size_t)added);
+  b->len += added;
+  return val_unit();
+}
+
+// A copy, where `string_slice`'s answer is an interned share — a Bytes is
+// mutable, so a view would be two names for octets one of them can change.
+// It cuts anywhere, having no boundary to respect: that is the whole difference
+// between the two types, read from the slicing side.
+static Value n_bytes_slice(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  ObjBytes *b = val_as_bytes(args[0]);
+  int64_t from = args[1].as.i;
+  int64_t to = args[2].as.i;
+  if (from < 0 || to < from || to > b->len) {
+    ctx->error = "byte slice is out of bounds";
+    return val_unit();
+  }
+  ObjBytes *out = heap_bytes(ctx->heap);
+  int len = (int)(to - from);
+  if (len > 0) {
+    // `out` is unreachable from any root, so it must not outlive an allocation
+    // it does not survive — the reserve is the only one, and nothing is written
+    // before it.
+    native_root(ctx, val_obj(&out->obj));
+    heap_bytes_reserve(ctx->heap, out, len);
+    native_unroot(ctx, 1);
+    memcpy(out->bytes, b->bytes + from, (size_t)len);
+    out->len = len;
+  }
+  return val_obj(&out->obj);
+}
+
 // The exit door's question, asked separately from the exit itself: a native
 // cannot mint an `Option` (it has no handle on the VariantDef), so the choice
 // is made in ducktape and this is the predicate it chooses on.
@@ -918,13 +1175,17 @@ static const NativeEntry natives[] = {
     {"array_reserve", n_array_reserve},
     {"array_truncate", n_array_truncate},
     {"bytes_clear", n_bytes_clear},
+    {"bytes_extend", n_bytes_extend},
     {"bytes_get", n_bytes_get},
     {"bytes_is_utf8", n_bytes_is_utf8},
     {"bytes_len", n_bytes_len},
     {"bytes_new", n_bytes_new},
     {"bytes_push", n_bytes_push},
+    {"bytes_reserve", n_bytes_reserve},
     {"bytes_set", n_bytes_set},
+    {"bytes_slice", n_bytes_slice},
     {"bytes_to_string", n_bytes_to_string},
+    {"bytes_truncate", n_bytes_truncate},
     {"char_code", n_char_code},
     {"char_from_code", n_char_from_code},
     {"fmt_float", n_fmt_float},
@@ -932,6 +1193,8 @@ static const NativeEntry natives[] = {
     {"hash_string", n_hash_string},
     {"io_print", n_io_print},
     {"io_read_file", n_io_read_file},
+    {"io_read_lines", n_io_read_lines},
+    {"io_write_file", n_io_write_file},
     {"panic_abort", n_panic_abort},
     {"sort_by", n_sort_by},
     {"strbuf_build", n_strbuf_build},

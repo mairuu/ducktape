@@ -1,0 +1,14 @@
+#! expect: byte index is out of bounds
+# A failure inside the callback stops the walk and is reported where it
+# happened — the native drops its roots, closes the file and says nothing more.
+use std::io::print;
+use std::io::read_lines;
+
+fun main() {
+    var r = read_lines("tests/data/greeting.txt", |_line| {
+        var b = Bytes::new();
+        print(b.get(0));
+        true
+    });
+    print(r.is_ok());
+}

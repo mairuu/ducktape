@@ -1,0 +1,66 @@
+# std::io's write side. Pins that a write replaces and an append extends, that
+# an empty buffer still makes a file, and that a failure is an `Err` value.
+use std::io::append_file;
+use std::io::print;
+use std::io::read_file;
+use std::io::write_file;
+
+fun text(path: string) -> string {
+    return string::from_utf8(read_file(path).unwrap()).unwrap();
+}
+
+fun main() {
+    var path = "build/test_write.tmp";
+
+    print(write_file(path, "one\n".to_utf8()).is_ok());
+#> true
+    print(text(path));
+#> one
+#>
+
+    # a second write replaces, an append does not
+    print(write_file(path, "two\n".to_utf8()).is_ok());
+#> true
+    print(append_file(path, "three".to_utf8()).is_ok());
+#> true
+    print(text(path));
+#> two
+#> three
+
+    # appending to a file that is not there creates it, like writing does
+    var fresh = "build/test_write_new.tmp";
+    write_file(fresh, Bytes::new());
+    print(append_file(fresh, "x".to_utf8()).is_ok());
+#> true
+    print(text(fresh));
+#> x
+
+    # nothing to write still makes an empty file
+    print(write_file(fresh, Bytes::new()).is_ok());
+#> true
+    print(read_file(fresh).unwrap().len());
+#> 0
+
+    # a directory that is not there is an `Err`, not a crash — the message past
+    # it is libc's wording, not ours
+    print(write_file("build/no_such_dir/x.tmp", Bytes::new()).is_err());
+#> true
+
+    # a directory refuses to be opened for writing at all
+    print(write_file("tests/data", Bytes::new()).is_err());
+#> true
+
+    # a write fails at the *flush*, which is the only place a small one can:
+    # `fwrite` filled a buffer and succeeded, and `fclose` is what met the full
+    # device. Linux's `/dev/full` is the one way the suite can reach that branch
+    print(write_file("/dev/full", "x".to_utf8()).is_err());
+#> true
+
+    # the path check the read side makes, made on this side too
+    var sb = StringBuf::new();
+    sb.push("build/test_write.tmp");
+    sb.push_char('\u{0}');
+    sb.push("ignored");
+    print(write_file(sb.build(), Bytes::new()).err().unwrap());
+#> cannot write a path containing a NUL byte
+}

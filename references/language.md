@@ -1750,9 +1750,9 @@ unreachable. Where ducktape cannot express the operation, a module declares a
 bodyless function bound to C (see "Native functions" below); `std::assert`,
 `std::cmp`, `std::collections::hashmap`, `std::collections::hashset`,
 `std::convert`, `std::ops`, `std::option`, `std::result`, `std::sort` and
-`std::text` need none, `std::io` and `std::panic` are nothing but, and
-`std::array`, `std::string`, `std::string::buf`, `std::char` and `std::hash`
-are the mixed case — a handful of natives, and every other function written on
+`std::text` need none, `std::panic` is nothing but, and `std::array`,
+`std::string`, `std::string::buf`, `std::char`, `std::hash` and `std::io` are
+the mixed case — a handful of natives, and every other function written on
 top of them in ducktape.
 
 **A std module may nest.** A subdirectory of `std/` is a path segment, so
@@ -2544,7 +2544,13 @@ a deliberate exception, marked below.
 ```
 std::io      print<T>(value: T)                     # @native, free (see below)
              read_file(path: string) -> Result<Bytes, string>   # free
-             (plus a private free `read_file_into`, the @native it wraps)
+             write_file(path: string, data: Bytes) -> Result<(), string>
+             append_file(path: string, data: Bytes) -> Result<(), string>
+             read_lines(path: string, f: fun(string) -> bool)
+                 -> Result<(), string>              # free, and see below
+             (plus the private frees `read_file_into`, `write_file_raw` and
+              `read_lines_raw` — the @natives those wrap — and `answer`,
+              which turns an empty message back into `Ok`)
 
 std::array   fill<T>(n: int, value: T) -> [T]       # @native, free
              with_capacity<T>(n: int) -> [T]        # free
@@ -2598,6 +2604,10 @@ impl Bytes   Bytes::new() -> Bytes                  # @native (associated)
              self.set(i: int, value: int)           # @native
              self.push(value: int)                  # @native
              self.clear()                           # @native
+             self.reserve(capacity: int)            # @native
+             self.truncate(len: int)                # @native
+             self.extend(other: Bytes)              # @native
+             self.slice(from: int, to: int) -> Bytes  # @native
              self.is_utf8() -> bool                 # @native
              self.is_empty() -> bool
              (std::bytes also adds to `impl string`: `string::from_utf8(b) ->
@@ -2763,7 +2773,7 @@ mistaken for an `int`: `1.0`, `0.3333333333333333`, `300.0`, `1e+18`, `1e-07`,
 `-0.0`, `inf`, `-inf`, `NaN`. Exponent form takes over below `1e-5` and at
 `1e17`; every form printed is also a literal the scanner accepts.
 
-### `std::bytes`, and reading a file
+### `std::bytes`, and reading and writing a file
 
 **A `Bytes` is a packed byte buffer**: one octet per element, where a `[int]`
 would hold a whole `Value` each. That gap is the only reason the type exists.
@@ -2779,6 +2789,9 @@ b.push(104);        # 0..255; anything else is a runtime error
 b.push(105);
 b.get(0);           # 104 — an int, never a signed char
 b.set(0, 72);
+b.extend(other);    # `other` may be `b` itself
+b.truncate(1);      # shortens only; a larger length is a no-op
+b.slice(0, 1);      # a *copy* of the range, cutting anywhere
 string::from_utf8(b);   # Some("Hi")
 "hi".to_utf8();         # a Bytes of 2
 ```
@@ -2804,8 +2817,14 @@ object. `==` compares the octets — a `Bytes` is not interned, so it is a
 comparison rather than a pointer test. `print(b)` shows the octets in decimal,
 as `Bytes[104, 105]`, because an int is what `get` answers; rendering them as
 text would be a claim about the encoding that a `Bytes` is exactly the type
-that declines to make. There is **no `b[i]`** — a string has no index either,
-for the same reason.
+that declines to make. `slice` copies rather than sharing, because a `Bytes` is
+mutable and a view would be two names for octets either could change — where
+`string::slice` shares an interned string that nothing can alter, and cuts only
+at a character boundary a `Bytes` does not have.
+
+There is **no `b[i]`**: indexing is a *language* question rather than a missing
+method, since `b[i] = v` also has to mean something, and `[]` is defined on
+`[T]` alone. `get` and `set` are the spelling.
 
 **`std::io::read_file(path) -> Result<Bytes, string>`** is the read side, and
 the first thing a ducktape program can read at all:
@@ -2825,6 +2844,42 @@ error — a file that is not there is data, not a bug. A path containing a NUL
 byte is refused rather than truncated, because a ducktape string carries its
 own length while `fopen` stops at the first NUL, and the two would otherwise
 name different files.
+
+**`write_file(path, data)`** replaces whatever was there, **`append_file`**
+starts at the end, and both answer `Result<(), string>`. The write side makes a
+*weaker* promise than the read side, deliberately: a failed read restores the
+caller's buffer, so `Err` means nothing was appended, while nothing can un-write
+octets the disk already took — `Err` from a write says only that the write did
+not finish. All-or-nothing is a temporary and a rename, which is a policy a
+program writes on top of this rather than one baked in.
+
+**`read_lines(path, f)`** hands each line to `f`, which answers whether to keep
+going, so a program looking for one line stops at it:
+
+```
+use std::io::read_lines;
+
+read_lines("notes.txt", |line| {
+    print(line);
+    true                        # false stops the walk, without an error
+});
+```
+
+**A line arrives rather than being asked for, and that is a decision about who
+closes a file.** The pull shape — `for line in io::lines(path)` — needs a value
+holding the open file, and a `break` abandons it. ducktape has no destructors
+and a panic does not unwind, so a `defer` is not a guarantee either (see
+"`defer`"): nothing in the language could be *made* to close such a handle, and
+a file handle would be a promise the language cannot check. Pushing keeps the
+open and the close inside one native, where the close happens on every path the
+VM can take back into it. So there is no `File` type, and the operations are
+whole-file ones plus this walk.
+
+A line is a `string`, so a file that is not valid UTF-8 fails at the line that
+is not — the `Bytes`/`string` boundary reaching the read side. The separator is
+`\n` and is not part of the line; a `\r` before it goes too, so a CRLF file
+reads the same as an LF one, and a file not ending in a newline still ends in a
+line.
 
 Importing `std::io` at all brings `Bytes`'s methods with it, since `std::io`
 imports `std::bytes` — so a program that writes `use std::io::print;` gets the
@@ -3354,7 +3409,7 @@ See the gaps table below for what suppression still cannot do.
 | indexing a `string` by character (`s[i]`) | there is none: `s.chars()` walks, because a byte offset is not a character position. `s.chars().collect()` is the array, and `s.chars().skip(i).next()` is the one character |
 | a cut whose ends are known to be ordered | a `StrPos` is opaque and knows its own string (milestone 102), so cutting inside a character or into the wrong string is unrepresentable — but `slice` takes two independent positions rather than a range, so `s.slice(s.end(), s.start())` is still a runtime error |
 | a `byte` scalar | there is none, and deliberately: it would be the first sized integer in a language that has no others, and a `Value` is as wide as its widest arm, so it would buy no memory. `s.to_utf8()` hands the bytes over as a packed `Bytes` instead (milestone 108) |
-| writing a file, or reading one a line at a time | `std::io` reads a whole file and prints; there is no write side, no stdin, and no seeking. `read_file` is one call that either appends the lot or fails |
+| a file handle, stdin, or seeking | there is none, and the first is deliberate: nothing could be made to close a handle, so `std::io` is whole-file calls plus `read_lines`, which pushes (milestone 121). stdin and seeking are unwritten rather than refused — seeking is what only a handle can offer |
 | a *dynamic* width or precision in a format spec (`{v:>{n}}`) | the width and precision in a `{v:>8}` / `{f:.3}` spec are literals; a runtime value there has no spelling. The spec itself is sugar for `std::string::pad_*` / `std::fmt::float` (milestone 35) |
 | a downcast to a type that does not implement the trait, or binds a different associated type | rejected, rather than compiled as an always-`None` test: the identity is the vtable, and such a type has no table to recognise |
 | a trait's type arguments at a *bare* method call | the expected type breaks the tie between two impls of one generic trait, and pins an impl parameter the receiver cannot reach (`impl<T, U: From<T>> Into<U> for T`); with no expected type the first impl wins — or, where the parameter was only pinnable that way, no impl applies at all. The trait-qualified spelling (`into::<Fahrenheit>::into(c)`) settles it explicitly without an expected type |

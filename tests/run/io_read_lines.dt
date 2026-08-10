@@ -1,0 +1,106 @@
+# std::io::read_lines — the push shape that lets the file be closed. Pins the
+# separator's edges (CRLF, an empty line, a file not ending in one), the early
+# stop, and that a file which is not text fails at the line that is not.
+use std::io::print;
+use std::io::read_lines;
+use std::io::write_file;
+
+fun show(path: string) {
+    var r = read_lines(path, |line| {
+        print("[{line}]");
+        true
+    });
+    print(r.is_ok());
+}
+
+fun main() {
+    var path = "build/test_lines.tmp";
+
+    write_file(path, "one\ntwo\n".to_utf8());
+    show(path);
+#> [one]
+#> [two]
+#> true
+
+    # a file not ending in a newline still ends in a line; an empty line is one
+    write_file(path, "a\n\nb".to_utf8());
+    show(path);
+#> [a]
+#> []
+#> [b]
+#> true
+
+    # an empty file has no lines at all
+    write_file(path, Bytes::new());
+    show(path);
+#> true
+
+    # a CRLF file reads as an LF one
+    write_file(path, "x\r\ny\r\n".to_utf8());
+    show(path);
+#> [x]
+#> [y]
+#> true
+
+    # the callback answers whether to keep going, so a search stops at its hit
+    write_file(path, "1\n2\n3\n".to_utf8());
+    var seen = 0;
+    var stopped = read_lines(path, |line| {
+        seen = seen + 1;
+        line != "2"
+    });
+    print(seen);
+#> 2
+    print(stopped.is_ok());
+#> true
+
+    # a line longer than the read's own chunk: the accumulator spans reads
+    var sb = StringBuf::new();
+    var i = 0;
+    while i < 20000 {
+        sb.push_char('x');
+        i = i + 1;
+    }
+    sb.push("\ntail");
+    write_file(path, sb.build().to_utf8());
+    var widths: [int] = [];
+    read_lines(path, |line| {
+        widths.push(line.len());
+        true
+    });
+    print(widths);
+#> [20000, 4]
+
+    # a line is a `string`, so a file that is not text fails at the line that is
+    # not — and the lines before it were already handed over
+    var b = "ok\n".to_utf8();
+    b.push(255);
+    b.extend("\nafter\n".to_utf8());
+    write_file(path, b);
+    var got = read_lines(path, |line| {
+        print("<{line}>");
+        true
+    });
+#> <ok>
+    print(got.err().unwrap());
+#> cannot read 'build/test_lines.tmp': line 2 is not valid UTF-8
+
+    # the same failure on the *last* line, which the walk emits from outside its
+    # read loop and so counts on its own
+    var tail_bad = "one\ntwo\n".to_utf8();
+    tail_bad.push(255);
+    write_file(path, tail_bad);
+    print(read_lines(path, |_line| true).err().unwrap());
+#> cannot read 'build/test_lines.tmp': line 3 is not valid UTF-8
+
+    # a missing file is a value, not a crash
+    print(read_lines("build/no_such_file.tmp", |_line| true).is_err());
+#> true
+
+    var sb2 = StringBuf::new();
+    sb2.push("build/test_lines.tmp");
+    sb2.push_char('\u{0}');
+    sb2.push("ignored");
+    print(read_lines(sb2.build(), |_line| true).err().unwrap());
+#> cannot read a path containing a NUL byte
+}

@@ -1,0 +1,10 @@
+#! expect: byte length cannot be negative
+# `int` is the only integer type there is, so a capacity's lower edge is checked
+# here rather than by the type — the check `array::reserve` makes.
+use std::io::print;
+
+fun main() {
+    var b = Bytes::new();
+    b.reserve(0 - 1);
+    print(b.len());
+}

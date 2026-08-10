@@ -276,7 +276,12 @@ entry — only chars, strings and digits go in — so `build` validates nothing.
 runs `utf8_validate` and refuses, which is what keeps a `string` valid UTF-8
 even when the raw native is bound directly. The element a program sees is an
 `int` in 0..255, stored as one byte, and both edges of that range are checked in
-C because there is no `byte` type to have checked them earlier.
+C because there is no `byte` type to have checked them earlier. The bulk four
+(`reserve`, `truncate`, `extend`, `slice`) are the array's, narrowing a
+program's `int64_t` the same way and reading `extend`'s source after the reserve
+for the same `b.extend(b)` reason — except `slice`, which copies where
+`string_slice` shares: an interned string cannot change under a view and a
+`Bytes` can.
 
 string identity is pointer identity — `heap_intern` looks up an
 open-addressing table (FNV-1a hash, linear probing, tombstone deletes)
@@ -438,16 +443,40 @@ compares by pointer *because* it is interned, an `OBJ_STRBUF` has to compare
 its bytes. `OBJ_BYTES` arrived on exactly these terms and cost the image
 nothing for the same reason.
 
-`io_read_file` is the one native that reads the world. It appends to the caller's
-buffer and returns the failure as a string, empty when there was none — a native
-cannot mint a `Result`, so the value and the error leave by different doors, and
-the mutable buffer is what makes an out-parameter possible at all. It reads in
-8 KiB chunks rather than sizing by `ftell`: a length is a property of a regular
-file, and a pipe or a `/proc` entry answers zero for one while still having
-every byte to give. `out` stays rooted across the `heap_bytes_reserve` inside
-that loop because it is `args[1]`, still on the VM stack — the whole of what the
-calling convention promises. A path holding a NUL is refused before `fopen`
-sees it, since a ducktape string carries its own length and `fopen` does not.
+### The natives that touch the world
+
+Three of them, and one door out: none can mint a `Result`, so each returns the
+failure as a string and answers the empty one on success (`io_ok`/`io_fail`).
+A path holding a NUL is refused before `fopen` sees it (`io_path_ok`), since a
+ducktape string carries its own length and `fopen` does not.
+
+`io_read_file` appends to the caller's buffer, which is the out-parameter a
+mutable object makes possible. It reads in 8 KiB chunks rather than sizing by
+`ftell`: a length is a property of a regular file, and a pipe or a `/proc` entry
+answers zero for one while still having every byte to give. `out` stays rooted
+across the `heap_bytes_reserve` inside that loop because it is `args[1]`, still
+on the VM stack — the whole of what the calling convention promises.
+
+`io_write_file` takes an append flag and is otherwise the mirror, except in what
+it promises: the read restores `out->len` on failure, and a write has nothing to
+restore, so its `Err` says the write did not finish and nothing about the file.
+Its `fclose` is checked because a buffered write reports failure *there* — the
+`fwrite` that filled the last buffer succeeded, and the flush behind it is what
+meets ENOSPC.
+
+`io_read_lines` is the second native to call back into ducktape, and the first
+whose *shape* is a consequence of the runtime rather than a speed decision
+(milestone 121). Pulling lines would need a `FILE *` inside a ducktape value,
+and nothing could be made to close it: there are no destructors, and a panic
+does not unwind past `defer`. Pushing keeps the open/close pair in one C frame.
+The accumulator is an `ObjBytes` rather than a C buffer — it grows the way every
+other buffer here grows, and `native_root` is what carries it across the
+collection the callback may trigger. One `heap_bytes_reserve` covers a whole
+chunk, since at most `got` bytes are appended before the next read however many
+lines they split into. The callback's `false` and a `native_call` that fails are
+different answers (`IoLine`): the first is success, the second returns promptly
+with the roots dropped and says nothing, because it was reported where it
+happened.
 
 ## Codegen shapes (`src/codegen.c`)
 
@@ -1677,7 +1706,9 @@ convenience:
 named function rather than a closure, a comparator that sorts (the interpreter
 re-entered twice over) — and under `--gc-stress` it is the rooting test:
 deleting the `native_root` calls turns it into a heap corruption abort rather
-than a wrong answer.
+than a wrong answer. `io_read_lines` is the second caller and holds a root of
+its own (the line accumulator) across every callback, so
+`tests/run/io_read_lines.dt` is the same rooting test read from the io side.
 
 **Panic is that failure path, named.** `std::panic`'s `panic_abort` sets
 `ctx->error` and nothing else, so a ducktape-level panic and a failing native
