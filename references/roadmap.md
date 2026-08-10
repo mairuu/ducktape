@@ -2,13 +2,13 @@
 
 ## Start here
 
-**Last landed:** milestone 118 (`12a0b2f`) — **the receiver that is not a
-value**. An exploded binding now survives being a spliced call's receiver, and
-a call whose callee always constructs its result is a fresh initializer, so
-`var it = xs.iter()` is three slots and `it.next()` costs **7.7ns/elem** over
-the plain `for` where this direction began at 77.5. 708 tests, clean under
-debug, `--gc-stress` and `make sanitize`. Everything lands on `main`; there are
-no feature branches.
+**Last landed:** milestone 119 (`763d535`) — **scope exit is a thing you can
+write**. `defer` is block-grained and evaluated at the exit: the expression is
+compiled again at every way out of its block, so it reads the locals as they
+are then. No new opcode and no image change — the VM never learns the word.
+714 tests, clean under debug, `--gc-stress` and `make sanitize`. It was built
+on `feature/defer-poc` and merged; that branch was the one exception to
+everything landing on `main`.
 
 **Nothing is blocked, and nothing is owed.** Milestone 95 closed the last entry
 that was not a matter of appetite, and 103 the last one that was already
@@ -18,7 +18,11 @@ that was not a matter of appetite, and 103 the last one that was already
 spent**, at milestone 118. Ten milestones took `it.next()` from +77.5ns/elem
 over the plain `for` to +7.7, and the direction has no step left in it; its
 entry keeps the reasoning because each finding outlived its milestone.
-**Everything that remains is breadth**, so the three below are all appetite:
+**Everything under "Next" is breadth**, so the three below are all appetite —
+but 119 left one compiler item behind that is not: codegen resolves a local by
+*name* where the checker already resolved it to a `VarEntry`, and `CgDeferSkip`
+is the patch over the seam. It is a wart rather than a milestone here because
+it deletes machinery instead of adding a feature.
 
 2. **std breadth on the natives** — every piece with a design question in it is
    spent, so what remains is typing.
@@ -647,6 +651,35 @@ to keep this file small. Everything from 100 on is below.
   Remainder: `it.map(f)` is unmoved at +39, because a chain's source is stored
   into the adapter and so leaves whole; and a plain `fun` call is never a fresh
   initializer, since `cg_static_callee` reads only a method call's resolution.
+
+- **119. Scope exit is a thing you can write** (`763d535`) — `defer expr;` and
+  `defer { .. }`, block-grained and evaluated at the exit: the expression is
+  compiled again at every way out of its block — fall-through, `return`, `?`,
+  `break`, `continue` — innermost scope first and in reverse declaration order,
+  so it reads the locals as they are then rather than as they were where it was
+  written. Nothing may leave a deferred body. No new opcode and no image
+  change: the VM never learns the word.
+  Design: `language.md` "Statements and blocks" → "`defer`", `runtime.md`
+  "Codegen shapes" → "`defer`", `architecture.md` (the barrier frame, the
+  parser's one bare-block statement head, the CFG mirror), `grammar.ebnf`
+  `stmt`. **THE FINDING: milestone 98's landing pad is the wrong shape for
+  this.** The pad carries one exit kind to one destination, where a `defer`
+  runs several nested scopes on the way to a destination that differs per exit
+  kind — chaining pads wants a "where am I going" variable, and compiling the
+  body again at each exit is what "evaluated at the exit" already means, so it
+  falls out of the design rather than being paid for on top of it. Second:
+  **codegen resolves a local by *name*, and an exit sits below declarations the
+  `defer` sits above** — `var x` / `defer print(x)` / `var x` read the second
+  one until `CgDeferSkip` hid that span of `Cg.locals`. Third: `src/cfg.c` had
+  to mirror the chain, or a store nothing but a `defer` reads looks dead; the
+  graph now has a second consumer. Sabotage 19/20 bit — the one that mattered
+  **survived the first round and was a live miscompile**: "a `break` runs every
+  scope" ran the defer of the block *around* a loop twice, once early, and
+  `break_stops_at_the_loop` pins it now. Remainder: the honest survivor is that
+  a body holding a `defer` is refused a splice though `Cg.defers_base` already
+  makes one correct; m116's thread declines where a `defer` sits between a
+  construction and the `return` carrying it; and a panic does not run defers,
+  so this is ergonomics rather than the answer to who closes a file handle.
 
 ## Next (in recommended order)
 
@@ -1288,6 +1321,26 @@ The corner where the honest answer is a data table nobody has shipped.
   an arm that could leave a tag uncovered (a guard, a binding arm) declines
   threading, and exhaustiveness covers the rest. It is a net with no test behind
   it, like `compile_coerce_dyn`'s abstract-target guard
+- **codegen resolves a local by name, where the checker resolved it by entry**
+  (milestone 119). Every `EXPR_PATH` already carries the `VarEntry *` it landed
+  on and `cfg.c` reads it; `cg_find_local` asks a second question about the same
+  name, and `defer` is the first construct where the two answers can differ —
+  an exit sits below declarations the `defer` sits above, so `CgDeferSkip` hides
+  that span of `Cg.locals` while a body emits. There are only two real call
+  sites (the assignment target, `EXPR_PATH`), both already holding the node.
+  Switching to entry identity deletes `CgDeferSkip` *and* `Cg.locals_base` — a
+  callee's entry cannot equal a caller's, so a splice's name barrier becomes
+  implied rather than enforced. The weight is plumbing an entry into every
+  `cg_add_local`, parameters especially
+- **a body holding a `defer` is refused a splice** (milestone 119).
+  `Cg.defers_base` already makes one come out right — a spliced `return` runs
+  the callee's scopes and stops at the caller's — and the sabotage that turned
+  the guard off survived the whole suite. It is conservatism, not a
+  requirement; relaxing it is an optimisation and wants a bench row
+- **m116's thread declines where a `defer` sits between a construction and the
+  `return` carrying it** (milestone 119), since the claim is read off the last
+  instruction emitted and a deferred body is instructions. Correct, and visible
+  only as speed — an iterator's `next` that defers keeps its tag test
 - **the read/slide fold only fires for the first parameter** (milestone 114).
   The slide leaves its value at the lowest slot it removes, so only a read of
   *that* slot is already in place; `return b` from a two-parameter body still
@@ -1310,7 +1363,10 @@ Listed so the absence reads as a decision rather than an omission.
   by refusing them, since the code below is unreachable either way
 - a panic does not unwind — no `catch`, and no way for a program to observe one
   and keep running. `!` is only a *type*; the runtime behaviour behind it is
-  "print the frames and stop"
+  "print the frames and stop". A `defer` does not run on that path either
+  (milestone 119), which is what keeps `defer` ergonomics rather than a
+  guarantee, and why item 4's "who closes a file handle" still wants a library
+  answer
 
 ### The test suite
 
