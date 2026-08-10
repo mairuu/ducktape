@@ -2,31 +2,31 @@
 
 ## Start here
 
-**Last landed:** milestone 120 (`3543157`) — **the name codegen no longer
-resolves**. A reference is matched on the `VarEntry` the checker resolved it
-to, not on its name, so `CgDeferSkip` and `Cg.locals_base` are both gone: a
-shadowed name is a different binding, and a spliced body's bindings are its
-own. It also closed a crash that predates it — a closure calling the function
-around it expanded splices until the C stack ran out. 714 tests, clean under
-`make sanitize`, and the bench agrees with 119 on every row.
+**Last landed:** milestone 121 (`54c6534`) — **a file is never held open**.
+`std::io` grew `write_file`/`append_file` and `read_lines(path, f)`, which
+pushes each line at a closure that answers whether to keep going, and `Bytes`
+grew the bulk four `[T]` got in 106. The decision item 4 was holding is
+answered **no**: there is no file handle, because nothing could be made to
+close one. 723 tests, clean under `make sanitize`.
 
 **Nothing is blocked, and nothing is owed.** Milestone 95 closed the last entry
 that was not a matter of appetite, and 103 the last one that was already
 *designed*. Every item under "Next" is a choice.
 
-**Item 1 of "Next" — the iterator, and the compiler work behind it — is
-spent**, at milestone 118. Ten milestones took `it.next()` from +77.5ns/elem
-over the plain `for` to +7.7, and the direction has no step left in it; its
-entry keeps the reasoning because each finding outlived its milestone.
-**Everything under "Next" is breadth** — 119 left one compiler item that was
-not, and 120 spent it — so the three below are all appetite.
+**Two of the four items below are spent.** Item 1 — the iterator, and the
+compiler work behind it — went at 118, ten milestones after it opened; item 4's
+one open decision went at 121. Both entries keep their reasoning, because each
+finding outlived its milestone. What is left is breadth and one *declined*
+item, so picking is appetite and nothing else:
 
 2. **std breadth on the natives** — every piece with a design question in it is
    spent, so what remains is typing.
 3. **`Eq`** — recorded as *declined*, by two consumers that were asked for it by
    name. Read the entry before reopening it.
-4. **`std::io` past one read** — one decision in it: whether a file *handle* is
-   worth a type, which is really the question of who closes it.
+
+The nearest thing to a designed item is **stdin**, which 121 left out for a
+reason that is not about the language: the suite cannot feed a child's stdin,
+so it wants a `#! stdin:` directive in `scripts/run_tests.sh` first.
 
 **How to read the rest of this file.** `Done` is one entry per milestone, oldest
 first, each pointing at the commit that holds the full write-up — `git log` is
@@ -61,6 +61,27 @@ Everything from 120 on is below.
   stack ran out; the child compiler now inherits both. Sabotage 9/10, the
   survivor unreachable rather than untested (a closure's `ParamDef` mirror — a
   splice needs a call by name). Remainder: none.
+
+- **121. A file is never held open** (`54c6534`) — `write_file`/`append_file`
+  are whole-file writes over one native with an append flag; `read_lines(path,
+  f)` hands each line to a closure that answers whether to keep going. The
+  decision item 4 held is answered **no**: a handle would be a resource whose
+  release is a promise the language cannot check, since there are no destructors
+  and a panic does not unwind past `defer` (119). Pulling is what cannot be
+  written — a `break` abandons the iterator and the open file with it — so the
+  push keeps the open/close pair in one C frame. `Bytes` grew m106's bulk four,
+  `slice` copying where `string_slice` shares.
+  Design: `language.md` "`std::bytes`, and reading and writing a file",
+  `runtime.md` "The natives that touch the world".
+  **THE FINDING: a small write does not fail at `fwrite`, it fails at
+  `fclose`.** The bytes go into stdio's buffer and the call succeeds; the flush
+  behind it is what meets ENOSPC, so an unchecked `fclose` reports a write that
+  never landed as a success. Sabotage found it — the mutant dropping the check
+  survived the suite, because no test can fill a disk. Linux's `/dev/full` can,
+  and reaches that branch and only that branch. Sabotage 12/12 after two real
+  gaps closed (the loop path's line number; an aliased `extend` that never had
+  to grow, which `make sanitize` catches and `make test` does not).
+  Remainder: stdin and seeking, and `b[i]` as a language question.
 
 ## Next (in recommended order)
 
@@ -247,16 +268,22 @@ wrong, and it landed in milestones 94–95.
    to address — and milestone 63 showed the other way out of it, since
    `std::hash` simply declines to implement `Hash for float` at all.
 
-4. **Growing `std::io` past one read.** Milestone 108 spent the item that stood
-   here — a packed `Bytes`, shipping with the milestone that first had something
-   to read — and what is left of the direction is breadth with one decision in
-   it. `read_file` is a single call that appends a whole file or fails; there is
-   no write side, no stdin, no seeking, and no line-at-a-time read. The decision
-   waiting is whether a *handle* is worth a type: everything above can be
-   written as more whole-file calls, and only streaming needs an object that
-   remembers a position. `Bytes` itself is missing the bulk operations `[T]`
-   grew in milestone 106 (`reserve`, `extend`, `truncate`, a slice) and has no
-   `b[i]`, all of which are ordinary registry entries.
+4. ~~**Growing `std::io` past one read.**~~ **Spent at milestone 121**, which
+   answered the one decision in it: a file *handle* is not worth a type, because
+   nothing could be made to close one. That is not a preference — it follows
+   from two facts already recorded here, that there are no destructors and that
+   a panic does not unwind past a `defer` — and it *bounds the direction*: every
+   io operation is a whole-file call or a push, and seeking is the one shape
+   that cannot be either.
+
+   What is left is unwritten rather than refused. **stdin** is the piece with a
+   consumer, and the push shape fits it as it fits a file; what it needs first
+   is a way for the suite to feed a child's stdin (`scripts/run_tests.sh` has no
+   directive for it). Everything else is more whole-file calls.
+
+   One correction the milestone made to this entry: `b[i]` is **not** an
+   ordinary registry entry. Indexing is a language question, since `b[i] = v`
+   also has to mean something and `[]` is defined on `[T]` alone.
 
    (The **`byte` scalar** stays rejected, and milestone 108 is the evidence
    rather than the argument: a `Value` is as wide as its widest arm, so `[byte]`
@@ -735,8 +762,11 @@ Listed so the absence reads as a decision rather than an omission.
   and keep running. `!` is only a *type*; the runtime behaviour behind it is
   "print the frames and stop". A `defer` does not run on that path either
   (milestone 119), which is what keeps `defer` ergonomics rather than a
-  guarantee, and why item 4's "who closes a file handle" still wants a library
-  answer
+  guarantee — and milestone 121 is what that costs: no file handle, because a
+  close is a promise nothing in the language can enforce
+- no stdin and no seeking (milestone 121). Seeking is the one io shape a
+  whole-file call or a push cannot stand in for, so it waits on the handle that
+  decision refused; stdin waits only on a way to test it
 
 ### The test suite
 
@@ -745,6 +775,10 @@ Listed so the absence reads as a decision rather than an omission.
   the reachable failures (a missing file, a directory) append nothing before
   they fail, so the restore is a no-op wherever it can be observed. The
   `ferror` branch itself is tested — a directory opens and then refuses
+- **the suite now names `/dev/full`** (milestone 121), which is Linux's and
+  nothing else's. It is the only way to reach a failing *flush*, so the
+  alternative was the write side inheriting the entry above; a port would have
+  to drop that one line of `tests/run/io_write_file.dt`
 - `make sanitize` is a separate run, not part of `make test`: a sanitizer
   finding is not a test failure, so the suite stays green while the binary is
   doing something undefined. Nothing enforces that it is run before a commit
