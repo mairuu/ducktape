@@ -2,13 +2,23 @@
 
 ## Start here
 
-**Last landed:** milestone 120 (`3543157`) — **the name codegen no longer
+> **This branch is a fork.** `feature/m120-file-handle` leaves the main line at
+> milestone 120 and answers item 4 below — is a file *handle* worth a type —
+> the opposite way from `main`'s milestone 121, which concluded it is not.
+> Both are numbered 121 and they are alternatives, not a sequence. Read the two
+> commit bodies together before merging either.
+
+**Last landed:** milestone 121 (`015369d`) — **a file is held open, and
+`defer` closes it**. `std::io::File` is a handle over an entry in a table in
+`src/native.c`, iterating the file's lines; the program closes it, and `defer`
+covers every exit but an abort. 719 tests, clean under `make sanitize`.
+
+**Landed before it:** milestone 120 (`3543157`) — **the name codegen no longer
 resolves**. A reference is matched on the `VarEntry` the checker resolved it
 to, not on its name, so `CgDeferSkip` and `Cg.locals_base` are both gone: a
 shadowed name is a different binding, and a spliced body's bindings are its
 own. It also closed a crash that predates it — a closure calling the function
-around it expanded splices until the C stack ran out. 714 tests, clean under
-`make sanitize`, and the bench agrees with 119 on every row.
+around it expanded splices until the C stack ran out.
 
 **Nothing is blocked, and nothing is owed.** Milestone 95 closed the last entry
 that was not a matter of appetite, and 103 the last one that was already
@@ -25,8 +35,9 @@ not, and 120 spent it — so the three below are all appetite.
    spent, so what remains is typing.
 3. **`Eq`** — recorded as *declined*, by two consumers that were asked for it by
    name. Read the entry before reopening it.
-4. **`std::io` past one read** — one decision in it: whether a file *handle* is
-   worth a type, which is really the question of who closes it.
+4. ~~**`std::io` past one read**~~ — its one decision, whether a file *handle*
+   is worth a type, is **answered at milestone 121: yes, and the program
+   closes it.** What is left under it is typing (a write side, stdin, seeking).
 
 **How to read the rest of this file.** `Done` is one entry per milestone, oldest
 first, each pointing at the commit that holds the full write-up — `git log` is
@@ -61,6 +72,25 @@ Everything from 120 on is below.
   stack ran out; the child compiler now inherits both. Sabotage 9/10, the
   survivor unreachable rather than untested (a closure's `ParamDef` mirror — a
   splice needs a call by name). Remainder: none.
+
+- **121. A file is held open, and `defer` closes it** (`015369d`) — the fork's
+  answer to item 4, and the opposite of `main`'s milestone 121: `std::io::File`
+  opens, iterates its lines and is closed by the program, with `defer` covering
+  every exit but an abort. A `File` is a struct over an int naming an entry in
+  a table in `src/native.c` rather than a pointer to one, so a stale or forged
+  handle resolves to nothing instead of to somebody's file; an `OBJ_FILE` was
+  declined because the collector runs no finalisers.
+  Design: `language.md` "`std::io`, …" (the `File` subsection and two rows of
+  the not-yet-implemented table), `runtime.md` "The open-file table".
+  **THE FINDING: what m121 called impossible was true only of the sugar.** Its
+  "a `break` abandons it" is about `for line in io::lines(path)`, whose file
+  lives in a hidden iterator local no `defer` can name — not about a handle the
+  program binds. m119 is what changed that, so the real cost is not "cannot be
+  closed" but "closed on every path except an abort".
+  Sabotage 9/10; the survivor restores a buffer that is private to `std::io`
+  and cleared by the next `next()`, so it is unreachable rather than untested.
+  Remainder: `close` returns unit, which is wrong the moment there is a write
+  side to flush; no write side, seek, or stdin (item 4).
 
 ## Next (in recommended order)
 
@@ -249,14 +279,22 @@ wrong, and it landed in milestones 94–95.
 
 4. **Growing `std::io` past one read.** Milestone 108 spent the item that stood
    here — a packed `Bytes`, shipping with the milestone that first had something
-   to read — and what is left of the direction is breadth with one decision in
-   it. `read_file` is a single call that appends a whole file or fails; there is
-   no write side, no stdin, no seeking, and no line-at-a-time read. The decision
-   waiting is whether a *handle* is worth a type: everything above can be
-   written as more whole-file calls, and only streaming needs an object that
-   remembers a position. `Bytes` itself is missing the bulk operations `[T]`
-   grew in milestone 106 (`reserve`, `extend`, `truncate`, a slice) and has no
-   `b[i]`, all of which are ordinary registry entries.
+   to read — and **milestone 121 spent the decision in it**: a handle *is* worth
+   a type, the program closes it, and `defer` is what makes that a fair ask
+   rather than a trap. What is left is typing, in rough order of appetite:
+
+   - **a write side.** `File::create`/`append`, `h.write(s)`, and the close that
+     has to answer whether the flush worked — which is the one place 121's
+     unit-returning `close` is wrong, since a read handle has nothing to lose
+     and a write handle has everything. Its own testing problem, and `/dev/full`
+     is the fixture (see `io_read_file`'s wart below).
+   - **seeking**, the shape that motivated the handle in the first place and is
+     now merely unwritten: `h.seek(pos)`, `h.tell()`.
+   - **stdin**, still blocked on `scripts/run_tests.sh` having no way to feed a
+     child's stdin.
+   - `Bytes` is missing the bulk operations `[T]` grew in milestone 106
+     (`reserve`, `extend`, `truncate`, a slice) and has no `b[i]`, all of which
+     are ordinary registry entries.
 
    (The **`byte` scalar** stays rejected, and milestone 108 is the evidence
    rather than the argument: a `Value` is as wide as its widest arm, so `[byte]`
@@ -735,8 +773,10 @@ Listed so the absence reads as a decision rather than an omission.
   and keep running. `!` is only a *type*; the runtime behaviour behind it is
   "print the frames and stop". A `defer` does not run on that path either
   (milestone 119), which is what keeps `defer` ergonomics rather than a
-  guarantee, and why item 4's "who closes a file handle" still wants a library
-  answer
+  guarantee. Milestone 121 is what that now costs: an aborting program leaks
+  every open `File`, which is tolerable only because the process is exiting.
+  A `catch` — or `feature/repl`, where the process does not exit — makes it
+  indefensible, so whichever lands first owes the handles an answer
 
 ### The test suite
 
@@ -744,7 +784,10 @@ Listed so the absence reads as a decision rather than an omission.
   fails partway restores the caller's buffer, and the suite cannot build one:
   the reachable failures (a missing file, a directory) append nothing before
   they fail, so the restore is a no-op wherever it can be observed. The
-  `ferror` branch itself is tested — a directory opens and then refuses
+  `ferror` branch itself is tested — a directory opens and then refuses.
+  `file_read_line` inherited both halves at milestone 121, and one more reason
+  its restore cannot be observed: the buffer it restores is `File`'s own
+  private one, which the next `next()` clears anyway
 - `make sanitize` is a separate run, not part of `make test`: a sanitizer
   finding is not a test failure, so the suite stays green while the binary is
   doing something undefined. Nothing enforces that it is run before a commit
