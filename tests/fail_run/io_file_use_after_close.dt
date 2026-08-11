@@ -1,0 +1,15 @@
+#! expect: read from a file that is not open
+# The one thing the table has to catch. A closed handle still holds the id it
+# had, and that id may by then name a file somebody else opened — so reading
+# through it is refused, not resolved. (The generation in the id is what makes
+# the refusal reliable; without it the slot would answer for its new occupant.)
+use std::io::print;
+use std::io::File;
+
+fun main() {
+    var h = File::open("tests/data/lines.txt").unwrap();
+    h.close();
+    for line in h {
+        print(line);
+    }
+}

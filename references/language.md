@@ -2546,6 +2546,13 @@ std::io      print<T>(value: T)                     # @native, free (see below)
              read_file(path: string) -> Result<Bytes, string>   # free
              (plus a private free `read_file_into`, the @native it wraps)
 
+impl File    File::open(path: string) -> Result<File, string>
+             self.close()
+             self.is_open() -> bool
+             self.error() -> string
+impl Iterator for File   # Item = string; the lines, pulled
+             (plus five private @natives over the runtime's file table)
+
 std::array   fill<T>(n: int, value: T) -> [T]       # @native, free
              with_capacity<T>(n: int) -> [T]        # free
 
@@ -2830,6 +2837,48 @@ Importing `std::io` at all brings `Bytes`'s methods with it, since `std::io`
 imports `std::bytes` — so a program that writes `use std::io::print;` gets the
 `Bytes` surface whether or not it asked, and an explicit `use std::bytes;`
 beside it is reported as an unused import.
+
+**`std::io::File`** is the other shape: a file held open and read a line at a
+time. `File::open` answers a `Result`, the handle iterates its lines, and
+`close` is the program's job — there is no destructor, so nothing else will do
+it:
+
+```
+use std::io::File;
+
+fun first_stop(path: string) -> Result<string, string> {
+    var h = File::open(path)?;
+    defer h.close();
+    for line in h {
+        if line == "stop" { return Result::Ok(line); }
+    }
+    return Result::Err("no stop");
+}
+```
+
+`defer` is what makes that a fair ask rather than a trap: it covers every way
+out of the block, `break`, `continue`, `return` and `?` included, so the close
+sits one line under the open instead of once per exit. **The one path it does
+not cover is an abort** — a panic runs no defers and leaks the descriptor into
+a process that is exiting anyway. So does simply forgetting: a dropped handle
+is not collected back, and the runtime's table holds 64 files, after which
+`open` answers `Err`. That is the price of the handle, and it is why
+`read_file` stays — a program that wants a whole file and not the bookkeeping
+should not open one.
+
+A `File` is a struct over an int naming an entry in that table, not a pointer,
+so a stale handle is caught rather than followed: `is_open` answers false after
+a close, `close` a second time is harmless (which is what lets an explicit
+close and a deferred one coexist), and *reading* through a closed handle is a
+runtime error. Reopening cannot resurrect an old handle either — an id carries
+a generation, so a reused entry never answers for the handle that used to name
+it.
+
+The lines come out without their newline, and a final line lacking one is still
+a line. `Option` has no failure arm and `Iterator` did not grow one for this, so
+a read error ends the iteration exactly as end-of-file does; **`h.error()` after
+the loop** is the difference, empty unless something went wrong (bytes that are
+not valid UTF-8, or a failed read or close).
 
 ### `std::char`, and what a `string` is made of
 
@@ -3354,7 +3403,8 @@ See the gaps table below for what suppression still cannot do.
 | indexing a `string` by character (`s[i]`) | there is none: `s.chars()` walks, because a byte offset is not a character position. `s.chars().collect()` is the array, and `s.chars().skip(i).next()` is the one character |
 | a cut whose ends are known to be ordered | a `StrPos` is opaque and knows its own string (milestone 102), so cutting inside a character or into the wrong string is unrepresentable — but `slice` takes two independent positions rather than a range, so `s.slice(s.end(), s.start())` is still a runtime error |
 | a `byte` scalar | there is none, and deliberately: it would be the first sized integer in a language that has no others, and a `Value` is as wide as its widest arm, so it would buy no memory. `s.to_utf8()` hands the bytes over as a packed `Bytes` instead (milestone 108) |
-| writing a file, or reading one a line at a time | `std::io` reads a whole file and prints; there is no write side, no stdin, and no seeking. `read_file` is one call that either appends the lot or fails |
+| writing a file, or seeking in one | `std::io` reads — a whole file (`read_file`) or a line at a time through a `File` handle. There is no write side, no stdin, and no seek, though a handle is what a seek would need and now exists |
+| a file that closes itself | there are no destructors, so `defer h.close()` is the close, and it is not enforced. It covers every ordinary exit and not an abort; a dropped handle stays open until the process ends (the table holds 64) |
 | a *dynamic* width or precision in a format spec (`{v:>{n}}`) | the width and precision in a `{v:>8}` / `{f:.3}` spec are literals; a runtime value there has no spelling. The spec itself is sugar for `std::string::pad_*` / `std::fmt::float` (milestone 35) |
 | a downcast to a type that does not implement the trait, or binds a different associated type | rejected, rather than compiled as an always-`None` test: the identity is the vtable, and such a type has no table to recognise |
 | a trait's type arguments at a *bare* method call | the expected type breaks the tie between two impls of one generic trait, and pins an impl parameter the receiver cannot reach (`impl<T, U: From<T>> Into<U> for T`); with no expected type the first impl wins — or, where the parameter was only pinnable that way, no impl applies at all. The trait-qualified spelling (`into::<Fahrenheit>::into(c)`) settles it explicitly without an expected type |

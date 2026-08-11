@@ -11,6 +11,8 @@
 # observation monomorphisation itself rests on, read from the other side.
 
 use std::bytes;
+use std::iter::Iterator;
+use std::option::Option;
 use std::result::Result;
 
 @native("io_print")
@@ -41,4 +43,126 @@ pub fun read_file(path: string) -> Result<Bytes, string> {
         return Result::Ok(out);
     }
     return Result::Err(err);
+}
+
+# ── A file held open ────────────────────────────────────────────────────────
+#
+# `read_file` reads a whole file because it is the shape that needs no handle,
+# and the reason to want one is everything that shape cannot do: stopping early,
+# and reading a file too big to hold. Both need the file to stay open across
+# more than one call, which means something has to close it — and this language
+# has no destructor, so that something is the program.
+#
+# `defer` is what makes that a fair ask. It covers every way out of the block
+# the handle was bound in, `break` and `?` included, so the close sits one line
+# under the open and is not repeated at each exit:
+#
+#     var h = File::open(path)?;
+#     defer h.close();
+#     for line in h {
+#         if line == "stop" { break; }   # the defer closes on the way out
+#     }
+#
+# What it does not cover is an abort, which runs no defers — a panic mid-loop
+# leaks the descriptor into a process that is exiting anyway. That is the whole
+# of the cost, and it is why `read_file` stays: a program that wants the file
+# and not the bookkeeping should not open one.
+#
+# A dropped handle is the other half of the same fact. Forgetting to close is
+# not an error and not caught; the file stays open until the process ends.
+
+# The C half. A `File` is an int naming an entry in the runtime's table, so
+# these take the name rather than the handle — a native has no way to read a
+# struct's field. `open_raw` answers 0 for "no file", since no entry is ever
+# named 0, and the reason is left where `error_raw` finds it.
+@native("file_open")
+fun open_raw(path: string) -> int;
+
+@native("file_close")
+fun close_raw(id: int) -> bool;
+
+@native("file_is_open")
+fun is_open_raw(id: int) -> bool;
+
+# 1 = a line was appended to `out`, 0 = end of file, -1 = the read failed.
+@native("file_read_line")
+fun read_line_raw(id: int, out: Bytes) -> int;
+
+@native("file_error")
+fun error_raw() -> string;
+
+# An open file, read a line at a time.
+#
+# The fields are private, so the only `File` a program can have is one `open`
+# handed it — but the runtime does not rely on that. A forged or stale id names
+# no entry, and every operation here answers that case rather than trusting it.
+pub struct File {
+    id: int,
+    # The line under construction, reused across `next` so a file costs one
+    # buffer rather than one per line.
+    buf: Bytes,
+    # Why the iteration stopped, when it was not the end of the file. `next`
+    # answers `None` for both, so this is the difference, and it is read after
+    # the loop rather than during it.
+    fault: string,
+}
+
+impl File {
+    # Open `path` for reading.
+    fun open(path: string) -> Result<File, string> {
+        var id = open_raw(path);
+        if id == 0 {
+            return Result::Err(error_raw());
+        }
+        return Result::Ok(File { id: id, buf: Bytes::new(), fault: "" });
+    }
+
+    # Release the file. Closing twice is harmless — an explicit close followed
+    # by a deferred one is the ordinary shape, and neither call is the wrong
+    # one — so this is safe to `defer` unconditionally.
+    fun close(self) {
+        if not close_raw(self.id) {
+            self.fault = error_raw();
+        }
+    }
+
+    fun is_open(self) -> bool {
+        return is_open_raw(self.id);
+    }
+
+    # Empty unless a read failed. `close` reports through here too, so one check
+    # after the block covers the whole handle.
+    fun error(self) -> string {
+        return self.fault;
+    }
+}
+
+# Lines, pulled. The newline is not part of the line, and a final line without
+# one is still a line.
+#
+# A read error and the end of the file are both `None`: `Option` has no arm for
+# a failure and `Iterator` was not going to grow one for this. So a loop that
+# must know checks `error()` after it, which is the same order the fault is
+# written in.
+impl Iterator for File {
+    type Item = string;
+
+    fun next(self) -> Option<string> {
+        self.buf.clear();
+        var got = read_line_raw(self.id, self.buf);
+        if got < 0 {
+            self.fault = error_raw();
+            return Option::None;
+        }
+        if got == 0 {
+            return Option::None;
+        }
+        match string::from_utf8(self.buf) {
+            Option::Some(line) => Option::Some(line),
+            Option::None => {
+                self.fault = "line is not valid UTF-8";
+                Option::None
+            },
+        }
+    }
 }

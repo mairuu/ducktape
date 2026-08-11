@@ -1,0 +1,120 @@
+# std::io::File — a file held open, and `defer` as the thing that closes it.
+# Pins that every exit from the block runs the close (fall-through, `break`,
+# `return`, `?`), that a read error and end-of-file are told apart by `error()`,
+# and that closing twice is harmless. Fixture paths are relative to the repo
+# root, which is where the suite runs.
+use std::io::print;
+use std::io::File;
+use std::result::Result;
+
+# The whole file, pulled a line at a time. `lines.txt` has no trailing newline,
+# so `gamma` also pins that a last line without one is still a line.
+fun every_line(path: string) -> int {
+    var h = File::open(path).unwrap();
+    defer h.close();
+    var n = 0;
+    for line in h {
+        print("[{line}]");
+        n += 1;
+    }
+    n
+}
+
+# The shape the handle exists for: stopping early. The handle comes back so the
+# caller can see that leaving through the `break` still closed it.
+fun until(path: string, stop: string) -> File {
+    var h = File::open(path).unwrap();
+    defer h.close();
+    for line in h {
+        if line == stop {
+            break;
+        }
+        print(line);
+    }
+    return h;
+}
+
+# `?` leaves through the defer like any other exit, and a failed open has no
+# handle to close.
+fun first_line(path: string) -> Result<string, string> {
+    var h = File::open(path)?;
+    defer h.close();
+    for line in h {
+        return Result::Ok(line);
+    }
+    return Result::Err("empty");
+}
+
+# Bytes that are not text end the iteration early, and `error()` is the only
+# place the difference from end-of-file shows.
+fun read_all(path: string) -> string {
+    var h = File::open(path).unwrap();
+    defer h.close();
+    for line in h {
+        print("<{line}>");
+    }
+    h.error()
+}
+
+fun main() {
+    print(every_line("tests/data/lines.txt"));
+#> [alpha]
+#> [beta]
+#> [stop]
+#> [gamma]
+#> 4
+
+    var h = until("tests/data/lines.txt", "stop");
+#> alpha
+#> beta
+    print(h.is_open());
+#> false
+    # nothing went wrong: the loop ended where the program said to
+    print(h.error() == "");
+#> true
+
+    # closing an already-closed handle is not an error, which is what makes
+    # `defer h.close()` safe to write next to an explicit close
+    h.close();
+    print(h.is_open());
+#> false
+
+    print(first_line("tests/data/lines.txt").unwrap());
+#> alpha
+    print(first_line("tests/data/nope.txt").is_err());
+#> true
+
+    print(read_all("tests/data/not_utf8.txt"));
+#> <ok>
+#> line is not valid UTF-8
+
+    # the other way a read stops short of the end: a directory opens and then
+    # refuses to be read, so the very first `next` is the failing one
+    print(read_all("tests/data"));
+#> cannot read the file: Is a directory
+
+    # a file's contents are not consumed by having been read once: a second
+    # handle starts at the beginning
+    print(every_line("tests/data/greeting.txt"));
+#> [héllo, ducktape]
+#> 1
+
+    # the same refusal `read_file` makes, and for the same reason: a ducktape
+    # string carries its own length where `fopen` stops at the first NUL
+    var sb = StringBuf::new();
+    sb.push("tests/data/lines.txt");
+    sb.push_char('\u{0}');
+    sb.push("ignored");
+    print(File::open(sb.build()).err().unwrap());
+#> cannot open a path containing a NUL byte
+
+    # `h` was closed long ago, and every open since has reused the entry it
+    # named — `live` is sitting in it now. The old handle must not answer for
+    # the new file: an id carries a generation, so it names nothing at all.
+    var live = File::open("tests/data/greeting.txt").unwrap();
+    defer live.close();
+    print(live.is_open());
+#> true
+    print(h.is_open());
+#> false
+}

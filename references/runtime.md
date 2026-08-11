@@ -449,6 +449,39 @@ that loop because it is `args[1]`, still on the VM stack — the whole of what t
 calling convention promises. A path holding a NUL is refused before `fopen`
 sees it, since a ducktape string carries its own length and `fopen` does not.
 
+### The open-file table
+
+`std::io::File` is the one std type whose value refers to something the
+collector does not own, and the table in `src/native.c` is how that is kept
+safe. A `File` is an ordinary ducktape struct holding an int; the int names an
+entry, and `file_slot` is what turns the name back into a `FILE *` — or answers
+NULL, which a closed handle, a stale one and an int a program invented all get
+alike. Nothing here dereferences what a program supplies, which is what allows
+the field to be private for tidiness rather than for safety.
+
+The alternative was an object kind that owns the file, and it was declined for
+one reason: the collector runs no finalisers, so `OBJ_FILE` would have bought a
+close that never happens. Naming the file rather than pointing at it also keeps
+the image format out of it, exactly as `OBJ_BYTES` did.
+
+An id is `generation << 8 | slot + 1`. The `+ 1` is what makes 0 mean "no
+file", which is how `file_open` reports a failure without minting a `Result`;
+the generation is bumped by every close, so reopening cannot hand a fresh file
+an id that an old handle still holds. The table is a fixed 64 entries — a
+static array keeps the runtime's allocation where the rest of it is, and a
+program that exceeds it has leaked handles rather than needed them.
+
+`file_read_line` answers 1/0/-1 rather than a line, because the three cases the
+caller's `Option` collapses into two have to arrive somewhere: `None` means
+spent whether the file ended or broke. The bytes go into the caller's `Bytes`
+(`args[1]`, so rooted across the `heap_bytes_reserve` per byte), and the -1 case
+restores its length, as `io_read_file` does. Reading through a handle that names
+no entry is the one `ctx->error` here — a program that reads a closed file has a
+bug, where one that *closes* a closed file has only been careful twice.
+`file_error` fetches the message the last failure left in a static buffer: the
+call that most needs one is `open`, which fails precisely when there is no
+handle to hang it on.
+
 ## Codegen shapes (`src/codegen.c`)
 
 - Locals are compile-time tracked (`Cg.locals`, binding → frame slot); the

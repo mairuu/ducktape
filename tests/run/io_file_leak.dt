@@ -1,0 +1,51 @@
+# The cost of a handle, pinned rather than argued about: there is no destructor,
+# so a `File` nobody closes stays open until the process ends, and the runtime's
+# table is finite. The disciplined loop runs three times the table's size and
+# never runs out; the loop that drops its handles exhausts it and cannot get
+# them back. This is the whole of what `defer h.close()` is buying.
+use std::io::print;
+use std::io::File;
+use std::result::Result;
+
+# 200 rounds through a 64-entry table. Every round leaves through the `break`,
+# which is the exit a hidden iterator local could not have been closed on.
+fun disciplined() -> int {
+    var n = 0;
+    var i = 0;
+    while i < 200 {
+        var h = File::open("tests/data/lines.txt").unwrap();
+        defer h.close();
+        for _line in h {
+            n += 1;
+            break;
+        }
+        i += 1;
+    }
+    n
+}
+
+# How many opens the table has room for once nothing is ever closed. Runs last,
+# because the handles it drops are unreachable and so unclosable: every open
+# after this fails for the rest of the process.
+fun until_exhausted() -> int {
+    var n = 0;
+    while n < 1000 {
+        match File::open("tests/data/lines.txt") {
+            Result::Ok(_h) => { n += 1; },
+            Result::Err(_e) => { return n; },
+        }
+    }
+    return -1;
+}
+
+fun main() {
+    print(disciplined());
+#> 200
+
+    print(until_exhausted());
+#> 64
+
+    # and it stays exhausted — a dropped handle is not collected back
+    print(File::open("tests/data/lines.txt").err().unwrap());
+#> cannot open 'tests/data/lines.txt': too many open files
+}

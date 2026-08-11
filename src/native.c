@@ -99,6 +99,181 @@ static Value n_io_read_file(NativeCtx *ctx, Value *args, int argc) {
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
+// std::io — the open-file table
+// ───────────────────────────────────────────────────────────────────────────────
+//
+// A `File` is an ordinary ducktape struct holding an int, and the int is a
+// *name* for an entry here rather than a pointer to one. The runtime has no
+// object kind that owns a file, and giving it one would mean a finaliser the
+// collector does not run — so the table is what turns a name back into a
+// `FILE *`, or refuses to. Refusing is the point: a closed handle, a stale one,
+// and an int a program made up are all indistinguishable from each other and
+// all safe, where a pointer in a field would be none of those things.
+//
+// An id carries a generation above the slot, and closing bumps it. Without
+// that, reopening would hand a fresh file the slot an old handle still names,
+// and that handle would silently read the wrong file.
+//
+// The table is fixed: 64 open files is far below any process limit, and a
+// static array keeps the runtime's allocation where the rest of it is.
+
+#define FILE_SLOTS 64
+#define FILE_SLOT_MASK 0xff
+
+typedef struct {
+  FILE *fp;
+  int64_t gen;
+} FileSlot;
+
+static FileSlot file_table[FILE_SLOTS];
+
+// The last failure, for the call that has no handle to hang one on — `open`,
+// which fails precisely when there is no `File` yet. std reads it immediately
+// after the call that set it, and the VM is single-threaded, so the window
+// errno itself lives in is the window this lives in.
+static char file_error_msg[512];
+
+// `path` is NULL past `open`: a slot holds the file and not the name it was
+// opened under, which is one string per open that no message needs badly
+// enough.
+static void file_record(const char *verb, const char *path) {
+  if (path == NULL) {
+    snprintf(file_error_msg, sizeof file_error_msg, "cannot %s the file: %s",
+             verb, strerror(errno));
+  } else {
+    snprintf(file_error_msg, sizeof file_error_msg, "cannot %s '%s': %s", verb,
+             path, strerror(errno));
+  }
+}
+
+// The entry `id` names, or NULL when it names none.
+static FileSlot *file_slot(int64_t id) {
+  int slot = (int)(id & FILE_SLOT_MASK) - 1;
+  if (slot < 0 || slot >= FILE_SLOTS) {
+    return NULL;
+  }
+  FileSlot *s = &file_table[slot];
+  return (s->fp != NULL && s->gen == id >> 8) ? s : NULL;
+}
+
+// Open for reading, answering the id — or 0, which is no slot's name, with the
+// reason left in `file_error_msg` for `io::error` to fetch.
+static Value n_file_open(NativeCtx *ctx, Value *args, int argc) {
+  (void)ctx;
+  (void)argc;
+  ObjString *path = val_as_string(args[0]);
+
+  // as in `io_read_file`: `fopen` stops at the first NUL, so a path holding one
+  // names a different file than the string does.
+  if ((int)strlen(path->chars) != path->len) {
+    snprintf(file_error_msg, sizeof file_error_msg,
+             "cannot open a path containing a NUL byte");
+    return val_int(0);
+  }
+
+  int slot = -1;
+  for (int i = 0; i < FILE_SLOTS; i++) {
+    if (file_table[i].fp == NULL) {
+      slot = i;
+      break;
+    }
+  }
+  if (slot < 0) {
+    snprintf(file_error_msg, sizeof file_error_msg,
+             "cannot open '%s': too many open files", path->chars);
+    return val_int(0);
+  }
+
+  FILE *fp = fopen(path->chars, "rb");
+  if (fp == NULL) {
+    file_record("open", path->chars);
+    return val_int(0);
+  }
+  file_table[slot].fp = fp;
+  file_error_msg[0] = '\0';
+  return val_int(file_table[slot].gen << 8 | (slot + 1));
+}
+
+// Whether `id` still names an open file. False for a closed handle, a stale
+// one, and a forged one alike — the table cannot tell them apart and does not
+// need to.
+static Value n_file_is_open(NativeCtx *ctx, Value *args, int argc) {
+  (void)ctx;
+  (void)argc;
+  return val_bool(file_slot(args[0].as.i) != NULL);
+}
+
+// Answers whether the close was clean. A handle that names nothing is *not* a
+// failure: closing twice is what a program does when it closes explicitly and
+// a `defer` closes again, and neither call is the wrong one.
+static Value n_file_close(NativeCtx *ctx, Value *args, int argc) {
+  (void)ctx;
+  (void)argc;
+  FileSlot *s = file_slot(args[0].as.i);
+  if (s == NULL) {
+    return val_bool(true);
+  }
+  bool ok = fclose(s->fp) == 0;
+  if (!ok) {
+    file_record("close", NULL);
+  }
+  s->fp = NULL;
+  s->gen++; // every id naming this slot is stale from here
+  return val_bool(ok);
+}
+
+// Append the next line's bytes to `out`, without its newline: 1 when a line was
+// read, 0 at end of file, -1 on a read error. The three are distinct because
+// the caller's `Option` cannot be: `None` has to mean "spent" whether the file
+// ended or broke, so the difference has to come back as something else.
+static Value n_file_read_line(NativeCtx *ctx, Value *args, int argc) {
+  (void)argc;
+  FileSlot *s = file_slot(args[0].as.i);
+  if (s == NULL) {
+    ctx->error = "read from a file that is not open";
+    return val_unit();
+  }
+  ObjBytes *out = val_as_bytes(args[1]);
+
+  int start = out->len;
+  bool any = false;
+  for (;;) {
+    int c = fgetc(s->fp);
+    if (c == EOF) {
+      if (ferror(s->fp)) {
+        out->len = start; // a failed read appends nothing, as `read_file` does
+        file_record("read", NULL);
+        return val_int(-1);
+      }
+      break;
+    }
+    any = true;
+    if (c == '\n') {
+      break;
+    }
+    if (out->len == INT_MAX) {
+      out->len = start;
+      snprintf(file_error_msg, sizeof file_error_msg, "line is too long");
+      return val_int(-1);
+    }
+    // may collect; `out` is `args[1]` and so is rooted, and `s` points into a
+    // static table the heap knows nothing about.
+    heap_bytes_reserve(ctx->heap, out, out->len + 1);
+    out->bytes[out->len++] = (char)c;
+  }
+  return val_int(any ? 1 : 0);
+}
+
+// The message the last failure left, empty when there has been none.
+static Value n_file_error(NativeCtx *ctx, Value *args, int argc) {
+  (void)args;
+  (void)argc;
+  return val_obj(
+      &heap_intern(ctx->heap, file_error_msg, (int)strlen(file_error_msg))
+           ->obj);
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
 // std::array
 // ───────────────────────────────────────────────────────────────────────────────
 
@@ -927,6 +1102,11 @@ static const NativeEntry natives[] = {
     {"bytes_to_string", n_bytes_to_string},
     {"char_code", n_char_code},
     {"char_from_code", n_char_from_code},
+    {"file_close", n_file_close},
+    {"file_error", n_file_error},
+    {"file_is_open", n_file_is_open},
+    {"file_open", n_file_open},
+    {"file_read_line", n_file_read_line},
     {"fmt_float", n_fmt_float},
     {"hash_mix", n_hash_mix},
     {"hash_string", n_hash_string},
