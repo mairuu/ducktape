@@ -2,13 +2,35 @@
 
 ## Start here
 
-**Last landed:** milestone 120 (`3543157`) — **the name codegen no longer
+> **This branch is a fork.** `feature/m122-ir` leaves the main line at
+> milestone 120, before either of the two rival milestone 121s (`main`'s "a
+> file is never held open" and `feature/m120-file-handle`'s "a file is held
+> open"). It is a compiler branch and touches nothing either of them does, so
+> it is a merge and not a third alternative — but the 121 question has to be
+> settled on its own terms first.
+
+**Last landed:** milestone 122 (`75522a3`) — **codegen emits an
+instruction list, not bytes**. `IrBody` (`include/ir.h`, `src/ir.c`) holds one
+entry per instruction; `ir_emit` walks it into the `Chunk` at the end of each
+body. A forward jump names a label instead of an offset patched back into the
+code, and the peephole's three watermarks are indices rather than byte
+positions. Behaviour-neutral by construction: 714 tests, clean under
+`make sanitize`, and every one of the 203 emittable test programs produces a
+**byte-identical** image against 120.
+
+**Landed before it:** milestone 120 (`3543157`) — **the name codegen no longer
 resolves**. A reference is matched on the `VarEntry` the checker resolved it
-to, not on its name, so `CgDeferSkip` and `Cg.locals_base` are both gone: a
-shadowed name is a different binding, and a spliced body's bindings are its
-own. It also closed a crash that predates it — a closure calling the function
-around it expanded splices until the C stack ran out. 714 tests, clean under
-`make sanitize`, and the bench agrees with 119 on every row.
+to, not on its name, so `CgDeferSkip` and `Cg.locals_base` are both gone.
+
+**What 122 is for.** It is step one of promoting `src/cfg.c` from a lint's
+private graph to the backend's IR — the wart "the graph has exactly one
+consumer". Nothing is faster yet and nothing was meant to be. The next step is
+the one that pays: **lower `defer` into explicit exit edges at IR
+construction**, which would close "a body holding a `defer` is refused a
+splice" and m116's "thread declines where a `defer` sits between a construction
+and the `return`" by deleting what they are about, rather than fixing it. After
+that, inlining as a block splice with renamed operands, which is what makes
+"an inlined body is still compiled on its own" reachable.
 
 **Nothing is blocked, and nothing is owed.** Milestone 95 closed the last entry
 that was not a matter of appetite, and 103 the last one that was already
@@ -61,6 +83,28 @@ Everything from 120 on is below.
   stack ran out; the child compiler now inherits both. Sabotage 9/10, the
   survivor unreachable rather than untested (a closure's `ParamDef` mirror — a
   splice needs a call by name). Remainder: none.
+
+- **122. Codegen emits an instruction list, not bytes** (`75522a3`) —
+  `IrBody` holds one entry per instruction and `ir_emit` walks it into the
+  `Chunk` when the body is done. A forward jump names a label that `patch_jump`
+  binds; `last_get_local`, `last_target` and `last_exit` become indices, so a
+  rewrite reads `ir_last` instead of decoding operands back out of
+  `chunk->code`. The constant pool stays on the `Chunk` — it is indexed as it
+  is filled and never needed deferring.
+  Design: `runtime.md` "The instruction list", and the two paragraphs of "The
+  peephole" that described byte positions.
+  **THE FINDING: the peephole's watermarks are not a workaround for bytes.**
+  The obvious follow-up is to delete `last_get_local` and `last_enum` now that
+  `ir_last` can be asked what the last instruction is, and both would be wrong:
+  compound assignment emits its own `OP_GET_LOCAL` and `as?` its own `OP_ENUM`,
+  and neither is eligible for the rewrite its watermark guards. The positions
+  mark a *site*, not an opcode; all the list retires is the sentence saying why
+  they had to be remembered.
+  No test file — there is no behaviour to pin. The check is byte-identity: 203
+  programs `--emit-bc`'d on both binaries and compared, which is stricter than
+  a green suite and is what the next two steps can be held to.
+  Remainder: it is not a value IR — an instruction is still one the VM
+  executes, and nothing reads the list between construction and emission.
 
 ## Next (in recommended order)
 
