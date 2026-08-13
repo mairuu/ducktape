@@ -449,6 +449,34 @@ that loop because it is `args[1]`, still on the VM stack — the whole of what t
 calling convention promises. A path holding a NUL is refused before `fopen`
 sees it, since a ducktape string carries its own length and `fopen` does not.
 
+## The instruction list (`include/ir.h`, `src/ir.c`)
+
+Codegen does not write bytes. It appends to an `IrBody` — one instruction per
+entry, carrying the opcode and its operands in the shape `chunk.h` describes
+(none, a frame byte, a program-grown `u16`, `OP_ENUM`'s pair, a label, or
+`OP_CLOSURE`'s upvalue vector) — and `ir_emit` walks the finished list into the
+`Chunk` at the end of the body. Widths are fixed per shape, so one pass fixes
+every instruction's address and the second writes them.
+
+Two things follow, and they are the whole point of the indirection:
+
+- **A forward jump names a label, not an address.** `emit_jump` allocates one
+  and `patch_jump` binds it to the current position; nothing is written twice
+  and nothing is read back out of the code. A label bound at `ir_count` names
+  the end of the body. `ir_emit` measures every offset — forward and backward
+  alike — from the end of the jump instruction that carries it, which is the
+  one rule the VM's `OP_JUMP`/`OP_LOOP` need.
+- **A position is an index, so the last instruction can be read.** The rewrites
+  that look backwards ask `ir_last` and compare against `ir_count`, where they
+  used to remember a byte offset and decode the operand out of `chunk->code`;
+  unemitting is `ir_truncate`.
+
+The constant pool stays on the `Chunk` throughout — it is indexed as it is
+filled, so it never needed deferring.
+
+This is not a value IR. An instruction is one the VM executes, the walk is
+straight, and nothing between construction and emission looks at the list.
+
 ## Codegen shapes (`src/codegen.c`)
 
 - Locals are compile-time tracked (`Cg.locals`, binding → frame slot); the
@@ -1025,13 +1053,20 @@ Two rewrites, each looking only at the instruction just emitted. Both exist for
 what a splice leaves behind — the parameters it reads back and the pad it jumps
 to — but neither is about inlining, and both fire in ordinary code as well.
 
-Three positions on `Cg` are what makes looking backwards safe, since a chunk
-cannot be scanned in reverse: `last_get_local` (where the last `OP_GET_LOCAL`
-went, so the byte before the current end is known to be an opcode and not some
-other instruction's operand), `last_target` (the highest position anything
-jumps to) and `last_exit` (just past the last unconditional exit).
+Three positions on `Cg` are what makes looking backwards safe. All three are
+indices into the instruction list: `last_get_local` (where the last
+`OP_GET_LOCAL` went), `last_target` (the highest position anything jumps to)
+and `last_exit` (just past the last unconditional exit).
 `cg_unreachable` is the two watermarks together: the last instruction was an
 exit *and* nothing jumps back here.
+
+**They mark a site, not an opcode**, which is why the instruction list does not
+retire them. `ir_last` can say what the last instruction *is*, but two of these
+are about where it came from: compound assignment emits its own `OP_GET_LOCAL`
+through `emit2`, and the `as?` downcast its own `OP_ENUM`, and neither is
+eligible for the rewrite the watermark's own site is. `last_enum_def` and
+`last_enum_tag` are the same point from the other side — a slot operand does
+not lead back to an `EnumDef`.
 
 **A read the slide is about to remove is not a read.** Every `emit_slide(n)`
 means the same n slots — the ones directly beneath the top — so the lowest of
@@ -1045,8 +1080,8 @@ same rewrite with no call in sight.
 
 **A landing pad reached by falling into it needs no jump.** A body whose last
 statement is a `return` leaves through a jump that is the last instruction
-emitted, so the pad is the byte after it and the fall-through epilogue is code
-no path reaches. `compile_block` skips the tail unit and the scope close when
+emitted, so the pad is the position after it and the fall-through epilogue is
+code no path reaches. `compile_block` skips the tail unit and the scope close when
 `cg_unreachable` says its statements already left; `cg_inline_body` then finds
 the pad jump last, unemits it, and lets that exit arrive by falling in. Both
 halves are needed — the block's dead epilogue sits between the jump and the pad
@@ -1055,8 +1090,8 @@ otherwise.
 **`last_target` is the whole of the safety argument.** Rewriting the last
 instruction is sound only if no other path arrives between it and here, and
 `patch_jump` records the one position it ever targets. Where the two arms of an
-`if` end in the same read, the merge point is exactly the byte the fold would
-unemit, and that check is what declines it.
+`if` end in the same read, the merge point is exactly the instruction the fold
+would unemit, and that check is what declines it.
 
 ### Threading a match into its constructions
 

@@ -103,7 +103,8 @@ With `--run`, `compiler_execute` (`src/compiler.c`) additionally runs:
 7. **tags** — `exe_assign_tags` (`src/codegen.c`): fix every enum's variant
    tags. All that is left of a linking step, since a tag is the one part of a
    program's layout that is not demand-driven
-8. **codegen** — `src/codegen.c`: AST → bytecode `Chunk`, demand-driven from
+8. **codegen** — `src/codegen.c`: AST → an instruction list (`src/ir.c`) that
+   `ir_emit` walks into a bytecode `Chunk` per body, demand-driven from
    `main` outwards (`Mono`, drained until it reaches a fixpoint). A definition
    takes a slot and a chunk when something *reaches* it; one nothing reaches
    costs neither, generic or not. The program-wide slot tables (funs + methods,

@@ -1,6 +1,7 @@
 #include "codegen.h"
 #include "ast.h"
 #include "chunk.h"
+#include "ir.h"
 #include "object.h"
 #include "scanner.h"
 #include "string_utils.h"
@@ -158,7 +159,10 @@ typedef struct Cg {
   Executable *exe;  // the linked program (slot spaces, closure registry)
   Heap *heap;
   Mono *mono; // the monomorphisation queue; generic callees are enqueued here
+  // `chunk` holds the constant pool while the body is being built, and
+  // receives the code at the end; `ir` is the code until then.
   Chunk *chunk;
+  IrBody *ir;
   DiagBag *diags;
   Allocator *al;
 
@@ -260,8 +264,8 @@ typedef struct Cg {
 // Is code emitted here reached? Only if the last instruction was not an
 // unconditional exit, or something jumps back to this exact point.
 static bool cg_unreachable(const Cg *cg) {
-  return cg->last_exit == cg->chunk->count &&
-         cg->last_target != cg->chunk->count;
+  return cg->last_exit == ir_count(cg->ir) &&
+         cg->last_target != ir_count(cg->ir);
 }
 
 // The frame a `break`/`continue` leaves: the innermost *loop* unlabelled, the
@@ -644,18 +648,16 @@ static FunDef *cg_call_target(Cg *cg, FunDef *fun, const Subst *primary,
   return target;
 }
 
-static void emit(Cg *cg, uint8_t byte) { chunk_write(cg->chunk, byte); }
+static void emit(Cg *cg, uint8_t op) { ir_op(cg->ir, op); }
 
-static void emit2(Cg *cg, uint8_t a, uint8_t b) {
-  emit(cg, a);
-  emit(cg, b);
+// an op and the one frame-sized byte after it.
+static void emit2(Cg *cg, uint8_t op, uint8_t operand) {
+  ir_op_u8(cg->ir, op, operand);
 }
 
 // an op whose operand indexes a program-grown table: two bytes, big-endian.
 static void emit_slot(Cg *cg, uint8_t op, int slot) {
-  assert(slot >= 0 && slot < SLOT_MAX && "slot outside the operand space");
-  emit(cg, op);
-  chunk_write_u16(cg->chunk, (uint16_t)slot);
+  ir_op_u16(cg->ir, op, slot);
 }
 
 // the pool is per function but has no frame bounding it, so it is a u16 space
@@ -699,35 +701,38 @@ static ObjString *cg_decode_string(Cg *cg, StringView raw) {
   return heap_intern(cg->heap, buf, n);
 }
 
-// emit a forward jump with a placeholder offset; returns the operand's ip.
+// emit a forward jump to a label nothing has bound yet; returns the label,
+// which the matching `patch_jump` binds to wherever it is called.
 static int emit_jump(Cg *cg, uint8_t op) {
-  emit(cg, op);
-  emit2(cg, 0xff, 0xff);
-  return cg->chunk->count - 2;
+  int label = ir_label(cg->ir);
+  ir_jump(cg->ir, op, label);
+  return label;
 }
 
-static void patch_jump(Cg *cg, int operand_ip) {
-  int dist = cg->chunk->count - operand_ip - 2;
-  assert(dist >= 0 && dist <= 0xffff && "jump too far");
-  cg->chunk->code[operand_ip] = (uint8_t)((dist >> 8) & 0xff);
-  cg->chunk->code[operand_ip + 1] = (uint8_t)(dist & 0xff);
-  cg->last_target = cg->chunk->count; // patching only ever targets here
+static void patch_jump(Cg *cg, int label) {
+  ir_bind(cg->ir, label);
+  cg->last_target = ir_count(cg->ir); // patching only ever targets here
 }
 
-static void emit_loop(Cg *cg, int target_ip) {
-  emit(cg, OP_LOOP);
-  int dist = cg->chunk->count - target_ip + 2;
-  assert(dist >= 0 && dist <= 0xffff && "loop body too large");
-  emit2(cg, (uint8_t)((dist >> 8) & 0xff), (uint8_t)(dist & 0xff));
-  if (target_ip > cg->last_target) {
-    cg->last_target = target_ip; // a back edge is a target like any other
+// a label naming this exact position, for a back edge to be aimed at later.
+static int label_here(Cg *cg) {
+  int label = ir_label(cg->ir);
+  ir_bind(cg->ir, label);
+  return label;
+}
+
+static void emit_loop(Cg *cg, int target) {
+  ir_jump(cg->ir, OP_LOOP, target);
+  int at = ir_label_at(cg->ir, target);
+  if (at > cg->last_target) {
+    cg->last_target = at; // a back edge is a target like any other
   }
 }
 
 // Read a local, and remember where: `emit_slide` below is the one rewrite that
 // looks at the instruction it follows, and a chunk cannot be scanned backwards.
 static void emit_get_local(Cg *cg, int slot) {
-  cg->last_get_local = cg->chunk->count;
+  cg->last_get_local = ir_count(cg->ir);
   emit2(cg, OP_GET_LOCAL, (uint8_t)slot);
 }
 
@@ -747,11 +752,11 @@ static void emit_slide(Cg *cg, int n) {
     return;
   }
   bool folds = cg->last_get_local >= 0 &&
-               cg->last_get_local == cg->chunk->count - 2 &&
-               cg->last_target != cg->chunk->count &&
-               cg->chunk->code[cg->last_get_local + 1] == cg->depth - 1 - n;
+               cg->last_get_local == ir_count(cg->ir) - 1 &&
+               cg->last_target != ir_count(cg->ir) &&
+               ir_last(cg->ir)->a == cg->depth - 1 - n;
   if (folds) {
-    cg->chunk->count -= 2; // unemit the read; the original stays put
+    ir_truncate(cg->ir, ir_count(cg->ir) - 1); // unemit the read
     cg->last_get_local = -1;
     if (n > 1) {
       emit2(cg, OP_POPN, (uint8_t)(n - 1));
@@ -763,12 +768,11 @@ static void emit_slide(Cg *cg, int n) {
 }
 
 // The variant the last instruction built, or NULL. Same shape as the fold
-// above and the same safety argument: an OP_ENUM is four bytes and a chunk
-// cannot be read backwards, so the position is remembered, and `last_target`
-// is what says no other path arrives between it and here.
+// above and the same safety argument: the position is remembered, and
+// `last_target` is what says no other path arrives between it and here.
 static VariantDef *cg_last_variant(const Cg *cg) {
-  if (cg->last_enum_def == NULL || cg->last_enum != cg->chunk->count - 4 ||
-      cg->last_target == cg->chunk->count) {
+  if (cg->last_enum_def == NULL || cg->last_enum != ir_count(cg->ir) - 1 ||
+      cg->last_target == ir_count(cg->ir)) {
     return NULL;
   }
   return &cg->last_enum_def->variants[cg->last_enum_tag];
@@ -798,7 +802,8 @@ static int cg_thread_claim(Cg *cg, CgThread *th) {
     return -1;
   }
   if (built->field_count == 1) {
-    cg->chunk->count -= 4; // the field it was about to wrap is the value now
+    // the field it was about to wrap is the value now
+    ir_truncate(cg->ir, ir_count(cg->ir) - 1);
     cg->last_enum_def = NULL;
   }
   th->taken++;
@@ -1356,7 +1361,7 @@ static void cg_emit_return(Cg *cg) {
   CgLoop *pad = cg->inline_pad;
   if (pad == NULL) {
     emit(cg, OP_RETURN);
-    cg->last_exit = cg->chunk->count;
+    cg->last_exit = ir_count(cg->ir);
     return;
   }
   assert(pad->break_count < CG_MAX_BREAKS && "fun_inline_cost caps the exits");
@@ -1377,7 +1382,7 @@ static void cg_emit_return(Cg *cg) {
   } else {
     pad->break_jumps[pad->break_count++] = emit_jump(cg, OP_JUMP);
   }
-  cg->last_exit = cg->chunk->count;
+  cg->last_exit = ir_count(cg->ir);
 }
 
 // ── expression / statement compilation ───────────────────────────────────────
@@ -1744,7 +1749,7 @@ static void compile_stmt_inner(Cg *cg, Stmt *stmt) {
       }
     }
     loop->break_jumps[loop->break_count++] = emit_jump(cg, OP_JUMP);
-    cg->last_exit = cg->chunk->count;
+    cg->last_exit = ir_count(cg->ir);
     break;
   }
 
@@ -1768,7 +1773,7 @@ static void compile_stmt_inner(Cg *cg, Stmt *stmt) {
       }
       loop->continue_jumps[loop->continue_count++] = emit_jump(cg, OP_JUMP);
     }
-    cg->last_exit = cg->chunk->count;
+    cg->last_exit = ir_count(cg->ir);
     break;
   }
 
@@ -2208,7 +2213,7 @@ static void compile_while(Cg *cg, Expr *expr) {
 
   CgLoop loop = {
       .label = expr->as.while_expr.label.name,
-      .start = cg->chunk->count,
+      .start = label_here(cg),
       .continue_is_backward = true,
       .continue_base = cg->local_count,
       .break_base = cg->local_count,
@@ -2248,7 +2253,7 @@ static void compile_while(Cg *cg, Expr *expr) {
 static void compile_loop(Cg *cg, Expr *expr) {
   CgLoop loop = {
       .label = expr->as.loop_expr.label.name,
-      .start = cg->chunk->count,
+      .start = label_here(cg),
       .continue_is_backward = true,
       .continue_base = cg->local_count,
       .break_base = cg->local_count,
@@ -2302,7 +2307,7 @@ static void compile_for_range(Cg *cg, Expr *expr) {
   };
   cg->loop = &loop;
 
-  int loop_start = cg->chunk->count;
+  int loop_start = label_here(cg);
   loop.start = loop_start;
   emit_get_local(cg, range_slot);
   emit_get_local(cg, i_slot);
@@ -2366,7 +2371,7 @@ static void compile_for_array(Cg *cg, Expr *expr) {
   };
   cg->loop = &loop;
 
-  int loop_start = cg->chunk->count;
+  int loop_start = label_here(cg);
   loop.start = loop_start;
   emit_get_local(cg, idx_slot);
   emit_get_local(cg, arr_slot);
@@ -2482,7 +2487,7 @@ static void compile_for_iter(Cg *cg, Expr *expr) {
   };
   cg->loop = &loop;
 
-  int loop_start = cg->chunk->count;
+  int loop_start = label_here(cg);
   loop.start = loop_start;
 
   // `Some` binds the loop variable and runs the body; every other tag is the
@@ -2704,12 +2709,15 @@ static void cg_inline_body(Cg *cg, const Instance *inst, int base_depth,
   // nothing to emit at it.
   //
   // Unless the body *ended* in a `return`: then the jump it left through is the
-  // last instruction, its target is the byte after it, and the fall-through
+  // last instruction, its target is the position after it, and the fall-through
   // this would emit is code no path reaches. Unemitting the jump costs the pad
-  // nothing — the exit arrives by falling into it instead.
-  if (pad.break_count > 0 && cg_unreachable(cg) &&
-      pad.break_jumps[pad.break_count - 1] + 2 == cg->chunk->count) {
-    cg->chunk->count -= 3;
+  // nothing — the exit arrives by falling into it instead. Its label is then
+  // named by nothing, so leaving it unbound is what dropping it means.
+  const IrInst *last = ir_last(cg->ir);
+  if (pad.break_count > 0 && cg_unreachable(cg) && last != NULL &&
+      last->shape == IR_LABEL &&
+      last->a == pad.break_jumps[pad.break_count - 1]) {
+    ir_truncate(cg->ir, ir_count(cg->ir) - 1);
     pad.break_count--;
     cg->last_exit = -1; // reached by fall-through now
   } else if (!cg_unreachable(cg)) {
@@ -3431,11 +3439,10 @@ static void compile_variant_init(Cg *cg, Expr *expr) {
   }
   // remembered for `cg_last_variant`: this is the one construction a merge
   // below may decide was never needed.
-  cg->last_enum = cg->chunk->count;
+  cg->last_enum = ir_count(cg->ir);
   cg->last_enum_def = enum_def;
   cg->last_enum_tag = variant->tag;
-  emit_slot(cg, OP_ENUM, enum_def->slot);
-  emit(cg, variant->tag);
+  ir_op_u16_u8(cg->ir, OP_ENUM, enum_def->slot, variant->tag);
 }
 
 // `d as? T` — the coercion recognised rather than performed. The whole test is
@@ -3473,15 +3480,15 @@ static void compile_downcast(Cg *cg, Expr *expr) {
   int miss = emit_jump(cg, OP_JUMP_IF_FALSE); // peeks `is`
   emit(cg, OP_POP);                           // is (true) -> [dyn]
   emit(cg, OP_DYN_INNER);                     // [inner]
-  emit_slot(cg, OP_ENUM, option->slot);       // [Some(inner)]
-  emit(cg, cast->some_variant->tag);
+  // [Some(inner)]
+  ir_op_u16_u8(cg->ir, OP_ENUM, option->slot, cast->some_variant->tag);
   int done = emit_jump(cg, OP_JUMP);
 
-  patch_jump(cg, miss);                 // [dyn, is]
-  emit(cg, OP_POP);                     // is (false) -> [dyn]
-  emit(cg, OP_POP);                     // the object was not it -> []
-  emit_slot(cg, OP_ENUM, option->slot); // [None]
-  emit(cg, cast->none_variant->tag);
+  patch_jump(cg, miss); // [dyn, is]
+  emit(cg, OP_POP);     // is (false) -> [dyn]
+  emit(cg, OP_POP);     // the object was not it -> []
+  // [None]
+  ir_op_u16_u8(cg->ir, OP_ENUM, option->slot, cast->none_variant->tag);
   patch_jump(cg, done);
 }
 
@@ -3763,7 +3770,7 @@ static void cg_thread_subject(Cg *cg, CgThread *th, Expr *subject) {
     return;
   }
   cg_thread_jump(th, cont, emit_jump(cg, OP_JUMP));
-  cg->last_exit = cg->chunk->count;
+  cg->last_exit = ir_count(cg->ir);
 }
 
 // Whatever still arrives holding a built variant meets one tag test per
@@ -3797,7 +3804,7 @@ static void cg_thread_merge(Cg *cg, CgThread *th, int subject_slot) {
     cg_popped(cg, 1);
   }
   cg_thread_jump(th, CG_THREAD_OTHER, emit_jump(cg, OP_JUMP));
-  cg->last_exit = cg->chunk->count;
+  cg->last_exit = ir_count(cg->ir);
 }
 
 // Enter a continuation: everything that jumped here arrives with the same
@@ -4080,7 +4087,7 @@ static void compile_while_binding(Cg *cg, Expr *expr) {
 
   CgLoop loop = {
       .label = expr->as.while_expr.label.name,
-      .start = cg->chunk->count,
+      .start = label_here(cg),
       .continue_is_backward = true,
       .continue_base = saved_outer,
       .break_base = saved_outer,
@@ -4470,6 +4477,8 @@ static void compile_fun_body(Mono *mono, FunDef *fun, FunDef *body_of,
            .last_enum = -1};
   cg.chunk = al_alloc_zero_for(mono->al, Chunk);
   chunk_init(cg.chunk, mono->al);
+  cg.ir = al_alloc_zero_for(mono->al, IrBody);
+  ir_init(cg.ir, mono->al);
 
   for (int i = 0; i < fun->param_count; i++) {
     // the receiver is a binding like any other parameter — the checker defines
@@ -4488,6 +4497,7 @@ static void compile_fun_body(Mono *mono, FunDef *fun, FunDef *body_of,
   compile_expr(&cg, body_of->body);
   emit(&cg, OP_RETURN);
 
+  ir_emit(cg.ir, cg.chunk);
   fun->chunk = cg.chunk;
   *ok &= cg.ok;
 }
@@ -4547,6 +4557,8 @@ static void compile_closure(Cg *cg, Expr *expr) {
   memcpy(child.inlining, cg->inlining, sizeof(child.inlining));
   child.chunk = al_alloc_zero_for(cg->al, Chunk);
   chunk_init(child.chunk, cg->al);
+  child.ir = al_alloc_zero_for(cg->al, IrBody);
+  ir_init(child.ir, cg->al);
 
   for (int i = 0; i < closure->param_count; i++) {
     // slots 0..n-1 of the closure's own frame, like any function's params
@@ -4556,17 +4568,19 @@ static void compile_closure(Cg *cg, Expr *expr) {
   child.body_root = closure->body;
   compile_expr(&child, closure->body);
   emit(&child, OP_RETURN);
+  ir_emit(child.ir, child.chunk);
   fun->chunk = child.chunk;
   cg->ok &= child.ok;
 
   cg_register_closure(cg, fun);
 
   int const_idx = cg_add_const(cg, val_fun(fun));
-  emit_slot(cg, OP_CLOSURE, const_idx);
-  emit(cg, (uint8_t)child.upvalue_count);
+  uint8_t pairs[CG_MAX_UPVALUES * 2];
   for (int i = 0; i < child.upvalue_count; i++) {
-    emit2(cg, child.upvalues[i].is_local ? 1 : 0, child.upvalues[i].index);
+    pairs[i * 2] = child.upvalues[i].is_local ? 1 : 0;
+    pairs[i * 2 + 1] = child.upvalues[i].index;
   }
+  ir_closure(cg->ir, const_idx, pairs, child.upvalue_count);
 }
 
 Module *mono_pending_module(Mono *mono) {
